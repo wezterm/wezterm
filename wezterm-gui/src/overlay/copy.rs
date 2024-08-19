@@ -822,7 +822,8 @@ impl CopyRenderable {
         }
     }
 
-    fn move_backward_one_word(&mut self) {
+    // Move 1 vim word or WORD backward
+    fn move_backward_one_word(&mut self, non_blank: bool) {
         let y = if self.cursor.x == 0 && self.cursor.y > 0 {
             self.cursor.x = usize::max_value();
             self.cursor.y.saturating_sub(1)
@@ -846,11 +847,16 @@ impl CopyRenderable {
             //  |     _
 
             let mut last_was_whitespace = false;
+            let mut passed_word = false;
 
             for (idx, word) in s.split_word_bounds().rev().enumerate() {
                 let width = unicode_column_width(word, None);
 
                 if is_whitespace_word(word) {
+                    if non_blank && passed_word {
+                        self.cursor.x = self.cursor.x.saturating_add(1);
+                        break;
+                    }
                     self.cursor.x = self.cursor.x.saturating_sub(width);
                     last_was_whitespace = true;
                     continue;
@@ -864,20 +870,25 @@ impl CopyRenderable {
                 }
 
                 self.cursor.x = self.cursor.x.saturating_sub(width.saturating_sub(1));
-                break;
+                if non_blank {
+                    passed_word = true;
+                } else {
+                    break;
+                }
             }
 
             if last_was_whitespace && self.cursor.y > 0 {
                 // The line begins with whitespace
                 self.cursor.x = usize::max_value();
                 self.cursor.y -= 1;
-                return self.move_backward_one_word();
+                return self.move_backward_one_word(non_blank);
             }
         }
         self.select_to_cursor_pos();
     }
 
-    fn move_forward_one_word(&mut self) {
+    // Move 1 vim word or WORD forward
+    fn move_forward_one_word(&mut self, non_blank: bool) {
         let y = self.cursor.y;
         let (top, lines) = self.delegate.get_lines(y..y + 1);
         if let Some(line) = lines.get(0) {
@@ -886,12 +897,21 @@ impl CopyRenderable {
             let s = line.columns_as_str(self.cursor.x..width + 1);
             let mut words = s.split_word_bounds();
 
-            if let Some(word) = words.next() {
-                self.cursor.x += unicode_column_width(word, None);
-                if !is_whitespace_word(word) {
-                    if let Some(word) = words.next() {
-                        if is_whitespace_word(word) {
-                            self.cursor.x += unicode_column_width(word, None);
+            if non_blank {
+                while let Some(next_word) = words.next() {
+                    self.cursor.x += unicode_column_width(next_word, None);
+                    if is_whitespace_word(next_word) {
+                        break;
+                    }
+                }
+            } else {
+                if let Some(word) = words.next() {
+                    self.cursor.x += unicode_column_width(word, None);
+                    if !is_whitespace_word(word) {
+                        if let Some(word) = words.next() {
+                            if is_whitespace_word(word) {
+                                self.cursor.x += unicode_column_width(word, None);
+                            }
                         }
                     }
                 }
@@ -909,7 +929,8 @@ impl CopyRenderable {
         self.select_to_cursor_pos();
     }
 
-    fn move_to_end_of_word(&mut self) {
+    // move to end of vim word or WORD
+    fn move_to_end_of_word(&mut self, non_blank: bool) {
         let y = self.cursor.y;
         let (top, lines) = self.delegate.get_lines(y..y + 1);
         if let Some(line) = lines.get(0) {
@@ -924,7 +945,7 @@ impl CopyRenderable {
                 if self.cursor.y + 1 < max_row {
                     self.cursor.y += 1;
                     self.cursor.x = 0;
-                    return self.move_to_end_of_word();
+                    return self.move_to_end_of_word(non_blank);
                 }
             }
 
@@ -940,11 +961,13 @@ impl CopyRenderable {
                         }
                     }
                 }
-                while let Some(next_word) = words.next() {
-                    if !is_whitespace_word(next_word) {
-                        word_end += unicode_column_width(next_word, None);
-                    } else {
-                        break;
+                if non_blank {
+                    while let Some(next_word) = words.next() {
+                        if !is_whitespace_word(next_word) {
+                            word_end += unicode_column_width(next_word, None);
+                        } else {
+                            break;
+                        }
                     }
                 }
                 self.cursor.x = word_end - 1;
@@ -1260,9 +1283,12 @@ impl Pane for CopyOverlay {
                     MoveToStartOfNextLine => render.move_to_start_of_next_line(),
                     MoveToSelectionOtherEnd => render.move_to_selection_other_end(),
                     MoveToSelectionOtherEndHoriz => render.move_to_selection_other_end_horiz(),
-                    MoveBackwardWord => render.move_backward_one_word(),
-                    MoveForwardWord => render.move_forward_one_word(),
-                    MoveForwardWordEnd => render.move_to_end_of_word(),
+                    MoveBackwardWord => render.move_backward_one_word(false),
+                    MoveBackwardNonBlankWord => render.move_backward_one_word(true),
+                    MoveForwardWord => render.move_forward_one_word(false),
+                    MoveForwardNonBlankWord => render.move_forward_one_word(true),
+                    MoveForwardWordEnd => render.move_to_end_of_word(false),
+                    MoveForwardNonBlankWordEnd => render.move_to_end_of_word(true),
                     MoveRight => render.move_right_single_cell(),
                     MoveLeft => render.move_left_single_cell(),
                     MoveUp => render.move_up_single_row(),
@@ -1774,9 +1800,29 @@ pub fn copy_key_table() -> KeyTable {
             KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardWord),
         ),
         (
+            WKeyCode::Char('W'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardNonBlankWord),
+        ),
+        (
+            WKeyCode::Char('W'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardNonBlankWord),
+        ),
+        (
             WKeyCode::Char('e'),
             Modifiers::NONE,
             KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardWordEnd),
+        ),
+        (
+            WKeyCode::Char('E'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardNonBlankWordEnd),
+        ),
+        (
+            WKeyCode::Char('E'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardNonBlankWordEnd),
         ),
         (
             WKeyCode::LeftArrow,
@@ -1797,6 +1843,16 @@ pub fn copy_key_table() -> KeyTable {
             WKeyCode::Char('b'),
             Modifiers::NONE,
             KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardWord),
+        ),
+        (
+            WKeyCode::Char('B'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardNonBlankWord),
+        ),
+        (
+            WKeyCode::Char('B'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardNonBlankWord),
         ),
         (
             WKeyCode::Char('0'),
