@@ -22,3 +22,6 @@ build:
 fmt:
 	cargo +nightly fmt
 
+.PHONY: docs
+docs:
+	ci/build-docs.sh
