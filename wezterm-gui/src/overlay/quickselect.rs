@@ -585,14 +585,14 @@ impl Pane for QuickSelectOverlay {
                                 cell.attrs_mut()
                                     .set_intensity(Intensity::Normal)
                                     .set_underline(Underline::None)
-                                    .set_italic(false)
                                     .set_blink(Blink::None)
+                                    .set_italic(false)
                                     .set_reverse(false)
                                     .set_strikethrough(false)
                                     .set_invisible(false)
+                                    .set_overline(false)
                                     .set_foreground(ColorAttribute::Default)
-                                    .set_background(ColorAttribute::Default)
-                                    .set_hyperlink(None);
+                                    .set_background(ColorAttribute::Default);
                             }
                         }
                         if let Some(matches) = self.renderer.by_line.get(&stable_idx) {
