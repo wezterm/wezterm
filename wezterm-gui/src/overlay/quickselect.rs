@@ -581,7 +581,7 @@ impl Pane for QuickSelectOverlay {
                     } else {
                         if disable_attr_for_non_matching_text {
                             for cell in line.cells_mut_for_attr_changes_only().iter_mut() {
-                                cell.attrs_mut().reset_attributes();
+                                cell.attrs_mut().clear_attributes();
                             }
                         }
                         if let Some(matches) = self.renderer.by_line.get(&stable_idx) {
