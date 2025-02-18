@@ -14,13 +14,12 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use termwiz::cell::{Cell, CellAttributes};
-use termwiz::color::{AnsiColor, ColorAttribute};
+use termwiz::color::AnsiColor;
 use termwiz::surface::{SequenceNo, SEQ_ZERO};
 use url::Url;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Blink, Clipboard, Intensity, KeyCode, KeyModifiers, Line, MouseEvent, StableRowIndex,
-    TerminalSize, Underline,
+    Clipboard, Intensity, KeyCode, KeyModifiers, Line, MouseEvent, StableRowIndex, TerminalSize,
 };
 use window::WindowOps;
 
@@ -582,17 +581,7 @@ impl Pane for QuickSelectOverlay {
                     } else {
                         if disable_attr_for_non_matching_text {
                             for cell in line.cells_mut_for_attr_changes_only().iter_mut() {
-                                cell.attrs_mut()
-                                    .set_intensity(Intensity::Normal)
-                                    .set_underline(Underline::None)
-                                    .set_blink(Blink::None)
-                                    .set_italic(false)
-                                    .set_reverse(false)
-                                    .set_strikethrough(false)
-                                    .set_invisible(false)
-                                    .set_overline(false)
-                                    .set_foreground(ColorAttribute::Default)
-                                    .set_background(ColorAttribute::Default);
+                                cell.attrs_mut().reset_attributes();
                             }
                         }
                         if let Some(matches) = self.renderer.by_line.get(&stable_idx) {

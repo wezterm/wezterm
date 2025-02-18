@@ -286,6 +286,16 @@ impl CellAttributes {
         }
     }
 
+    /// Reset all attributes for a cell
+    pub fn reset_attributes(&mut self) {
+        self.attributes = 0;
+        self.foreground = SmallColor::Default;
+        self.background = SmallColor::Default;
+        if self.fat.is_some() {
+            self.fat.take();
+        };
+    }
+
     /// Returns true if the attribute bits in both objects are equal.
     /// This can be used to cheaply test whether the styles of the two
     /// cells are the same, and is used by some `Renderer` implementations.
