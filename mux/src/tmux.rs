@@ -1,3 +1,4 @@
+use crate::activity::Activity;
 use crate::domain::{alloc_domain_id, Domain, DomainId, DomainState, SplitSource};
 use crate::pane::{Pane, PaneId};
 use crate::tab::{SplitRequest, Tab, TabId};
@@ -264,10 +265,20 @@ impl TmuxDomainState {
     pub fn create_gui_window(&self) {
         if self.gui_window.lock().is_none() {
             let mux = Mux::get();
-            let window_builder = mux.new_empty_window(
-                None, /* TODO: pass session here */
-                None, /* position */
-            );
+            let window_builder =
+                if let Some((_domain, window_id, _tab)) = mux.resolve_pane_id(self.pane_id) {
+                    MuxWindowBuilder {
+                        window_id,
+                        activity: Some(Activity::new()),
+                        notified: false,
+                    }
+                } else {
+                    mux.new_empty_window(
+                        None, /* TODO: pass session here */
+                        None, /* position */
+                    )
+                };
+
             log::info!("Tmux create window id {}", window_builder.window_id);
             {
                 let mut window_id = self.gui_window.lock();
