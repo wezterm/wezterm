@@ -452,7 +452,7 @@ impl FallbackResolveInfo {
     }
 }
 
-enum EntityFont {
+enum Entity {
     Title,
     CommandPalette,
     CharSelect,
@@ -596,24 +596,24 @@ impl FontConfigInner {
         myself: &Rc<Self>,
         pref_size: Option<f64>,
         make_bold: bool,
-        entity_font: EntityFont,
+        entity: Entity,
     ) -> anyhow::Result<Rc<LoadedFont>> {
         let config = self.config.borrow();
         let (sys_font, sys_size) = self.compute_title_font(&config, make_bold);
 
         let font_size = pref_size.unwrap_or(sys_size);
 
-        let text_style = match entity_font {
-            EntityFont::Title => config.window_frame.font.as_ref().unwrap_or(&sys_font),
-            EntityFont::CommandPalette => config
+        let text_style = match entity {
+            Entity::Title => config.window_frame.font.as_ref().unwrap_or(&sys_font),
+            Entity::CommandPalette => config
                 .command_palette_font
                 .as_ref()
                 .unwrap_or_else(|| config.window_frame.font.as_ref().unwrap_or(&sys_font)),
-            EntityFont::CharSelect => config
+            Entity::CharSelect => config
                 .char_select_font
                 .as_ref()
                 .unwrap_or_else(|| config.window_frame.font.as_ref().unwrap_or(&sys_font)),
-            EntityFont::PaneSelect => config
+            Entity::PaneSelect => config
                 .pane_select_font
                 .as_ref()
                 .unwrap_or_else(|| config.window_frame.font.as_ref().unwrap_or(&sys_font)),
@@ -661,12 +661,8 @@ impl FontConfigInner {
             return Ok(Rc::clone(entry));
         }
 
-        let loaded = self.make_entity_font_impl(
-            myself,
-            config.window_frame.font_size,
-            true,
-            EntityFont::Title,
-        )?;
+        let loaded =
+            self.make_entity_font_impl(myself, config.window_frame.font_size, true, Entity::Title)?;
 
         title_font.replace(Rc::clone(&loaded));
 
@@ -686,7 +682,7 @@ impl FontConfigInner {
             myself,
             Some(config.command_palette_font_size),
             false,
-            EntityFont::CommandPalette,
+            Entity::CommandPalette,
         )?;
 
         command_palette_font.replace(Rc::clone(&loaded));
@@ -707,7 +703,7 @@ impl FontConfigInner {
             myself,
             Some(config.char_select_font_size),
             true,
-            EntityFont::CharSelect,
+            Entity::CharSelect,
         )?;
 
         char_select_font.replace(Rc::clone(&loaded));
@@ -728,7 +724,7 @@ impl FontConfigInner {
             myself,
             Some(config.pane_select_font_size),
             true,
-            EntityFont::PaneSelect,
+            Entity::PaneSelect,
         )?;
 
         pane_select_font.replace(Rc::clone(&loaded));
