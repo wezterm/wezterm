@@ -75,6 +75,7 @@ pub(crate) struct TmuxDomainState {
     pub support_commands: Mutex<HashMap<String, String>>,
     pub attach_state: Mutex<AttachState>,
     pub channel: (Sender<TmuxPaneId>, Receiver<TmuxPaneId>),
+    pub backlog: Mutex<HashMap<TmuxPaneId, String>>,
 }
 
 pub struct TmuxDomain {
@@ -116,13 +117,15 @@ impl TmuxDomainState {
                             log::error!("Failed to write tmux data to output: {:#}", err);
                         }
                     } else {
+                        // the output may come early then pane is ready, in this case we
+                        // backlog it
+                        self.backlog.lock().insert(*pane, text.to_string());
                         log::error!("Tmux pane {} havn't been attached", pane);
                     }
                 }
                 Event::WindowAdd { window } => {
-                    if self.gui_window.lock().is_none() {
-                        self.create_gui_window();
-                    } else {
+                    // Only handle the new tab, the first empty window handled by sync_window_state
+                    if !self.gui_window.lock().is_none() {
                         if let Some(session) = *self.tmux_session.lock() {
                             let mut cmd_queue = self.cmd_queue.as_ref().lock();
                             cmd_queue.push_back(Box::new(ListAllWindows {
@@ -319,6 +322,7 @@ impl TmuxDomain {
             support_commands: Mutex::new(HashMap::default()),
             attach_state: Mutex::new(AttachState::Init),
             channel: bounded(1),
+            backlog: Mutex::new(HashMap::default()),
         });
 
         Self { inner }

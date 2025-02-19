@@ -47,6 +47,7 @@ struct WindowItem {
     window_name: String,
     layout: Vec<WindowLayout>,
     layout_csum: String,
+    history_limit: isize,
 }
 
 impl TmuxDomainState {
@@ -309,14 +310,23 @@ impl TmuxDomainState {
             };
 
             if let Some(local_pane) = local_pane {
-                // When we run ListAllPanes on a new created window, the pane sometimes have not
-                // output yet, so all positions are 0
-                if (pane.cursor_x + pane.cursor_y) != 0 {
-                    self.set_pane_cursor_position(
-                        &local_pane,
-                        pane.cursor_x as usize,
-                        pane.cursor_y as usize,
-                    );
+                if let Some(text) = self.backlog.lock().remove(&pane.pane_id) {
+                    if let Some(ref_pane) = pane_map.get(&pane.pane_id) {
+                        let mut ref_pane = ref_pane.lock();
+                        if let Err(err) = ref_pane.output_write.write_all(text.as_bytes()) {
+                            log::error!("Failed to write tmux data to output: {:#}", err);
+                        }
+                    }
+                } else {
+                    // When we run ListAllPanes on a new created window, the pane sometimes have not
+                    // output yet, so all positions are 0
+                    if (pane.cursor_x + pane.cursor_y) != 0 {
+                        self.set_pane_cursor_position(
+                            &local_pane,
+                            pane.cursor_x as usize,
+                            pane.cursor_y as usize,
+                        );
+                    }
                 }
                 if pane.pane_active {
                     let gui_tabs = self.gui_tabs.lock();
@@ -495,7 +505,10 @@ impl TmuxDomainState {
             // For new window, we wait for nature ouput instead of capturing
             if !new_window {
                 for p in local_tab.panes.iter() {
-                    self.cmd_queue.lock().push_back(Box::new(CapturePane(*p)));
+                    self.cmd_queue.lock().push_back(Box::new(CapturePane {
+                        pane_id: *p,
+                        history_limit: window.history_limit,
+                    }));
                 }
             }
 
@@ -754,7 +767,8 @@ impl TmuxCommand for ListAllWindows {
                 #{{window_width}} #{{window_height}} \
                 #{{window_active}} \
                 #{{window_name}} \
-                #{{window_layout}}' -t {}\n",
+                #{{window_layout}} \
+                #{{history_limit}}' -t {}\n",
             self.session_id
         )
     }
@@ -799,6 +813,11 @@ impl TmuxCommand for ListAllWindows {
                 .next()
                 .ok_or_else(|| anyhow!("missing window_layout"))?;
 
+            let history_limit = fields
+                .next()
+                .ok_or_else(|| anyhow!("missing history_limit"))?
+                .parse::<isize>()?;
+
             let window_active = window_active == 1;
 
             // These ids all have various sigils such as `$`, `%`, `@`,
@@ -830,6 +849,7 @@ impl TmuxCommand for ListAllWindows {
                 window_name: window_name.to_string(),
                 layout,
                 layout_csum: layout_csum.to_string(),
+                history_limit,
             });
         }
 
@@ -944,11 +964,18 @@ impl TmuxCommand for Resize {
 }
 
 #[derive(Debug)]
-pub(crate) struct CapturePane(TmuxPaneId);
+pub(crate) struct CapturePane {
+    pane_id: TmuxPaneId,
+    history_limit: isize,
+}
+
 impl TmuxCommand for CapturePane {
     fn get_command(&self, _domain_id: DomainId) -> String {
-        const HISTORY_LINES: isize = -2000;
-        format!("capture-pane -p -t %{} -e -C -S {HISTORY_LINES}\n", self.0)
+        format!(
+            "capture-pane -p -t %{} -e -C -S {}\n",
+            self.pane_id,
+            self.history_limit * -1
+        )
     }
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
@@ -976,7 +1003,7 @@ impl TmuxCommand for CapturePane {
         let unescaped = &unescaped[0..unescaped.len().saturating_sub(1)].replace("\n", "\r\n");
 
         let pane_map = tmux_domain.inner.remote_panes.lock();
-        if let Some(pane) = pane_map.get(&self.0) {
+        if let Some(pane) = pane_map.get(&self.pane_id) {
             let mut pane = pane.lock();
             if let Some(p) = mux.get_pane(pane.local_pane_id) {
                 tmux_domain.inner.set_pane_cursor_position(&p, 0, 0);
