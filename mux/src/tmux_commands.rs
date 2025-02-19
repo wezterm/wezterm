@@ -310,16 +310,20 @@ impl TmuxDomainState {
             };
 
             if let Some(local_pane) = local_pane {
-                if let Some(text) = self.backlog.lock().remove(&pane.pane_id) {
-                    if let Some(ref_pane) = pane_map.get(&pane.pane_id) {
-                        let mut ref_pane = ref_pane.lock();
-                        if let Err(err) = ref_pane.output_write.write_all(text.as_bytes()) {
-                            log::error!("Failed to write tmux data to output: {:#}", err);
+                let c = local_pane.get_cursor_position();
+                // no caupture, output case
+                if (c.x + c.y as usize) == 0 {
+                    if let Some(text) = self.backlog.lock().remove(&pane.pane_id) {
+                        if let Some(ref_pane) = pane_map.get(&pane.pane_id) {
+                            let mut ref_pane = ref_pane.lock();
+                            if let Err(err) = ref_pane.output_write.write_all(text.as_bytes()) {
+                                log::error!("Failed to write tmux data to output: {:#}", err);
+                            }
                         }
                     }
                 } else {
-                    // When we run ListAllPanes on a new created window, the pane sometimes have not
-                    // output yet, so all positions are 0
+                    // we have capture, so remove the backlog
+                    let _ = self.backlog.lock().remove(&pane.pane_id);
                     if (pane.cursor_x + pane.cursor_y) != 0 {
                         self.set_pane_cursor_position(
                             &local_pane,
