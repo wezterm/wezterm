@@ -772,7 +772,7 @@ impl TmuxCommand for ListAllWindows {
                 #{{window_active}} \
                 #{{window_name}} \
                 #{{window_layout}} \
-                #{{history_limit}}' -t {}\n",
+                #{{history_limit}}' -t ${}\n",
             self.session_id
         )
     }
