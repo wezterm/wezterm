@@ -5072,7 +5072,7 @@ impl GlyphCache {
                 for row in 0..3 {
                     for col in 0..2 {
                         let bit = 2 * row + col;
-                        if pattern & bit != 0 {
+                        if pattern & (1u8 << bit) != 0 {
                             fill_rect(
                                 &mut buffer,
                                 col as f32 * x_half..(col + 1) as f32 * x_half,
