@@ -812,6 +812,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &[],
             icon: None,
         },
+        Confirmation(_) => CommandDef {
+            brief: "Prompt the user for confirmation".into(),
+            doc: "Activates the confirmation overlay and wait for input".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &[],
+            icon: None,
+        },
         PromptInputLine(_) => CommandDef {
             brief: "Prompt the user for a line of text".into(),
             doc: "Activates the prompt overlay and wait for input".into(),
