@@ -84,7 +84,7 @@ impl Child for TmuxChild {
     }
 
     fn process_id(&self) -> Option<u32> {
-        Some(0)
+        None
     }
 
     #[cfg(windows)]
