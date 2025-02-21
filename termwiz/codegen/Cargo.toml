@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-phf_codegen = "0.10"
-ucd-trie = "0.1"
-reqwest = {version="0.12", features=["blocking"]}
-human-sort = "0.2"
+human-sort.workspace = true
+phf_codegen.workspace = true
+reqwest = {workspace=true, features=["blocking"]}
+serde = {workspace=true, features=["derive"]}
+serde_json.workspace = true
+ucd-trie.workspace = true
+

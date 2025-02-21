@@ -1565,7 +1565,7 @@ impl TabInner {
                     // If the pane is no longer known to the mux, then its liveness
                     // state isn't guaranteed to be monitored or updated, so let's
                     // consider the pane effectively dead if it isn't in the mux.
-                    // <https://github.com/wez/wezterm/issues/4030>
+                    // <https://github.com/wezterm/wezterm/issues/4030>
                     let in_mux = mux.get_pane(pane.pane_id()).is_some();
                     let dead = pane.is_dead();
                     log::trace!(
@@ -1748,6 +1748,12 @@ impl TabInner {
     }
 
     fn set_active_pane(&mut self, pane: &Arc<dyn Pane>) {
+        let prior = self.get_active_pane();
+
+        if is_pane(pane, &prior.as_ref()) {
+            return;
+        }
+
         if self.zoomed.is_some() {
             if !configuration().unzoom_on_switch_pane {
                 return;
@@ -1760,7 +1766,6 @@ impl TabInner {
             .iter()
             .find(|p| p.pane.pane_id() == pane.pane_id())
         {
-            let prior = self.get_active_pane();
             self.active = item.index;
             self.recency.tag(item.index);
             self.advise_focus_change(prior);
@@ -1918,7 +1923,7 @@ impl TabInner {
         }
 
         // Ensure that we're not zoomed, otherwise we'll end up in
-        // a bogus split state (https://github.com/wez/wezterm/issues/723)
+        // a bogus split state (https://github.com/wezterm/wezterm/issues/723)
         self.set_zoomed(false);
 
         self.iter_panes().iter().nth(pane_index).map(|pos| {

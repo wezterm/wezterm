@@ -76,7 +76,7 @@ pub struct SshDomain {
 
     /// Show time since last response when waiting for a response.
     /// It is recommended to use
-    /// <https://wezfurlong.org/wezterm/config/lua/pane/get_metadata.html#since_last_response_ms>
+    /// <https://wezterm.org/config/lua/pane/get_metadata.html#since_last_response_ms>
     /// instead.
     #[dynamic(default)]
     pub overlay_lag_indicator: bool,
@@ -119,6 +119,7 @@ impl SshDomain {
                 name: format!("SSH:{host}"),
                 remote_address: host.to_string(),
                 multiplexing: SshMultiplexing::None,
+                local_echo_threshold_ms: default_local_echo_threshold_ms(),
                 ..SshDomain::default()
             });
 
@@ -126,6 +127,7 @@ impl SshDomain {
                 name: format!("SSHMUX:{host}"),
                 remote_address: host.to_string(),
                 multiplexing: SshMultiplexing::WezTerm,
+                local_echo_threshold_ms: default_local_echo_threshold_ms(),
                 ..SshDomain::default()
             });
         }

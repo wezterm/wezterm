@@ -71,7 +71,7 @@ jobs:
       - name: "Install Rust"
         uses: dtolnay/rust-toolchain@stable
       - name: "Compile with sccache"
-        uses: mozilla-actions/sccache-action@v0.0.5
+        uses: mozilla-actions/sccache-action@v0.0.7
       - name: "Cache Rust Dependencies"
         uses: actions/cache@v4
         id: cache-cargo-vendor
@@ -120,7 +120,7 @@ jobs:
         shell: bash
         run: "bash ci/appimage.sh"
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: "ubuntu20.04"
           path: |
@@ -134,6 +134,11 @@ jobs:
   upload:
     runs-on: ubuntu-latest
     needs: build
+    if: github.repository == 'wezterm/wezterm'
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
 
     steps:
       - name: "Workaround git permissions issue"
@@ -142,7 +147,7 @@ jobs:
       - name: "checkout repo"
         uses: actions/checkout@v4
       - name: "Download artifact"
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: "ubuntu20.04"
       - name: "Checksum"

@@ -7,17 +7,16 @@
 //! menus.
 use crate::commands::derive_command_from_key_assignment;
 use crate::inputmap::InputMap;
+use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::termwindow::TermWindowNotif;
 use config::configuration;
 use config::keyassignment::{KeyAssignment, SpawnCommand, SpawnTabDomain};
-use fuzzy_matcher::skim::SkimMatcherV2;
-use fuzzy_matcher::FuzzyMatcher;
 use mux::domain::{DomainId, DomainState};
 use mux::pane::PaneId;
-use mux::tab::TabId;
 use mux::termwiztermtab::TermWizTerminal;
 use mux::window::WindowId;
 use mux::Mux;
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 use termwiz::cell::{AttributeChange, CellAttributes};
 use termwiz::color::ColorAttribute;
@@ -37,7 +36,6 @@ struct Entry {
 
 pub struct LauncherTabEntry {
     pub title: String,
-    pub tab_id: TabId,
     pub tab_idx: usize,
     pub pane_count: Option<usize>,
 }
@@ -59,6 +57,8 @@ pub struct LauncherArgs {
     title: String,
     active_workspace: String,
     workspaces: Vec<String>,
+    help_text: String,
+    fuzzy_help_text: String,
 }
 
 impl LauncherArgs {
@@ -69,6 +69,8 @@ impl LauncherArgs {
         mux_window_id: WindowId,
         pane_id: PaneId,
         domain_id_of_current_tab: DomainId,
+        help_text: &str,
+        fuzzy_help_text: &str,
     ) -> Self {
         let mux = Mux::get();
 
@@ -102,7 +104,6 @@ impl LauncherArgs {
                     };
                     LauncherTabEntry {
                         title,
-                        tab_id: tab.tab_id(),
                         tab_idx,
                         pane_count: tab.count_panes(),
                     }
@@ -158,6 +159,8 @@ impl LauncherArgs {
             title: title.to_string(),
             workspaces,
             active_workspace,
+            help_text: help_text.to_string(),
+            fuzzy_help_text: fuzzy_help_text.to_string(),
         }
     }
 }
@@ -175,6 +178,8 @@ struct LauncherState {
     window: ::window::Window,
     filtering: bool,
     flags: LauncherFlags,
+    help_text: String,
+    fuzzy_help_text: String,
 }
 
 impl LauncherState {
@@ -186,19 +191,19 @@ impl LauncherState {
 
         self.filtered_entries.clear();
 
-        let matcher = SkimMatcherV2::default();
+        let pattern = matcher_pattern(&self.filter_term);
 
         struct MatchResult {
             row_idx: usize,
-            score: i64,
+            score: u32,
         }
 
         let mut scores: Vec<MatchResult> = self
             .entries
-            .iter()
+            .par_iter()
             .enumerate()
             .filter_map(|(row_idx, entry)| {
-                let score = matcher.fuzzy_match(&entry.label, &self.filter_term)?;
+                let score = matcher_score(&pattern, &entry.label)?;
                 Some(MatchResult { row_idx, score })
             })
             .collect();
@@ -364,11 +369,7 @@ impl LauncherState {
             },
             Change::Text(format!(
                 "{}\r\n",
-                truncate_right(
-                    "Select an item and press Enter=launch  \
-                     Esc=cancel  /=filter",
-                    max_width
-                )
+                truncate_right(&self.help_text, max_width)
             )),
             Change::AllAttributes(CellAttributes::default()),
         ];
@@ -404,11 +405,13 @@ impl LauncherState {
                 line.resize(max_width, termwiz::surface::SEQ_ZERO);
             }
             changes.append(&mut line.changes(&attr));
-            changes.push(Change::Text(" \r\n".to_string()));
+            changes.push(Change::Text(" ".to_string()));
 
             if entry_idx == self.active_idx {
                 changes.push(AttributeChange::Reverse(false).into());
             }
+            changes.push(Change::AllAttributes(CellAttributes::default()));
+            changes.push(Change::Text("\r\n".to_string()));
         }
 
         if self.filtering || !self.filter_term.is_empty() {
@@ -419,7 +422,7 @@ impl LauncherState {
                 },
                 Change::ClearToEndOfLine(ColorAttribute::Default),
                 Change::Text(truncate_right(
-                    &format!("Fuzzy matching: {}", self.filter_term),
+                    &format!("{}{}", &self.fuzzy_help_text, self.filter_term),
                     max_width,
                 )),
             ]);
@@ -596,11 +599,12 @@ pub fn launcher(
     args: LauncherArgs,
     mut term: TermWizTerminal,
     window: ::window::Window,
+    initial_choice_idx: usize,
 ) -> anyhow::Result<()> {
     let size = term.get_screen_size()?;
     let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
     let mut state = LauncherState {
-        active_idx: 0,
+        active_idx: initial_choice_idx,
         max_items,
         pane_id: args.pane_id,
         top_row: 0,
@@ -610,6 +614,8 @@ pub fn launcher(
         window,
         filtering: args.flags.contains(LauncherFlags::FUZZY),
         flags: args.flags,
+        help_text: args.help_text.clone(),
+        fuzzy_help_text: args.fuzzy_help_text.clone(),
     };
 
     term.set_raw_mode()?;

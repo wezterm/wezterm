@@ -12,7 +12,10 @@ use crate::utilsprites::RenderMetrics;
 use ::window::bitmaps::{TextureCoord, TextureRect, TextureSize};
 use ::window::{DeadKeyStatus, PointF, RectF, SizeF, WindowOps};
 use anyhow::{anyhow, Context};
-use config::{BoldBrightening, ConfigHandle, DimensionContext, TextStyle, VisualBellTarget};
+use config::{
+    BoldBrightening, ConfigHandle, DimensionContext, HorizontalWindowContentAlignment, TextStyle,
+    VerticalWindowContentAlignment, VisualBellTarget,
+};
 use euclid::num::Zero;
 use mux::pane::{Pane, PaneId};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
@@ -72,8 +75,6 @@ pub struct LineQuadCacheKey {
 }
 
 pub struct LineQuadCacheValue {
-    /// For resolving hash collisions
-    pub line: Line,
     pub expires: Option<Instant>,
     pub layers: HeapQuadAllocator,
     // Only set if the line contains any hyperlinks, so
@@ -86,9 +87,7 @@ pub struct LineToElementParams<'a> {
     pub line: &'a Line,
     pub config: &'a ConfigHandle,
     pub palette: &'a ColorPalette,
-    pub stable_line_idx: StableRowIndex,
     pub window_is_transparent: bool,
-    pub cursor: &'a StableCursorPosition,
     pub reverse_video: bool,
     pub shape_key: &'a Option<LineToEleShapeCacheKey>,
 }
@@ -110,8 +109,6 @@ pub struct LineToElementShapeItem {
 }
 
 pub struct LineToElementShape {
-    pub attrs: CellAttributes,
-    pub style: TextStyle,
     pub underline_tex_rect: TextureRect,
     pub fg_color: LinearRgba,
     pub bg_color: LinearRgba,
@@ -358,9 +355,43 @@ impl crate::TermWindow {
             .window_padding
             .left
             .evaluate_as_pixels(h_context);
+        let padding_right = self.config.window_padding.right;
         let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context);
+        let padding_bottom = self
+            .config
+            .window_padding
+            .bottom
+            .evaluate_as_pixels(v_context);
 
-        (padding_left, padding_top)
+        let horizontal_gap = self.dimensions.pixel_width as f32
+            - self.terminal_size.pixel_width as f32
+            - padding_left
+            - if self.show_scroll_bar && padding_right.is_zero() {
+                h_context.pixel_cell
+            } else {
+                padding_right.evaluate_as_pixels(h_context)
+            };
+        let vertical_gap = self.dimensions.pixel_height as f32
+            - self.terminal_size.pixel_height as f32
+            - padding_top
+            - padding_bottom
+            - if self.show_tab_bar {
+                self.tab_bar_pixel_height().unwrap_or(0.)
+            } else {
+                0.
+            };
+        let left_gap = match self.config.window_content_alignment.horizontal {
+            HorizontalWindowContentAlignment::Left => 0.,
+            HorizontalWindowContentAlignment::Center => horizontal_gap / 2.,
+            HorizontalWindowContentAlignment::Right => horizontal_gap,
+        };
+        let top_gap = match self.config.window_content_alignment.vertical {
+            VerticalWindowContentAlignment::Top => 0.,
+            VerticalWindowContentAlignment::Center => vertical_gap / 2.,
+            VerticalWindowContentAlignment::Bottom => vertical_gap,
+        };
+
+        (padding_left + left_gap, padding_top + top_gap)
     }
 
     fn resolve_lock_glyph(

@@ -185,7 +185,10 @@ pub struct Config {
     pub color_schemes: HashMap<String, Palette>,
 
     /// How many lines of scrollback you want to retain
-    #[dynamic(default = "default_scrollback_lines")]
+    #[dynamic(
+        default = "default_scrollback_lines",
+        validate = "validate_scrollback_lines"
+    )]
     pub scrollback_lines: usize,
 
     /// If no `prog` is specified on the command line, use this
@@ -469,6 +472,9 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub show_new_tab_button_in_tab_bar: bool,
 
+    #[dynamic(default = "default_true")]
+    pub show_close_tab_button_in_tabs: bool,
+
     /// If true, show_tab_index_in_tab_bar uses a zero-based index.
     /// The default is false and the tab shows a one-based index.
     #[dynamic(default)]
@@ -514,6 +520,9 @@ pub struct Config {
     /// Controls the amount of padding to use around the terminal cell area
     #[dynamic(default)]
     pub window_padding: WindowPadding,
+
+    #[dynamic(default)]
+    pub window_content_alignment: WindowContentAlignment,
 
     /// Specifies the path to a background image attachment file.
     /// The file can be any image format that the rust `image`
@@ -1630,12 +1639,22 @@ fn default_text_blink_rate_rapid() -> u64 {
 
 fn default_swap_backspace_and_delete() -> bool {
     // cfg!(target_os = "macos")
-    // See: https://github.com/wez/wezterm/issues/88
+    // See: https://github.com/wezterm/wezterm/issues/88
     false
 }
 
 fn default_scrollback_lines() -> usize {
     3500
+}
+
+const MAX_SCROLLBACK_LINES: usize = 999_999_999;
+fn validate_scrollback_lines(value: &usize) -> Result<(), String> {
+    if *value > MAX_SCROLLBACK_LINES {
+        return Err(format!(
+            "Illegal value {value} for scrollback_lines; it must be <= {MAX_SCROLLBACK_LINES}!"
+        ));
+    }
+    Ok(())
 }
 
 fn default_initial_rows() -> u16 {
@@ -1653,9 +1672,11 @@ pub fn default_hyperlink_rules() -> Vec<hyperlink::Rule> {
         hyperlink::Rule::with_highlight(r"\((\w+://\S+)\)", "$1", 1).unwrap(),
         hyperlink::Rule::with_highlight(r"\[(\w+://\S+)\]", "$1", 1).unwrap(),
         hyperlink::Rule::with_highlight(r"<(\w+://\S+)>", "$1", 1).unwrap(),
-        // Then handle URLs not wrapped in brackets
-        // and include terminating ), / or - characters, if any
-        hyperlink::Rule::new(r"\b\w+://\S+[)/a-zA-Z0-9-]+", "$0").unwrap(),
+        // Then handle URLs not wrapped in brackets that
+        // 1) have a balanced ending parenthesis or
+        hyperlink::Rule::new(hyperlink::CLOSING_PARENTHESIS_HYPERLINK_PATTERN, "$0").unwrap(),
+        // 2) include terminating _, / or - characters, if any
+        hyperlink::Rule::new(hyperlink::GENERIC_HYPERLINK_PATTERN, "$0").unwrap(),
         // implicit mailto link
         hyperlink::Rule::new(r"\b\w+@[\w-]+(\.[\w-]+)+\b", "mailto:$0").unwrap(),
     ]
@@ -1674,6 +1695,14 @@ fn default_term() -> String {
 
 fn default_font_size() -> f64 {
     12.0
+}
+
+pub(crate) fn compute_cache_dir() -> anyhow::Result<PathBuf> {
+    if let Some(runtime) = dirs_next::cache_dir() {
+        return Ok(runtime.join("wezterm"));
+    }
+
+    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
 }
 
 pub(crate) fn compute_data_dir() -> anyhow::Result<PathBuf> {
@@ -1745,6 +1774,7 @@ fn default_tiling_desktop_environments() -> Vec<String> {
         "X11 bspwm",
         "X11 dwm",
         "X11 i3",
+        "X11 xmonad",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -1873,6 +1903,28 @@ impl Default for WindowPadding {
             bottom: default_half_cell(),
         }
     }
+}
+
+#[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default)]
+pub struct WindowContentAlignment {
+    pub horizontal: HorizontalWindowContentAlignment,
+    pub vertical: VerticalWindowContentAlignment,
+}
+
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HorizontalWindowContentAlignment {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VerticalWindowContentAlignment {
+    #[default]
+    Top,
+    Center,
+    Bottom,
 }
 
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, PartialEq, Eq)]
@@ -2082,9 +2134,9 @@ pub(crate) fn validate_domain_name(name: &str) -> Result<(), String> {
     }
 }
 
-/// <https://github.com/wez/wezterm/pull/2435>
-/// <https://github.com/wez/wezterm/issues/2771>
-/// <https://github.com/wez/wezterm/issues/2630>
+/// <https://github.com/wezterm/wezterm/pull/2435>
+/// <https://github.com/wezterm/wezterm/issues/2771>
+/// <https://github.com/wezterm/wezterm/issues/2630>
 fn default_macos_forward_mods() -> Modifiers {
     Modifiers::SHIFT
 }

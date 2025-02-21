@@ -8,7 +8,7 @@ tags:
 
 Configures whether the window has a title bar and/or resizable border.
 
-The value is a set of of flags:
+The value is a set of flags:
 
 * `window_decorations = "NONE"` - disables titlebar and border (borderless
   mode), but causes problems with resizing and minimizing the window, so you
@@ -38,6 +38,13 @@ The value is a set of of flags:
       [integrated_title_button_alignment](integrated_title_button_alignment.md)
       [integrated_title_button_color](integrated_title_button_color.md) and,
       if you are using the retro tab bar, [tab_bar_style](tab_bar_style.md).
+
+{{since('nightly', outline=true)}}
+    The following flag is also supported:
+
+    * `MACOS_FORCE_SQUARE_CORNERS` - on macOS, force the window to have square
+      rather than rounded corners. It is not compatible with `TITLE` or
+      `INTEGRATED_BUTTONS`
 
 On X11 and Wayland, the windowing system may override the window decorations.
 

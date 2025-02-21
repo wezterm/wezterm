@@ -3,7 +3,7 @@
 //! Unlike other crates in this space, this crate provides a set
 //! of traits that allow selecting from different implementations
 //! at runtime.
-//! This crate is part of [wezterm](https://github.com/wez/wezterm).
+//! This crate is part of [wezterm](https://github.com/wezterm/wezterm).
 //!
 //! ```no_run
 //! use portable_pty::{CommandBuilder, PtySize, native_pty_system, PtySystem};
@@ -42,7 +42,7 @@ use downcast_rs::{impl_downcast, Downcast};
 #[cfg(unix)]
 use libc;
 #[cfg(feature = "serde_support")]
-use serde_derive::*;
+use serde::{Deserialize, Serialize};
 use std::io::Result as IoResult;
 #[cfg(windows)]
 use std::os::windows::prelude::{AsRawHandle, RawHandle};

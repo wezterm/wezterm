@@ -1,6 +1,6 @@
 // The range_plus_one lint can't see when the LHS is not compatible with
 // and inclusive range
-#![cfg_attr(feature = "cargo-clippy", allow(clippy::range_plus_one))]
+#![allow(clippy::range_plus_one)]
 use super::*;
 use crate::color::{ColorPalette, RgbColor};
 use crate::config::{BidiMode, NewlineCanon};
@@ -339,6 +339,7 @@ pub struct TerminalState {
     title: String,
     /// The icon title string (OSC 1)
     icon_title: Option<String>,
+    progress: Progress,
 
     palette: Option<ColorPalette>,
 
@@ -583,6 +584,7 @@ impl TerminalState {
             focused: true,
             bidi_enabled: None,
             bidi_hint: None,
+            progress: Progress::default(),
         }
     }
 
@@ -642,6 +644,10 @@ impl TerminalState {
     /// if it is set, otherwise return the OSC 2 window title.
     pub fn get_title(&self) -> &str {
         self.icon_title.as_ref().unwrap_or(&self.title)
+    }
+
+    pub fn get_progress(&self) -> Progress {
+        self.progress.clone()
     }
 
     /// Returns the current working directory associated with the
@@ -2007,7 +2013,7 @@ impl TerminalState {
         // The concept of uninitialized cells in wezterm is not the same as that on VT520 or that
         // on xterm, so, to prevent a lot of noise in esctest, treat them as spaces, at least when
         // asking for the checksum of a single cell (which is what esctest does).
-        // See: https://github.com/wez/wezterm/pull/4565
+        // See: https://github.com/wezterm/wezterm/pull/4565
         if checksum == 0 {
             32u16
         } else {
@@ -2202,7 +2208,7 @@ impl TerminalState {
                     // the logic for updating the cursor position, it causes regressions
                     // in the test suite.
                     // So this is here for now until a better solution is found.
-                    // <https://github.com/wez/wezterm/issues/3548>
+                    // <https://github.com/wezterm/wezterm/issues/3548>
                     EraseInLine::EraseToEndOfLine => cx + if self.wrap_next { 1 } else { 0 }..cols,
                     EraseInLine::EraseToStartOfLine => 0..cx + 1,
                     EraseInLine::EraseLine => 0..cols,
@@ -2315,9 +2321,8 @@ impl TerminalState {
         // The terminal only recognizes this control function if vertical split
         // screen mode (DECLRMM) is set.
         if self.left_and_right_margin_mode {
-            let rows = self.screen().physical_rows as u32;
             let cols = self.screen().physical_cols as u32;
-            let left = left.as_zero_based().min(rows - 1).max(0) as usize;
+            let left = left.as_zero_based().min(cols - 1).max(0) as usize;
             let right = right.as_zero_based().min(cols - 1).max(0) as usize;
 
             // The value of the left margin (Pl) must be less than the right margin (Pr).

@@ -16,7 +16,7 @@ mod daemonize;
 
 #[derive(Debug, Parser)]
 #[command(
-    about = "Wez's Terminal Emulator\nhttp://github.com/wez/wezterm",
+    about = "Wez's Terminal Emulator\nhttp://github.com/wezterm/wezterm",
     version = config::wezterm_version(),
     trailing_var_arg = true,
 )]
@@ -205,7 +205,7 @@ fn run() -> anyhow::Result<()> {
     }
 
     wezterm_blob_leases::register_storage(Arc::new(
-        wezterm_blob_leases::simple_tempdir::SimpleTempDir::new()?,
+        wezterm_blob_leases::simple_tempdir::SimpleTempDir::new_in(&*config::CACHE_DIR)?,
     ))?;
 
     let need_builder = !opts.prog.is_empty() || opts.cwd.is_some();

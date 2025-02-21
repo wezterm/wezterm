@@ -9,19 +9,18 @@ use ::window::{Point, Rect};
 use anyhow::Context;
 use config::{AllowSquareGlyphOverflow, TextStyle};
 use euclid::num::Zero;
-use image::io::Limits;
 use image::{
-    AnimationDecoder, DynamicImage, Frame, Frames, ImageDecoder, ImageFormat, ImageResult,
+    AnimationDecoder, DynamicImage, Frame, Frames, ImageDecoder, ImageFormat, ImageResult, Limits,
 };
 use lfucache::LfuCache;
-use once_cell::sync::Lazy;
 use ordered_float::NotNan;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Seek;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TryRecvError};
-use std::sync::{Arc, MutexGuard};
+use std::sync::{Arc, LazyLock, MutexGuard};
 use std::time::{Duration, Instant};
 use termwiz::color::RgbColor;
 use termwiz::image::{ImageData, ImageDataType};
@@ -30,6 +29,20 @@ use wezterm_blob_leases::{BlobLease, BlobManager, BoxedReader};
 use wezterm_font::units::*;
 use wezterm_font::{FontConfiguration, GlyphInfo, LoadedFont, LoadedFontId};
 use wezterm_term::Underline;
+
+static FRAME_ERROR_REPORTED: AtomicBool = AtomicBool::new(false);
+
+/// We only want to report a frame error once at error level, because
+/// if it is triggering it is likely in a animated image and will continue
+/// to trigger multiple times per second as the frames are cycled.
+fn report_frame_error<S: Into<String>>(message: S) {
+    if FRAME_ERROR_REPORTED.load(Ordering::Relaxed) {
+        log::debug!("{}", message.into());
+    } else {
+        log::error!("{}", message.into());
+        FRAME_ERROR_REPORTED.store(true, Ordering::Relaxed);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadState {
@@ -224,7 +237,7 @@ impl FrameDecoder {
         let (tx, rx) = sync_channel(2);
 
         let buf_reader = lease.get_reader().context("lease.get_reader()")?;
-        let reader = image::io::Reader::new(buf_reader)
+        let reader = image::ImageReader::new(buf_reader)
             .with_guessed_format()
             .context("guess format from lease")?;
         let format = reader
@@ -246,7 +259,7 @@ impl FrameDecoder {
     }
 
     fn run_decoder_thread(
-        reader: image::io::Reader<BoxedReader>,
+        reader: image::ImageReader<BoxedReader>,
         format: ImageFormat,
         tx: SyncSender<DecodedFrame>,
     ) -> anyhow::Result<()> {
@@ -371,7 +384,7 @@ struct FrameState {
 impl FrameState {
     fn new(rx: Receiver<DecodedFrame>) -> Self {
         const BLACK_SIZE: usize = 8;
-        static BLACK: Lazy<BlobLease> = Lazy::new(|| {
+        static BLACK: LazyLock<BlobLease> = LazyLock::new(|| {
             let mut data = vec![];
             for _ in 0..BLACK_SIZE * BLACK_SIZE {
                 data.extend_from_slice(&[0, 0, 0, 0xff]);
@@ -724,7 +737,7 @@ impl GlyphCache {
         };
 
         // We shouldn't need to render a glyph that occupies zero cells, but that
-        // can happen somehow; see <https://github.com/wez/wezterm/issues/1042>
+        // can happen somehow; see <https://github.com/wezterm/wezterm/issues/1042>
         // so let's treat 0 cells as 1 cell so that we don't try to divide by
         // zero below.
         let num_cells = num_cells.max(1) as f64;
@@ -934,7 +947,7 @@ impl GlyphCache {
                     // that any given cell may switch to a different frame from
                     // its neighbor while we are rendering the entire terminal
                     // frame, so we want to avoid that.
-                    // <https://github.com/wez/wezterm/issues/3260>
+                    // <https://github.com/wezterm/wezterm/issues/3260>
                     let mut next_due = *decoded_frame_start
                         + durations[*decoded_current_frame].max(min_frame_duration);
                     if now >= next_due {
@@ -1003,7 +1016,7 @@ impl GlyphCache {
                 // that any given cell may switch to a different frame from
                 // its neighbor while we are rendering the entire terminal
                 // frame, so we want to avoid that.
-                // <https://github.com/wez/wezterm/issues/3260>
+                // <https://github.com/wezterm/wezterm/issues/3260>
                 let mut next_due =
                     *decoded_frame_start + frames.frame_duration().max(min_frame_duration);
                 if now >= next_due {
@@ -1025,14 +1038,35 @@ impl GlyphCache {
                     return Ok((sprite.clone(), next, frames.load_state));
                 }
 
+                let expected_byte_size =
+                    frames.current_frame.width * frames.current_frame.height * 4;
+
+                let frame_data = match frames.current_frame.lease.get_data() {
+                    Ok(data) => {
+                        // If the size isn't right, ignore this frame and replace
+                        // it with a blank one instead. This might happen if
+                        // some process is truncating the files, or perhaps if
+                        // the disk is full.
+                        // We need to check for this because the consequence of
+                        // a mismatched size is a panic in a layer where we
+                        // cannot handle the error case.
+                        if data.len() != expected_byte_size {
+                            report_frame_error(format!("frame data is corrupted: expected size {expected_byte_size} but have {}", data.len()));
+                            vec![0u8; expected_byte_size]
+                        } else {
+                            data
+                        }
+                    }
+                    Err(err) => {
+                        report_frame_error(format!("frame data error: {err:#}"));
+                        vec![0u8; expected_byte_size]
+                    }
+                };
+
                 let frame = Image::from_raw(
                     frames.current_frame.width,
                     frames.current_frame.height,
-                    frames
-                        .current_frame
-                        .lease
-                        .get_data()
-                        .context("frames.current_frame.lease.get_data")?,
+                    frame_data,
                 );
                 let sprite = atlas.allocate_with_padding(&frame, padding, scale_down)?;
 

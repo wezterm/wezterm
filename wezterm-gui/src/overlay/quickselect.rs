@@ -27,7 +27,7 @@ const PATTERNS: [&str; 14] = [
     // markdown_url
     r"\[[^]]*\]\(([^)]+)\)",
     // url
-    r"(?:https?://|git@|git://|ssh://|ftp://|file:///)\S+",
+    r"(?:https?://|git@|git://|ssh://|ftp://|file://)\S+",
     // diff_a
     r"--- a/(\S+)",
     // diff_b
@@ -35,7 +35,7 @@ const PATTERNS: [&str; 14] = [
     // docker
     r"sha256:([0-9a-f]{64})",
     // path
-    r"(?:[.\w\-@~]+)?(?:/[.\w\-@]+)+",
+    r"(?:[.\w\-@~]+)?(?:/+[.\w\-@]+)+",
     // color
     r"#[0-9a-fA-F]{6}",
     // uuid
@@ -914,6 +914,7 @@ impl QuickSelectRenderable {
 
         let pane_id = self.delegate.pane_id();
         let action = self.args.action.clone();
+        let skip_action_on_paste = self.args.skip_action_on_paste;
         self.window
             .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
                 let mux = mux::Mux::get();
@@ -942,7 +943,9 @@ impl QuickSelectRenderable {
                             let _ = pane.send_paste(&text);
                         }
                         if let Some(action) = action {
-                            let _ = term_window.perform_key_assignment(&pane, &action);
+                            if !paste || !skip_action_on_paste {
+                                let _ = term_window.perform_key_assignment(&pane, &action);
+                            }
                         } else {
                             term_window.copy_to_clipboard(
                                 ClipboardCopyDestination::ClipboardAndPrimarySelection,

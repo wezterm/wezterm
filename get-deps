@@ -107,6 +107,13 @@ fedora_deps() {
   if test_flag; then
     $YUM install -y 'openssh-server'
   fi
+
+  # Fedora 41 and above split a part of openssl-devel into openssl-devel-engine.
+  # CentOS/RHEL 10 are doing the same thing.
+  if { [ "$VERSION_ID" -ge "41" ] && [ "$ID" == "fedora" ]; } \
+     || { [ "$VERSION_ID" -ge "10" ] && [ "$ID" != "fedora" ]; }; then
+    $YUM install -y 'openssl-devel-engine'
+  fi
 }
 
 suse_deps() {
@@ -390,7 +397,7 @@ fi
 
 if ! test_cmd 'rustc'; then
   echo "Rust is not installed!"
-  echo "Please see https://wezfurlong.org/wezterm/install/source.html for installation instructions"
+  echo "Please see https://wezterm.org/install/source.html for installation instructions"
   exit 1
 fi
 

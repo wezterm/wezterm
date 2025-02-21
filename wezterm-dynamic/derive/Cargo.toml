@@ -1,8 +1,8 @@
 [package]
 name = "wezterm-dynamic-derive"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
-repository = "https://github.com/wez/wezterm"
+repository = "https://github.com/wezterm/wezterm"
 description = "config serialization for wezterm via dynamic json-like data values"
 license = "MIT"
 
@@ -10,6 +10,6 @@ license = "MIT"
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1.0"
-quote = "1.0.2"
-syn = {version="1.0", features=["extra-traits"]}
+proc-macro2.workspace = true
+quote.workspace = true
+syn = {workspace=true, features=["extra-traits"]}

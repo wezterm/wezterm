@@ -38,7 +38,7 @@ jobs:
         with:
           target: "x86_64-pc-windows-msvc"
       - name: "Compile with sccache"
-        uses: mozilla-actions/sccache-action@v0.0.5
+        uses: mozilla-actions/sccache-action@v0.0.7
       - name: "Cache Rust Dependencies"
         uses: actions/cache@v4
         id: cache-cargo-vendor
@@ -85,7 +85,7 @@ jobs:
         shell: bash
         run: "bash ci/deploy.sh"
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: "windows"
           path: |
@@ -96,12 +96,17 @@ jobs:
   upload:
     runs-on: ubuntu-latest
     needs: build
+    if: github.repository == 'wezterm/wezterm'
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
 
     steps:
       - name: "checkout repo"
         uses: actions/checkout@v4
       - name: "Download artifact"
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: "windows"
       - name: "Checksum"

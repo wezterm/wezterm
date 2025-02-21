@@ -482,7 +482,7 @@ impl TextStyle {
     /// doesn't help us know anything about the name until
     /// we have a parsed font to compare with.
     ///
-    /// <https://github.com/wez/wezterm/issues/456>
+    /// <https://github.com/wezterm/wezterm/issues/456>
     pub fn reduce_first_font_to_family(&self) -> Self {
         fn reduce(mut family: &str) -> String {
             loop {
@@ -581,7 +581,7 @@ impl TextStyle {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::let_and_return))]
+    #[allow(clippy::let_and_return)]
     pub fn font_with_fallback(&self) -> Vec<FontAttributes> {
         let mut font = self.font.clone();
 

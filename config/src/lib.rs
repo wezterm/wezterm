@@ -67,6 +67,7 @@ lazy_static! {
     pub static ref CONFIG_DIRS: Vec<PathBuf> = config_dirs();
     pub static ref RUNTIME_DIR: PathBuf = compute_runtime_dir().unwrap();
     pub static ref DATA_DIR: PathBuf = compute_data_dir().unwrap();
+    pub static ref CACHE_DIR: PathBuf = compute_cache_dir().unwrap();
     static ref CONFIG: Configuration = Configuration::new();
     static ref CONFIG_FILE_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
     static ref CONFIG_SKIP: AtomicBool = AtomicBool::new(false);
@@ -591,7 +592,7 @@ impl ConfigInner {
                 // But avoid watching the home dir itself, so that we
                 // don't keep reloading every time something in the
                 // home dir changes!
-                // <https://github.com/wez/wezterm/issues/1895>
+                // <https://github.com/wezterm/wezterm/issues/1895>
                 if parent != &*HOME_DIR {
                     watch_paths.push(parent.to_path_buf());
                 }
