@@ -862,7 +862,7 @@ impl WindowOps for Window {
 
     fn get_os_parameters(
         &self,
-        _config: &ConfigHandle,
+        config: &ConfigHandle,
         window_state: WindowState,
     ) -> anyhow::Result<Option<Parameters>> {
         let raw = self.raw_window_handle();
@@ -881,7 +881,7 @@ impl WindowOps for Window {
 
         let border_dimensions = if window_state.contains(WindowState::FULL_SCREEN)
             && !native_full_screen
-            && !_config.macos_fullscreen_extend_behind_notch
+            && !config.macos_fullscreen_extend_behind_notch
         {
             let main_screen = unsafe { NSScreen::mainScreen(nil) };
             let has_safe_area_insets: BOOL =
