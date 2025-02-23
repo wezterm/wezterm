@@ -649,14 +649,14 @@ impl Pane for QuickSelectOverlay {
         // For rows with search results, we want to highlight the matching ranges
         let search_row = renderer.compute_search_row();
         for (idx, line) in lines.iter_mut().enumerate() {
+            if disable_attr {
+                line.cells_mut_for_attr_changes_only()
+                    .iter_mut()
+                    .for_each(|cell| cell.attrs_mut().clear());
+            }
             let stable_idx = idx as StableRowIndex + top;
             renderer.dirty_results.remove(stable_idx);
             if stable_idx == search_row {
-                if disable_attr {
-                    line.cells_mut_for_attr_changes_only()
-                        .iter_mut()
-                        .for_each(|cell| cell.attrs_mut().clear());
-                }
                 // Replace with search UI
                 let rev = CellAttributes::default().set_reverse(true).clone();
                 line.fill_range(0..dims.cols, &Cell::new(' ', rev.clone()), SEQ_ZERO);
