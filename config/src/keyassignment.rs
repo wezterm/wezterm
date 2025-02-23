@@ -517,6 +517,18 @@ fn default_fuzzy_description() -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct Confirmation {
+    pub action: Box<KeyAssignment>,
+    /// Text to show for confirmation
+    #[dynamic(default = "default_message")]
+    pub message: String,
+}
+
+fn default_message() -> String {
+    "🛑 Really continue?".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub enum KeyAssignment {
     SpawnTab(SpawnTabDomain),
     SpawnWindow,
@@ -630,6 +642,7 @@ pub enum KeyAssignment {
     ActivateWindowRelativeNoWrap(isize),
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
+    Confirmation(Confirmation),
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

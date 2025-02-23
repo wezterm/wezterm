@@ -232,4 +232,5 @@ return config
 
 
 See also [PromptInputLine](PromptInputLine.md).
+See also [Confirmation](Confirmation.md).
 

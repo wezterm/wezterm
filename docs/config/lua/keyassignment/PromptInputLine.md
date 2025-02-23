@@ -96,3 +96,4 @@ return config
 ```
 
 See also [InputSelector](InputSelector.md).
+See also [Confirmation](Confirmation.md).
