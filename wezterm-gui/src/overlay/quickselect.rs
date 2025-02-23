@@ -556,6 +556,11 @@ impl Pane for QuickSelectOverlay {
 
                 for (idx, line) in lines.iter_mut().enumerate() {
                     let mut line: Line = line.clone();
+                    if disable_attr_for_non_matching_text {
+                        for cell in line.cells_mut_for_attr_changes_only().iter_mut() {
+                            cell.attrs_mut().clear();
+                        }
+                    }
                     let stable_idx = idx as StableRowIndex + first_row;
                     self.renderer.dirty_results.remove(stable_idx);
                     if stable_idx == self.search_row {
@@ -578,62 +583,51 @@ impl Pane for QuickSelectOverlay {
                         );
                         self.renderer.last_bar_pos = Some(self.search_row);
                         line.clear_appdata();
-                    } else {
-                        if disable_attr_for_non_matching_text {
-                            for cell in line.cells_mut_for_attr_changes_only().iter_mut() {
-                                cell.attrs_mut().clear();
-                            }
-                        }
-                        if let Some(matches) = self.renderer.by_line.get(&stable_idx) {
-                            for m in matches {
-                                // highlight
-                                for cell_idx in m.range.clone() {
-                                    if let Some(cell) =
-                                        line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
-                                    {
-                                        cell.attrs_mut()
-                                            .set_background(
-                                                colors
-                                                    .quick_select_match_bg
-                                                    .unwrap_or(AnsiColor::Black.into()),
-                                            )
-                                            .set_foreground(
-                                                colors
-                                                    .quick_select_match_fg
-                                                    .unwrap_or(AnsiColor::Green.into()),
-                                            )
-                                            .set_reverse(false)
-                                            .set_intensity(Intensity::Bold);
-                                    }
-                                }
-                                for (idx, c) in m.label.chars().enumerate() {
-                                    let mut attr = line
-                                        .get_cell(idx)
-                                        .map(|cell| cell.attrs().clone())
-                                        .unwrap_or_else(|| CellAttributes::default());
-                                    attr.set_background(
-                                        colors
-                                            .quick_select_label_bg
-                                            .unwrap_or(AnsiColor::Black.into()),
-                                    )
-                                    .set_foreground(
-                                        colors
-                                            .quick_select_label_fg
-                                            .unwrap_or(AnsiColor::Olive.into()),
-                                    )
-                                    .set_reverse(false)
-                                    .set_intensity(Intensity::Bold);
-                                    line.set_cell(
-                                        m.range.start + idx,
-                                        Cell::new(c, attr),
-                                        SEQ_ZERO,
-                                    );
+                    } else if let Some(matches) = self.renderer.by_line.get(&stable_idx) {
+                        for m in matches {
+                            // highlight
+                            for cell_idx in m.range.clone() {
+                                if let Some(cell) =
+                                    line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
+                                {
+                                    cell.attrs_mut()
+                                        .set_background(
+                                            colors
+                                                .quick_select_match_bg
+                                                .unwrap_or(AnsiColor::Black.into()),
+                                        )
+                                        .set_foreground(
+                                            colors
+                                                .quick_select_match_fg
+                                                .unwrap_or(AnsiColor::Green.into()),
+                                        )
+                                        .set_reverse(false)
+                                        .set_intensity(Intensity::Bold);
                                 }
                             }
-                            line.clear_appdata();
-                        } else if disable_attr_for_non_matching_text {
-                            line.clear_appdata();
+                            for (idx, c) in m.label.chars().enumerate() {
+                                let mut attr = line
+                                    .get_cell(idx)
+                                    .map(|cell| cell.attrs().clone())
+                                    .unwrap_or_else(|| CellAttributes::default());
+                                attr.set_background(
+                                    colors
+                                        .quick_select_label_bg
+                                        .unwrap_or(AnsiColor::Black.into()),
+                                )
+                                .set_foreground(
+                                    colors
+                                        .quick_select_label_fg
+                                        .unwrap_or(AnsiColor::Olive.into()),
+                                )
+                                .set_reverse(false)
+                                .set_intensity(Intensity::Bold);
+                                line.set_cell(m.range.start + idx, Cell::new(c, attr), SEQ_ZERO);
+                            }
                         }
+                        line.clear_appdata();
+                    } else if disable_attr_for_non_matching_text {
+                        line.clear_appdata();
                     }
                     overlay_lines.push(line);
                 }
@@ -663,6 +657,11 @@ impl Pane for QuickSelectOverlay {
             let stable_idx = idx as StableRowIndex + top;
             renderer.dirty_results.remove(stable_idx);
             if stable_idx == search_row {
+                if disable_attr_for_non_matching_text {
+                    for cell in line.cells_mut_for_attr_changes_only().iter_mut() {
+                        cell.attrs_mut().clear();
+                    }
+                }
                 // Replace with search UI
                 let rev = CellAttributes::default().set_reverse(true).clone();
                 line.fill_range(0..dims.cols, &Cell::new(' ', rev.clone()), SEQ_ZERO);
@@ -681,53 +680,45 @@ impl Pane for QuickSelectOverlay {
                     SEQ_ZERO,
                 );
                 renderer.last_bar_pos = Some(search_row);
-            } else {
-                if disable_attr_for_non_matching_text {
-                    for cell in line.cells_mut_for_attr_changes_only().iter_mut() {
-                        cell.attrs_mut().clear();
+            } else if let Some(matches) = renderer.by_line.get(&stable_idx) {
+                for m in matches {
+                    // highlight
+                    for cell_idx in m.range.clone() {
+                        if let Some(cell) = line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
+                        {
+                            cell.attrs_mut()
+                                .set_background(
+                                    colors
+                                        .quick_select_match_bg
+                                        .unwrap_or(AnsiColor::Black.into()),
+                                )
+                                .set_foreground(
+                                    colors
+                                        .quick_select_match_fg
+                                        .unwrap_or(AnsiColor::Green.into()),
+                                )
+                                .set_reverse(false)
+                                .set_intensity(Intensity::Bold);
+                        }
                     }
-                }
-                if let Some(matches) = renderer.by_line.get(&stable_idx) {
-                    for m in matches {
-                        // highlight
-                        for cell_idx in m.range.clone() {
-                            if let Some(cell) =
-                                line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
-                            {
-                                cell.attrs_mut()
-                                    .set_background(
-                                        colors
-                                            .quick_select_match_bg
-                                            .unwrap_or(AnsiColor::Black.into()),
-                                    )
-                                    .set_foreground(
-                                        colors
-                                            .quick_select_match_fg
-                                            .unwrap_or(AnsiColor::Green.into()),
-                                    )
-                                    .set_reverse(false)
-                                    .set_intensity(Intensity::Bold);
-                            }
-                        }
-                        for (idx, c) in m.label.chars().enumerate() {
-                            let mut attr = line
-                                .get_cell(idx)
-                                .map(|cell| cell.attrs().clone())
-                                .unwrap_or_else(|| CellAttributes::default());
-                            attr.set_background(
-                                colors
-                                    .quick_select_label_bg
-                                    .unwrap_or(AnsiColor::Black.into()),
-                            )
-                            .set_foreground(
-                                colors
-                                    .quick_select_label_fg
-                                    .unwrap_or(AnsiColor::Olive.into()),
-                            )
-                            .set_reverse(false)
-                            .set_intensity(Intensity::Bold);
-                            line.set_cell(m.range.start + idx, Cell::new(c, attr), SEQ_ZERO);
-                        }
+                    for (idx, c) in m.label.chars().enumerate() {
+                        let mut attr = line
+                            .get_cell(idx)
+                            .map(|cell| cell.attrs().clone())
+                            .unwrap_or_else(|| CellAttributes::default());
+                        attr.set_background(
+                            colors
+                                .quick_select_label_bg
+                                .unwrap_or(AnsiColor::Black.into()),
+                        )
+                        .set_foreground(
+                            colors
+                                .quick_select_label_fg
+                                .unwrap_or(AnsiColor::Olive.into()),
+                        )
+                        .set_reverse(false)
+                        .set_intensity(Intensity::Bold);
+                        line.set_cell(m.range.start + idx, Cell::new(c, attr), SEQ_ZERO);
                     }
                 }
             }
