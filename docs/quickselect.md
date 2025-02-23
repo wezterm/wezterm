@@ -31,4 +31,10 @@ Pressing `ESCAPE` will cancel quick select mode.
 
 {{since('nightly')}}
 
-A configuration option [disable_attributes_for_non_matching_text_in_quick_select](config/lua/config/disable_attributes_for_non_matching_text_in_quick_select.md) has been added to disable attributes for non matching text in Quick Select mode.
+A configuration option [quick_select_remove_styling](config/lua/config/quick_select_remove_styling.md)
+has been added which when set to `true`, results in all color and styling
+being removed from the pane prior to performing matching and highlighting
+any matching text in quick select mode.
+
+This can make it easier to focus on the matches, particularly when the pane
+already had a lot of styling and colors.
