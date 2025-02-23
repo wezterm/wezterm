@@ -547,8 +547,7 @@ impl Pane for QuickSelectOverlay {
 
                 let config = &self.renderer.config;
                 let colors = config.resolved_palette.clone();
-                let disable_attr_for_non_matching_text =
-                    config.disable_attributes_for_non_matching_text_in_quick_select;
+                let disable_attr = config.quick_select_remove_styling;
 
                 // Process the lines; for the search row we want to render instead
                 // the search UI.
@@ -556,7 +555,7 @@ impl Pane for QuickSelectOverlay {
 
                 for (idx, line) in lines.iter_mut().enumerate() {
                     let mut line: Line = line.clone();
-                    if disable_attr_for_non_matching_text {
+                    if disable_attr {
                         line.cells_mut_for_attr_changes_only()
                             .iter_mut()
                             .for_each(|cell| cell.attrs_mut().clear());
@@ -626,7 +625,7 @@ impl Pane for QuickSelectOverlay {
                             }
                         }
                         line.clear_appdata();
-                    } else if disable_attr_for_non_matching_text {
+                    } else if disable_attr {
                         line.clear_appdata();
                     }
                     overlay_lines.push(line);
@@ -645,9 +644,7 @@ impl Pane for QuickSelectOverlay {
 
         let (top, mut lines) = self.delegate.get_lines(lines);
         let colors = renderer.config.resolved_palette.clone();
-        let disable_attr_for_non_matching_text = renderer
-            .config
-            .disable_attributes_for_non_matching_text_in_quick_select;
+        let disable_attr = renderer.config.quick_select_remove_styling;
 
         // Process the lines; for the search row we want to render instead
         // the search UI.
@@ -657,7 +654,7 @@ impl Pane for QuickSelectOverlay {
             let stable_idx = idx as StableRowIndex + top;
             renderer.dirty_results.remove(stable_idx);
             if stable_idx == search_row {
-                if disable_attr_for_non_matching_text {
+                if disable_attr {
                     line.cells_mut_for_attr_changes_only()
                         .iter_mut()
                         .for_each(|cell| cell.attrs_mut().clear());
