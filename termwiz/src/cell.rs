@@ -376,13 +376,8 @@ impl CellAttributes {
     }
 
     /// Clear all attributes from a cell
-    pub fn clear_attributes(&mut self) {
-        self.attributes = 0;
-        self.foreground = SmallColor::Default;
-        self.background = SmallColor::Default;
-        if self.fat.is_some() {
-            self.fat.take();
-        }
+    pub fn clear(&mut self) {
+        *self = Self::blank();
     }
 
     fn allocate_fat_attributes(&mut self) {
