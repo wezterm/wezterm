@@ -559,6 +559,7 @@ impl Pane for QuickSelectOverlay {
                         line.cells_mut_for_attr_changes_only()
                             .iter_mut()
                             .for_each(|cell| cell.attrs_mut().clear());
+                        line.clear_appdata();
                     }
                     let stable_idx = idx as StableRowIndex + first_row;
                     self.renderer.dirty_results.remove(stable_idx);
@@ -622,8 +623,6 @@ impl Pane for QuickSelectOverlay {
                                 line.set_cell(m.range.start + idx, Cell::new(c, attr), SEQ_ZERO);
                             }
                         }
-                        line.clear_appdata();
-                    } else if disable_attr {
                         line.clear_appdata();
                     }
                     overlay_lines.push(line);
