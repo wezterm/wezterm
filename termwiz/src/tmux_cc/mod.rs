@@ -281,7 +281,22 @@ fn parse_line(line: &str) -> anyhow::Result<Event> {
                 raw_flags,
             })
         }
-        _ => unreachable!(),
+        Rule::pane_id
+        | Rule::word
+        | Rule::client_name
+        | Rule::window_id
+        | Rule::session_id
+        | Rule::window_layout
+        | Rule::any_text
+        | Rule::line
+        | Rule::line_entire
+        | Rule::EOI
+        | Rule::number
+        | Rule::layout_split_pane
+        | Rule::layout_pane
+        | Rule::layout_split_horizontal
+        | Rule::layout_split_vertical
+        | Rule::layout_window => anyhow::bail!("Should not reach here"),
     }
 }
 
@@ -540,7 +555,36 @@ fn parse_layout_inner(
 
                 stack.push(pane);
             }
-            _ => unreachable!(),
+            Rule::EOI
+            | Rule::number
+            | Rule::client_session_changed
+            | Rule::any_text
+            | Rule::pane_id
+            | Rule::window_id
+            | Rule::word
+            | Rule::window_layout
+            | Rule::line_entire
+            | Rule::line
+            | Rule::session_id
+            | Rule::client_name
+            | Rule::client_detached
+            | Rule::begin
+            | Rule::end
+            | Rule::error
+            | Rule::exit
+            | Rule::output
+            | Rule::pane_mode_changed
+            | Rule::session_changed
+            | Rule::session_renamed
+            | Rule::session_window_changed
+            | Rule::sessions_changed
+            | Rule::window_add
+            | Rule::window_close
+            | Rule::window_pane_changed
+            | Rule::window_renamed
+            | Rule::layout_split_pane
+            | Rule::layout_window
+            | Rule::layout_change => anyhow::bail!("Should not reach here"),
         }
     }
 
@@ -836,7 +880,7 @@ here
         let layout_case2 = "158x40,0,0[158x20,0,0,69,158x19,0,21{79x19,0,21,70,78x19,80,21[78x9,80,21,71,78x9,80,31,73]}]".to_string();
         let layout_case3 = "158x40,0,0{79x40,0,0[79x20,0,0,74,79x19,0,21{39x19,0,21,76,39x19,40,21,77}],78x40,80,0,75}".to_string();
 
-        let mut layout = parse_layout(layout_case1.get(0..).unwrap()).unwrap();
+        let mut layout = parse_layout(&layout_case1).unwrap();
         let l = layout.pop().unwrap();
         assert!(if let WindowLayout::SinglePane(p) = l {
             assert_eq!(p.pane_width, 158);
@@ -849,38 +893,13 @@ here
             false
         });
 
-        layout = parse_layout(layout_case2.get(0..).unwrap()).unwrap();
-        assert!(if let WindowLayout::SplitVertical(_x) = &layout[0] {
-            true
-        } else {
-            false
-        });
-        assert!(if let WindowLayout::SplitHorizontal(_x) = &layout[1] {
-            true
-        } else {
-            false
-        });
-        assert!(if let WindowLayout::SplitVertical(_x) = &layout[2] {
-            true
-        } else {
-            false
-        });
-
-        layout = parse_layout(layout_case3.get(0..).unwrap()).unwrap();
-        assert!(if let WindowLayout::SplitHorizontal(_x) = &layout[0] {
-            true
-        } else {
-            false
-        });
-        assert!(if let WindowLayout::SplitVertical(_x) = &layout[1] {
-            true
-        } else {
-            false
-        });
-        assert!(if let WindowLayout::SplitHorizontal(_x) = &layout[2] {
-            true
-        } else {
-            false
-        });
+        layout = parse_layout(&layout_case2).unwrap();
+        assert!(matches!(&layout[0], WindowLayout::SplitVertical(_x)));
+        assert!(matches!(&layout[1], WindowLayout::SplitHorizontal(_x)));
+        assert!(matches!(&layout[2], WindowLayout::SplitVertical(_x)));
+        layout = parse_layout(&layout_case3).unwrap();
+        assert!(matches!(&layout[0], WindowLayout::SplitHorizontal(_x)));
+        assert!(matches!(&layout[1], WindowLayout::SplitVertical(_x)));
+        assert!(matches!(&layout[2], WindowLayout::SplitHorizontal(_x)));
     }
 }

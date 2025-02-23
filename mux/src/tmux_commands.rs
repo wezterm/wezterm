@@ -311,7 +311,7 @@ impl TmuxDomainState {
 
             if let Some(local_pane) = local_pane {
                 let c = local_pane.get_cursor_position();
-                // no caupture, output case
+                // no capture, output case
                 if (c.x + c.y as usize) == 0 {
                     if let Some(text) = self.backlog.lock().remove(&pane.pane_id) {
                         if let Some(ref_pane) = pane_map.get(&pane.pane_id) {
@@ -472,7 +472,7 @@ impl TmuxDomainState {
                         let pane_map = self.remote_panes.lock();
                         let local_pane_id = match pane_map.get(&p.pane_id) {
                             Some(x) => x.lock().local_pane_id,
-                            None => anyhow::bail!("cannot find the local pane for {}", &p.pane_id),
+                            None => anyhow::bail!("cannot find the local pane for {}", p.pane_id),
                         };
 
                         split_pane_index = match tab
@@ -482,7 +482,7 @@ impl TmuxDomainState {
                         {
                             Some(x) => x.index,
                             None => {
-                                log::info!("invalid pane id {}", local_pane_id);
+                                log::info!("invalid pane id {local_pane_id}");
                                 continue;
                             }
                         };
@@ -500,7 +500,7 @@ impl TmuxDomainState {
                 None => {
                     log::info!(
                         "cannot find the local tab for tmux window {}",
-                        &window.window_id
+                        window.window_id
                     );
                     continue;
                 }
@@ -665,13 +665,9 @@ impl TmuxCommand for ListAllPanes {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-
-            anyhow::bail!("list-panes failed");
+            let error = format!("list-pane in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         let mut items = vec![];
         let mut pane_set = HashSet::new();
@@ -779,13 +775,9 @@ impl TmuxCommand for ListAllWindows {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-
-            anyhow::bail!("list-windows failed");
+            let error = format!("list-window in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         let mut items = vec![];
 
@@ -956,12 +948,9 @@ impl TmuxCommand for Resize {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-            anyhow::bail!("resize-window failed");
+            let error = format!("resize-pane in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         Ok(())
     }
@@ -984,13 +973,9 @@ impl TmuxCommand for CapturePane {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-
-            anyhow::bail!("capture-pane failed");
+            let error = format!("capture-pane in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         let mux = Mux::get();
         let domain = match mux.get_domain(domain_id) {
@@ -1038,13 +1023,9 @@ impl TmuxCommand for SendKeys {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-
-            anyhow::bail!("send-key failed");
+            let error = format!("send-key in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         Ok(())
     }
@@ -1059,13 +1040,9 @@ impl TmuxCommand for NewWindow {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-
-            anyhow::bail!("new-windows failed");
+            let error = format!("new-window in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         Ok(())
     }
@@ -1080,13 +1057,9 @@ impl TmuxCommand for ListCommands {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-
-            anyhow::bail!("list-commands failed");
+            let error = format!("list-command in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         let mux = Mux::get();
         let domain = match mux.get_domain(domain_id) {
@@ -1138,13 +1111,9 @@ impl TmuxCommand for SplitPane {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-
-            anyhow::bail!("split-windows failed");
+            let error = format!("split-window in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         Ok(())
     }
@@ -1162,13 +1131,9 @@ impl TmuxCommand for SelectWindow {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-
-            anyhow::bail!("select-windows failed");
+            let error = format!("select-window in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         Ok(())
     }
@@ -1186,13 +1151,9 @@ impl TmuxCommand for SelectPane {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-
-            anyhow::bail!("select-pane failed");
+            let error = format!("select-pane in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         Ok(())
     }
@@ -1210,13 +1171,9 @@ impl TmuxCommand for AttachDone {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            log::error!(
-                "Error resizing: domain_id={} result={:?}",
-                domain_id,
-                result
-            );
-
-            anyhow::bail!("list-session failed");
+            let error = format!("list-session in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
         }
         let mux = Mux::get();
         let domain = match mux.get_domain(domain_id) {

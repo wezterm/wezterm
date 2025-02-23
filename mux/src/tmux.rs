@@ -11,7 +11,6 @@ use async_trait::async_trait;
 use filedescriptor::FileDescriptor;
 use parking_lot::{Condvar, Mutex};
 use portable_pty::CommandBuilder;
-use smol::channel::{bounded, Receiver, Sender};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::sync::Arc;
@@ -75,7 +74,7 @@ pub(crate) struct TmuxDomainState {
     pub tmux_session: Mutex<Option<TmuxSessionId>>,
     pub support_commands: Mutex<HashMap<String, String>>,
     pub attach_state: Mutex<AttachState>,
-    pub channel: (Sender<TmuxPaneId>, Receiver<TmuxPaneId>),
+    pending_splits: Mutex<VecDeque<promise::Promise<TmuxPaneId>>>,
     pub backlog: Mutex<HashMap<TmuxPaneId, String>>,
 }
 
@@ -178,9 +177,10 @@ impl TmuxDomainState {
 
                     // Split pane
                     if !self.check_pane_attached(*window, *pane) {
-                        smol::block_on(async {
-                            let _ = self.channel.0.send(*pane).await;
-                        });
+                        let mut pending_splits = self.pending_splits.lock();
+                        if let Some(mut promise) = pending_splits.pop_front() {
+                            promise.ok(*pane);
+                        }
                     }
                     log::info!("tmux window pane changed: {}:{}", window, pane);
                 }
@@ -332,7 +332,7 @@ impl TmuxDomain {
             tmux_session: Mutex::new(None),
             support_commands: Mutex::new(HashMap::default()),
             attach_state: Mutex::new(AttachState::Init),
-            channel: bounded(1),
+            pending_splits: Mutex::new(VecDeque::default()),
             backlog: Mutex::new(HashMap::default()),
         });
 
@@ -367,11 +367,18 @@ impl Domain for TmuxDomain {
         pane_id: PaneId,
         split_request: SplitRequest,
     ) -> anyhow::Result<Arc<dyn Pane>> {
-        self.inner.split_tmux_pane(tab, pane_id, split_request);
+        let mut promise = promise::Promise::new();
+        if let Some(future) = promise.get_future() {
+            {
+                let mut pending_splits = self.inner.pending_splits.lock();
+                pending_splits.push_back(promise);
+                self.inner.split_tmux_pane(tab, pane_id, split_request);
+            }
 
-        if let Ok(id) = self.inner.channel.1.recv().await {
-            let pane = self.inner.split_pane(tab, pane_id, id, split_request);
-            return pane;
+            if let Ok(id) = future.await {
+                let pane = self.inner.split_pane(tab, pane_id, id, split_request);
+                return pane;
+            }
         }
 
         anyhow::bail!("Split_pane failed");
