@@ -142,6 +142,10 @@ pub struct Config {
     #[dynamic(default)]
     pub window_frame: WindowFrameConfig,
 
+    /// Font to use for CharSelect
+    #[dynamic(default)]
+    pub char_select_font: Option<TextStyle>,
+
     #[dynamic(default = "default_char_select_font_size")]
     pub char_select_font_size: f64,
 
@@ -150,6 +154,10 @@ pub struct Config {
 
     #[dynamic(default = "default_char_select_bg_color")]
     pub char_select_bg_color: RgbaColor,
+
+    /// Font to use for ActivateCommandPalette
+    #[dynamic(default)]
+    pub command_palette_font: Option<TextStyle>,
 
     #[dynamic(default = "default_command_palette_font_size")]
     pub command_palette_font_size: f64,
@@ -160,6 +168,10 @@ pub struct Config {
 
     #[dynamic(default = "default_command_palette_bg_color")]
     pub command_palette_bg_color: RgbaColor,
+
+    /// Font to use for PaneSelect
+    #[dynamic(default)]
+    pub pane_select_font: Option<TextStyle>,
 
     #[dynamic(default = "default_pane_select_font_size")]
     pub pane_select_font_size: f64,

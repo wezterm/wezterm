@@ -452,6 +452,13 @@ impl FallbackResolveInfo {
     }
 }
 
+enum Entity {
+    Title,
+    CommandPalette,
+    CharSelect,
+    PaneSelect,
+}
+
 struct FontConfigInner {
     fonts: RefCell<HashMap<TextStyle, Rc<LoadedFont>>>,
     metrics: RefCell<Option<FontMetrics>>,
@@ -584,18 +591,33 @@ impl FontConfigInner {
         )
     }
 
-    fn make_title_font_impl(
+    fn make_entity_font_impl(
         &self,
         myself: &Rc<Self>,
         pref_size: Option<f64>,
         make_bold: bool,
+        entity: Entity,
     ) -> anyhow::Result<Rc<LoadedFont>> {
         let config = self.config.borrow();
         let (sys_font, sys_size) = self.compute_title_font(&config, make_bold);
 
         let font_size = pref_size.unwrap_or(sys_size);
 
-        let text_style = config.window_frame.font.as_ref().unwrap_or(&sys_font);
+        let text_style = match entity {
+            Entity::Title => config.window_frame.font.as_ref().unwrap_or(&sys_font),
+            Entity::CommandPalette => config
+                .command_palette_font
+                .as_ref()
+                .unwrap_or_else(|| config.window_frame.font.as_ref().unwrap_or(&sys_font)),
+            Entity::CharSelect => config
+                .char_select_font
+                .as_ref()
+                .unwrap_or_else(|| config.window_frame.font.as_ref().unwrap_or(&sys_font)),
+            Entity::PaneSelect => config
+                .pane_select_font
+                .as_ref()
+                .unwrap_or_else(|| config.window_frame.font.as_ref().unwrap_or(&sys_font)),
+        };
 
         let dpi = *self.dpi.borrow() as u32;
         let pixel_size = (font_size * dpi as f64 / 72.0) as u16;
@@ -639,7 +661,8 @@ impl FontConfigInner {
             return Ok(Rc::clone(entry));
         }
 
-        let loaded = self.make_title_font_impl(myself, config.window_frame.font_size, true)?;
+        let loaded =
+            self.make_entity_font_impl(myself, config.window_frame.font_size, true, Entity::Title)?;
 
         title_font.replace(Rc::clone(&loaded));
 
@@ -655,8 +678,12 @@ impl FontConfigInner {
             return Ok(Rc::clone(entry));
         }
 
-        let loaded =
-            self.make_title_font_impl(myself, Some(config.command_palette_font_size), false)?;
+        let loaded = self.make_entity_font_impl(
+            myself,
+            Some(config.command_palette_font_size),
+            false,
+            Entity::CommandPalette,
+        )?;
 
         command_palette_font.replace(Rc::clone(&loaded));
 
@@ -672,7 +699,12 @@ impl FontConfigInner {
             return Ok(Rc::clone(entry));
         }
 
-        let loaded = self.make_title_font_impl(myself, Some(config.char_select_font_size), true)?;
+        let loaded = self.make_entity_font_impl(
+            myself,
+            Some(config.char_select_font_size),
+            true,
+            Entity::CharSelect,
+        )?;
 
         char_select_font.replace(Rc::clone(&loaded));
 
@@ -688,7 +720,12 @@ impl FontConfigInner {
             return Ok(Rc::clone(entry));
         }
 
-        let loaded = self.make_title_font_impl(myself, Some(config.pane_select_font_size), true)?;
+        let loaded = self.make_entity_font_impl(
+            myself,
+            Some(config.pane_select_font_size),
+            true,
+            Entity::PaneSelect,
+        )?;
 
         pane_select_font.replace(Rc::clone(&loaded));
 
