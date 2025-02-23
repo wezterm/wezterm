@@ -557,9 +557,9 @@ impl Pane for QuickSelectOverlay {
                 for (idx, line) in lines.iter_mut().enumerate() {
                     let mut line: Line = line.clone();
                     if disable_attr_for_non_matching_text {
-                        for cell in line.cells_mut_for_attr_changes_only().iter_mut() {
-                            cell.attrs_mut().clear();
-                        }
+                        line.cells_mut_for_attr_changes_only()
+                            .iter_mut()
+                            .for_each(|cell| cell.attrs_mut().clear());
                     }
                     let stable_idx = idx as StableRowIndex + first_row;
                     self.renderer.dirty_results.remove(stable_idx);
@@ -658,9 +658,9 @@ impl Pane for QuickSelectOverlay {
             renderer.dirty_results.remove(stable_idx);
             if stable_idx == search_row {
                 if disable_attr_for_non_matching_text {
-                    for cell in line.cells_mut_for_attr_changes_only().iter_mut() {
-                        cell.attrs_mut().clear();
-                    }
+                    line.cells_mut_for_attr_changes_only()
+                        .iter_mut()
+                        .for_each(|cell| cell.attrs_mut().clear());
                 }
                 // Replace with search UI
                 let rev = CellAttributes::default().set_reverse(true).clone();
