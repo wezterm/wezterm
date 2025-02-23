@@ -375,6 +375,11 @@ impl CellAttributes {
         self.background.into()
     }
 
+    /// Clear all attributes from a cell
+    pub fn clear(&mut self) {
+        *self = Self::blank();
+    }
+
     fn allocate_fat_attributes(&mut self) {
         if self.fat.is_none() {
             self.fat.replace(Box::new(FatAttributes {

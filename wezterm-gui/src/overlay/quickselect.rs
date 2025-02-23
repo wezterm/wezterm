@@ -545,7 +545,9 @@ impl Pane for QuickSelectOverlay {
             fn with_lines_mut(&mut self, first_row: StableRowIndex, lines: &mut [&mut Line]) {
                 let mut overlay_lines = vec![];
 
-                let colors = self.renderer.config.resolved_palette.clone();
+                let config = &self.renderer.config;
+                let colors = config.resolved_palette.clone();
+                let disable_attr = config.quick_select_remove_styling;
 
                 // Process the lines; for the search row we want to render instead
                 // the search UI.
@@ -553,6 +555,12 @@ impl Pane for QuickSelectOverlay {
 
                 for (idx, line) in lines.iter_mut().enumerate() {
                     let mut line: Line = line.clone();
+                    if disable_attr {
+                        line.cells_mut_for_attr_changes_only()
+                            .iter_mut()
+                            .for_each(|cell| cell.attrs_mut().clear());
+                        line.clear_appdata();
+                    }
                     let stable_idx = idx as StableRowIndex + first_row;
                     self.renderer.dirty_results.remove(stable_idx);
                     if stable_idx == self.search_row {
@@ -633,12 +641,18 @@ impl Pane for QuickSelectOverlay {
 
         let (top, mut lines) = self.delegate.get_lines(lines);
         let colors = renderer.config.resolved_palette.clone();
+        let disable_attr = renderer.config.quick_select_remove_styling;
 
         // Process the lines; for the search row we want to render instead
         // the search UI.
         // For rows with search results, we want to highlight the matching ranges
         let search_row = renderer.compute_search_row();
         for (idx, line) in lines.iter_mut().enumerate() {
+            if disable_attr {
+                line.cells_mut_for_attr_changes_only()
+                    .iter_mut()
+                    .for_each(|cell| cell.attrs_mut().clear());
+            }
             let stable_idx = idx as StableRowIndex + top;
             renderer.dirty_results.remove(stable_idx);
             if stable_idx == search_row {
