@@ -19,7 +19,7 @@ use termwiz::surface::{SequenceNo, SEQ_ZERO};
 use url::Url;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Clipboard, KeyCode, KeyModifiers, Line, MouseEvent, StableRowIndex, TerminalSize,
+    Clipboard, Intensity, KeyCode, KeyModifiers, Line, MouseEvent, StableRowIndex, TerminalSize,
 };
 use window::WindowOps;
 
@@ -601,7 +601,8 @@ impl Pane for QuickSelectOverlay {
                                                 .quick_select_match_fg
                                                 .unwrap_or(AnsiColor::Green.into()),
                                         )
-                                        .set_reverse(false);
+                                        .set_reverse(false)
+                                        .set_intensity(Intensity::Bold);
                                 }
                             }
                             for (idx, c) in m.label.chars().enumerate() {
@@ -619,7 +620,8 @@ impl Pane for QuickSelectOverlay {
                                         .quick_select_label_fg
                                         .unwrap_or(AnsiColor::Olive.into()),
                                 )
-                                .set_reverse(false);
+                                .set_reverse(false)
+                                .set_intensity(Intensity::Bold);
                                 line.set_cell(m.range.start + idx, Cell::new(c, attr), SEQ_ZERO);
                             }
                         }
@@ -691,7 +693,8 @@ impl Pane for QuickSelectOverlay {
                                         .quick_select_match_fg
                                         .unwrap_or(AnsiColor::Green.into()),
                                 )
-                                .set_reverse(false);
+                                .set_reverse(false)
+                                .set_intensity(Intensity::Bold);
                         }
                     }
                     for (idx, c) in m.label.chars().enumerate() {
@@ -709,7 +712,8 @@ impl Pane for QuickSelectOverlay {
                                 .quick_select_label_fg
                                 .unwrap_or(AnsiColor::Olive.into()),
                         )
-                        .set_reverse(false);
+                        .set_reverse(false)
+                        .set_intensity(Intensity::Bold);
                         line.set_cell(m.range.start + idx, Cell::new(c, attr), SEQ_ZERO);
                     }
                 }
