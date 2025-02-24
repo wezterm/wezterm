@@ -156,12 +156,22 @@ pub fn show_confirmation_overlay(
         _ => anyhow::bail!("Confirmation requires action to be defined by wezterm.action_callback"),
     };
 
-    if let Ok(true) = run_confirmation_impl(&args.message, &mut term) {
-        promise::spawn::spawn_into_main_thread(async move {
-            trampoline(name, window, pane);
-            anyhow::Result::<()>::Ok(())
-        })
-        .detach();
+    if let Ok(confirm) = run_confirmation_impl(&args.message, &mut term) {
+        if confirm {
+            promise::spawn::spawn_into_main_thread(async move {
+                trampoline(name, window, pane);
+                anyhow::Result::<()>::Ok(())
+            })
+            .detach();
+        } else if let Some(key_assignment) = args.cancel {
+            if let KeyAssignment::EmitEvent(id) = *key_assignment {
+                promise::spawn::spawn_into_main_thread(async move {
+                    trampoline(id, window, pane);
+                    anyhow::Result::<()>::Ok(())
+                })
+                .detach();
+            }
+        }
     }
     Ok(())
 }

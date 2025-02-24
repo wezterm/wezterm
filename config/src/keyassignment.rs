@@ -519,6 +519,8 @@ fn default_fuzzy_description() -> String {
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct Confirmation {
     pub action: Box<KeyAssignment>,
+    #[dynamic(default)]
+    pub cancel: Option<Box<KeyAssignment>>,
     /// Text to show for confirmation
     #[dynamic(default = "default_message")]
     pub message: String,
