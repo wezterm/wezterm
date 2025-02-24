@@ -12,6 +12,16 @@ upon the input.
 * `message` - the text to show for confirmation. You may embed
   escape sequences and/or use [wezterm.format](../wezterm/format.md).
   Defaults to: `"🛑 Really continue?"`.
+* `action` - event callback registered via `wezterm.action_callback`.  The
+  callback's function signature is `(window, pane, id, label)` where `window` and
+  `pane` are the [Window](../window/index.md) and [Pane](../pane/index.md)
+  objects from the current pane and window. This callback is called when the
+  user selects `Yes`.
+* `cancel` - event callback registered via `wezterm.action_callback`.  The
+  callback's function signature is `(window, pane, id, label)` where `window` and
+  `pane` are the [Window](../window/index.md) and [Pane](../pane/index.md).
+  This is an optional argument. If present, this callback is called when the
+  user selects `No` or closes the confirmation menu.
 
 ## Example of choosing a program with user confirmation
 
@@ -29,6 +39,9 @@ config.keys = {
       action = wezterm.action_callback(function(window, pane)
         window:perform_action(act.SpawnCommandInNewWindow { args = { 'htop' } }, pane)
       end),
+      cancel = wezterm.action_callback(function(window,pane)
+        wezterm.log_error("user declined")
+      end)
     },
   },
 }
