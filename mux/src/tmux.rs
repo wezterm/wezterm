@@ -120,7 +120,7 @@ impl TmuxDomainState {
                         // the output may come early then pane is ready, in this case we
                         // backlog it
                         self.backlog.lock().insert(*pane, text.to_string());
-                        log::error!("Tmux pane {} havn't been attached", pane);
+                        log::debug!("Tmux pane {} havn't been attached", pane);
                     }
                 }
                 Event::WindowAdd { window } => {
@@ -295,7 +295,12 @@ impl TmuxDomainState {
     }
 
     /// split the tmux pane
-    pub fn split_tmux_pane(&self, _tab: TabId, pane_id: PaneId, split_request: SplitRequest) {
+    pub fn split_tmux_pane(
+        &self,
+        _tab: TabId,
+        pane_id: PaneId,
+        split_request: SplitRequest,
+    ) -> anyhow::Result<()> {
         let tmux_pane_id = self
             .remote_panes
             .lock()
@@ -310,8 +315,9 @@ impl TmuxDomainState {
                 direction: split_request.direction,
             }));
             TmuxDomainState::schedule_send_next_command(self.domain_id);
+            return Ok(());
         } else {
-            log::debug!("Could not find the tmux pane peer for local pane: {pane_id}");
+            anyhow::bail!("Could not find the tmux pane peer for local pane: {pane_id}");
         }
     }
 }
@@ -371,8 +377,8 @@ impl Domain for TmuxDomain {
         if let Some(future) = promise.get_future() {
             {
                 let mut pending_splits = self.inner.pending_splits.lock();
+                let _ = self.inner.split_tmux_pane(tab, pane_id, split_request)?;
                 pending_splits.push_back(promise);
-                self.inner.split_tmux_pane(tab, pane_id, split_request);
             }
 
             if let Ok(id) = future.await {

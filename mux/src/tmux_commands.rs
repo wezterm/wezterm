@@ -622,6 +622,15 @@ impl TmuxDomainState {
     }
 }
 
+fn parse_sigil_number(text: &str) -> anyhow::Result<u64> {
+    let num = text
+        .get(1..)
+        .ok_or_else(|| anyhow!("wrong prefixed id"))?
+        .parse()?;
+
+    Ok(num)
+}
+
 #[derive(Debug)]
 pub(crate) struct ListAllPanes {
     pub window_id: TmuxWindowId,
@@ -676,9 +685,14 @@ impl TmuxCommand for ListAllPanes {
                 continue;
             }
             let mut fields = line.split(' ');
-            let session_id = fields.next().ok_or_else(|| anyhow!("missing session_id"))?;
-            let window_id = fields.next().ok_or_else(|| anyhow!("missing window_id"))?;
-            let pane_id = fields.next().ok_or_else(|| anyhow!("missing pane_id"))?;
+            // These ids all have various sigils such as `$`, `%`, `@`,
+            // so skip those prior to parsing them
+            let session_id =
+                parse_sigil_number(fields.next().ok_or_else(|| anyhow!("missing session_id"))?)?;
+            let window_id =
+                parse_sigil_number(fields.next().ok_or_else(|| anyhow!("missing window_id"))?)?;
+            let pane_id =
+                parse_sigil_number(fields.next().ok_or_else(|| anyhow!("missing pane_id"))?)?;
             let _pane_index = fields
                 .next()
                 .ok_or_else(|| anyhow!("missing pane_index"))?
@@ -712,11 +726,6 @@ impl TmuxCommand for ListAllPanes {
                 .ok_or_else(|| anyhow!("missing pane_active"))?
                 .parse::<usize>()?;
 
-            // These ids all have various sigils such as `$`, `%`, `@`,
-            // so skip those prior to parsing them
-            let session_id = session_id[1..].parse()?;
-            let window_id = window_id[1..].parse()?;
-            let pane_id = pane_id[1..].parse()?;
             let pane_active = pane_active == 1;
 
             pane_set.insert(pane_id);
@@ -786,8 +795,10 @@ impl TmuxCommand for ListAllWindows {
                 continue;
             }
             let mut fields = line.split(' ');
-            let session_id = fields.next().ok_or_else(|| anyhow!("missing session_id"))?;
-            let window_id = fields.next().ok_or_else(|| anyhow!("missing window_id"))?;
+            let session_id =
+                parse_sigil_number(fields.next().ok_or_else(|| anyhow!("missing session_id"))?)?;
+            let window_id =
+                parse_sigil_number(fields.next().ok_or_else(|| anyhow!("missing window_id"))?)?;
             let window_width = fields
                 .next()
                 .ok_or_else(|| anyhow!("missing window_width"))?
@@ -815,11 +826,6 @@ impl TmuxCommand for ListAllWindows {
                 .parse::<isize>()?;
 
             let window_active = window_active == 1;
-
-            // These ids all have various sigils such as `$`, `%`, `@`,
-            // so skip those prior to parsing them
-            let session_id = session_id[1..].parse()?;
-            let window_id = window_id[1..].parse()?;
 
             if let Some(x) = self.window_id {
                 if x != window_id {

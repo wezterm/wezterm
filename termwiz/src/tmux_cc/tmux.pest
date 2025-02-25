@@ -65,4 +65,4 @@ layout_window = _{ (
     layout_split_horizontal |
     layout_split_vertical |
     layout_pane
-)}
+) }
