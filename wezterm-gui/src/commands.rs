@@ -804,6 +804,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Help"],
             icon: Some("cod_debug"),
         },
+        DisplayText(_) => CommandDef {
+            brief: "Displays provided text".into(),
+            doc: "Activates the display overlay and displays provided text".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &[],
+            icon: None,
+        },
         InputSelector(_) => CommandDef {
             brief: "Prompt the user to choose from a list".into(),
             doc: "Activates the selector overlay and wait for input".into(),
