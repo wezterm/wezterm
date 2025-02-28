@@ -270,7 +270,7 @@ hide:
     can install wezterm from our tap:
 
     ```console
-    $ brew tap wezterm/wezterm-linuxbrew
+    $ brew tap wez/wezterm-linuxbrew
     $ brew install wezterm
     ```
 
