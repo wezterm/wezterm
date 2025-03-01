@@ -27,7 +27,7 @@ use cocoa::foundation::{
     NSString, NSUInteger,
 };
 use config::window::WindowLevel;
-use config::{ConfigHandle};
+use config::{ConfigHandle, RgbaColor, SrgbaTuple};
 use core_foundation::base::{CFTypeID, TCFType};
 use core_foundation::bundle::{CFBundleGetBundleWithIdentifier, CFBundleGetFunctionPointerForName};
 use core_foundation::data::{CFData, CFDataGetBytePtr, CFDataRef};
@@ -1117,10 +1117,10 @@ impl WindowInner {
             return
         }
 
-        // Set the titlebar background to the theme color falling back to the default if there
-        // is no specified color scheme
+        // Set the titlebar background to the theme color falling back to black if there is no
+        // specified color scheme
         let color = self.config.resolved_palette.background.unwrap_or(
-            wezterm_term::color::ColorPalette::default().background.into()
+            RgbaColor::from(SrgbaTuple(0.,0.,0.,255.))
         );
 
         unsafe {
