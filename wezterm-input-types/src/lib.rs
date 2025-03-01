@@ -1993,8 +1993,8 @@ impl Into<String> for &WindowDecorations {
         if self.contains(WindowDecorations::INTEGRATED_BUTTONS) {
             s.push("INTEGRATED_BUTTONS");
         }
-        if self.contains(WindowDecorations::INTEGRATED_BUTTONS) {
-            s.push("MACOS_RESPECT_THEME_BACKGROUND")
+        if self.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR) {
+            s.push("MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR")
         }
         if self.contains(WindowDecorations::MACOS_FORCE_ENABLE_SHADOW) {
             s.push("MACOS_FORCE_ENABLE_SHADOW");
@@ -2023,7 +2023,7 @@ impl TryFrom<String> for WindowDecorations {
                 flags = Self::NONE;
             } else if ele == "RESIZE" {
                 flags |= Self::RESIZE;
-            } else if ele == "MACOS_RESPECT_THEME_BACKGROUND" {
+            } else if ele == "MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR" {
                 flags |= Self::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR;
             } else if ele == "MACOS_FORCE_DISABLE_SHADOW" {
                 flags |= Self::MACOS_FORCE_DISABLE_SHADOW;

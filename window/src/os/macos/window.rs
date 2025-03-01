@@ -27,17 +27,17 @@ use cocoa::foundation::{
     NSString, NSUInteger,
 };
 use config::window::WindowLevel;
-use config::{ConfigHandle, RgbaColor};
+use config::{ConfigHandle};
 use core_foundation::base::{CFTypeID, TCFType};
 use core_foundation::bundle::{CFBundleGetBundleWithIdentifier, CFBundleGetFunctionPointerForName};
 use core_foundation::data::{CFData, CFDataGetBytePtr, CFDataRef};
 use core_foundation::string::{CFString, CFStringRef, UniChar};
 use core_foundation::{declare_TCFType, impl_TCFType};
-use core_graphics::color::CGColor;
 use objc::declare::ClassDecl;
 use objc::rc::{StrongPtr, WeakPtr};
 use objc::runtime::{Class, Object, Protocol, Sel};
 use objc::*;
+use objc2_core_graphics::CGColorCreateSRGB;
 use promise::Future;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle,
@@ -1112,24 +1112,37 @@ impl WindowInner {
         }
     }
 
-    fn update_titlebar_background(&self, color: RgbaColor) {
+    fn update_titlebar_background(&self) {
+        if !self.config.window_decorations.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR) {
+            return
+        }
+
+        // Set the titlebar background to the theme color falling back to the default if there
+        // is no specified color scheme
+        let color = self.config.resolved_palette.background.unwrap_or(
+            wezterm_term::color::ColorPalette::default().background.into()
+        );
+
         unsafe {
-            let titlebar_view_container = get_titlebar_view_container(&self.window).unwrap();
-            let layer: id = msg_send![*titlebar_view_container.load(), layer];
+            if let Some(titlebar_view_container) = get_titlebar_view_container(&self.window) {
+                let layer: id = msg_send![*titlebar_view_container.load(), layer];
 
-            if layer.is_null() {
-                return
+                if layer.is_null() {
+                    return
+                }
+
+                // We need to make sure to convert the config color into an sRGB CGColor or the color will be slightly off
+                let srgb_cgcolor = CGColorCreateSRGB(
+                    color.0.into(),
+                    color.1.into(),
+                    color.2.into(),
+                    color.3.into(),
+                );
+
+                let _: () = msg_send![layer, setBackgroundColor: srgb_cgcolor];
+            } else {
+                log::trace!("failed to get titlebar view container from window");
             }
-
-            // We need to make sure to convert the config color into an sRGB CGColor or the color will be slightly off
-            let srgb_cgcolor = srgb(
-                color.0.into(),
-                color.1.into(),
-                color.2.into(),
-                color.3.into(),
-            );
-
-            let _: () = msg_send![layer, setBackgroundColor: srgb_cgcolor];
         }
     }
 
@@ -1163,15 +1176,7 @@ impl WindowInner {
                 self.config.integrated_title_button_style,
             );
 
-            // Set the titlebar background to the theme color falling back to the default if there
-            // is no specified theme
-            if self.config.window_decorations.contains(WindowDecorations::MACOS_RESPECT_THEME_BACKGROUND) {
-                if let Some(bkg) = self.config.resolved_palette.background {
-                    self.update_titlebar_background(bkg);
-                } else {
-                    self.update_titlebar_background(wezterm_term::color::ColorPalette::default().background.into());
-                }
-            }
+            self.update_titlebar_background();
 
             self.window.makeKeyAndOrderFront_(nil)
         }
@@ -1341,6 +1346,7 @@ impl WindowInner {
         }
         self.update_window_shadow();
         self.update_window_background_blur();
+        self.update_titlebar_background();
         self.apply_decorations();
     }
 }
@@ -1390,7 +1396,7 @@ fn apply_decorations_to_window(
         });
 
         if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS) 
-            || decorations.contains(WindowDecorations::MACOS_RESPECT_THEME_BACKGROUND) {
+            || decorations.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR) {
             window.setTitlebarAppearsTransparent_(YES);
         } else {
             window.setTitlebarAppearsTransparent_(hidden);
@@ -1813,25 +1819,6 @@ impl Inner {
 const VIEW_CLS_NAME: &str = "WezTermWindowView";
 const WINDOW_CLS_NAME: &str = "WezTermWindow";
 const TITLEBAR_VIEW_NAME: &str = "NSTitlebarContainerView";
-
-// core-graphics does not currently expose a binding by default for CGColor srgb conversions
-// pull request to upstream this here: https://github.com/servo/core-foundation-rs/pull/716
-// IMPORTANT: This binding was introduced in catalina, attempting to use it on older systems will fail
-fn srgb(red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) -> CGColor {
-    unsafe {
-        let ptr = CGColorCreateSRGB(red, green, blue, alpha);
-        CGColor::wrap_under_create_rule(ptr)
-    }
-}
-
-extern "C" {
-    fn CGColorCreateSRGB(
-        red: CGFloat,
-        green: CGFloat,
-        blue: CGFloat,
-        alpha: CGFloat,
-    ) -> core_graphics::sys::CGColorRef;
-}
 
 struct WindowView {
     inner: Rc<RefCell<Inner>>,
