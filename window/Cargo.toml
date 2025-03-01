@@ -46,7 +46,6 @@ wezterm-bidi.workspace = true
 wezterm-color-types.workspace = true
 wezterm-font.workspace = true
 wezterm-input-types.workspace = true
-wezterm-term.workspace = true
 
 [target."cfg(windows)".dependencies]
 clipboard-win.workspace = true
