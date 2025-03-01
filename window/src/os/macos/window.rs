@@ -679,7 +679,7 @@ impl HasDisplayHandle for Window {
 
 impl HasWindowHandle for Window {
     fn window_handle(&self) -> Result<WindowHandle, HandleError> {
-        let mut handle =
+        let handle =
             AppKitWindowHandle::new(NonNull::new(self.ns_view as *mut _).expect("non-null"));
         unsafe { Ok(WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle))) }
     }
@@ -871,7 +871,7 @@ impl WindowOps for Window {
 
     fn get_os_parameters(
         &self,
-        _config: &ConfigHandle,
+        config: &ConfigHandle,
         window_state: WindowState,
     ) -> anyhow::Result<Option<Parameters>> {
         // We implement this method primarily to provide Notch-avoidance for
@@ -883,42 +883,44 @@ impl WindowOps for Window {
             style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask)
         };
 
-        let border_dimensions =
-            if window_state.contains(WindowState::FULL_SCREEN) && !native_full_screen {
-                let main_screen = unsafe { NSScreen::mainScreen(nil) };
-                let has_safe_area_insets: BOOL =
-                    unsafe { msg_send![main_screen, respondsToSelector: sel!(safeAreaInsets)] };
-                if has_safe_area_insets == YES {
-                    #[derive(Debug)]
-                    struct NSEdgeInsets {
-                        top: CGFloat,
-                        left: CGFloat,
-                        bottom: CGFloat,
-                        right: CGFloat,
-                    }
-                    let insets: NSEdgeInsets = unsafe { msg_send![main_screen, safeAreaInsets] };
-                    log::trace!("{:?}", insets);
-
-                    let scale = unsafe {
-                        let frame = NSScreen::frame(main_screen);
-                        let backing_frame = NSScreen::convertRectToBacking_(main_screen, frame);
-                        backing_frame.size.height / frame.size.height
-                    };
-
-                    let top = (insets.top.ceil() * scale) as usize;
-                    Some(Border {
-                        top: ULength::new(top),
-                        left: ULength::new(insets.left.ceil() as usize),
-                        right: ULength::new(insets.right.ceil() as usize),
-                        bottom: ULength::new(insets.bottom.ceil() as usize),
-                        color: crate::color::LinearRgba::with_components(0., 0., 0., 1.),
-                    })
-                } else {
-                    None
+        let border_dimensions = if window_state.contains(WindowState::FULL_SCREEN)
+            && !native_full_screen
+            && !config.macos_fullscreen_extend_behind_notch
+        {
+            let main_screen = unsafe { NSScreen::mainScreen(nil) };
+            let has_safe_area_insets: BOOL =
+                unsafe { msg_send![main_screen, respondsToSelector: sel!(safeAreaInsets)] };
+            if has_safe_area_insets == YES {
+                #[derive(Debug)]
+                struct NSEdgeInsets {
+                    top: CGFloat,
+                    left: CGFloat,
+                    bottom: CGFloat,
+                    right: CGFloat,
                 }
+                let insets: NSEdgeInsets = unsafe { msg_send![main_screen, safeAreaInsets] };
+                log::trace!("{:?}", insets);
+
+                let scale = unsafe {
+                    let frame = NSScreen::frame(main_screen);
+                    let backing_frame = NSScreen::convertRectToBacking_(main_screen, frame);
+                    backing_frame.size.height / frame.size.height
+                };
+
+                let top = (insets.top.ceil() * scale) as usize;
+                Some(Border {
+                    top: ULength::new(top),
+                    left: ULength::new(insets.left.ceil() as usize),
+                    right: ULength::new(insets.right.ceil() as usize),
+                    bottom: ULength::new(insets.bottom.ceil() as usize),
+                    color: crate::color::LinearRgba::with_components(0., 0., 0., 1.),
+                })
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         Ok(Some(Parameters {
             title_bar: TitleBar {
@@ -1088,9 +1090,9 @@ impl WindowInner {
             // when transparent, also turn off the window shadow,
             // because having the shadow enabled seems to correlate
             // with ghostly remnants see:
-            // https://github.com/wez/wezterm/issues/310.
+            // https://github.com/wezterm/wezterm/issues/310.
             // But allow overriding the shadows independent of opacity as well:
-            // <https://github.com/wez/wezterm/issues/2669>
+            // <https://github.com/wezterm/wezterm/issues/2669>
             let shadow = if self
                 .config
                 .window_decorations
@@ -1410,6 +1412,13 @@ fn decoration_to_mask(
             | NSWindowStyleMask::NSClosableWindowMask
             | NSWindowStyleMask::NSMiniaturizableWindowMask
             | NSWindowStyleMask::NSResizableWindowMask
+    } else if decorations
+        == WindowDecorations::MACOS_FORCE_SQUARE_CORNERS | WindowDecorations::RESIZE
+    {
+        NSWindowStyleMask::NSClosableWindowMask
+            | NSWindowStyleMask::NSMiniaturizableWindowMask
+            | NSWindowStyleMask::NSResizableWindowMask
+            | NSWindowStyleMask::NSFullSizeContentViewWindowMask
     } else if decorations == WindowDecorations::RESIZE
         || decorations == WindowDecorations::INTEGRATED_BUTTONS
         || decorations == WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE
@@ -1428,6 +1437,10 @@ fn decoration_to_mask(
         NSWindowStyleMask::NSTitledWindowMask
             | NSWindowStyleMask::NSClosableWindowMask
             | NSWindowStyleMask::NSMiniaturizableWindowMask
+    } else if decorations == WindowDecorations::MACOS_FORCE_SQUARE_CORNERS {
+        NSWindowStyleMask::NSClosableWindowMask
+            | NSWindowStyleMask::NSMiniaturizableWindowMask
+            | NSWindowStyleMask::NSFullSizeContentViewWindowMask
     } else {
         NSWindowStyleMask::NSTitledWindowMask
             | NSWindowStyleMask::NSClosableWindowMask
@@ -2501,7 +2514,7 @@ impl WindowView {
             } else if virtual_key == kVK_Delete {
                 (true, "\x08")
             } else if virtual_key == kVK_ANSI_KeypadEnter {
-                // https://github.com/wez/wezterm/issues/739
+                // https://github.com/wezterm/wezterm/issues/739
                 // Keypad enter sends ctrl-c for some reason; explicitly
                 // treat that as enter here.
                 (true, "\r")
@@ -2511,7 +2524,7 @@ impl WindowView {
 
         // Shift-Tab on macOS produces \x19 for some reason.
         // Rewrite it to something we understand.
-        // <https://github.com/wez/wezterm/issues/1902>
+        // <https://github.com/wezterm/wezterm/issues/1902>
         let chars = if virtual_key == kVK_Tab && modifiers.contains(Modifiers::SHIFT) {
             "\t"
         } else {
@@ -2685,7 +2698,7 @@ impl WindowView {
                             // but didn't call one of our callbacks.
                             // In theory, we should stop here, but the IME
                             // mysteriously swallows key repeats for certain
-                            // keys (eg: `f`) but not others.
+                            // keys (i.e. b, f, j, m, p, q, v, x) but not others.
                             // To compensate for that, if the current event
                             // is a repeat, and the IME previously generated
                             // `Acted`, we will assume that we're safe to replay
@@ -2731,14 +2744,14 @@ impl WindowView {
         // which isn't particularly helpful. eg: ALT+SHIFT+` produces chars='`' and unmod='~'
         // In this case, we take the key from unmod.
         // We leave `raw` set to None as we want to preserve the value of modifiers.
-        // <https://github.com/wez/wezterm/issues/1706>.
+        // <https://github.com/wezterm/wezterm/issues/1706>.
         // We can't do this for every ALT+SHIFT combo, as the weird behavior doesn't
         // apply to eg: ALT+SHIFT+789 for Norwegian layouts
-        // <https://github.com/wez/wezterm/issues/760>
+        // <https://github.com/wezterm/wezterm/issues/760>
         let swap_unmod_and_chars = (modifiers.contains(Modifiers::SHIFT | Modifiers::ALT)
             && virtual_key == kVK_ANSI_Grave)
             ||
-            // <https://github.com/wez/wezterm/issues/1907>
+            // <https://github.com/wezterm/wezterm/issues/1907>
             (modifiers.contains(Modifiers::SHIFT | Modifiers::CTRL)
                 && virtual_key == kVK_ANSI_Slash);
 
@@ -2777,7 +2790,7 @@ impl WindowView {
                     // But take care: on German layouts CTRL-Backslash has unmod="/"
                     // but chars="\x1c"; we only want to do this transformation when
                     // chars and unmod have that base ASCII relationship.
-                    // <https://github.com/wez/wezterm/issues/1891>
+                    // <https://github.com/wezterm/wezterm/issues/1891>
                     (KeyCode::Char(c), Some(KeyCode::Char(raw)))
                         if is_ascii_control(*c) == Some(raw.to_ascii_lowercase()) =>
                     {
@@ -2814,7 +2827,11 @@ impl WindowView {
 
             if let Some(myself) = Self::get_this(this) {
                 let mut inner = myself.inner.borrow_mut();
-                inner.ime_last_event.take();
+                // Don't clear the last IME event when a key is up otherwise it
+                // could mess up the succeeding key repeats.
+                if key_is_down {
+                    inner.ime_last_event.take();
+                }
                 inner.events.dispatch(WindowEvent::KeyEvent(event));
             }
         }
@@ -2838,7 +2855,7 @@ impl WindowView {
         {
             // Synthesize a key down event for this, because macOS will
             // not do that, even though we tell it that we handled this event.
-            // <https://github.com/wez/wezterm/issues/1867>
+            // <https://github.com/wezterm/wezterm/issues/1867>
             Self::key_common(this, nsevent, true);
 
             // Prevent macOS from calling doCommandBySelector(cancel:)
@@ -2935,7 +2952,7 @@ impl WindowView {
             // the current screen changing. We cannot detect that case here.
             // There is some logic to compensate for this in
             // wezterm-gui/src/termwindow/resize.rs.
-            // <https://github.com/wez/wezterm/issues/3503>
+            // <https://github.com/wezterm/wezterm/issues/3503>
             let is_zoomed = !is_full_screen
                 && inner.window.as_ref().map_or(false, |window| {
                     let window = window.load();

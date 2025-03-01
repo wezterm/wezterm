@@ -13,7 +13,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
-      MACOSX_DEPLOYMENT_TARGET: "10.9"
+      MACOSX_DEPLOYMENT_TARGET: "10.12"
 
     steps:
       - name: "checkout repo"
@@ -27,7 +27,7 @@ jobs:
         shell: bash
         run: "rustup target add x86_64-apple-darwin"
       - name: "Compile with sccache"
-        uses: mozilla-actions/sccache-action@v0.0.5
+        uses: mozilla-actions/sccache-action@v0.0.7
       - name: "Cache Rust Dependencies"
         uses: actions/cache@v4
         id: cache-cargo-vendor
@@ -89,6 +89,19 @@ jobs:
         with:
           name: "macos"
           path: "WezTerm-*.zip"
+
+  upload:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.repository == 'wezterm/wezterm'
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+
+    steps:
+      - name: "checkout repo"
+        uses: actions/checkout@v4
       - name: "Checkout homebrew tap"
         uses: actions/checkout@v4
         with:
@@ -103,14 +116,6 @@ jobs:
         with:
           commit_message: "Automated update to match latest tag"
           repository: "homebrew-wezterm"
-
-  upload:
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
-      - name: "checkout repo"
-        uses: actions/checkout@v4
       - name: "Download artifact"
         uses: actions/download-artifact@v4
         with:

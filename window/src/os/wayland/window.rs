@@ -579,7 +579,7 @@ impl WaylandWindowInner {
         // correctly.
         // Therefore, when frame_callback is set to some, we need to send the NeedRepaint
         // event again to ensure the window is displayed.
-        // Fix: https://github.com/wez/wezterm/issues/5103
+        // Fix: https://github.com/wezterm/wezterm/issues/5103
         if self.frame_callback.is_some() {
             self.events.dispatch(WindowEvent::NeedRepaint);
         }
@@ -588,11 +588,8 @@ impl WaylandWindowInner {
     }
 
     fn refresh_frame(&mut self) {
-        if let Some(window) = self.window.as_mut() {
-            if self.window_frame.is_dirty() && !self.window_frame.is_hidden() {
-                self.window_frame.draw();
-            }
-            window.wl_surface().commit();
+        if self.window_frame.is_dirty() && !self.window_frame.is_hidden() {
+            self.window_frame.draw();
         }
     }
 
@@ -848,12 +845,11 @@ impl WaylandWindowInner {
 
                 log::trace!("Resizing frame");
                 if !self.window_frame.is_hidden() {
-                    // Clamp the size to at least one pixel.
-                    let width =
-                        NonZeroU32::new(pixel_width as u32).unwrap_or(NonZeroU32::new(1).unwrap());
-                    let height =
-                        NonZeroU32::new(pixel_height as u32).unwrap_or(NonZeroU32::new(1).unwrap());
+                    // Clamp the size to at least one surface heigh/width.
+                    let width = NonZeroU32::new(w).unwrap_or(NonZeroU32::new(1).unwrap());
+                    let height = NonZeroU32::new(h).unwrap_or(NonZeroU32::new(1).unwrap());
                     self.window_frame.resize(width, height);
+                    pending.refresh_decorations = true
                 }
                 let (x, y) = self.window_frame.location();
                 self.window
@@ -911,11 +907,12 @@ impl WaylandWindowInner {
                         ) {
                             self.surface().attach(Some(buffer.wl_buffer()), 0, 0);
                             self.surface().set_buffer_scale(factor as i32);
+                            self.surface().commit();
+
                             self.surface_factor = factor;
                         }
                     }
                 }
-                self.refresh_frame();
                 self.do_paint().unwrap();
             }
         }
@@ -932,6 +929,10 @@ impl WaylandWindowInner {
     }
 
     fn set_cursor(&mut self, cursor: Option<MouseCursor>) {
+        if !PendingMouse::in_window(&self.pending_mouse) {
+            return;
+        }
+
         let conn = Connection::get().unwrap().wayland();
         let state = conn.wayland_state.borrow_mut();
         let pointer = match &state.pointer {
@@ -1070,8 +1071,8 @@ impl WaylandWindowInner {
         // which is necessary for the frame callback to get triggered.
         // Ordering the repaint after requesting the callback ensures that
         // we will get woken at the appropriate time.
-        // <https://github.com/wez/wezterm/issues/3468>
-        // <https://github.com/wez/wezterm/issues/3126>
+        // <https://github.com/wezterm/wezterm/issues/3468>
+        // <https://github.com/wezterm/wezterm/issues/3126>
         self.events.dispatch(WindowEvent::NeedRepaint);
 
         Ok(())
@@ -1243,7 +1244,6 @@ impl WaylandState {
             .window_by_id(window_id)
             .expect("Inner Window should exist");
 
-        let is_frame_hidden = window_inner.borrow().window_frame.is_hidden();
         let p = window_inner.borrow().pending_event.clone();
         let mut pending_event = p.lock().unwrap();
 
@@ -1280,31 +1280,6 @@ impl WaylandState {
                     state |= WindowState::MAXIMIZED;
                 }
 
-                // For MAXIMIZED and FULL_SCREEN window configure contains Windowed size.
-                // Replacing it with Wayland suggested bounds.
-                if state.intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN) {
-                    if let Some((w, h)) = configure.suggested_bounds {
-                        pending_event.configure.replace((w, h));
-                    }
-                } else if configure
-                    .state
-                    .contains(SCTKWindowState::TILED_TOP | SCTKWindowState::TILED_BOTTOM)
-                    && is_frame_hidden
-                {
-                    // Tiled window without borders will take exactly half of the screen.
-                    if let Some((w, h)) = configure.suggested_bounds {
-                        pending_event.configure.replace((w / 2, h));
-                    }
-                } else if configure
-                    .state
-                    .contains(SCTKWindowState::TILED_LEFT | SCTKWindowState::TILED_RIGHT)
-                    && is_frame_hidden
-                {
-                    // Tiled window without borders will take exactly half of the screen.
-                    if let Some((w, h)) = configure.suggested_bounds {
-                        pending_event.configure.replace((w, h / 2));
-                    }
-                }
                 log::debug!(
                     "Config: self.window_state={:?}, states: {:?} {:?}",
                     pending_event.window_state,

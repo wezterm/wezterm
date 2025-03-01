@@ -136,7 +136,7 @@ class CacheStep(ActionStep):
 
 class SccacheStep(ActionStep):
     def __init__(self, name):
-        super().__init__(name, action="mozilla-actions/sccache-action@v0.0.5")
+        super().__init__(name, action="mozilla-actions/sccache-action@v0.0.7")
 
 
 class CheckoutStep(ActionStep):
@@ -574,7 +574,7 @@ rustup default {toolchain}
         if self.app_image:
             patterns.append("*src.tar.gz")
             patterns.append("*.AppImage")
-            patterns.append("*.zsync")
+            #patterns.append("*.zsync") broken upstream: <https://github.com/linuxdeploy/linuxdeploy/issues/309>
         return patterns
 
     def upload_artifact_nightly(self):
@@ -813,7 +813,7 @@ rustup default {toolchain}
         self.env["SCCACHE_GHA_ENABLED"] = "true"
         self.env["RUSTC_WRAPPER"] = "sccache"
         if "macos" in self.name:
-            self.env["MACOSX_DEPLOYMENT_TARGET"] = "10.9"
+            self.env["MACOSX_DEPLOYMENT_TARGET"] = "10.12"
         if "alpine" in self.name:
             self.env["RUSTFLAGS"] = "-C target-feature=-crt-static"
         if "win" in self.name:
@@ -974,11 +974,11 @@ rustup default {toolchain}
         steps += self.test_all()
         steps += self.package(trusted=True)
         steps += self.upload_artifact()
-        steps += self.update_homebrew_tap()
 
         uploader = Job(
             runs_on="ubuntu-latest",
             steps=self.checkout(submodules=False)
+            + self.update_homebrew_tap()
             + self.upload_asset_tag()
             + self.create_winget_pr()
             + self.create_flathub_pr(),
@@ -1009,9 +1009,9 @@ TARGETS = [
     Target(name="centos9", container="quay.io/centos/centos:stream9"),
     Target(name="macos", os="macos-latest"),
     # https://fedoraproject.org/wiki/End_of_life?rd=LifeCycle/EOL
-    Target(container="fedora:38"),
     Target(container="fedora:39"),
     Target(container="fedora:40"),
+    Target(container="fedora:41"),
     # Target(container="alpine:3.15"),
     Target(name="windows", os="windows-latest", rust_target="x86_64-pc-windows-msvc"),
 ]
@@ -1080,6 +1080,11 @@ jobs:
   upload:
     runs-on: ubuntu-latest
     needs: build
+    if: github.repository == 'wezterm/wezterm'
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
 """
                 )
                 uploader.render(f, 3)

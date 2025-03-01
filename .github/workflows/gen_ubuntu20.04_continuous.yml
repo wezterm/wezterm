@@ -71,7 +71,7 @@ jobs:
       - name: "Install Rust"
         uses: dtolnay/rust-toolchain@stable
       - name: "Compile with sccache"
-        uses: mozilla-actions/sccache-action@v0.0.5
+        uses: mozilla-actions/sccache-action@v0.0.7
       - name: "Cache Rust Dependencies"
         uses: actions/cache@v4
         id: cache-cargo-vendor
@@ -128,12 +128,16 @@ jobs:
             wezterm-*.xz
             *src.tar.gz
             *.AppImage
-            *.zsync
           retention-days: 5
 
   upload:
     runs-on: ubuntu-latest
     needs: build
+    if: github.repository == 'wezterm/wezterm'
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
 
     steps:
       - name: "Workaround git permissions issue"
@@ -147,9 +151,9 @@ jobs:
           name: "ubuntu20.04"
       - name: "Checksum"
         shell: bash
-        run: "for f in wezterm-*.deb wezterm-*.xz *src.tar.gz *.AppImage *.zsync ; do sha256sum $f > $f.sha256 ; done"
+        run: "for f in wezterm-*.deb wezterm-*.xz *src.tar.gz *.AppImage ; do sha256sum $f > $f.sha256 ; done"
       - name: "Upload to Nightly Release"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
-        run: "bash ci/retry.sh gh release upload --clobber nightly wezterm-*.deb wezterm-*.xz *src.tar.gz *.AppImage *.zsync *.sha256"
+        run: "bash ci/retry.sh gh release upload --clobber nightly wezterm-*.deb wezterm-*.xz *src.tar.gz *.AppImage *.sha256"

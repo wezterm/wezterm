@@ -2,4 +2,4 @@
 
 Find documentation grouped by tag:
 
-[TAGS]
+<!-- material/tags -->

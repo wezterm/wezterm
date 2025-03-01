@@ -1676,7 +1676,7 @@ impl KeyEvent {
         }
         // TODO: Hyper and Meta are not handled yet.
         // We should somehow detect this?
-        // See: https://github.com/wez/wezterm/pull/4605#issuecomment-1823604708
+        // See: https://github.com/wezterm/wezterm/pull/4605#issuecomment-1823604708
         if self.leds.contains(KeyboardLedStatus::CAPS_LOCK) {
             modifiers |= 64;
         }
@@ -1976,7 +1976,8 @@ bitflags! {
         const MACOS_FORCE_DISABLE_SHADOW = 4;
         const MACOS_FORCE_ENABLE_SHADOW = 4|8;
         const INTEGRATED_BUTTONS = 16;
-        const MACOS_RESPECT_THEME_BACKGROUND = 32;
+        const MACOS_FORCE_SQUARE_CORNERS = 32;
+        const MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR = 64;
     }
 }
 
@@ -1999,6 +2000,8 @@ impl Into<String> for &WindowDecorations {
             s.push("MACOS_FORCE_ENABLE_SHADOW");
         } else if self.contains(WindowDecorations::MACOS_FORCE_DISABLE_SHADOW) {
             s.push("MACOS_FORCE_DISABLE_SHADOW");
+        } else if self.contains(WindowDecorations::MACOS_FORCE_SQUARE_CORNERS) {
+            s.push("MACOS_FORCE_SQUARE_CORNERS");
         }
         if s.is_empty() {
             "NONE".to_string()
@@ -2021,11 +2024,13 @@ impl TryFrom<String> for WindowDecorations {
             } else if ele == "RESIZE" {
                 flags |= Self::RESIZE;
             } else if ele == "MACOS_RESPECT_THEME_BACKGROUND" {
-                flags |= Self::MACOS_RESPECT_THEME_BACKGROUND;
+                flags |= Self::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR;
             } else if ele == "MACOS_FORCE_DISABLE_SHADOW" {
                 flags |= Self::MACOS_FORCE_DISABLE_SHADOW;
             } else if ele == "MACOS_FORCE_ENABLE_SHADOW" {
                 flags |= Self::MACOS_FORCE_ENABLE_SHADOW;
+            } else if ele == "MACOS_FORCE_SQUARE_CORNERS" {
+                flags |= Self::MACOS_FORCE_SQUARE_CORNERS;
             } else if ele == "INTEGRATED_BUTTONS" {
                 flags |= Self::INTEGRATED_BUTTONS;
             } else {

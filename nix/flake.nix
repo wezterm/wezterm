@@ -63,11 +63,11 @@
           with pkgs;
           [
             fontconfig
+            openssl
             zlib
           ]
           ++ lib.optionals stdenv.isLinux [
             libxkbcommon
-            openssl
             wayland
 
             xorg.libX11
