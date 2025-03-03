@@ -22,6 +22,7 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* modifyOtherKeys support has been turned off by default. Use [enable_modify_other_keys](config/lua/config/enable_modify_other_keys.md)`=true` to enable it.
 * Wayland: currently being reimplemented, it maybe more unstable than usual.
   Please file GH issues for any problems you see.
   Many thanks to @tzx and @tmccombs! #4777 #5781

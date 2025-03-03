@@ -1952,11 +1952,18 @@ impl TerminalState {
                 resource: XtermKeyModifierResource::OtherKeys,
                 value,
             } => {
-                self.modify_other_keys = match value {
-                    Some(0) => None,
-                    _ => value,
-                };
-                log::debug!("XtermKeyMode OtherKeys -> {:?}", self.modify_other_keys);
+                let enable_modify_other_keys = self.config.enable_modify_other_keys();
+                if enable_modify_other_keys {
+                    self.modify_other_keys = match value {
+                        Some(0) => None,
+                        _ => value,
+                    };
+                }
+                log::debug!(
+                    "XtermKeyMode OtherKeys -> {:?} [enabled={}]",
+                    self.modify_other_keys,
+                    enable_modify_other_keys,
+                );
             }
 
             Mode::XtermKeyMode { resource, value } => {

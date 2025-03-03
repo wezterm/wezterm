@@ -239,6 +239,8 @@ pub struct Config {
     pub enable_kitty_graphics: bool,
     #[dynamic(default)]
     pub enable_kitty_keyboard: bool,
+    #[dynamic(default)]
+    pub enable_modify_other_keys: bool,
 
     /// Whether the terminal should respond to requests to read the
     /// title string.

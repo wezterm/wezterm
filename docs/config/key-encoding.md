@@ -59,7 +59,8 @@ The kitty protocol allows applications to request varying degrees of
 enhancement over the standard encoding scheme and also allows for more modifier
 keys (notably: `CMD`/`Super`/`Windows`) to be reported to the application.
 
-[enable_kitty_keyboard](lua/config/enable_kitty_keyboard.md) controls whether
+[enable_modify_other_keys](lua/config/enable_modify_other_keys.md) and
+[enable_kitty_keyboard](lua/config/enable_kitty_keyboard.md) control whether
 wezterm will honor the application requests to modify the keyboard encoding.
 
 ## Windows

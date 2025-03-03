@@ -176,6 +176,10 @@ pub trait TerminalConfiguration: Downcast + std::fmt::Debug + Send + Sync {
         false
     }
 
+    fn enable_modify_other_keys(&self) -> bool {
+        false
+    }
+
     fn enable_kitty_keyboard(&self) -> bool {
         false
     }
