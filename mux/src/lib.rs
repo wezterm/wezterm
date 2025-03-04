@@ -804,11 +804,16 @@ impl Mux {
 
     fn remove_pane_internal(&self, pane_id: PaneId) {
         log::debug!("removing pane {}", pane_id);
+        let mut changed = false;
         if let Some(pane) = self.panes.write().remove(&pane_id).clone() {
             log::debug!("killing pane {}", pane_id);
             pane.kill();
-            self.recompute_pane_count();
             self.notify(MuxNotification::PaneRemoved(pane_id));
+            changed = true;
+        }
+
+        if changed {
+            self.recompute_pane_count();
         }
     }
 
