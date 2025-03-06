@@ -29,7 +29,7 @@ freetype = []
 use_glib = []
 
 [dependencies]
-libc = { workspace = true }
+libc.workspace = true
 
 [build-dependencies]
 cc.workspace = true
