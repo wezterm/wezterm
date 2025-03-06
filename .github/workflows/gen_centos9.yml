@@ -8,6 +8,7 @@ on:
       - "**/*.rs"
       - "**/Cargo.lock"
       - "**/Cargo.toml"
+      - ".cargo/config.toml"
       - ".github/workflows/gen_centos9.yml"
       - "assets/fonts/**/*"
       - "assets/icon/*"

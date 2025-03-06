@@ -10,6 +10,7 @@ on:
       - "**/*.rs"
       - "**/Cargo.lock"
       - "**/Cargo.toml"
+      - ".cargo/config.toml"
       - ".github/workflows/gen_debian11_continuous.yml"
       - "assets/fonts/**/*"
       - "assets/icon/*"

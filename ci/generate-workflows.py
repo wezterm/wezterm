@@ -8,6 +8,7 @@ TRIGGER_PATHS = [
     "**/*.rs",
     "**/Cargo.lock",
     "**/Cargo.toml",
+    ".cargo/config.toml",
     "assets/fonts/**/*",
     "assets/icon/*",
     "ci/deploy.sh",
