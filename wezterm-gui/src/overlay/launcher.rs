@@ -5,9 +5,9 @@
 //! be rendered as a popup/context menu if the system supports it; at the
 //! time of writing our window layer doesn't provide an API for context
 //! menus.
-use super::quickselect;
 use crate::commands::derive_command_from_key_assignment;
 use crate::inputmap::InputMap;
+use crate::overlay::quickselect;
 use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::termwindow::TermWindowNotif;
 use config::configuration;

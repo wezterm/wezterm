@@ -1,4 +1,4 @@
-use super::quickselect;
+use crate::overlay::quickselect;
 use crate::scripting::guiwin::GuiWin;
 use config::keyassignment::{InputSelector, InputSelectorEntry, KeyAssignment};
 use mux::termwiztermtab::TermWizTerminal;
