@@ -13,7 +13,7 @@ upon the input.
   escape sequences and/or use [wezterm.format](../wezterm/format.md).
   Defaults to: `"🛑 Really continue?"`.
 * `action` - event callback registered via `wezterm.action_callback`.  The
-  callback's function signature is `(window, pane, id, label)` where `window` and
+  callback's function signature is `(window, pane)` where `window` and
   `pane` are the [Window](../window/index.md) and [Pane](../pane/index.md)
   objects from the current pane and window. This callback is called when the
   user selects `Yes`.
