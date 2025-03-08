@@ -18,7 +18,7 @@ upon the input.
   objects from the current pane and window. This callback is called when the
   user selects `Yes`.
 * `cancel` - event callback registered via `wezterm.action_callback`.  The
-  callback's function signature is `(window, pane, id, label)` where `window` and
+  callback's function signature is `(window, pane)` where `window` and
   `pane` are the [Window](../window/index.md) and [Pane](../pane/index.md).
   This is an optional argument. If present, this callback is called when the
   user selects `No` or closes the confirmation menu.
