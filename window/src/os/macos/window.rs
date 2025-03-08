@@ -1113,22 +1113,28 @@ impl WindowInner {
     }
 
     fn update_titlebar_background(&self) {
-        if !self.config.window_decorations.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR) {
-            return
+        if !self
+            .config
+            .window_decorations
+            .contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR)
+        {
+            return;
         }
 
         // Set the titlebar background to the theme color falling back to black if there is no
         // specified color scheme
-        let color = self.config.resolved_palette.background.unwrap_or(
-            RgbaColor::from(SrgbaTuple(0.,0.,0.,255.))
-        );
+        let color = self
+            .config
+            .resolved_palette
+            .background
+            .unwrap_or(RgbaColor::from(SrgbaTuple(0., 0., 0., 255.)));
 
         unsafe {
             if let Some(titlebar_view_container) = get_titlebar_view_container(&self.window) {
                 let layer: id = msg_send![*titlebar_view_container.load(), layer];
 
                 if layer.is_null() {
-                    return
+                    return;
                 }
 
                 // We need to make sure to convert the config color into an sRGB CGColor or the color will be slightly off
@@ -1395,8 +1401,9 @@ fn apply_decorations_to_window(
             appkit::NSWindowTitleVisibility::NSWindowTitleHidden
         });
 
-        if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS) 
-            || decorations.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR) {
+        if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
+            || decorations.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR)
+        {
             window.setTitlebarAppearsTransparent_(YES);
         } else {
             window.setTitlebarAppearsTransparent_(hidden);
@@ -1460,7 +1467,7 @@ unsafe fn get_view_class_name(id: id) -> Option<String> {
         return None;
     }
 
-    let class_name: id = msg_send![id, className] ;
+    let class_name: id = msg_send![id, className];
 
     if class_name.is_null() {
         return None;
@@ -1475,13 +1482,12 @@ unsafe fn get_view_class_name(id: id) -> Option<String> {
 }
 
 fn get_titlebar_view_container(window: &StrongPtr) -> Option<WeakPtr> {
-    
-    // The view container for the titlebar on macos is found next to the primary window view 
+    // The view container for the titlebar on macos is found next to the primary window view
     // so we need to traverse up to the super view to find it
     let super_view = get_view_superview(window)?;
 
     let sub_views = get_view_subviews(&super_view.load())?;
-    
+
     let count = unsafe { sub_views.load().count() };
 
     for i in 0..count {
@@ -1515,10 +1521,9 @@ fn get_view_superview(view: &StrongPtr) -> Option<WeakPtr> {
 }
 
 fn get_view_subviews(view: &StrongPtr) -> Option<WeakPtr> {
-
     let sub_views_id: id = unsafe { msg_send![**view, subviews] };
     if sub_views_id.is_null() {
-        return None
+        return None;
     }
 
     let sub_views = unsafe { WeakPtr::new(sub_views_id) };
