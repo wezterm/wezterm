@@ -14,37 +14,60 @@ error = { "%error " ~ number ~ " " ~ number ~ " " ~ number }
 
 client_session_changed = { "%client-session-changed " ~ client_name ~ " " ~ session_id ~ " " ~any_text }
 client_detached = { "%client-detached " ~ client_name }
-output = { "%output " ~ pane_id ~ " " ~ any_text }
+config_error = { "%config-error " ~ any_text }
+continue = { "%continue " ~ pane_id }
 exit = { "%exit" ~ (" " ~ any_text)? }
-sessions_changed = { "%sessions-changed" }
+extended_output = { "%extended-output " ~ pane_id ~ any_text }
+layout_change = { "%layout-change " ~ window_id ~ " " ~ (window_layout ~ " " ~ window_layout ~ " " ~any_text | window_layout) }
+message = { "%message " ~ any_text }
+output = { "%output " ~ pane_id ~ " " ~ any_text }
 pane_mode_changed = { "%pane-mode-changed " ~ pane_id }
-window_add = { "%window-add " ~ window_id }
-window_close = { ("%window-close " | "%unlinked-window-close ") ~ window_id }
-window_pane_changed = { "%window-pane-changed " ~ window_id ~ " " ~ pane_id }
-window_renamed = { "%window-renamed " ~ window_id ~ " " ~ any_text }
+paste_buffer_changed = { "%paste-buffer-changed " ~ any_text }
+paste_buffer_deleted = { "%paste-buffer-deleted " ~ any_text }
+pause = { "%pause " ~ pane_id }
 session_changed = { "%session-changed " ~ session_id ~ " " ~ any_text }
 session_renamed = { "%session-renamed " ~ any_text }
 session_window_changed = { "%session-window-changed " ~ session_id ~ " " ~ window_id }
-layout_change = { "%layout-change " ~ window_id ~ " " ~ (window_layout ~ " " ~ window_layout ~ " " ~any_text | window_layout) }
+sessions_changed = { "%sessions-changed" }
+subscription_changed = { " %subscription-changed " ~ any_text }
+unlinked_window_add = { "%unlinked-window-add " ~ window_id }
+unlinked_window_close = { "%unlinked-window-close " ~ window_id }
+unlinked_window_renamed = { "%unlinked-window-renamed " ~ window_id }
+window_add = { "%window-add " ~ window_id }
+window_close = { "%window-close " ~ window_id }
+window_pane_changed = { "%window-pane-changed " ~ window_id ~ " " ~ pane_id }
+window_renamed = { "%window-renamed " ~ window_id ~ " " ~ any_text }
 
 line = _{ (
-  client_session_changed |
-  client_detached |
   begin |
   end |
   error |
+
+  client_session_changed |
+  client_detached |
+  config_error |
+  continue |
   exit |
+  extended_output |
+  layout_change |
+  message |
   output |
   pane_mode_changed |
+  paste_buffer_changed |
+  paste_buffer_deleted |
+  pause |
   session_changed |
   session_renamed |
   session_window_changed |
   sessions_changed |
+  subscription_changed |
+  unlinked_window_add |
+  unlinked_window_close |
+  unlinked_window_renamed |
   window_add |
   window_close |
   window_pane_changed |
-  window_renamed |
-  layout_change
+  window_renamed
 ) }
 
 line_entire = _{ SOI ~ line ~ EOI }

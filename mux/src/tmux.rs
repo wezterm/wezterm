@@ -123,6 +123,10 @@ impl TmuxDomainState {
                         log::debug!("Tmux pane {} havn't been attached", pane);
                     }
                 }
+                Event::ConfigError { error } => {
+                    // tmux config file error, not our fault, just log it and go
+                    log::info!("The tmux configuration error: '{}'", error);
+                }
                 Event::WindowAdd { window } => {
                     // Only handle the new tab, the first empty window handled by sync_window_state
                     if !self.gui_window.lock().is_none() {
