@@ -14,7 +14,7 @@ The arguments are a lua table with the following keys:
 * `fuzzy_help_text` - a string to display when in fuzzy finding mode. Defaults to:
   `"Fuzzy matching: "` {{since('nightly', inline=True)}}
 * `alphabet` - a string of unique characters. The characters in the string are used
-  to calculate one or two click shortcuts that can be used to quickly choose from
+  to calculate one or two key press shortcuts that can be used to quickly choose from
   the Launcher when in the default mode. Defaults to the same value as
   [launcher_alphabet](../config/launcher_alphabet.md) {{since('nightly', inline=True)}}
 
