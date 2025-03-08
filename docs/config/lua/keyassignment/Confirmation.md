@@ -52,5 +52,6 @@ return config
 
 
 
-See also [InputSelector](InputSelector.md).
-See also [PromptInputLine](PromptInputLine.md).
+See also:
+   * [InputSelector](InputSelector.md).
+   * [PromptInputLine](PromptInputLine.md).
