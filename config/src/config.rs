@@ -1808,6 +1808,7 @@ fn default_alternate_buffer_wheel_scroll_speed() -> u8 {
 }
 
 fn default_num_alphabet() -> String {
+    // Note: vi motion keys are intentionally excluded from this alphabet
     "1234567890abcdefghilmnopqrstuvwxyz".to_string()
 }
 
