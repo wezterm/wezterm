@@ -1,3 +1,8 @@
+---
+tags:
+  - prompt
+---
+
 # `Confirmation`
 
 {{since('nightly')}}
