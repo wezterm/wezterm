@@ -23,7 +23,7 @@ use std::io::{Result as IoResult, Write};
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use termwiz::escape::csi::{DecPrivateMode, DecPrivateModeCode, Mode, Sgr, CSI};
+use termwiz::escape::csi::{Sgr, CSI};
 use termwiz::escape::{Action, DeviceControlMode};
 use termwiz::input::KeyboardEncoding;
 use termwiz::surface::{Line, SequenceNo};
@@ -172,7 +172,11 @@ impl Pane for LocalPane {
     }
 
     fn get_keyboard_encoding(&self) -> KeyboardEncoding {
-        self.terminal.lock().get_keyboard_encoding()
+        if self.tmux_domain.lock().is_some() {
+            KeyboardEncoding::Xterm
+        } else {
+            self.terminal.lock().get_keyboard_encoding()
+        }
     }
 
     fn get_current_seqno(&self) -> SequenceNo {
@@ -824,7 +828,6 @@ impl Pane for LocalPane {
 struct LocalPaneDCSHandler {
     pane_id: PaneId,
     tmux_domain: Option<Arc<TmuxDomainState>>,
-    win32_input_mode_disabled: Arc<Mutex<bool>>,
 }
 
 pub(crate) fn emit_output_for_pane(pane_id: PaneId, message: &str) {
@@ -837,47 +840,6 @@ pub(crate) fn emit_output_for_pane(pane_id: PaneId, message: &str) {
         if let Some(pane) = mux.get_pane(pane_id) {
             pane.perform_actions(actions);
             mux.notify(MuxNotification::PaneOutput(pane_id));
-        }
-    })
-    .detach();
-}
-
-// win32 input mode directly send the key to terminal, we don't have chance to detach tmux control
-// mode
-fn disable_win32_input_mode_if(win32_input_mode_disabled: Arc<Mutex<bool>>, pane_id: PaneId) {
-    promise::spawn::spawn_into_main_thread(async move {
-        let mux = Mux::get();
-        if let Some(pane) = mux.get_pane(pane_id) {
-            if pane.get_keyboard_encoding() == KeyboardEncoding::Win32
-                && configuration().allow_win32_input_mode
-            {
-                let mut disabled = win32_input_mode_disabled.lock();
-                *disabled = true;
-                pane.perform_actions(vec![Action::CSI(CSI::Mode(Mode::ResetDecPrivateMode(
-                    DecPrivateMode::Code(DecPrivateModeCode::Win32InputMode),
-                )))]);
-            }
-        }
-    })
-    .detach();
-}
-
-// restore win32 input mode if we modified it.
-fn restore_win32_input_mode_if(win32_input_mode_disabled: Arc<Mutex<bool>>, pane_id: PaneId) {
-    if !*win32_input_mode_disabled.lock() {
-        return;
-    }
-
-    promise::spawn::spawn_into_main_thread(async move {
-        let mux = Mux::get();
-        if let Some(pane) = mux.get_pane(pane_id) {
-            let mut disabled = win32_input_mode_disabled.lock();
-            if *disabled {
-                *disabled = false;
-                pane.perform_actions(vec![Action::CSI(CSI::Mode(Mode::SetDecPrivateMode(
-                    DecPrivateMode::Code(DecPrivateModeCode::Win32InputMode),
-                )))]);
-            }
         }
     })
     .detach();
@@ -906,11 +868,6 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
                         let pane = pane.downcast_ref::<LocalPane>().unwrap();
                         pane.tmux_domain.lock().replace(Arc::clone(&tmux_domain));
 
-                        disable_win32_input_mode_if(
-                            self.win32_input_mode_disabled.clone(),
-                            self.pane_id,
-                        );
-
                         emit_output_for_pane(
                             self.pane_id,
                             "\r\n[This pane is running tmux control mode. Press q to detach]",
@@ -932,11 +889,6 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
                     if let Some(pane) = mux.get_pane(self.pane_id) {
                         let pane = pane.downcast_ref::<LocalPane>().unwrap();
                         pane.tmux_domain.lock().take();
-
-                        restore_win32_input_mode_if(
-                            self.win32_input_mode_disabled.clone(),
-                            self.pane_id,
-                        );
                     }
                     mux.domain_was_detached(tmux.domain_id);
                 }
@@ -1047,7 +999,6 @@ impl LocalPane {
         terminal.set_device_control_handler(Box::new(LocalPaneDCSHandler {
             pane_id,
             tmux_domain: None,
-            win32_input_mode_disabled: Arc::new(Mutex::new(false)),
         }));
         terminal.set_notification_handler(Box::new(LocalPaneNotifHandler { pane_id }));
 
