@@ -112,6 +112,10 @@ impl TmuxDomainState {
                 },
 
                 // Tmux specific events
+                Event::ConfigError { error } => {
+                    // tmux config file error, not our fault, just log it and go
+                    log::info!("The tmux configuration error: {error}");
+                }
                 Event::Exit { reason: _ } => {
                     *self.state.lock() = State::Exit;
                     let mut pane_map = self.remote_panes.lock();
@@ -215,6 +219,9 @@ impl TmuxDomainState {
                             tab.set_title(&format!("{}", name));
                         }
                     }
+                }
+                Event::UnlinkedWindowClose { window } => {
+                    let _ = self.remove_detached_window(*window);
                 }
                 _ => {}
             }

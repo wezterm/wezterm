@@ -52,6 +52,16 @@ pub enum Event {
         session: TmuxSessionId,
         session_name: String,
     },
+    ConfigError {
+        error: String,
+    },
+    Continue {
+        pane: TmuxPaneId,
+    },
+    ExtendedOutput {
+        pane: TmuxPaneId,
+        text: String,
+    },
     Exit {
         reason: Option<String>,
     },
@@ -61,11 +71,23 @@ pub enum Event {
         visible_layout: Option<String>,
         raw_flags: Option<String>,
     },
+    Message {
+        message: String,
+    },
     Output {
         pane: TmuxPaneId,
         text: String,
     },
     PaneModeChanged {
+        pane: TmuxPaneId,
+    },
+    PasteBufferChanged {
+        buffer: String,
+    },
+    PasteBufferDeleted {
+        buffer: String,
+    },
+    Pause {
         pane: TmuxPaneId,
     },
     SessionChanged {
@@ -78,6 +100,16 @@ pub enum Event {
     SessionsChanged,
     SessionWindowChanged {
         session: TmuxSessionId,
+        window: TmuxWindowId,
+    },
+    SubscriptionChanged,
+    UnlinkedWindowAdd {
+        window: TmuxWindowId,
+    },
+    UnlinkedWindowClose {
+        window: TmuxWindowId,
+    },
+    UnlinkedWindowRenamed {
         window: TmuxWindowId,
     },
     WindowAdd {
@@ -246,6 +278,32 @@ fn parse_line(line: &str) -> anyhow::Result<Event> {
                 session_name,
             })
         }
+        Rule::config_error => {
+            let mut pairs = pair.into_inner();
+            let error = unvis(
+                pairs
+                    .next()
+                    .ok_or_else(|| anyhow!("missing name"))?
+                    .as_str(),
+            )?;
+            Ok(Event::ConfigError { error })
+        }
+        Rule::r#continue => {
+            let mut pairs = pair.into_inner();
+            let pane = parse_pane_id(pairs.next().ok_or_else(|| anyhow!("missing pane id"))?)?;
+            Ok(Event::Continue { pane })
+        }
+        Rule::extended_output => {
+            let mut pairs = pair.into_inner();
+            let pane = parse_pane_id(pairs.next().ok_or_else(|| anyhow!("missing pane id"))?)?;
+            let text = unvis(
+                pairs
+                    .next()
+                    .ok_or_else(|| anyhow!("missing text"))?
+                    .as_str(),
+            )?;
+            Ok(Event::ExtendedOutput { pane, text })
+        }
         Rule::exit => {
             let mut pairs = pair.into_inner();
             let reason = pairs.next().map(|pair| pair.as_str().to_owned());
@@ -270,6 +328,16 @@ fn parse_line(line: &str) -> anyhow::Result<Event> {
                 raw_flags,
             })
         }
+        Rule::message => {
+            let mut pairs = pair.into_inner();
+            let message = unvis(
+                pairs
+                    .next()
+                    .ok_or_else(|| anyhow!("missing text"))?
+                    .as_str(),
+            )?;
+            Ok(Event::Message { message })
+        }
         Rule::output => {
             let mut pairs = pair.into_inner();
             let pane = parse_pane_id(pairs.next().ok_or_else(|| anyhow!("missing pane id"))?)?;
@@ -285,6 +353,31 @@ fn parse_line(line: &str) -> anyhow::Result<Event> {
             let mut pairs = pair.into_inner();
             let pane = parse_pane_id(pairs.next().ok_or_else(|| anyhow!("missing pane id"))?)?;
             Ok(Event::PaneModeChanged { pane })
+        }
+        Rule::paste_buffer_changed => {
+            let mut pairs = pair.into_inner();
+            let buffer = unvis(
+                pairs
+                    .next()
+                    .ok_or_else(|| anyhow!("missing text"))?
+                    .as_str(),
+            )?;
+            Ok(Event::PasteBufferChanged { buffer })
+        }
+        Rule::paste_buffer_deleted => {
+            let mut pairs = pair.into_inner();
+            let buffer = unvis(
+                pairs
+                    .next()
+                    .ok_or_else(|| anyhow!("missing text"))?
+                    .as_str(),
+            )?;
+            Ok(Event::PasteBufferDeleted { buffer })
+        }
+        Rule::pause => {
+            let mut pairs = pair.into_inner();
+            let pane = parse_pane_id(pairs.next().ok_or_else(|| anyhow!("missing pane id"))?)?;
+            Ok(Event::Pause { pane })
         }
         Rule::session_changed => {
             let mut pairs = pair.into_inner();
@@ -317,6 +410,25 @@ fn parse_line(line: &str) -> anyhow::Result<Event> {
             Ok(Event::SessionWindowChanged { session, window })
         }
         Rule::sessions_changed => Ok(Event::SessionsChanged),
+        Rule::subscription_changed => Ok(Event::SubscriptionChanged),
+        Rule::unlinked_window_add => {
+            let mut pairs = pair.into_inner();
+            let window =
+                parse_window_id(pairs.next().ok_or_else(|| anyhow!("missing window id"))?)?;
+            Ok(Event::UnlinkedWindowAdd { window })
+        }
+        Rule::unlinked_window_close => {
+            let mut pairs = pair.into_inner();
+            let window =
+                parse_window_id(pairs.next().ok_or_else(|| anyhow!("missing window id"))?)?;
+            Ok(Event::UnlinkedWindowClose { window })
+        }
+        Rule::unlinked_window_renamed => {
+            let mut pairs = pair.into_inner();
+            let window =
+                parse_window_id(pairs.next().ok_or_else(|| anyhow!("missing window id"))?)?;
+            Ok(Event::UnlinkedWindowRenamed { window })
+        }
         Rule::window_add => {
             let mut pairs = pair.into_inner();
             let window =
@@ -351,13 +463,13 @@ fn parse_line(line: &str) -> anyhow::Result<Event> {
         Rule::EOI
         | Rule::any_text
         | Rule::client_name
-        | Rule::line
-        | Rule::line_entire
         | Rule::layout_pane
         | Rule::layout_split_horizontal
         | Rule::layout_split_pane
         | Rule::layout_split_vertical
         | Rule::layout_window
+        | Rule::line
+        | Rule::line_entire
         | Rule::number
         | Rule::pane_id
         | Rule::session_id
@@ -628,23 +740,34 @@ fn parse_layout_inner(
             | Rule::client_detached
             | Rule::client_name
             | Rule::client_session_changed
+            | Rule::config_error
+            | Rule::r#continue
             | Rule::end
             | Rule::error
             | Rule::exit
+            | Rule::extended_output
             | Rule::layout_change
             | Rule::layout_split_pane
             | Rule::layout_window
             | Rule::line
             | Rule::line_entire
+            | Rule::message
             | Rule::number
             | Rule::output
             | Rule::pane_id
             | Rule::pane_mode_changed
+            | Rule::paste_buffer_changed
+            | Rule::paste_buffer_deleted
+            | Rule::pause
             | Rule::session_changed
             | Rule::session_id
             | Rule::session_renamed
             | Rule::session_window_changed
             | Rule::sessions_changed
+            | Rule::subscription_changed
+            | Rule::unlinked_window_add
+            | Rule::unlinked_window_close
+            | Rule::unlinked_window_renamed
             | Rule::window_add
             | Rule::window_close
             | Rule::window_id
@@ -875,6 +998,16 @@ here
 %output %1 \\033[K\\033[?2004h
 %exit
 %exit I said so
+%config-error /home/joe/.tmux.conf:1: unknown command: dadsafafasdf
+%continue %2
+%extended-output %1 \\033[1m\\033[7m%\\033[27m\\033[1m\\033[0m    \\015 \\015
+%message message text
+%unlinked-window-add @40
+%unlinked-window-renamed @41
+%paste-buffer-changed just something
+%paste-buffer-deleted just something else
+%pause %3
+%subscription-changed something we don't handle so far
 ";
 
         let mut p = Parser::new();
@@ -892,7 +1025,7 @@ here
                 }),
                 Event::WindowAdd { window: 1 },
                 Event::WindowClose { window: 38 },
-                Event::WindowClose { window: 39 },
+                Event::UnlinkedWindowClose { window: 39 },
                 Event::SessionsChanged,
                 Event::SessionChanged {
                     session: 1,
@@ -939,6 +1072,27 @@ here
                 Event::Exit {
                     reason: Some("I said so".to_owned())
                 },
+                Event::ConfigError {
+                    error: "/home/joe/.tmux.conf:1: unknown command: dadsafafasdf".to_owned()
+                },
+                Event::Continue { pane: 2 },
+                Event::ExtendedOutput {
+                    pane: 1,
+                    text: "\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m    \r \r".to_owned()
+                },
+                Event::Message {
+                    message: "message text".to_owned()
+                },
+                Event::UnlinkedWindowAdd { window: 40 },
+                Event::UnlinkedWindowRenamed { window: 41 },
+                Event::PasteBufferChanged {
+                    buffer: "just something".to_owned()
+                },
+                Event::PasteBufferDeleted {
+                    buffer: "just something else".to_owned()
+                },
+                Event::Pause { pane: 3 },
+                Event::SubscriptionChanged,
             ],
             events
         );
