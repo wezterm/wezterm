@@ -1,3 +1,8 @@
+---
+tags:
+  - prompt
+---
+
 # `PromptInputLine`
 
 {{since('20230408-112425-69ae8472')}}
