@@ -40,13 +40,16 @@ config.keys = {
     key = 'E',
     mods = 'CTRL|SHIFT',
     action = act.Confirmation {
-      message = "Do you want to run htop in a new window?",
+      message = 'Do you want to run htop in a new window?',
       action = wezterm.action_callback(function(window, pane)
-        window:perform_action(act.SpawnCommandInNewWindow { args = { 'htop' } }, pane)
+        window:perform_action(
+          act.SpawnCommandInNewWindow { args = { 'htop' } },
+          pane
+        )
       end),
-      cancel = wezterm.action_callback(function(window,pane)
-        wezterm.log_error("user declined")
-      end)
+      cancel = wezterm.action_callback(function(window, pane)
+        wezterm.log_error 'user declined'
+      end),
     },
   },
 }
