@@ -114,7 +114,7 @@ impl TmuxDomainState {
                 // Tmux specific events
                 Event::ConfigError { error } => {
                     // tmux config file error, not our fault, just log it and go
-                    log::info!("The tmux configuration error: {error}");
+                    log::warn!("tmux configuration error: {error}");
                 }
                 Event::Exit { reason: _ } => {
                     *self.state.lock() = State::Exit;
