@@ -88,6 +88,7 @@ impl TmuxDomainState {
             let state = *self.state.lock();
             log::debug!("tmux: {:?} in state {:?}", event, state);
             match event {
+                // Tmux generic events
                 Event::Guarded(response) => match state {
                     State::WaitForInitialGuard => {
                         *self.state.lock() = State::Idle;
@@ -109,41 +110,8 @@ impl TmuxDomainState {
                     State::Idle => {}
                     State::Exit => {}
                 },
-                Event::Output { pane, text } => {
-                    let pane_map = self.remote_panes.lock();
-                    if let Some(ref_pane) = pane_map.get(pane) {
-                        let mut tmux_pane = ref_pane.lock();
-                        if let Err(err) = tmux_pane.output_write.write_all(text.as_bytes()) {
-                            log::error!("Failed to write tmux data to output: {:#}", err);
-                        }
-                    } else {
-                        // the output may come early then pane is ready, in this case we
-                        // backlog it
-                        self.backlog.lock().insert(*pane, text.to_string());
-                        log::debug!("Tmux pane {} havn't been attached", pane);
-                    }
-                }
-                Event::WindowAdd { window } => {
-                    // Only handle the new tab, the first empty window handled by sync_window_state
-                    if !self.gui_window.lock().is_none() {
-                        if let Some(session) = *self.tmux_session.lock() {
-                            let mut cmd_queue = self.cmd_queue.as_ref().lock();
-                            cmd_queue.push_back(Box::new(ListAllWindows {
-                                session_id: session,
-                                window_id: Some(*window),
-                            }));
-                            log::info!("tmux window add: {}:{}", session, window);
-                        }
-                    }
-                }
-                Event::SessionChanged { session, name: _ } => {
-                    *self.tmux_session.lock() = Some(*session);
-                    let mut cmd_queue = self.cmd_queue.as_ref().lock();
-                    cmd_queue.push_back(Box::new(ListCommands));
 
-                    self.subscribe_notification();
-                    log::info!("tmux session changed:{}", session);
-                }
+                // Tmux specific events
                 Event::Exit { reason: _ } => {
                     *self.state.lock() = State::Exit;
                     let mut pane_map = self.remote_panes.lock();
@@ -168,22 +136,6 @@ impl TmuxDomainState {
 
                     return;
                 }
-                Event::WindowPaneChanged { window, pane } => {
-                    // The tmux 2.7 WindowPaneChanged event comes early than WindowAdd, we need to
-                    // skip it
-                    if !self.check_window_attached(*window) {
-                        continue;
-                    }
-
-                    // Split pane
-                    if !self.check_pane_attached(*window, *pane) {
-                        let mut pending_splits = self.pending_splits.lock();
-                        if let Some(mut promise) = pending_splits.pop_front() {
-                            promise.ok(*pane);
-                        }
-                    }
-                    log::info!("tmux window pane changed: {}:{}", window, pane);
-                }
                 Event::LayoutChange {
                     window,
                     layout,
@@ -201,6 +153,60 @@ impl TmuxDomainState {
                         },
                     }));
                 }
+                Event::Output { pane, text } => {
+                    let pane_map = self.remote_panes.lock();
+                    if let Some(ref_pane) = pane_map.get(pane) {
+                        let mut tmux_pane = ref_pane.lock();
+                        if let Err(err) = tmux_pane.output_write.write_all(text.as_bytes()) {
+                            log::error!("Failed to write tmux data to output: {:#}", err);
+                        }
+                    } else {
+                        // the output may come early then pane is ready, in this case we
+                        // backlog it
+                        self.backlog.lock().insert(*pane, text.to_string());
+                        log::debug!("Tmux pane {} havn't been attached", pane);
+                    }
+                }
+                Event::SessionChanged { session, name: _ } => {
+                    *self.tmux_session.lock() = Some(*session);
+                    let mut cmd_queue = self.cmd_queue.as_ref().lock();
+                    cmd_queue.push_back(Box::new(ListCommands));
+
+                    self.subscribe_notification();
+                    log::info!("tmux session changed:{}", session);
+                }
+                Event::WindowAdd { window } => {
+                    // Only handle the new tab, the first empty window handled by sync_window_state
+                    if !self.gui_window.lock().is_none() {
+                        if let Some(session) = *self.tmux_session.lock() {
+                            let mut cmd_queue = self.cmd_queue.as_ref().lock();
+                            cmd_queue.push_back(Box::new(ListAllWindows {
+                                session_id: session,
+                                window_id: Some(*window),
+                            }));
+                            log::info!("tmux window add: {}:{}", session, window);
+                        }
+                    }
+                }
+                Event::WindowClose { window } => {
+                    let _ = self.remove_detached_window(*window);
+                }
+                Event::WindowPaneChanged { window, pane } => {
+                    // The tmux 2.7 WindowPaneChanged event comes early than WindowAdd, we need to
+                    // skip it
+                    if !self.check_window_attached(*window) {
+                        continue;
+                    }
+
+                    // Split pane
+                    if !self.check_pane_attached(*window, *pane) {
+                        let mut pending_splits = self.pending_splits.lock();
+                        if let Some(mut promise) = pending_splits.pop_front() {
+                            promise.ok(*pane);
+                        }
+                    }
+                    log::info!("tmux window pane changed: {}:{}", window, pane);
+                }
                 Event::WindowRenamed { window, name } => {
                     let gui_tabs = self.gui_tabs.lock();
                     if let Some(x) = gui_tabs.get(&window) {
@@ -209,9 +215,6 @@ impl TmuxDomainState {
                             tab.set_title(&format!("{}", name));
                         }
                     }
-                }
-                Event::WindowClose { window } => {
-                    let _ = self.remove_detached_window(*window);
                 }
                 _ => {}
             }

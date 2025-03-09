@@ -1,39 +1,49 @@
-number = { ASCII_DIGIT+ }
+// Plese put new items in alphabet order in its category
+
+// Generic tokens
 any_text = { ANY* }
+number = { ASCII_DIGIT+ }
 word = { (ASCII_ALPHANUMERIC | "/")+ }
 
-pane_id = { "%" ~ number }
-window_id = { "@" ~ number }
-session_id = { "$" ~ number }
+// Tmux tokens
 client_name = { word }
+pane_id = { "%" ~ number }
+session_id = { "$" ~ number }
+window_id = { "@" ~ number }
 window_layout = { (ASCII_HEX_DIGIT | "x" | "[" | "]" | "{" | "}" | ",")+ }
 
+// Tmux generic rules
 begin = { "%begin " ~ number ~ " " ~ number ~ " " ~ number }
 end = { "%end " ~ number ~ " " ~ number ~ " " ~ number }
 error = { "%error " ~ number ~ " " ~ number ~ " " ~ number }
 
+// Tmux specific rules
 client_session_changed = { "%client-session-changed " ~ client_name ~ " " ~ session_id ~ " " ~any_text }
 client_detached = { "%client-detached " ~ client_name }
-output = { "%output " ~ pane_id ~ " " ~ any_text }
 exit = { "%exit" ~ (" " ~ any_text)? }
-sessions_changed = { "%sessions-changed" }
+layout_change = { "%layout-change " ~ window_id ~ " " ~ (window_layout ~ " " ~ window_layout ~ " " ~any_text | window_layout) }
+output = { "%output " ~ pane_id ~ " " ~ any_text }
 pane_mode_changed = { "%pane-mode-changed " ~ pane_id }
+session_changed = { "%session-changed " ~ session_id ~ " " ~ any_text }
+session_renamed = { "%session-renamed " ~ any_text }
+session_window_changed = { "%session-window-changed " ~ session_id ~ " " ~ window_id }
+sessions_changed = { "%sessions-changed" }
 window_add = { "%window-add " ~ window_id }
 window_close = { ("%window-close " | "%unlinked-window-close ") ~ window_id }
 window_pane_changed = { "%window-pane-changed " ~ window_id ~ " " ~ pane_id }
 window_renamed = { "%window-renamed " ~ window_id ~ " " ~ any_text }
-session_changed = { "%session-changed " ~ session_id ~ " " ~ any_text }
-session_renamed = { "%session-renamed " ~ any_text }
-session_window_changed = { "%session-window-changed " ~ session_id ~ " " ~ window_id }
-layout_change = { "%layout-change " ~ window_id ~ " " ~ (window_layout ~ " " ~ window_layout ~ " " ~any_text | window_layout) }
 
 line = _{ (
-  client_session_changed |
-  client_detached |
+  // Tmux generic rules
   begin |
   end |
   error |
+
+  // Tmux specific rules
+  client_detached |
+  client_session_changed |
   exit |
+  layout_change |
   output |
   pane_mode_changed |
   session_changed |
@@ -43,8 +53,7 @@ line = _{ (
   window_add |
   window_close |
   window_pane_changed |
-  window_renamed |
-  layout_change
+  window_renamed
 ) }
 
 line_entire = _{ SOI ~ line ~ EOI }
@@ -57,12 +66,12 @@ line_entire = _{ SOI ~ line ~ EOI }
 // layout split pane: widthxheight,left,top
 // layout horizontal: widthxheight,left,top{...}
 // layout vertical:   widthxheight,left,top[...]
-layout_split_pane = {number ~ "x" ~ number ~ "," ~ number ~ "," ~ number }
 layout_pane = {number ~ "x" ~ number ~ "," ~ number ~ "," ~ number ~ "," ~ number}
 layout_split_horizontal = { layout_split_pane ~ "{" ~ (layout_split_vertical | layout_pane) ~ ("," ~ (layout_split_vertical | layout_pane))* ~ "}" }
+layout_split_pane = {number ~ "x" ~ number ~ "," ~ number ~ "," ~ number }
 layout_split_vertical = { layout_split_pane ~ "[" ~ (layout_split_horizontal | layout_pane) ~ ("," ~ (layout_split_horizontal | layout_pane))* ~ "]" }
 layout_window = _{ (
+    layout_pane |
     layout_split_horizontal |
-    layout_split_vertical |
-    layout_pane
+    layout_split_vertical
 ) }
