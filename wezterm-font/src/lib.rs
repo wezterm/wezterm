@@ -452,6 +452,7 @@ impl FallbackResolveInfo {
     }
 }
 
+#[derive(PartialEq, Eq)]
 enum Entity {
     Title,
     CommandPalette,
@@ -595,10 +596,10 @@ impl FontConfigInner {
         &self,
         myself: &Rc<Self>,
         pref_size: Option<f64>,
-        make_bold: bool,
         entity: Entity,
     ) -> anyhow::Result<Rc<LoadedFont>> {
         let config = self.config.borrow();
+        let make_bold = entity != Entity::CommandPalette;
         let (sys_font, sys_size) = self.compute_title_font(&config, make_bold);
 
         let font_size = pref_size.unwrap_or(sys_size);
@@ -662,7 +663,7 @@ impl FontConfigInner {
         }
 
         let loaded =
-            self.make_entity_font_impl(myself, config.window_frame.font_size, true, Entity::Title)?;
+            self.make_entity_font_impl(myself, config.window_frame.font_size, Entity::Title)?;
 
         title_font.replace(Rc::clone(&loaded));
 
@@ -681,7 +682,6 @@ impl FontConfigInner {
         let loaded = self.make_entity_font_impl(
             myself,
             Some(config.command_palette_font_size),
-            false,
             Entity::CommandPalette,
         )?;
 
@@ -702,7 +702,6 @@ impl FontConfigInner {
         let loaded = self.make_entity_font_impl(
             myself,
             Some(config.char_select_font_size),
-            true,
             Entity::CharSelect,
         )?;
 
@@ -723,7 +722,6 @@ impl FontConfigInner {
         let loaded = self.make_entity_font_impl(
             myself,
             Some(config.pane_select_font_size),
-            true,
             Entity::PaneSelect,
         )?;
 
