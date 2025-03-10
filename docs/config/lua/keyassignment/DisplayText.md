@@ -11,7 +11,7 @@ Activates an overlay to display the provided text.
 
 ### Key Assignments
 
-The default key assignments in the InputSelector are as follows:
+The default key assignments in DisplayText are as follows:
 
 | Action  |  Key Assignment |
 |---------|-------------------|
