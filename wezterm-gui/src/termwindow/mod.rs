@@ -2899,7 +2899,7 @@ impl TermWindow {
                 }
             }
             QuickSelect => {
-                if let Some(pane) = self.get_active_pane_no_overlay() {
+                if let Some(pane) = self.get_active_pane_or_overlay() {
                     let qa = QuickSelectOverlay::with_pane(
                         self,
                         &pane,
@@ -2909,7 +2909,7 @@ impl TermWindow {
                 }
             }
             QuickSelectArgs(args) => {
-                if let Some(pane) = self.get_active_pane_no_overlay() {
+                if let Some(pane) = self.get_active_pane_or_overlay() {
                     let qa = QuickSelectOverlay::with_pane(self, &pane, args);
                     self.assign_overlay_for_pane(pane.pane_id(), qa);
                 }
