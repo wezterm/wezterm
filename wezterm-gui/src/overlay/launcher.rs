@@ -393,6 +393,11 @@ impl LauncherState {
         let max_label_len = labels.iter().map(|s| s.len()).max().unwrap_or(0);
         let mut labels_iter = labels.into_iter();
 
+        let config = configuration();
+        let colors = &config.resolved_palette;
+        let launcher_label_fg = colors.launcher_label_fg;
+        let launcher_label_bg = colors.launcher_label_bg;
+
         for (row_num, (entry_idx, entry)) in self
             .filtered_entries
             .iter()
@@ -416,7 +421,19 @@ impl LauncherState {
             // and we are not filtering
             if !self.filtering {
                 if let Some(label) = labels_iter.next() {
+                    if let Some(launcher_label_bg) = launcher_label_bg {
+                        changes.push(AttributeChange::Background(launcher_label_bg.into()).into());
+                    }
+                    if let Some(launcher_label_fg) = launcher_label_fg {
+                        changes.push(AttributeChange::Foreground(launcher_label_fg.into()).into());
+                    }
                     changes.push(Change::Text(format!(" {label:>max_label_len$}. ")));
+                    if launcher_label_bg.is_some() {
+                        changes.push(AttributeChange::Background(ColorAttribute::Default).into());
+                    }
+                    if launcher_label_fg.is_some() {
+                        changes.push(AttributeChange::Foreground(ColorAttribute::Default).into());
+                    }
                 } else {
                     changes.push(Change::Text(" ".repeat(max_label_len + 3)));
                 }
