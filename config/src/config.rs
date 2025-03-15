@@ -2020,6 +2020,7 @@ pub enum DroppedFileQuoting {
     /// Always double quote the file name
     WindowsAlwaysQuoted,
 }
+impl_lua_conversion_dynamic!(DroppedFileQuoting);
 
 impl Default for DroppedFileQuoting {
     fn default() -> Self {

@@ -1013,12 +1013,48 @@ impl TermWindow {
                 }
                 Ok(true)
             }
+            // Combine the dropped events into one match so we can fire an event to
+            // alter the texts or urls before sending them to the pane
             WindowEvent::DroppedString(text) => {
                 let pane = match self.get_active_pane_or_overlay() {
                     Some(pane) => pane,
                     None => return Ok(true),
                 };
-                pane.send_paste(text.as_str())?;
+                let txt = match config::run_immediate_with_lua_config(|lua| {
+                    if let Some(lua) = lua {
+                        let tabs = self.get_tab_information();
+                        let panes = self.get_pane_information();
+                        let active_tab = tabs.iter().find(|t| t.is_active).cloned();
+                        let active_pane = panes.iter().find(|p| p.is_active).cloned();
+
+                        let v = config::lua::emit_sync_callback(
+                            &*lua,
+                            (
+                                "user-dropped-string".to_string(),
+                                (
+                                    tabs,
+                                    panes,
+                                    active_tab.clone(),
+                                    active_pane.clone(),
+                                    text.clone(),
+                                ),
+                            ),
+                        )?;
+                        match &v {
+                            mlua::Value::Nil => Ok(None),
+                            _ => Ok(Some(String::from_lua(v, &*lua)?)),
+                        }
+                    } else {
+                        Ok(None)
+                    }
+                }) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        log::warn!("user-dropped-string: {}", err);
+                        Some(text.clone())
+                    }
+                };
+                pane.send_paste(txt.as_deref().unwrap_or(&text))?;
                 Ok(true)
             }
             WindowEvent::DroppedUrl(urls) => {
@@ -1026,13 +1062,76 @@ impl TermWindow {
                     Some(pane) => pane,
                     None => return Ok(true),
                 };
-                let urls = urls
-                    .iter()
-                    .map(|url| self.config.quote_dropped_files.escape(&url.to_string()))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    + " ";
-                pane.send_paste(urls.as_str())?;
+                let urls_string = match config::run_immediate_with_lua_config(|lua| {
+                    if let Some(lua) = lua {
+                        let tabs = self.get_tab_information();
+                        let panes = self.get_pane_information();
+                        let active_tab = tabs.iter().find(|t| t.is_active).cloned();
+                        let active_pane = panes.iter().find(|p| p.is_active).cloned();
+                        // We need to pass the urls as a lua table to the
+                        // callback so that the lua code can modify them
+                        let urls = urls.iter().map(|url| url.to_string()).collect::<Vec<_>>();
+
+                        let seq = lua.create_sequence_from(urls.iter().map(|s| s.as_str()))?;
+                        let v = config::lua::emit_sync_callback(
+                            &*lua,
+                            (
+                                "user-dropped-urls".to_string(),
+                                (
+                                    tabs,
+                                    panes,
+                                    active_tab.clone(),
+                                    active_pane.clone(),
+                                    urls.clone(),
+                                ),
+                            ),
+                        )?;
+                        match &v {
+                            mlua::Value::Nil => Ok(None),
+                            mlua::Value::Table(t) => {
+                                // if returns a table, convert to a string joined by spaces
+                                let mut urls_string = String::new();
+                                for i in 1..=t.len()? {
+                                    if let Some(v) = t.get(i)? {
+                                        if !urls_string.is_empty() {
+                                            urls_string.push(' ');
+                                        }
+                                        urls_string.push_str(&String::from_lua(v, &*lua)?);
+                                    }
+                                }
+                                if urls_string.is_empty() {
+                                    return Ok(None);
+                                }
+                                Ok(Some(urls_string))
+                            }
+                            mlua::Value::String(s) => {
+                                let v = s.to_str()?;
+                                if v.is_empty() {
+                                    return Ok(None);
+                                }
+                                Ok(Some(v.to_string()))
+                            }
+                            _ => Ok(Some(String::from_lua(v, &*lua)?)),
+                        }
+                    } else {
+                        Ok(None)
+                    }
+                }) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        log::warn!("user-dropped-urls: {}", err);
+                        None
+                    }
+                };
+                pane.send_paste(
+                    urls_string.as_deref().unwrap_or(
+                        &urls
+                            .iter()
+                            .map(|url| url.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    ),
+                )?;
                 Ok(true)
             }
             WindowEvent::DroppedFile(paths) => {
@@ -1040,17 +1139,91 @@ impl TermWindow {
                     Some(pane) => pane,
                     None => return Ok(true),
                 };
-                let paths = paths
-                    .iter()
-                    .map(|path| {
-                        self.config
-                            .quote_dropped_files
-                            .escape(&path.to_string_lossy())
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    + " ";
-                pane.send_paste(&paths)?;
+                let paths_string = match config::run_immediate_with_lua_config(|lua| {
+                    if let Some(lua) = lua {
+                        let tabs = self.get_tab_information();
+                        let panes = self.get_pane_information();
+                        let active_tab = tabs.iter().find(|t| t.is_active).cloned();
+                        let active_pane = panes.iter().find(|p| p.is_active).cloned();
+                        let paths = paths
+                            .iter()
+                            .map(|path| path.to_string_lossy())
+                            .collect::<Vec<_>>();
+
+                        let v = config::lua::emit_sync_callback(
+                            &*lua,
+                            (
+                                "user-dropped-paths".to_string(),
+                                (
+                                    tabs,
+                                    panes,
+                                    active_tab.clone(),
+                                    active_pane.clone(),
+                                    paths.clone(),
+                                ),
+                            ),
+                        )?;
+                        match &v {
+                            mlua::Value::Nil => Ok(None),
+                            mlua::Value::Table(t) => {
+                                // if returns a table, convert to a string joined by spaces
+                                let mut paths_string = String::new();
+                                for i in 1..=t.len()? {
+                                    if let Some(v) = t.get(i)? {
+                                        if !paths_string.is_empty() {
+                                            paths_string.push(' ');
+                                        }
+                                        paths_string.push_str(&String::from_lua(v, &*lua)?);
+                                    }
+                                }
+                                if paths_string.is_empty() {
+                                    return Ok(None);
+                                }
+                                Ok(Some(paths_string))
+                            }
+                            mlua::Value::String(s) => {
+                                let v = s.to_str()?;
+                                if v.is_empty() {
+                                    return Ok(None);
+                                }
+                                Ok(Some(v.to_string()))
+                            }
+                            _ => Ok(Some(String::from_lua(v, &*lua)?)),
+                        }
+                    } else {
+                        Ok(None)
+                    }
+                }) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        log::warn!("user-dropped-paths: {}", err);
+                        None
+                    }
+                };
+                // let paths = paths
+                //     .iter()
+                //     .map(|path| {
+                //         self.config
+                //             .quote_dropped_files
+                //             .escape(&path.to_string_lossy())
+                //     })
+                //     .collect::<Vec<_>>()
+                //     .join(" ")
+                //     + " ";
+                pane.send_paste(
+                    paths_string.as_deref().unwrap_or(
+                        (paths
+                            .iter()
+                            .map(|path| {
+                                self.config
+                                    .quote_dropped_files
+                                    .escape(&path.to_string_lossy())
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            + " ").as_str()
+                    ),
+                )?;
                 Ok(true)
             }
             WindowEvent::DraggedFile(_) => Ok(true),
