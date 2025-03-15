@@ -119,9 +119,32 @@ impl CopyOverlay {
         cursor.shape = termwiz::surface::CursorShape::SteadyBlock;
         cursor.visibility = CursorVisibility::Visible;
 
-        let (_domain, _window, tab_id) = mux::Mux::get()
-            .resolve_pane_id(pane.pane_id())
-            .ok_or_else(|| anyhow::anyhow!("no tab contains the current pane"))?;
+        let tab = mux::Mux::get()
+            .get_active_tab_for_window(term_window.mux_window_id)
+            .ok_or_else(|| anyhow::anyhow!("missing active tab on window!?"))?;
+        let tab_id = tab.tab_id();
+
+        let active_pane = tab
+            .get_active_pane()
+            .ok_or_else(|| anyhow::anyhow!("missing active pane on tab!?"))?;
+        let active_pane_id = active_pane.pane_id();
+
+        let pane_id = pane.pane_id();
+
+        if pane_id != active_pane_id {
+            if let Some(overlay) = term_window
+                .tab_state(tab_id)
+                .overlay
+                .as_ref()
+                .map(|o| &o.pane)
+            {
+                if pane_id != overlay.pane_id() {
+                    return Err(anyhow::anyhow!("no tab contains the current pane"));
+                }
+            } else {
+                return Err(anyhow::anyhow!("no tab contains the current pane"));
+            }
+        }
 
         let window = term_window
             .window
