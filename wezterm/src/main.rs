@@ -587,6 +587,7 @@ impl ImgCatCommand {
         }
 
         if self.hold {
+            term.set_raw_mode()?;
             while let Ok(Some(event)) = term.poll_input(None) {
                 match event {
                     InputEvent::Key(KeyEvent {
