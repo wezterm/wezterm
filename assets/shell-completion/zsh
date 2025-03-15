@@ -422,7 +422,7 @@ _arguments "${_arguments_options[@]}" \
 '--resize=[Pre-process the image to resize it to the specified dimensions, expressed as eg\: 800x600 (width x height). The resize is independent of other parameters that control the image placement and dimensions in the terminal; this is provided as a convenience preprocessing step]:WIDTHxHEIGHT: ' \
 '--no-preserve-aspect-ratio[Do not respect the aspect ratio.  The default is to respect the aspect ratio]' \
 '--no-move-cursor[Do not move the cursor after displaying the image. Note that when used like this from the shell, there is a very high chance that shell prompt will overwrite the image; you may wish to also use \`--hold\` in that case]' \
-'--hold[Wait for enter to be pressed after displaying the image]' \
+'--hold[Wait for enter/escape/ctrl-c/ctrl-d to be pressed after displaying the image]' \
 '--no-resample[Do not resample images whose frames are larger than the max-pixels value. Note that this will typically result in the image refusing to display in wezterm]' \
 '--show-resample-timing[When resampling or resizing, display some diagnostics around the timing/performance of that operation]' \
 '-h[Print help (see more with '\''--help'\'')]' \
