@@ -132,16 +132,13 @@ impl CopyOverlay {
         let pane_id = pane.pane_id();
 
         if pane_id != active_pane_id {
-            if let Some(overlay) = term_window
+            if term_window
                 .tab_state(tab_id)
                 .overlay
                 .as_ref()
                 .map(|o| &o.pane)
+                .is_none_or(|o| pane_id != o.pane_id())
             {
-                if pane_id != overlay.pane_id() {
-                    return Err(anyhow::anyhow!("no tab contains the current pane"));
-                }
-            } else {
                 return Err(anyhow::anyhow!("no tab contains the current pane"));
             }
         }
