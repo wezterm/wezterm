@@ -260,13 +260,13 @@ impl SelectorState {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('j'),
                     ..
-                }) if !self.filtering && !self.args.alphabet.contains("j") => {
+                }) if !self.filtering => {
                     self.move_down();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('k'),
                     ..
-                }) if !self.filtering && !self.args.alphabet.contains("k") => {
+                }) if !self.filtering => {
                     self.move_up();
                 }
                 InputEvent::Key(KeyEvent {

@@ -506,13 +506,13 @@ impl LauncherState {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('j'),
                     ..
-                }) if !self.filtering && !self.alphabet.contains("j") => {
+                }) if !self.filtering => {
                     self.move_down();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('k'),
                     ..
-                }) if !self.filtering && !self.alphabet.contains("k") => {
+                }) if !self.filtering => {
                     self.move_up();
                 }
                 InputEvent::Key(KeyEvent {
