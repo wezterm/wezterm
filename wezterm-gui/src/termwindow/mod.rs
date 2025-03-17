@@ -1018,7 +1018,7 @@ impl TermWindow {
                     Some(pane) => pane,
                     None => return Ok(true),
                 };
-                let txt = self.run_lua_callback( "user-dropped-string", vec![text.clone()]);
+                let txt = self.user_dropped_event( "user-dropped-string", vec![text.clone()]);
                 pane.send_paste(txt.as_deref().unwrap_or(&text))?;
                 Ok(true)
             }
@@ -1027,7 +1027,7 @@ impl TermWindow {
                     Some(pane) => pane,
                     None => return Ok(true),
                 };
-                let urls_string = self.run_lua_callback( 
+                let urls_string = self.user_dropped_event( 
                     "user-dropped-urls",
                     urls.iter().map(|url| url.to_string()).collect::<Vec<_>>(),
                 );
@@ -1047,7 +1047,7 @@ impl TermWindow {
                     Some(pane) => pane,
                     None => return Ok(true),
                 };
-                let paths_string = self.run_lua_callback( 
+                let paths_string = self.user_dropped_event( 
                     "user-dropped-paths",
                     paths
                         .iter()
@@ -1074,7 +1074,7 @@ impl TermWindow {
             WindowEvent::DraggedFile(_) => Ok(true),
         }
     }
-    fn run_lua_callback(
+    fn user_dropped_event(
         &mut self, 
         event_name: &str, 
         data: Vec<String>
