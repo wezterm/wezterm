@@ -2220,6 +2220,7 @@ impl<'a> CSIParser<'a> {
             // other encodings is added and this block is likely copied and pasted
             // or refactored for re-use with them.
             ('M', 35) => MouseButton::None, // mouse motion with no buttons
+            ('m', 35) => MouseButton::None, // mouse motion with no buttons (in Windows Terminal)
             ('M', 3) => MouseButton::None,  // legacy notification about button release
             ('m', 3) => MouseButton::None,  // release+press doesn't make sense
             _ => {
