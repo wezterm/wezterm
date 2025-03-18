@@ -75,7 +75,7 @@ pub(crate) struct TmuxDomainState {
     pub support_commands: Mutex<HashMap<String, String>>,
     pub attach_state: Mutex<AttachState>,
     pending_splits: Mutex<VecDeque<promise::Promise<TmuxPaneId>>>,
-    pub backlog: Mutex<HashMap<TmuxPaneId, String>>,
+    pub backlog: Mutex<HashMap<TmuxPaneId, Vec<u8>>>,
 }
 
 pub struct TmuxDomain {
@@ -161,13 +161,13 @@ impl TmuxDomainState {
                     let pane_map = self.remote_panes.lock();
                     if let Some(ref_pane) = pane_map.get(pane) {
                         let mut tmux_pane = ref_pane.lock();
-                        if let Err(err) = tmux_pane.output_write.write_all(text.as_bytes()) {
+                        if let Err(err) = tmux_pane.output_write.write_all(text) {
                             log::error!("Failed to write tmux data to output: {:#}", err);
                         }
                     } else {
                         // the output may come early then pane is ready, in this case we
                         // backlog it
-                        self.backlog.lock().insert(*pane, text.to_string());
+                        self.backlog.lock().insert(*pane, text.to_vec());
                         log::debug!("Tmux pane {} havn't been attached", pane);
                     }
                 }

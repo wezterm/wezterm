@@ -316,7 +316,7 @@ impl TmuxDomainState {
                     if let Some(text) = self.backlog.lock().remove(&pane.pane_id) {
                         if let Some(ref_pane) = pane_map.get(&pane.pane_id) {
                             let mut ref_pane = ref_pane.lock();
-                            if let Err(err) = ref_pane.output_write.write_all(text.as_bytes()) {
+                            if let Err(err) = ref_pane.output_write.write_all(&text) {
                                 log::error!("Failed to write tmux data to output: {:#}", err);
                             }
                         }

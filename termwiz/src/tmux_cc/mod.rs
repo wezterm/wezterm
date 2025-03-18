@@ -60,7 +60,7 @@ pub enum Event {
     },
     ExtendedOutput {
         pane: TmuxPaneId,
-        text: String,
+        text: Vec<u8>,
     },
     Exit {
         reason: Option<String>,
@@ -76,7 +76,7 @@ pub enum Event {
     },
     Output {
         pane: TmuxPaneId,
-        text: String,
+        text: Vec<u8>,
     },
     PaneModeChanged {
         pane: TmuxPaneId,
@@ -215,8 +215,10 @@ fn parse_guard(mut pairs: Pairs<Rule>) -> anyhow::Result<(i64, u64, i64)> {
     Ok((timestamp, number, flags))
 }
 
-fn parse_line(line: &str) -> anyhow::Result<Event> {
-    let mut pairs = parser::TmuxParser::parse(Rule::line_entire, line)?;
+fn parse_line(line: &[u8]) -> anyhow::Result<Event> {
+    let binding = String::from_utf8_lossy(line);
+    let parsed_line = binding.as_ref();
+    let mut pairs = parser::TmuxParser::parse(Rule::line_entire, parsed_line)?;
     let pair = pairs.next().ok_or_else(|| anyhow::anyhow!("no pairs!?"))?;
     match pair.as_rule() {
         // Tmux generic rules
@@ -296,12 +298,10 @@ fn parse_line(line: &str) -> anyhow::Result<Event> {
         Rule::extended_output => {
             let mut pairs = pair.into_inner();
             let pane = parse_pane_id(pairs.next().ok_or_else(|| anyhow!("missing pane id"))?)?;
-            let text = unvis(
-                pairs
-                    .next()
-                    .ok_or_else(|| anyhow!("missing text"))?
-                    .as_str(),
-            )?;
+            let pair = pairs.next().ok_or_else(|| anyhow!("missing text"))?;
+
+            let (_, pos) = pair.line_col();
+            let text = unvis_bytes(&line[pos - 1..])?;
             Ok(Event::ExtendedOutput { pane, text })
         }
         Rule::exit => {
@@ -341,12 +341,10 @@ fn parse_line(line: &str) -> anyhow::Result<Event> {
         Rule::output => {
             let mut pairs = pair.into_inner();
             let pane = parse_pane_id(pairs.next().ok_or_else(|| anyhow!("missing pane id"))?)?;
-            let text = unvis(
-                pairs
-                    .next()
-                    .ok_or_else(|| anyhow!("missing text"))?
-                    .as_str(),
-            )?;
+            let pair = pairs.next().ok_or_else(|| anyhow!("missing text"))?;
+
+            let (_, pos) = pair.line_col();
+            let text = unvis_bytes(&line[pos - 1..])?;
             Ok(Event::Output { pane, text })
         }
         Rule::pane_mode_changed => {
@@ -481,7 +479,7 @@ fn parse_line(line: &str) -> anyhow::Result<Event> {
 
 /// Decode OpenBSD `vis` encoded strings
 /// See: https://github.com/tmux/tmux/blob/486ce9b09855ae30a2bf5e576cb6f7ad37792699/compat/unvis.c
-pub fn unvis(s: &str) -> anyhow::Result<String> {
+fn unvis_bytes(s: &[u8]) -> anyhow::Result<Vec<u8>> {
     enum State {
         Ground,
         Start,
@@ -494,7 +492,7 @@ pub fn unvis(s: &str) -> anyhow::Result<String> {
 
     let mut state = State::Ground;
     let mut result: Vec<u8> = vec![];
-    let mut bytes = s.as_bytes().iter();
+    let mut bytes = s.iter();
 
     fn is_octal(b: u8) -> bool {
         b >= b'0' && b <= b'7'
@@ -641,6 +639,14 @@ pub fn unvis(s: &str) -> anyhow::Result<String> {
             unvis_byte(b, &mut state, &mut result)?;
         }
     }
+
+    Ok(result)
+}
+
+pub fn unvis(s: &str) -> anyhow::Result<String> {
+    let bytes = s.as_bytes();
+
+    let result = unvis_bytes(bytes)?;
 
     String::from_utf8(result)
         .map_err(|err| anyhow::anyhow!("Unescaped string is not valid UTF8: {}", err))
@@ -841,8 +847,9 @@ impl Parser {
         Ok(events)
     }
 
-    fn process_guarded_line(&mut self, line: String) -> anyhow::Result<Option<Event>> {
-        let result = match parse_line(&line) {
+    fn process_guarded_line(&mut self) -> anyhow::Result<Option<Event>> {
+        let line = std::str::from_utf8(&self.buffer)?;
+        let result = match parse_line(&self.buffer) {
             Ok(Event::End {
                 timestamp,
                 number,
@@ -889,7 +896,7 @@ impl Parser {
                     .begun
                     .as_mut()
                     .ok_or_else(|| anyhow!("missing begun"))?;
-                begun.output.push_str(&line);
+                begun.output.push_str(line);
                 begun.output.push('\n');
                 None
             }
@@ -902,42 +909,40 @@ impl Parser {
         if self.buffer.last() == Some(&b'\r') {
             self.buffer.pop();
         }
-        let result = match std::str::from_utf8(&self.buffer) {
-            Ok(line) => {
+        if self.begun.is_some() {
+            return self.process_guarded_line();
+        }
+
+        let result = match parse_line(&self.buffer) {
+            Ok(Event::Begin {
+                timestamp,
+                number,
+                flags,
+            }) => {
                 if self.begun.is_some() {
-                    let line = line.to_owned();
-                    return self.process_guarded_line(line);
+                    log::error!(
+                        "expected %end or %error before %begin ({})",
+                        String::from_utf8_lossy(&self.buffer).as_ref()
+                    );
                 }
-                match parse_line(line) {
-                    Ok(Event::Begin {
-                        timestamp,
-                        number,
-                        flags,
-                    }) => {
-                        if self.begun.is_some() {
-                            log::error!("expected %end or %error before %begin ({})", line);
-                        }
-                        self.begun.replace(Guarded {
-                            timestamp,
-                            number,
-                            flags,
-                            error: false,
-                            output: String::new(),
-                        });
-                        None
-                    }
-                    Ok(event) => Some(event),
-                    Err(err) => {
-                        log::error!("Unrecognized tmux cc line: {}", err);
-                        return Err(anyhow::anyhow!(line.to_owned()));
-                    }
-                }
-            }
-            Err(err) => {
-                log::error!("Failed to parse line from tmux: {}", err);
+                self.begun.replace(Guarded {
+                    timestamp,
+                    number,
+                    flags,
+                    error: false,
+                    output: String::new(),
+                });
                 None
             }
+            Ok(event) => Some(event),
+            Err(err) => {
+                log::error!("Unrecognized tmux cc line: {}", err);
+                return Err(anyhow::anyhow!(String::from_utf8_lossy(&self.buffer)
+                    .as_ref()
+                    .to_owned()));
+            }
         };
+
         self.buffer.clear();
         Ok(result)
     }
@@ -961,7 +966,7 @@ mod tests {
                 number: 321,
                 flags: 0,
             },
-            parse_line("%begin 12345 321 0").unwrap()
+            parse_line("%begin 12345 321 0".to_owned().as_bytes()).unwrap()
         );
 
         assert_eq!(
@@ -970,7 +975,7 @@ mod tests {
                 number: 321,
                 flags: 0,
             },
-            parse_line("%end 12345 321 0").unwrap()
+            parse_line("%end 12345 321 0".to_owned().as_bytes()).unwrap()
         );
     }
 
@@ -1053,20 +1058,28 @@ here
                 },
                 Event::Output {
                     pane: 1,
-                    text: "\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m    \r \r".to_owned()
+                    text: "\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m    \r \r"
+                        .to_owned()
+                        .as_bytes()
+                        .to_vec()
                 },
                 Event::Output {
                     pane: 1,
                     text: "\x1bkwez@cube-localdomain:~\x1b\\\x1b]2;wez@cube-localdomain:~\x1b\\"
                         .to_owned()
+                        .as_bytes()
+                        .to_vec()
                 },
                 Event::Output {
                     pane: 1,
-                    text: "\x1b]7;file://cube-localdomain/home/wez\x1b\\".to_owned(),
+                    text: "\x1b]7;file://cube-localdomain/home/wez\x1b\\"
+                        .to_owned()
+                        .as_bytes()
+                        .to_vec(),
                 },
                 Event::Output {
                     pane: 1,
-                    text: "\x1b[K\x1b[?2004h".to_owned(),
+                    text: "\x1b[K\x1b[?2004h".to_owned().as_bytes().to_vec(),
                 },
                 Event::Exit { reason: None },
                 Event::Exit {
@@ -1078,7 +1091,10 @@ here
                 Event::Continue { pane: 2 },
                 Event::ExtendedOutput {
                     pane: 1,
-                    text: "\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m    \r \r".to_owned()
+                    text: "\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m    \r \r"
+                        .to_owned()
+                        .as_bytes()
+                        .to_vec()
                 },
                 Event::Message {
                     message: "message text".to_owned()
