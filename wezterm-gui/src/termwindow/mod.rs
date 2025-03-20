@@ -3385,6 +3385,20 @@ impl TermWindow {
         self.pane_state(pane.pane_id()).viewport = None;
     }
 
+    fn get_tab_overlay(&self, tab: &Arc<Tab>) -> Option<Arc<dyn Pane>> {
+        let tab_id = tab.tab_id();
+        let tab_state = self.tab_state(tab_id);
+        let overlay = tab_state.overlay.as_ref();
+
+        if let Some(overlay) = overlay {
+            let pane_state = self.pane_state(overlay.pane.pane_id());
+            let nested_overlay = pane_state.overlay.as_ref();
+            Some(nested_overlay.map_or_else(|| overlay.pane.clone(), |o| o.pane.clone()))
+        } else {
+            None
+        }
+    }
+
     fn get_active_pane_no_overlay(&self) -> Option<Arc<dyn Pane>> {
         let mux = Mux::get();
         mux.get_active_tab_for_window(self.mux_window_id)
@@ -3404,20 +3418,8 @@ impl TermWindow {
             None => return None,
         };
 
-        let tab_id = tab.tab_id();
-
-        let overlay_id = self
-            .tab_state(tab_id)
-            .overlay
-            .as_ref()
-            .map(|overlay| overlay.pane.pane_id());
-
-        if let Some(overlay_id) = overlay_id {
-            self.pane_state(overlay_id)
-                .overlay
-                .as_ref()
-                .map(|nested_overlay| nested_overlay.pane.clone())
-                .or_else(|| Mux::get().get_pane(overlay_id).clone())
+        if let Some(tab_overlay) = self.get_tab_overlay(&tab) {
+            Some(tab_overlay)
         } else {
             let pane = tab.get_active_pane()?;
             let pane_id = pane.pane_id();
@@ -3501,21 +3503,7 @@ impl TermWindow {
     }
 
     fn get_pos_panes_for_tab(&self, tab: &Arc<Tab>) -> Vec<PositionedPane> {
-        let tab_id = tab.tab_id();
-
-        let overlay_id = self
-            .tab_state(tab_id)
-            .overlay
-            .as_ref()
-            .map(|overlay| overlay.pane.pane_id());
-
-        if let Some(overlay_id) = overlay_id {
-            let pane = self
-                .pane_state(overlay_id)
-                .overlay
-                .as_ref()
-                .map(|nested_overlay| nested_overlay.pane.clone())
-                .unwrap_or_else(|| Mux::get().get_pane(overlay_id).unwrap().clone());
+        if let Some(pane) = self.get_tab_overlay(tab) {
             let size = tab.get_size();
             vec![PositionedPane {
                 index: 0,
