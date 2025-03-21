@@ -127,11 +127,10 @@ impl CopyOverlay {
         let active_pane = tab
             .get_active_pane()
             .ok_or_else(|| anyhow::anyhow!("missing active pane on tab!?"))?;
-        let active_pane_id = active_pane.pane_id();
 
         let pane_id = pane.pane_id();
 
-        if pane_id != active_pane_id {
+        if pane_id != active_pane.pane_id() {
             if term_window
                 .tab_state(tab_id)
                 .overlay
