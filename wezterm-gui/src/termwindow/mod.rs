@@ -3386,17 +3386,12 @@ impl TermWindow {
     }
 
     fn get_tab_overlay(&self, tab: &Arc<Tab>) -> Option<Arc<dyn Pane>> {
-        let tab_id = tab.tab_id();
-        let tab_state = self.tab_state(tab_id);
-        let overlay = tab_state.overlay.as_ref();
+        let tab_state = self.tab_state(tab.tab_id());
+        let overlay = tab_state.overlay.as_ref()?;
 
-        if let Some(overlay) = overlay {
-            let pane_state = self.pane_state(overlay.pane.pane_id());
-            let nested_overlay = pane_state.overlay.as_ref();
-            Some(nested_overlay.map_or_else(|| overlay.pane.clone(), |o| o.pane.clone()))
-        } else {
-            None
-        }
+        let pane_state = self.pane_state(overlay.pane.pane_id());
+        let nested_overlay = pane_state.overlay.as_ref();
+        Some(nested_overlay.map_or_else(|| overlay.pane.clone(), |o| o.pane.clone()))
     }
 
     fn get_active_pane_no_overlay(&self) -> Option<Arc<dyn Pane>> {
