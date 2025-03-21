@@ -4,6 +4,14 @@
 
 Activates an overlay to display the provided text.
 
+We can use the below keybindings to activate the respective
+overlay on top of the `DisplayText` overlay:
+
+* [ActivateCopyMode](./ActivateCopyMode.md)
+* [Search](./Search.md)
+* [QuickSelect](./QuickSelect.md),
+* [QuickSelectArgs](./QuickSelectArgs.md)
+
 `DisplayText` accepts the following fields:
 
 * `text` - the content to display in the overlay. You may embed
