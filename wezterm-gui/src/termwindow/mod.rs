@@ -1047,27 +1047,25 @@ impl TermWindow {
                     Some(pane) => pane,
                     None => return Ok(true),
                 };
-                let paths_string = self.user_dropped_event( 
-                    "user-dropped-paths",
-                    paths
+                let paths = paths
                         .iter()
                         .map(|path| path.to_string_lossy().to_string())
-                        .collect::<Vec<_>>(),
+                        .collect::<Vec<_>>();
+                        
+                let paths_string = self.user_dropped_event( 
+                    "user-dropped-paths",
+                    &paths
                 );
+                
                 pane.send_paste(
-                    paths_string.as_deref().unwrap_or(
-                        (paths
-                            .iter()
-                            .map(|path| {
-                                self.config
-                                    .quote_dropped_files
-                                    .escape(&path.to_string_lossy())
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            + " ")
-                            .as_str(),
-                    ),
+                    paths_string.unwrap_or_else(|| {
+                       paths.into_iter().map(|path| {
+                          self.config.quote_dropped_files.escape(&path)
+                       })
+                       .collect::<Vec<_>>().
+                       .join(" ")
+                       + " "
+                    })
                 )?;
                 Ok(true)
             }
