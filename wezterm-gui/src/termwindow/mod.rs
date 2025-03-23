@@ -1114,14 +1114,13 @@ impl TermWindow {
                         }
                         Ok(Some(result_string))
                     }
-                    mlua::Value::String(s) => {
-                        let v = s.to_str()?;
-                        if v.is_empty() {
-                            return Ok(Some("".to_string()));
+                    value => match value.to_string() {
+                            Ok(s) => return Some(s),
+                            Err(err) => {
+                               log::warn!("{event_name}: error converting result to string: {err:#}");
+                               return None
+                            }
                         }
-                        Ok(Some(v.to_string()))
-                    }
-                    _ => Ok(Some(String::from_lua(v, &lua)?)),
                 }
             } else {
                 Ok(None)
