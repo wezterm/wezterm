@@ -1075,7 +1075,7 @@ impl TermWindow {
     fn user_dropped_event(
         &mut self, 
         event_name: &str, 
-        data: Vec<String>
+        string_list: Vec<String>
     ) -> Option<String> {
         match config::run_immediate_with_lua_config(|lua| {
             if let Some(lua) = lua {
