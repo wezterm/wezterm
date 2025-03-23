@@ -1128,7 +1128,7 @@ impl TermWindow {
         }) {
             Ok(s) => s,
             Err(err) => {
-                log::warn!("{}: {}", event_name, err);
+                log::warn!("{event_name}: {err:#}");
                 None
             }
         }
