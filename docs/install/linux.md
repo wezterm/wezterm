@@ -303,6 +303,19 @@ hide:
     }
     ```
 
+    !!! note "Git must be available in $PATH before attempting install"
+
+        The Wezterm package uses Nix's `builtins.fetchGit` which depends on the `git`
+        binary being available in `$PATH` during the _evaluation_ phase (before building packages).
+
+        Git must be installed before attempting to install wezterm.
+
+        Note: `builtins.fetchGit` is used because of `cargoLock.allowBuiltinFetchGit` in `buildRustPackage` call.
+
+        (This is a known Nix issue, tracked in [nix#3533](https://github.com/NixOS/nix/issues/3533)
+        & [nix#9807](https://github.com/NixOS/nix/issues/9807))
+
+
     ### Flake
     
     If you need a newer version use the flake. Use the cachix if you want to avoid building WezTerm from source.
