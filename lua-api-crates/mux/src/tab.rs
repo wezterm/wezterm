@@ -155,5 +155,14 @@ impl UserData for MuxTab {
             }
             Ok(())
         });
+
+        methods.add_method("swap_active_with_index", |_, this, (pane_index, keep_focus): (usize, bool)| {
+            let mux = get_mux()?;
+            let tab = this.resolve(&mux)?;
+
+            let success = tab.swap_active_with_index(pane_index, keep_focus).is_some();
+
+            Ok(success)
+        });
     }
 }
