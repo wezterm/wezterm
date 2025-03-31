@@ -6,8 +6,8 @@ use crate::frontend::{front_end, try_front_end};
 use crate::inputmap::InputMap;
 use crate::overlay::{
     confirm_close_pane, confirm_close_tab, confirm_close_window, confirm_quit_program, launcher,
-    start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay, LauncherArgs, LauncherFlags,
-    QuickSelectOverlay,
+    start_overlay, start_overlay_pane, start_overlay_widget_pane, CopyModeParams, CopyOverlay,
+    LauncherArgs, LauncherFlags, QuickSelectOverlay,
 };
 use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::scripting::guiwin::GuiWin;
@@ -52,6 +52,7 @@ use mux::window::WindowId as MuxWindowId;
 use mux::{Mux, MuxNotification};
 use mux_lua::MuxPane;
 use smol::channel::Sender;
+use smol::future::block_on;
 use smol::Timer;
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, LinkedList};
@@ -83,6 +84,7 @@ pub mod resize;
 mod selection;
 pub mod spawn;
 pub mod webgpu;
+
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
 
@@ -1014,124 +1016,99 @@ impl TermWindow {
                 Ok(true)
             }
             WindowEvent::DroppedString(text) => {
-                let pane = match self.get_active_pane_or_overlay() {
-                    Some(pane) => pane,
-                    None => return Ok(true),
-                };
-                let txt = self.user_dropped_event( "user-dropped-string", vec![text.clone()]);
-                pane.send_paste(txt.as_deref().unwrap_or(&text))?;
+                let text = &text;
+                let _ = self.item_dropped_event(
+                    "user-dropped-string".to_string(),
+                    vec![text.clone().to_string()],
+                );
                 Ok(true)
             }
             WindowEvent::DroppedUrl(urls) => {
-                let pane = match self.get_active_pane_or_overlay() {
-                    Some(pane) => pane,
-                    None => return Ok(true),
-                };
-                let urls_string = self.user_dropped_event( 
-                    "user-dropped-urls",
-                    urls.iter().map(|url| url.to_string()).collect::<Vec<_>>(),
-                );
-                pane.send_paste(
-                    urls_string.as_deref().unwrap_or(
-                        &urls
-                            .iter()
-                            .map(|url| url.to_string())
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                    ),
-                )?;
+                let urls = urls.iter().map(|url| url.to_string()).collect::<Vec<_>>();
+                let _ = self.item_dropped_event("user-dropped-urls".to_string(), urls.clone());
                 Ok(true)
             }
             WindowEvent::DroppedFile(paths) => {
-                let pane = match self.get_active_pane_or_overlay() {
-                    Some(pane) => pane,
-                    None => return Ok(true),
-                };
+                // we pre quote the paths here so that we can default to config option
+                // if user wants to handle differently then they can manually `wezterm.quote_path`
                 let paths = paths
-                        .iter()
-                        .map(|path| path.to_string_lossy().to_string())
-                        .collect::<Vec<_>>();
-                        
-                let paths_string = self.user_dropped_event( 
-                    "user-dropped-paths",
-                    &paths
-                );
-                
-                pane.send_paste(
-                    paths_string.unwrap_or_else(|| {
-                       paths.into_iter().map(|path| {
-                          self.config.quote_dropped_files.escape(&path)
-                       })
-                       .collect::<Vec<_>>().
-                       .join(" ")
-                       + " "
+                    .iter()
+                    .map(|path| {
+                        self.config
+                            .quote_dropped_files
+                            .escape(&path.to_string_lossy())
                     })
-                )?;
+                    .collect::<Vec<_>>();
+                let _ = self.item_dropped_event("user-dropped-paths".to_string(), paths.clone());
                 Ok(true)
             }
             WindowEvent::DraggedFile(_) => Ok(true),
         }
     }
-    fn user_dropped_event(
-        &mut self, 
-        event_name: &str, 
-        string_list: Vec<String>
-    ) -> Option<String> {
-        match config::run_immediate_with_lua_config(|lua| {
-            if let Some(lua) = lua {
-                let tabs = self.get_tab_information();
-                let panes = self.get_pane_information();
-                let active_tab = tabs.iter().find(|t| t.is_active).cloned();
-                let active_pane = panes.iter().find(|p| p.is_active).cloned();
-                let (modifiers, _) = self.current_modifier_and_leds;
 
-                let v = config::lua::emit_sync_callback(
-                    &lua,
-                    (
-                        event_name.to_string(),
-                        (
-                            active_tab.clone(),
-                            active_pane.clone(),
-                            modifiers.to_string(),
-                            data.clone(),
-                        ),
-                    ),
-                )?;
-                match &v {
-                    mlua::Value::Nil => Ok(None),
-                    mlua::Value::Table(t) => {
-                        let mut result_string = String::new();
-                        for i in 1..=t.len()? {
-                            if let Some(v) = t.get(i)? {
-                                if !result_string.is_empty() {
-                                    result_string.push(' ');
-                                }
-                                result_string.push_str(&String::from_lua(v, &lua)?);
-                            }
+    fn item_dropped_event(&mut self, name: String, string_list: Vec<String>) -> anyhow::Result<()> {
+        let name = name.to_string();
+        let pane = match self.get_active_pane_or_overlay() {
+            Some(pane) => pane,
+            None => return Ok(()),
+        };
+        let pane_id = pane.pane_id();
+
+        let window = GuiWin::new(self);
+        let mux_pane = MuxPane(pane_id);
+
+        async fn evaluate(
+            name: String,
+            window: GuiWin,
+            pane: MuxPane,
+            string_list: Vec<String>,
+        ) -> anyhow::Result<Option<String>> {
+            match config::with_lua_config_on_main_thread(|lua| async {
+                if let Some(lua) = lua {
+                    let args = lua.pack_multi((window.clone(), pane, string_list))?;
+                    let v =
+                        config::lua::emit_async_callback(&lua, (name.to_string(), args)).await?;
+                    log::trace!("{name}: got {v:?}");
+                    match v {
+                        mlua::Value::Nil => Ok(None),
+                        mlua::Value::String(s) => Ok(Some(s.to_str()?.to_string())),
+                        _ => {
+                            log::warn!("{name}: expected string return value, got {v:?}");
+                            Ok(None)
                         }
-                        if result_string.is_empty() {
-                            return Ok(None);
-                        }
-                        Ok(Some(result_string))
                     }
-                    value => match value.to_string() {
-                            Ok(s) => return Some(s),
-                            Err(err) => {
-                               log::warn!("{event_name}: error converting result to string: {err:#}");
-                               return None
-                            }
-                        }
+                } else {
+                    Ok(None)
                 }
-            } else {
-                Ok(None)
-            }
-        }) {
-            Ok(s) => s,
-            Err(err) => {
-                log::warn!("{event_name}: {err:#}");
-                None
+            })
+            .await
+            {
+                Ok(Some(s)) => Ok(Some(s)),
+                Ok(None) => Ok(None),
+                Err(err) => {
+                    log::warn!("{name}: {err:#}");
+                    Ok(None)
+                }
             }
         }
+
+        promise::spawn::spawn(async move {
+            let txt = evaluate(name, window, mux_pane, string_list.clone())
+                .await
+                .unwrap();
+            // handle the output of the txt if not empty, otherwise if nil send the original string_list
+            // if empty string skip sending to the pane because user may be handling differently
+            if let Some(txt) = txt {
+                if txt.is_empty() {
+                    return;
+                }
+                pane.send_paste(&txt).unwrap();
+            } else {
+                pane.send_paste(&(string_list.join(" ") + " ")).unwrap();
+            }
+        })
+        .detach();
+        Ok(())
     }
 
     fn do_paint(&mut self, window: &Window) -> bool {

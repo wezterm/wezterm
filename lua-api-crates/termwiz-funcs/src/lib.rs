@@ -1,6 +1,5 @@
 use config::lua::get_or_create_module;
 use config::lua::mlua::{self, IntoLua, Lua};
-use config::DroppedFileQuoting;
 use finl_unicode::grapheme_clusters::Graphemes;
 use luahelper::impl_lua_conversion_dynamic;
 use std::str::FromStr;
@@ -46,14 +45,6 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
     wezterm_mod.set(
         "permute_any_or_no_mods",
         lua.create_function(permute_any_or_no_mods)?,
-    )?;
-
-    wezterm_mod.set(
-        "quote",
-        lua.create_function(|_, (s, quoting): (String, DroppedFileQuoting)| {
-            let result = quoting.escape(&s);
-            Ok(result)
-        })?,
     )?;
 
     Ok(())
