@@ -6,7 +6,7 @@ use crate::frontend::{front_end, try_front_end};
 use crate::inputmap::InputMap;
 use crate::overlay::{
     confirm_close_pane, confirm_close_tab, confirm_close_window, confirm_quit_program, launcher,
-    start_overlay, start_overlay_pane, start_overlay_widget_pane, CopyModeParams, CopyOverlay,
+    start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay,
     LauncherArgs, LauncherFlags, QuickSelectOverlay,
 };
 use crate::resize_increment_calculator::ResizeIncrementCalculator;
