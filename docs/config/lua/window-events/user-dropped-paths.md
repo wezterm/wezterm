@@ -141,7 +141,7 @@ wezterm.on('user-dropped-paths', function(window, pane, paths)
         end
       end
     else
-      wezterm.log_info 'No nvim remote socket fall back to doing neovim motions for escaping to normal mode, then activate insert mode with the dropped paths'
+      wezterm.log_info 'No neovim remote socket, falling back to escaping to normal mode, and adding the dropped paths to edited files'
       local output = '\x1b' -- Escape sequence to enter normal mode
         .. ':arge' -- Use cmdline argedit cmd to open multiple files for editing
         .. ' ' -- separate arguments
