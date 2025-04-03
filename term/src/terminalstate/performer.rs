@@ -537,17 +537,13 @@ impl<'a> Performer<'a> {
                         .push(KeyboardEncoding::Kitty(flags));
                 }
             }
-            CSI::Keyboard(Keyboard::PushKittyState { flags, mode }) => {
+            CSI::Keyboard(Keyboard::PushKittyState(flags)) => {
                 if self.config.enable_kitty_keyboard() {
                     let current_flags = match self.screen().keyboard_stack.last() {
                         Some(KeyboardEncoding::Kitty(flags)) => *flags,
                         _ => KittyKeyboardFlags::NONE,
                     };
-                    let flags = match mode {
-                        KittyKeyboardMode::AssignAll => flags,
-                        KittyKeyboardMode::SetSpecified => current_flags | flags,
-                        KittyKeyboardMode::ClearSpecified => current_flags - flags,
-                    };
+                    let flags = current_flags | flags;
                     let screen = self.screen_mut();
                     screen.keyboard_stack.push(KeyboardEncoding::Kitty(flags));
                     if screen.keyboard_stack.len() > 128 {
