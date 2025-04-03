@@ -1,6 +1,6 @@
 # `user-dropped-{strings,paths,urls}`
 
-{{since('20250323-135010-34a8c65a')}}
+{{since('nightly')}}
 
 ```lua
 local wezterm = require 'wezterm'
