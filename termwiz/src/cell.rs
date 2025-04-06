@@ -2,6 +2,7 @@
 use crate::color::{ColorAttribute, PaletteIndex};
 pub use crate::emoji::Presentation;
 use crate::emoji_variation::WCWIDTH_TABLE;
+use crate::escape::csi::Sgr;
 pub use crate::escape::osc::Hyperlink;
 use crate::image::ImageCell;
 use crate::widechar_width::WcWidth;
@@ -240,6 +241,12 @@ pub enum Blink {
     Rapid = 2,
 }
 
+impl Default for Blink {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 /// Allow converting to boolean; true means some kind of
 /// blink, false means none.  This is used in some
 /// generic code to determine whether to enable blink.
@@ -256,6 +263,12 @@ pub enum VerticalAlign {
     BaseLine = 0,
     SuperScript = 1,
     SubScript = 2,
+}
+
+impl Default for VerticalAlign {
+    fn default() -> Self {
+        Self::BaseLine
+    }
 }
 
 impl Default for CellAttributes {
@@ -572,6 +585,47 @@ impl CellAttributes {
                 self.set_hyperlink(value.clone());
             }
         }
+    }
+
+    pub fn sgrs(&self) -> Vec<Sgr> {
+        let mut sgrs = Vec::new();
+        if self.intensity() != Intensity::default() {
+            sgrs.push(Sgr::Intensity(self.intensity()));
+        }
+        if self.underline() != Underline::default() {
+            sgrs.push(Sgr::Underline(self.underline()));
+        }
+        if self.blink() != Blink::default() {
+            sgrs.push(Sgr::Blink(self.blink()));
+        }
+        if self.italic() {
+            sgrs.push(Sgr::Italic(self.italic()));
+        }
+        if self.reverse() {
+            sgrs.push(Sgr::Inverse(self.reverse()));
+        }
+        if self.invisible() {
+            sgrs.push(Sgr::Invisible(self.invisible()));
+        }
+        if self.strikethrough() {
+            sgrs.push(Sgr::StrikeThrough(self.strikethrough()));
+        }
+        if self.overline() {
+            sgrs.push(Sgr::Overline(self.overline()));
+        }
+        if self.vertical_align() != VerticalAlign::default() {
+            sgrs.push(Sgr::VerticalAlign(self.vertical_align()));
+        }
+        if self.background() != ColorAttribute::default() {
+            sgrs.push(Sgr::Background(self.background().into()));
+        }
+        if self.foreground() != ColorAttribute::default() {
+            sgrs.push(Sgr::Foreground(self.foreground().into()));
+        }
+        if self.underline_color() != ColorAttribute::default() {
+            sgrs.push(Sgr::UnderlineColor(self.underline_color().into()))
+        }
+        sgrs
     }
 }
 

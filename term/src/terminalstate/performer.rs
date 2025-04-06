@@ -334,6 +334,15 @@ impl<'a> Performer<'a> {
                                 .ok();
                                 self.writer.flush().ok();
                             }
+                            &[b'm'] => {
+                                // SGR - graphic rendition
+                                write!(self.writer, "{}1$r0", DCS).ok();
+                                for sgr in self.pen.sgrs() {
+                                    write!(self.writer, ";{}", sgr).ok();
+                                }
+                                write!(self.writer, "m{}", ST).ok();
+                                self.writer.flush().ok();
+                            }
                             _ => {
                                 if self.config.log_unknown_escape_sequences() {
                                     log::warn!("unhandled DECRQSS {:?}", s);
