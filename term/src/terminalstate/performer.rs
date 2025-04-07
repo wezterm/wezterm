@@ -336,11 +336,8 @@ impl<'a> Performer<'a> {
                             }
                             &[b'm'] => {
                                 // SGR - graphic rendition
-                                write!(self.writer, "{}1$r0", DCS).ok();
-                                for sgr in self.pen.sgrs() {
-                                    write!(self.writer, ";{}", sgr).ok();
-                                }
-                                write!(self.writer, "m{}", ST).ok();
+                                let sgr = self.pen.clone_sgr_only();
+                                write!(self.writer, "{}1$r{}m{}", DCS, sgr.format_sgrs(), ST).ok();
                                 self.writer.flush().ok();
                             }
                             _ => {

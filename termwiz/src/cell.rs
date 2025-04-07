@@ -9,6 +9,7 @@ use crate::widechar_width::WcWidth;
 use finl_unicode::grapheme_clusters::Graphemes;
 #[cfg(feature = "use_serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::sync::Arc;
@@ -587,45 +588,84 @@ impl CellAttributes {
         }
     }
 
-    pub fn sgrs(&self) -> Vec<Sgr> {
-        let mut sgrs = Vec::new();
-        if self.intensity() != Intensity::default() {
-            sgrs.push(Sgr::Intensity(self.intensity()));
+    pub fn format_sgrs(&self) -> SgrFormatter<'_> {
+        SgrFormatter { attributes: self }
+    }
+}
+
+/// A formatter that emits the SGR attributes of the cell.
+///
+/// This is used for DECRQSS/DECRPSS of the SGR of the current cell.
+#[derive(Debug)]
+pub struct SgrFormatter<'a> {
+    attributes: &'a CellAttributes,
+}
+
+impl Display for SgrFormatter<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Reset the SGR first. This is common practice among terminals: it should be possible to
+        // "reply" the content of the DECRPSS report to restore the graphic rendition in another
+        // cell. Plus it simplifies the semicolon 'joining' behavior below.
+        // <https://github.com/wezterm/wezterm/pull/6856#discussion_r2030271666>
+        f.write_str("0")?;
+
+        if self.attributes.intensity() != Intensity::default() {
+            write!(f, ";{}", Sgr::Intensity(self.attributes.intensity()))?;
         }
-        if self.underline() != Underline::default() {
-            sgrs.push(Sgr::Underline(self.underline()));
+        if self.attributes.underline() != Underline::default() {
+            write!(f, ";{}", Sgr::Underline(self.attributes.underline()))?;
         }
-        if self.blink() != Blink::default() {
-            sgrs.push(Sgr::Blink(self.blink()));
+        if self.attributes.blink() != Blink::default() {
+            write!(f, ";{}", Sgr::Blink(self.attributes.blink()))?;
         }
-        if self.italic() {
-            sgrs.push(Sgr::Italic(self.italic()));
+        if self.attributes.italic() {
+            write!(f, ";{}", Sgr::Italic(self.attributes.italic()))?;
         }
-        if self.reverse() {
-            sgrs.push(Sgr::Inverse(self.reverse()));
+        if self.attributes.reverse() {
+            write!(f, ";{}", Sgr::Inverse(self.attributes.reverse()))?;
         }
-        if self.invisible() {
-            sgrs.push(Sgr::Invisible(self.invisible()));
+        if self.attributes.invisible() {
+            write!(f, ";{}", Sgr::Invisible(self.attributes.invisible()))?;
         }
-        if self.strikethrough() {
-            sgrs.push(Sgr::StrikeThrough(self.strikethrough()));
+        if self.attributes.strikethrough() {
+            write!(
+                f,
+                ";{}",
+                Sgr::StrikeThrough(self.attributes.strikethrough())
+            )?;
         }
-        if self.overline() {
-            sgrs.push(Sgr::Overline(self.overline()));
+        if self.attributes.overline() {
+            write!(f, ";{}", Sgr::Overline(self.attributes.overline()))?;
         }
-        if self.vertical_align() != VerticalAlign::default() {
-            sgrs.push(Sgr::VerticalAlign(self.vertical_align()));
+        if self.attributes.vertical_align() != VerticalAlign::default() {
+            write!(
+                f,
+                ";{}",
+                Sgr::VerticalAlign(self.attributes.vertical_align())
+            )?;
         }
-        if self.background() != ColorAttribute::default() {
-            sgrs.push(Sgr::Background(self.background().into()));
+        if self.attributes.background() != ColorAttribute::default() {
+            write!(
+                f,
+                ";{}",
+                Sgr::Background(self.attributes.background().into())
+            )?;
         }
-        if self.foreground() != ColorAttribute::default() {
-            sgrs.push(Sgr::Foreground(self.foreground().into()));
+        if self.attributes.foreground() != ColorAttribute::default() {
+            write!(
+                f,
+                ";{}",
+                Sgr::Foreground(self.attributes.foreground().into())
+            )?;
         }
-        if self.underline_color() != ColorAttribute::default() {
-            sgrs.push(Sgr::UnderlineColor(self.underline_color().into()))
+        if self.attributes.underline_color() != ColorAttribute::default() {
+            write!(
+                f,
+                ";{}",
+                Sgr::UnderlineColor(self.attributes.underline_color().into(),)
+            )?;
         }
-        sgrs
+        Ok(())
     }
 }
 
