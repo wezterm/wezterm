@@ -508,6 +508,6 @@ with open("../mkdocs.yml", "w") as f:
 
 
 with open("SUMMARY.md", "w") as f:
-    f.write("[root](index.md)\n")
+    f.write("[root]\n")
     for page in TOC:
         page.render(f, depth=1, mode="mdbook")
