@@ -14,7 +14,7 @@ The intended purpose is as a human readable way to inspect lua values.  It is no
 readable; do not attempt to use it as a serialization format as the format is not guaranteed
 to remain the same across different versions of wezterm.
 
-This same representation is used in the [debug overlay](../keyassignment/ShowDebugOverlay.md
+This same representation is used in the [debug overlay](../keyassignment/ShowDebugOverlay.md)
 when printing the result of an expression from the Lua REPL and for the implicit string
 conversions of the parameters passed to [wezterm.log_info](log_info.md).
 
