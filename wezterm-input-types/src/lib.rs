@@ -1723,6 +1723,9 @@ impl KeyEvent {
             match &self.key {
                 Char('\x08') => return '\x7f'.to_string(),
                 Char('\x7f') => return '\x08'.to_string(),
+                Char('\u{1b}') if flags.contains(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES) => {
+                    return "\u{1b}[27u".to_string()
+                }
                 Char(c) => return c.to_string(),
                 _ => {}
             }
@@ -3206,6 +3209,28 @@ mod test {
             }
             .encode_kitty(flags),
             "\u{1b}[102;14u".to_string()
+        );
+    }
+
+    #[test]
+    fn encode_escape_disambiguated() {
+        // See <https://sw.kovidgoyal.net/kitty/keyboard-protocol/#disambiguate-escape-codes>:
+        // > Turning on this flag will cause the terminal to report the `Esc`, ..., keys using
+        // > `CSI u` sequences instead of legacy ones.
+        let flags = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::Char('\u{1b}'), // Escape
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags),
+            "\u{1b}[27u"
         );
     }
 }
