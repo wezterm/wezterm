@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 #[cfg(feature = "std")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct PixelUnit;
 pub struct ScreenPixelUnit;
@@ -507,6 +507,8 @@ bitflags! {
         const LEFT_SHIFT = 1<<10;
         const RIGHT_SHIFT = 1<<11;
         const ENHANCED_KEY = 1<<12;
+        const LEFT_SUPER = 1<<13;
+        const RIGHT_SUPER = 1<<14;
     }
 }
 
@@ -519,22 +521,23 @@ impl TryFrom<String> for Modifiers {
             // Allow for whitespace; debug printing Modifiers includes spaces
             // around the `|` so it is desirable to be able to reverse that
             // encoding here.
-            let ele = ele.trim();
-            if ele == "SHIFT" {
-                mods |= Modifiers::SHIFT;
-            } else if ele == "ALT" || ele == "OPT" || ele == "META" {
-                mods |= Modifiers::ALT;
-            } else if ele == "CTRL" {
-                mods |= Modifiers::CTRL;
-            } else if ele == "SUPER" || ele == "CMD" || ele == "WIN" {
-                mods |= Modifiers::SUPER;
-            } else if ele == "LEADER" {
-                mods |= Modifiers::LEADER;
-            } else if ele == "NONE" || ele == "" {
-                mods |= Modifiers::NONE;
-            } else {
-                return Err(format!("invalid modifier name {} in {}", ele, s));
-            }
+            mods |= match ele.trim() {
+                "SHIFT" => Modifiers::SHIFT,
+                "LEFT_SHIFT" => Modifiers::LEFT_SHIFT,
+                "RIGHT_SHIFT" => Modifiers::RIGHT_SHIFT,
+                "ALT" | "OPT" | "META" => Modifiers::ALT,
+                "LEFT_ALT" | "LEFT_OPT" | "LEFT_META" => Modifiers::LEFT_ALT,
+                "RIGHT_ALT" | "RIGHT_OPT" | "RIGHT_META" => Modifiers::RIGHT_ALT,
+                "CTRL" => Modifiers::CTRL,
+                "LEFT_CTRL" => Modifiers::LEFT_CTRL,
+                "RIGHT_CTRL" => Modifiers::RIGHT_CTRL,
+                "SUPER" | "CMD" | "WIN" => Modifiers::SUPER,
+                "LEFT_SUPER" | "LEFT_CMD" | "LEFT_WIN" => Modifiers::LEFT_SUPER,
+                "RIGHT_SUPER" | "RIGHT_CMD" | "RIGHT_WIN" => Modifiers::RIGHT_SUPER,
+                "LEADER" => Modifiers::LEADER,
+                "NONE" | "" => Modifiers::NONE,
+                _ => return Err(format!("invalid modifier name {} in {}", ele, s)),
+            };
         }
         Ok(mods)
     }
@@ -687,6 +690,24 @@ impl Modifiers {
                 "Shift",
             ),
             (
+                Self::LEFT_SUPER,
+                "LEFT_SUPER",
+                "Super",
+                "Super",
+                md_apple_keyboard_command,
+                "Win",
+                md_microsoft_windows,
+            ),
+            (
+                Self::RIGHT_SUPER,
+                "RIGHT_SUPER",
+                "Super",
+                "Super",
+                md_apple_keyboard_command,
+                "Win",
+                md_microsoft_windows,
+            ),
+            (
                 Self::ENHANCED_KEY,
                 "ENHANCED_KEY",
                 "ENHANCED_KEY",
@@ -738,7 +759,38 @@ impl Modifiers {
             | Self::RIGHT_CTRL
             | Self::LEFT_SHIFT
             | Self::RIGHT_SHIFT
+            | Self::LEFT_SUPER
+            | Self::RIGHT_SUPER
             | Self::ENHANCED_KEY)
+    }
+
+    /// Enumerate combinations of positional modifiers so that keys can be looked
+    /// up by specific left/right position. Each modifier combo in the result is a
+    /// possible "physical" press combination that should trigger a binding for `self`.
+    pub fn positional_matches(self) -> HashSet<Self> {
+        if self.remove_positional_mods() == self {
+            // No positional modifiers, no special matching needed
+            return HashSet::from_iter([self]);
+        }
+
+        let positional_only = self - (Self::ALT | Self::SHIFT | Self::CTRL | Self::SUPER);
+        let mut result = HashSet::from_iter([positional_only]);
+
+        for (both, left, right) in [
+            (Self::SHIFT, Self::LEFT_SHIFT, Self::RIGHT_SHIFT),
+            (Self::ALT, Self::LEFT_ALT, Self::RIGHT_ALT),
+            (Self::CTRL, Self::LEFT_CTRL, Self::RIGHT_CTRL),
+            (Self::SUPER, Self::LEFT_SUPER, Self::RIGHT_SUPER),
+        ] {
+            if self.contains(both) {
+                // For each existing combo, add a variant with left and right versions of this modifier.
+                let lefts = result.iter().map(|&m| m | left);
+                let rights = result.iter().map(|&m| m | right);
+                result = lefts.chain(rights).collect();
+            }
+        }
+
+        result
     }
 }
 
@@ -1620,6 +1672,28 @@ impl KeyEvent {
                 ) =>
             {
                 self.key = KeyCode::RightShift;
+            }
+            KeyCode::Super
+                if matches!(
+                    self.raw,
+                    Some(RawKeyEvent {
+                        key: KeyCode::LeftWindows | KeyCode::Physical(PhysKeyCode::LeftWindows),
+                        ..
+                    })
+                ) =>
+            {
+                self.key = KeyCode::LeftWindows;
+            }
+            KeyCode::Super
+                if matches!(
+                    self.raw,
+                    Some(RawKeyEvent {
+                        key: KeyCode::RightWindows | KeyCode::Physical(PhysKeyCode::RightWindows),
+                        ..
+                    })
+                ) =>
+            {
+                self.key = KeyCode::RightWindows;
             }
             _ => {}
         }
@@ -3207,5 +3281,55 @@ mod test {
             .encode_kitty(flags),
             "\u{1b}[102;14u".to_string()
         );
+    }
+
+    #[test]
+    fn match_positional_mods() {
+        for (binding_str, expected) in [
+            (
+                "CTRL|RIGHT_ALT",
+                &[
+                    Modifiers::LEFT_CTRL | Modifiers::RIGHT_ALT,
+                    Modifiers::RIGHT_CTRL | Modifiers::RIGHT_ALT,
+                ][..],
+            ),
+            (
+                "CTRL|LEFT_ALT",
+                &[
+                    Modifiers::LEFT_CTRL | Modifiers::LEFT_ALT,
+                    Modifiers::RIGHT_CTRL | Modifiers::LEFT_ALT,
+                ],
+            ),
+            (
+                "CTRL|LEFT_ALT|RIGHT_SHIFT",
+                &[
+                    Modifiers::LEFT_CTRL | Modifiers::LEFT_ALT | Modifiers::RIGHT_SHIFT,
+                    Modifiers::RIGHT_CTRL | Modifiers::LEFT_ALT | Modifiers::RIGHT_SHIFT,
+                ],
+            ),
+            (
+                "CTRL|LEFT_ALT|SHIFT",
+                &[
+                    Modifiers::LEFT_CTRL | Modifiers::LEFT_ALT | Modifiers::LEFT_SHIFT,
+                    Modifiers::LEFT_CTRL | Modifiers::LEFT_ALT | Modifiers::RIGHT_SHIFT,
+                    Modifiers::RIGHT_CTRL | Modifiers::LEFT_ALT | Modifiers::LEFT_SHIFT,
+                    Modifiers::RIGHT_CTRL | Modifiers::LEFT_ALT | Modifiers::RIGHT_SHIFT,
+                ],
+            ),
+            (
+                "LEFT_CTRL|LEFT_ALT",
+                &[Modifiers::LEFT_CTRL | Modifiers::LEFT_ALT],
+            ),
+            ("CTRL|ALT", &[Modifiers::CTRL | Modifiers::ALT]),
+        ] {
+            let binding = Modifiers::try_from(binding_str.to_string()).unwrap();
+            let possible_matches = binding.positional_matches();
+
+            assert_eq!(
+                possible_matches,
+                HashSet::from_iter(expected.iter().copied()),
+                "matches for {binding_str:?}"
+            );
+        }
     }
 }

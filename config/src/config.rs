@@ -1264,33 +1264,39 @@ impl Config {
         let mut tables = KeyTables::default();
 
         for k in &self.keys {
-            let (key, mods) = k
-                .key
-                .key
-                .resolve(self.key_map_preference)
-                .normalize_shift(k.key.mods);
-            tables.default.insert(
-                (key, mods),
-                KeyTableEntry {
-                    action: k.action.clone(),
-                },
-            );
-        }
-
-        for (name, keys) in &self.key_tables {
-            let mut table = KeyTable::default();
-            for k in keys {
+            for mods in k.key.mods.positional_matches() {
                 let (key, mods) = k
                     .key
                     .key
                     .resolve(self.key_map_preference)
-                    .normalize_shift(k.key.mods);
-                table.insert(
+                    .normalize_shift(mods);
+
+                tables.default.insert(
                     (key, mods),
                     KeyTableEntry {
                         action: k.action.clone(),
                     },
                 );
+            }
+        }
+
+        for (name, keys) in &self.key_tables {
+            let mut table = KeyTable::default();
+            for k in keys {
+                for mods in k.key.mods.positional_matches() {
+                    let (key, mods) = k
+                        .key
+                        .key
+                        .resolve(self.key_map_preference)
+                        .normalize_shift(mods);
+
+                    table.insert(
+                        (key, mods),
+                        KeyTableEntry {
+                            action: k.action.clone(),
+                        },
+                    );
+                }
             }
             tables.by_name.insert(name.to_string(), table);
         }

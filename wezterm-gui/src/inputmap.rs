@@ -450,7 +450,14 @@ impl InputMap {
         };
 
         table
+            // Try the common case of non-positional modifiers first...
             .get(&key.normalize_shift(mods.remove_positional_mods()))
+            .or_else(|| {
+                // Then check for more specific positional modifiers
+                mods.positional_matches()
+                    .into_iter()
+                    .find_map(|m| table.get(&key.normalize_shift(m)))
+            })
             .cloned()
     }
 
