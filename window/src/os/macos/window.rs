@@ -1867,23 +1867,47 @@ fn decode_mouse_buttons(mask: u64) -> MouseButtons {
     buttons
 }
 
+bitflags::bitflags! {
+    // https://github.com/apple-oss-distributions/IOHIDFamily/blob/1fa575f45f1df1f1b3504d15a45498c012b58a62/IOHIDSystem/IOKit/hidsystem/IOLLEvent.h#L253-L261
+    struct NxDeviceFlags: NSUInteger {
+        const LCTLKEYMASK               = 0x00000001;
+        const LSHIFTKEYMASK             = 0x00000002;
+        const RSHIFTKEYMASK             = 0x00000004;
+        const LCMDKEYMASK               = 0x00000008;
+        const RCMDKEYMASK               = 0x00000010;
+        const LALTKEYMASK               = 0x00000020;
+        const RALTKEYMASK               = 0x00000040;
+        const ALPHASHIFT_STATELESS_MASK = 0x00000080;
+        const RCTLKEYMASK               = 0x00002000;
+    }
+}
+
+impl From<NxDeviceFlags> for NSEventModifierFlags {
+    fn from(value: NxDeviceFlags) -> Self {
+        Self::from_bits_retain(value.bits())
+    }
+}
+
 fn key_modifiers(flags: NSEventModifierFlags) -> Modifiers {
     let mut mods = Modifiers::NONE;
 
-    if flags.contains(NSEventModifierFlags::NSShiftKeyMask) {
-        mods |= Modifiers::SHIFT;
-    }
-    if flags.contains(NSEventModifierFlags::NSAlternateKeyMask) && (flags.bits() & 0x20) != 0 {
-        mods |= Modifiers::LEFT_ALT | Modifiers::ALT;
-    }
-    if flags.contains(NSEventModifierFlags::NSAlternateKeyMask) && (flags.bits() & 0x40) != 0 {
-        mods |= Modifiers::RIGHT_ALT | Modifiers::ALT;
-    }
-    if flags.contains(NSEventModifierFlags::NSControlKeyMask) {
-        mods |= Modifiers::CTRL;
-    }
-    if flags.contains(NSEventModifierFlags::NSCommandKeyMask) {
-        mods |= Modifiers::SUPER;
+    for (mask, modifier) in [
+        (NSEventModifierFlags::NSShiftKeyMask, Modifiers::SHIFT),
+        (NxDeviceFlags::LSHIFTKEYMASK.into(), Modifiers::LEFT_SHIFT),
+        (NxDeviceFlags::RSHIFTKEYMASK.into(), Modifiers::RIGHT_SHIFT),
+        (NSEventModifierFlags::NSAlternateKeyMask, Modifiers::ALT),
+        (NxDeviceFlags::LALTKEYMASK.into(), Modifiers::LEFT_ALT),
+        (NxDeviceFlags::RALTKEYMASK.into(), Modifiers::RIGHT_ALT),
+        (NSEventModifierFlags::NSControlKeyMask, Modifiers::CTRL),
+        (NxDeviceFlags::LCTLKEYMASK.into(), Modifiers::LEFT_CTRL),
+        (NxDeviceFlags::RCTLKEYMASK.into(), Modifiers::RIGHT_CTRL),
+        (NSEventModifierFlags::NSCommandKeyMask, Modifiers::SUPER),
+        (NxDeviceFlags::LCMDKEYMASK.into(), Modifiers::LEFT_SUPER),
+        (NxDeviceFlags::RCMDKEYMASK.into(), Modifiers::RIGHT_SUPER),
+    ] {
+        if flags.contains(mask) {
+            mods |= modifier;
+        }
     }
 
     mods
