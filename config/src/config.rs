@@ -1310,7 +1310,11 @@ impl Config {
         let mut map = HashMap::new();
 
         for m in &self.mouse_bindings {
-            map.insert((m.event.clone(), m.mods), m.action.clone());
+            let mut mouse_mods = m.mods;
+            for mods in m.mods.mods.positional_matches() {
+                mouse_mods.mods = mods;
+                map.insert((m.event.clone(), mouse_mods), m.action.clone());
+            }
         }
 
         map

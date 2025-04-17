@@ -464,10 +464,21 @@ impl InputMap {
     pub fn lookup_mouse(
         &self,
         event: MouseEventTrigger,
-        mut mods: MouseEventTriggerMods,
+        mods: MouseEventTriggerMods,
     ) -> Option<KeyAssignment> {
-        mods.mods = mods.mods.remove_positional_mods();
-        self.mouse.get(&(event, mods)).cloned()
+        self.mouse
+            .get(&(event.clone(), mods.remove_positional_mods()))
+            .or_else(move || {
+                mods.mods
+                    .positional_matches()
+                    .into_iter()
+                    .find_map(move |m| {
+                        let mut mods = mods;
+                        mods.mods = m;
+                        self.mouse.get(&(event.clone(), mods))
+                    })
+            })
+            .cloned()
     }
 
     pub fn dump_config(&self, key_table: Option<&str>) {

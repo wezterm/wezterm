@@ -192,3 +192,11 @@ pub struct MouseEventTriggerMods {
     #[dynamic(default)]
     pub alt_screen: MouseEventAltScreen,
 }
+
+impl MouseEventTriggerMods {
+    #[must_use]
+    pub fn remove_positional_mods(mut self) -> Self {
+        self.mods = self.mods.remove_positional_mods();
+        self
+    }
+}

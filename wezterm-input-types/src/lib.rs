@@ -752,6 +752,7 @@ impl Modifiers {
     /// are used to carry around implementation details, but that
     /// are not bits that should be matched when matching key
     /// assignments.
+    #[must_use]
     pub fn remove_positional_mods(self) -> Self {
         self - (Self::LEFT_ALT
             | Self::RIGHT_ALT
@@ -767,6 +768,7 @@ impl Modifiers {
     /// Enumerate combinations of positional modifiers so that keys can be looked
     /// up by specific left/right position. Each modifier combo in the result is a
     /// possible "physical" press combination that should trigger a binding for `self`.
+    #[must_use]
     pub fn positional_matches(self) -> HashSet<Self> {
         if self.remove_positional_mods() == self {
             // No positional modifiers, no special matching needed
