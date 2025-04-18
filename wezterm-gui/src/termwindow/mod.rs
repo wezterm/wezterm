@@ -343,7 +343,7 @@ pub struct TabState {
     /// If is_some(), rather than display the actual tab
     /// contents, we're overlaying a little internal application
     /// tab.  We'll also route input to it.
-    pub overlays: [Option<OverlayState>; 2],
+    pub overlays: [Option<OverlayState>; 3],
 }
 
 impl TabState {
@@ -354,6 +354,10 @@ impl TabState {
             }
         }
         None
+    }
+
+    fn higher_layer_overlays_any(&self, layer: usize) -> bool {
+        self.overlays.iter().skip(layer + 1).any(|o| o.is_some())
     }
 }
 
@@ -520,11 +524,12 @@ impl TermWindow {
                     return;
                 }
                 let window = self.window.clone().unwrap();
-                let layer = 1;
+                let tab_id = tab.tab_id();
+                let layer = 2;
                 let (overlay, future) = start_overlay(self, &tab, layer, move |tab_id, term| {
                     confirm_close_window(term, mux_window_id, window, tab_id, layer)
                 });
-                self.assign_overlay(tab.tab_id(), layer, overlay);
+                self.assign_overlay(tab_id, layer, overlay);
                 promise::spawn::spawn(future).detach();
 
                 // Don't close right now; let the close happen from
@@ -2302,12 +2307,15 @@ impl TermWindow {
         let gui_win = GuiWin::new(self);
         let pane = MuxPane(pane.pane_id());
 
+        let tab_id = tab.tab_id();
         let layer = 1;
-        let (overlay, future) = start_overlay(self, &tab, layer, move |_tab_id, term| {
-            crate::overlay::selector::selector(term, args, gui_win, pane)
-        });
-        self.assign_overlay(tab.tab_id(), layer, overlay);
-        promise::spawn::spawn(future).detach();
+        if !self.tab_state(tab_id).higher_layer_overlays_any(layer) {
+            let (overlay, future) = start_overlay(self, &tab, layer, move |_tab_id, term| {
+                crate::overlay::selector::selector(term, args, gui_win, pane)
+            });
+            self.assign_overlay(tab_id, layer, overlay);
+            promise::spawn::spawn(future).detach();
+        }
     }
 
     fn show_prompt_input_line(&mut self, args: &PromptInputLine) {
@@ -2327,12 +2335,15 @@ impl TermWindow {
         let gui_win = GuiWin::new(self);
         let pane = MuxPane(pane.pane_id());
 
+        let tab_id = tab.tab_id();
         let layer = 1;
-        let (overlay, future) = start_overlay(self, &tab, layer, move |_tab_id, term| {
-            crate::overlay::prompt::show_line_prompt_overlay(term, args, gui_win, pane)
-        });
-        self.assign_overlay(tab.tab_id(), layer, overlay);
-        promise::spawn::spawn(future).detach();
+        if !self.tab_state(tab_id).higher_layer_overlays_any(layer) {
+            let (overlay, future) = start_overlay(self, &tab, layer, move |_tab_id, term| {
+                crate::overlay::prompt::show_line_prompt_overlay(term, args, gui_win, pane)
+            });
+            self.assign_overlay(tab_id, layer, overlay);
+            promise::spawn::spawn(future).detach();
+        }
     }
 
     fn show_confirmation(&mut self, args: &Confirmation) {
@@ -2352,12 +2363,15 @@ impl TermWindow {
         let gui_win = GuiWin::new(self);
         let pane = MuxPane(pane.pane_id());
 
+        let tab_id = tab.tab_id();
         let layer = 1;
-        let (overlay, future) = start_overlay(self, &tab, layer, move |_tab_id, term| {
-            crate::overlay::confirm::show_confirmation_overlay(term, args, gui_win, pane)
-        });
-        self.assign_overlay(tab.tab_id(), layer, overlay);
-        promise::spawn::spawn(future).detach();
+        if !self.tab_state(tab_id).higher_layer_overlays_any(layer) {
+            let (overlay, future) = start_overlay(self, &tab, layer, move |_tab_id, term| {
+                crate::overlay::confirm::show_confirmation_overlay(term, args, gui_win, pane)
+            });
+            self.assign_overlay(tab_id, layer, overlay);
+            promise::spawn::spawn(future).detach();
+        }
     }
 
     fn show_display_text(&mut self, args: &DisplayText) {
@@ -2369,12 +2383,13 @@ impl TermWindow {
 
         let args = args.clone();
 
+        let tab_id = tab.tab_id();
         let layer = 0;
-        if self.tab_state(tab.tab_id()).overlays[1].is_none() {
+        if !self.tab_state(tab_id).higher_layer_overlays_any(layer) {
             let (overlay, future) = start_overlay(self, &tab, layer, move |_tab_id, term| {
                 crate::overlay::display::show_display_text_overlay(term, args)
             });
-            self.assign_overlay(tab.tab_id(), layer, overlay);
+            self.assign_overlay(tab_id, layer, overlay);
             promise::spawn::spawn(future).detach();
         }
     }
@@ -2391,12 +2406,15 @@ impl TermWindow {
         let opengl_info = self.opengl_info.as_deref().unwrap_or("Unknown").to_string();
         let connection_info = self.connection_name.clone();
 
+        let tab_id = tab.tab_id();
         let layer = 1;
-        let (overlay, future) = start_overlay(self, &tab, layer, move |_tab_id, term| {
-            crate::overlay::show_debug_overlay(term, gui_win, opengl_info, connection_info)
-        });
-        self.assign_overlay(tab.tab_id(), layer, overlay);
-        promise::spawn::spawn(future).detach();
+        if !self.tab_state(tab_id).higher_layer_overlays_any(layer) {
+            let (overlay, future) = start_overlay(self, &tab, layer, move |_tab_id, term| {
+                crate::overlay::show_debug_overlay(term, gui_win, opengl_info, connection_info)
+            });
+            self.assign_overlay(tab_id, layer, overlay);
+            promise::spawn::spawn(future).detach();
+        }
     }
 
     fn show_tab_navigator(&mut self) {
@@ -2467,36 +2485,40 @@ impl TermWindow {
         let config = &self.config;
         let alphabet = args.alphabet.unwrap_or(config.launcher_alphabet.clone());
 
-        promise::spawn::spawn(async move {
-            let args = LauncherArgs::new(
-                &title,
-                flags,
-                mux_window_id,
-                pane_id,
-                domain_id_of_current_pane,
-                &help_text,
-                &fuzzy_help_text,
-                &alphabet,
-            )
-            .await;
+        let layer = 1;
 
-            let win = window.clone();
-            win.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
-                let mux = Mux::get();
-                if let Some(tab) = mux.get_tab(tab_id) {
-                    let window = window.clone();
-                    let layer = 1;
-                    let (overlay, future) =
-                        start_overlay(term_window, &tab, layer, move |_tab_id, term| {
-                            launcher(args, term, window, initial_choice_idx)
-                        });
+        if !self.tab_state(tab_id).higher_layer_overlays_any(layer) {
+            promise::spawn::spawn(async move {
+                let args = LauncherArgs::new(
+                    &title,
+                    flags,
+                    mux_window_id,
+                    pane_id,
+                    domain_id_of_current_pane,
+                    &help_text,
+                    &fuzzy_help_text,
+                    &alphabet,
+                )
+                .await;
 
-                    term_window.assign_overlay(tab_id, layer, overlay);
-                    promise::spawn::spawn(future).detach();
-                }
-            })));
-        })
-        .detach();
+                let win = window.clone();
+                win.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                    let mux = Mux::get();
+                    if let Some(tab) = mux.get_tab(tab_id) {
+                        let window = window.clone();
+
+                        let (overlay, future) =
+                            start_overlay(term_window, &tab, layer, move |_tab_id, term| {
+                                launcher(args, term, window, initial_choice_idx)
+                            });
+
+                        term_window.assign_overlay(tab_id, layer, overlay);
+                        promise::spawn::spawn(future).detach();
+                    }
+                })));
+            })
+            .detach();
+        }
     }
 
     /// Returns the Prompt semantic zones
@@ -2843,12 +2865,14 @@ impl TermWindow {
                         };
 
                         let window = self.window.clone().unwrap();
-                        let layer = 1;
+                        let tab_id = tab.tab_id();
+                        let layer = 2;
+
                         let (overlay, future) =
                             start_overlay(self, &tab, layer, move |tab_id, term| {
                                 confirm_quit_program(term, window, tab_id, layer)
                             });
-                        self.assign_overlay(tab.tab_id(), layer, overlay);
+                        self.assign_overlay(tab_id, layer, overlay);
                         promise::spawn::spawn(future).detach();
                     }
                 }
@@ -3291,7 +3315,7 @@ impl TermWindow {
             }
 
             let window = self.window.clone().unwrap();
-            let layer = 1;
+            let layer = 2;
             let (overlay, future) = start_overlay(self, &tab, layer, move |tab_id, term| {
                 confirm_close_tab(tab_id, term, mux_window_id, window, layer)
             });
@@ -3312,7 +3336,7 @@ impl TermWindow {
         let mux_window_id = self.mux_window_id;
         if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
             let window = self.window.clone().unwrap();
-            let layer = 1;
+            let layer = 2;
             let (overlay, future) = start_overlay(self, &tab, layer, move |tab_id, term| {
                 confirm_close_tab(tab_id, term, mux_window_id, window, layer)
             });
