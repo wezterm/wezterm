@@ -1405,10 +1405,12 @@ impl TermWindow {
             .filter_map(|(tab_id, state)| state.focused_overlay().map(|_| *tab_id))
             .collect::<Vec<_>>();
 
-        for tab_id in tab_overlays_to_cancel {
-            let layer_count = self.tab_state(tab_id).overlays.len();
-            for layer in 0..layer_count {
-                self.cancel_overlay_for_tab(tab_id, layer, None);
+        if let Some(first_tab_id) = tab_overlays_to_cancel.first() {
+            let layer_count = self.tab_state(*first_tab_id).overlays.len();
+            for tab_id in tab_overlays_to_cancel {
+                for layer in 0..layer_count {
+                    self.cancel_overlay_for_tab(tab_id, layer, None);
+                }
             }
         }
 
