@@ -133,8 +133,7 @@ impl CopyOverlay {
         if pane_id != active_pane.pane_id() {
             if term_window
                 .tab_state(tab_id)
-                .overlay
-                .as_ref()
+                .focused_overlay()
                 .map(|o| &o.pane)
                 .is_none_or(|o| pane_id != o.pane_id())
             {

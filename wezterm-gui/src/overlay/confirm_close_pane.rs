@@ -33,6 +33,7 @@ pub fn confirm_close_tab(
     mut term: TermWizTerminal,
     _mux_window_id: WindowId,
     window: ::window::Window,
+    layer: usize,
 ) -> anyhow::Result<()> {
     if confirm::run_confirmation(
         "🛑 Really kill this tab and all contained panes?",
@@ -44,7 +45,7 @@ pub fn confirm_close_tab(
         })
         .detach();
     }
-    TermWindow::schedule_cancel_overlay(window, tab_id, None);
+    TermWindow::schedule_cancel_overlay(window, tab_id, layer, None);
 
     Ok(())
 }
@@ -54,6 +55,7 @@ pub fn confirm_close_window(
     mux_window_id: WindowId,
     window: ::window::Window,
     tab_id: TabId,
+    layer: usize,
 ) -> anyhow::Result<()> {
     if confirm::run_confirmation(
         "🛑 Really kill this window and all contained tabs and panes?",
@@ -65,7 +67,7 @@ pub fn confirm_close_window(
         })
         .detach();
     }
-    TermWindow::schedule_cancel_overlay(window, tab_id, None);
+    TermWindow::schedule_cancel_overlay(window, tab_id, layer, None);
 
     Ok(())
 }
@@ -74,6 +76,7 @@ pub fn confirm_quit_program(
     mut term: TermWizTerminal,
     window: ::window::Window,
     tab_id: TabId,
+    layer: usize,
 ) -> anyhow::Result<()> {
     if confirm::run_confirmation("🛑 Really Quit WezTerm?", &mut term)? {
         promise::spawn::spawn_into_main_thread(async move {
@@ -83,7 +86,7 @@ pub fn confirm_quit_program(
         })
         .detach();
     }
-    TermWindow::schedule_cancel_overlay(window, tab_id, None);
+    TermWindow::schedule_cancel_overlay(window, tab_id, layer, None);
 
     Ok(())
 }

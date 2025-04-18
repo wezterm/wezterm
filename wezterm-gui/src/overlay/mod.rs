@@ -27,6 +27,7 @@ pub use quickselect::QuickSelectOverlay;
 pub fn start_overlay<T, F>(
     term_window: &TermWindow,
     tab: &Arc<Tab>,
+    layer: usize,
     func: F,
 ) -> (
     Arc<dyn Pane>,
@@ -48,7 +49,7 @@ where
 
     let future = promise::spawn::spawn_into_new_thread(move || {
         let res = func(tab_id, tw_term);
-        TermWindow::schedule_cancel_overlay(window, tab_id, Some(overlay_pane_id));
+        TermWindow::schedule_cancel_overlay(window, tab_id, layer, Some(overlay_pane_id));
         res
     });
 
