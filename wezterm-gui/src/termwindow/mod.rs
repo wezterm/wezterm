@@ -348,12 +348,7 @@ pub struct TabState {
 
 impl TabState {
     pub fn focused_overlay(&self) -> Option<&OverlayState> {
-        for overlay in self.overlays.iter().rev() {
-            if overlay.is_some() {
-                return overlay.as_ref();
-            }
-        }
-        None
+        self.overlays.iter().rev().find_map(|o| o.as_ref())
     }
 
     fn higher_layer_overlays_any(&self, layer: usize) -> bool {
