@@ -1400,13 +1400,8 @@ impl TermWindow {
             .filter_map(|(tab_id, state)| state.focused_overlay().map(|_| *tab_id))
             .collect::<Vec<_>>();
 
-        if let Some(first_tab_id) = tab_overlays_to_cancel.first() {
-            let layer_count = self.tab_state(*first_tab_id).overlays.len();
-            for tab_id in tab_overlays_to_cancel {
-                for layer in 0..layer_count {
-                    self.cancel_overlay_for_tab(tab_id, layer, None);
-                }
-            }
+        for tab_id in tab_overlays_to_cancel {
+            self.cancel_all_overlays_for_tab(tab_id);
         }
 
         self.pane_state.borrow_mut().clear();
@@ -3598,6 +3593,26 @@ impl TermWindow {
         };
 
         self.get_pos_panes_for_tab(&tab)
+    }
+
+    /// Ideally we could call cancel_overlay_for_tab for each layer
+    /// But it would lead to borrow error because of the below reason.
+    /// Because the cancel_overlay_for_tab cancels overlay by layer, we perform the
+    /// below steps
+    /// To obtain layers, we call tab_state method which takes an immutable
+    /// reference to self
+    /// We pass the layer to cancel_overlay_for_tab method which takes a mutable
+    /// reference to self
+    /// So we define a separate method to cancel all overlays for a tab
+    fn cancel_all_overlays_for_tab(&mut self, tab_id: TabId) {
+        for overlay in &mut self.tab_state(tab_id).overlays {
+            if let Some(overlay) = overlay.take() {
+                Mux::get().remove_pane(overlay.pane.pane_id());
+            }
+        }
+        if let Some(window) = self.window.as_ref() {
+            window.invalidate();
+        }
     }
 
     /// if pane_id.is_none(), removes any overlay for the specified tab.
