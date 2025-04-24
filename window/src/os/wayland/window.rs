@@ -22,6 +22,7 @@ use raw_window_handle::{
 };
 use smithay_client_toolkit::compositor::{CompositorHandler, SurfaceData, SurfaceDataExt};
 use smithay_client_toolkit::data_device_manager::ReadPipe;
+use smithay_client_toolkit::globals::GlobalData;
 use smithay_client_toolkit::reexports::csd_frame::{
     DecorationsFrame, FrameAction, ResizeEdge, WindowState as SCTKWindowState,
 };
@@ -37,9 +38,12 @@ use smithay_client_toolkit::shell::WaylandSurface;
 use wayland_client::protocol::wl_callback::WlCallback;
 use wayland_client::protocol::wl_keyboard::{Event as WlKeyboardEvent, KeyState};
 use wayland_client::protocol::wl_pointer::{ButtonState, WlPointer};
+use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_client::{Connection as WConnection, Proxy};
+use wayland_client::{Connection as WConnection, Dispatch, Proxy, QueueHandle};
 use wayland_egl::{is_available as egl_is_available, WlEglSurface};
+use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
+use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwinBlurManager;
 use wezterm_font::FontConfiguration;
 use wezterm_input_types::{
     KeyboardLedStatus, Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress,
@@ -320,6 +324,8 @@ impl WaylandWindow {
 
         wait_configure.recv().await?;
 
+        inner.borrow().update_window_background_blur();
+
         Ok(window_handle)
     }
 }
@@ -473,6 +479,14 @@ impl WindowOps for WaylandWindow {
 
     fn restore(&self) {
         WaylandConnection::with_window_inner(self.0, move |inner| Ok(inner.restore()));
+    }
+
+    fn config_did_change(&self, config: &ConfigHandle) {
+        let config = config.clone();
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.config_did_change(config);
+            Ok(())
+        });
     }
 }
 #[derive(Default, Clone, Debug)]
@@ -1229,6 +1243,31 @@ impl WaylandWindowInner {
             window.unset_maximized();
         }
     }
+
+    fn config_did_change(&mut self, config: ConfigHandle) {
+        self.config = config;
+        self.update_window_background_blur();
+    }
+
+    fn update_window_background_blur(&self) {
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let qh = conn.event_queue.borrow().handle();
+        let wayland_state = conn.wayland_state.borrow();
+        match &wayland_state.kde_blur_manager {
+            Some(manager) => {
+                let kde_blur = manager.create(self.surface(), &qh, GlobalData);
+                if self.config.kde_window_background_blur {
+                    kde_blur.set_region(None);
+                } else {
+                    kde_blur.release();
+                }
+                kde_blur.commit();
+            }
+            None => {
+                // Can't blur if there is no blur manager
+            }
+        }
+    }
 }
 
 impl WaylandState {
@@ -1380,6 +1419,47 @@ impl WindowHandler for WaylandState {
         _serial: u32,
     ) {
         self.handle_window_event(window, WaylandWindowEvent::Request(configure));
+    }
+}
+
+impl Dispatch<OrgKdeKwinBlurManager, GlobalData> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &OrgKdeKwinBlurManager,
+        _event: <OrgKdeKwinBlurManager as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        // No events from OrgKdeKwinBlurManager...
+        unreachable!();
+    }
+}
+
+impl Dispatch<OrgKdeKwinBlur, GlobalData> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &OrgKdeKwinBlur,
+        _event: <OrgKdeKwinBlur as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        // No events from OrgKdeKwinBlur...
+        unreachable!();
+    }
+}
+
+impl Dispatch<WlRegion, GlobalData> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlRegion,
+        _event: <WlRegion as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!();
     }
 }
 

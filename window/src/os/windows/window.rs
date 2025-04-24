@@ -678,7 +678,7 @@ impl WindowInner {
         }
     }
 
-    fn config_did_change(&mut self, config: &ConfigHandle) {
+    fn config_did_change(&mut self, config: ConfigHandle) {
         self.config = config.clone();
         self.apply_decoration();
     }
@@ -887,7 +887,7 @@ impl WindowOps for Window {
     fn config_did_change(&self, config: &ConfigHandle) {
         let config = config.clone();
         Connection::with_window_inner(self.0, move |inner| {
-            inner.config_did_change(&config);
+            inner.config_did_change(config);
             Ok(())
         });
     }

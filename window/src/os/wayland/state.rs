@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use libc::bind;
 use smithay_client_toolkit::compositor::{CompositorState, SurfaceData};
 use smithay_client_toolkit::data_device_manager::data_device::DataDevice;
 use smithay_client_toolkit::data_device_manager::data_source::CopyPasteSource;
@@ -26,12 +27,13 @@ use smithay_client_toolkit::{
     delegate_compositor, delegate_data_device, delegate_output, delegate_pointer, delegate_primary_selection, delegate_registry, delegate_seat, delegate_shm, delegate_subcompositor, delegate_xdg_shell, delegate_xdg_window, registry_handlers
 };
 use wayland_client::backend::ObjectId;
-use wayland_client::globals::GlobalList;
+use wayland_client::globals::{BindError, GlobalList};
 use wayland_client::protocol::wl_keyboard::WlKeyboard;
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::{delegate_dispatch, Connection, QueueHandle};
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
+use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwinBlurManager;
 
 use crate::x11::KeyboardWithFallback;
 
@@ -71,6 +73,7 @@ pub(super) struct WaylandState {
     pub(super) primary_selection_source: Option<(PrimarySelectionSource, String)>,
     pub(super) shm: Shm,
     pub(super) mem_pool: RefCell<SlotPool>,
+    pub(super) kde_blur_manager: Option<OrgKdeKwinBlurManager>,
 }
 
 impl WaylandState {
@@ -81,6 +84,14 @@ impl WaylandState {
         let compositor = CompositorState::bind(globals, qh)?;
         let subcompositor =
             SubcompositorState::bind(compositor.wl_compositor().clone(), globals, qh)?;
+
+        let blur_manager: Result<OrgKdeKwinBlurManager, BindError> =
+            globals.bind(qh, 1..=1, GlobalData);
+
+        let blur_manager = match blur_manager {
+            Ok(manager) => Some(manager),
+            Err(_) => None,
+        };
 
         let wayland_state = WaylandState {
             registry: RegistryState::new(globals),
@@ -113,6 +124,7 @@ impl WaylandState {
             primary_selection_source: None,
             shm,
             mem_pool: RefCell::new(mem_pool),
+            kde_blur_manager: blur_manager,
         };
         Ok(wayland_state)
     }
