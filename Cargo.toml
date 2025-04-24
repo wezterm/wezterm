@@ -235,6 +235,7 @@ wayland-backend = "0.3.5"
 wayland-client = "0.31"
 wayland-egl = "0.32"
 wayland-protocols = "0.32"
+wayland-protocols-plasma = { version="0.3.6", features=["client"] }
 wezterm-bidi = { version="0.2.3", path = "bidi" }
 wezterm-blob-leases = { version="0.1.1", path = "wezterm-blob-leases"}
 wezterm-client = { path = "wezterm-client" }
