@@ -317,14 +317,14 @@ impl WaylandWindow {
             .events
             .assign_window(window_handle.clone());
 
+        inner.borrow().update_window_background_blur();
+
         {
             let windows = &conn.wayland_state.borrow().windows;
             windows.borrow_mut().insert(window_id, inner.clone());
         };
 
         wait_configure.recv().await?;
-
-        inner.borrow().update_window_background_blur();
 
         Ok(window_handle)
     }
