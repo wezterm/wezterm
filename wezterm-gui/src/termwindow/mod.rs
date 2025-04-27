@@ -1952,6 +1952,7 @@ impl TermWindow {
             Some(window) => window,
             _ => return,
         };
+        let window_title = window.get_title().to_string();
         let tabs = self.get_tab_information();
         let panes = self.get_pane_information();
         let active_tab = tabs.iter().find(|t| t.is_active).cloned();
@@ -2005,7 +2006,7 @@ impl TermWindow {
         }
         drop(window);
 
-        let title = match config::run_immediate_with_lua_config(|lua| {
+        let lua_title = match config::run_immediate_with_lua_config(|lua| {
             if let Some(lua) = lua {
                 let tabs = lua.create_sequence_from(tabs.clone().into_iter())?;
                 let panes = lua.create_sequence_from(panes.clone().into_iter())?;
@@ -2038,23 +2039,28 @@ impl TermWindow {
             }
         };
 
-        let title = match title {
+        // Priority: (1) Lua title, (2) window title, (3) generate a default title
+        let title = match lua_title {
             Some(title) => title,
             None => {
-                if let (Some(pos), Some(tab)) = (active_pane, active_tab) {
-                    if num_tabs == 1 {
-                        format!("{}{}", if pos.is_zoomed { "[Z] " } else { "" }, pos.title)
-                    } else {
-                        format!(
-                            "{}[{}/{}] {}",
-                            if pos.is_zoomed { "[Z] " } else { "" },
-                            tab.tab_index + 1,
-                            num_tabs,
-                            pos.title
-                        )
-                    }
+                if !window_title.is_empty() {
+                    window_title
                 } else {
-                    "".to_string()
+                    if let (Some(pos), Some(tab)) = (active_pane, active_tab) {
+                        if num_tabs == 1 {
+                            format!("{}{}", if pos.is_zoomed { "[Z] " } else { "" }, pos.title)
+                        } else {
+                            format!(
+                                "{}[{}/{}] {}",
+                                if pos.is_zoomed { "[Z] " } else { "" },
+                                tab.tab_index + 1,
+                                num_tabs,
+                                pos.title
+                            )
+                        }
+                    } else {
+                        "".to_string()
+                    }
                 }
             }
         };
