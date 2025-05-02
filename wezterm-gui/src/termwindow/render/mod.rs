@@ -382,12 +382,12 @@ impl crate::TermWindow {
             };
         let left_gap = match self.config.window_content_alignment.horizontal {
             HorizontalWindowContentAlignment::Left => 0.,
-            HorizontalWindowContentAlignment::Center => horizontal_gap / 2.,
+            HorizontalWindowContentAlignment::Center => (horizontal_gap / 2.).round(),
             HorizontalWindowContentAlignment::Right => horizontal_gap,
         };
         let top_gap = match self.config.window_content_alignment.vertical {
             VerticalWindowContentAlignment::Top => 0.,
-            VerticalWindowContentAlignment::Center => vertical_gap / 2.,
+            VerticalWindowContentAlignment::Center => (vertical_gap / 2.).round(),
             VerticalWindowContentAlignment::Bottom => vertical_gap,
         };
 
