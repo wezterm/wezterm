@@ -5,7 +5,7 @@ tags:
 # `kde_window_background_blur = false`
 
 When combined with `window_background_opacity`, enables background blur
-using the default KDE Wayland blur protocol.
+using the KDE Wayland blur protocol.
 
 This can be used to produce a translucent window effect rather than
 a crystal clear transparent window effect.
