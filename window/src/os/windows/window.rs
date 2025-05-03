@@ -678,7 +678,7 @@ impl WindowInner {
         }
     }
 
-    fn config_did_change(&mut self, config: ConfigHandle) {
+    fn config_did_change(&mut self, config: &ConfigHandle) {
         self.config = config.clone();
         self.apply_decoration();
     }
