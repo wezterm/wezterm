@@ -1441,7 +1441,6 @@ impl Dispatch<OrgKdeKwinBlur, GlobalData> for WaylandState {
         _qhandle: &wayland_client::QueueHandle<Self>,
     ) {
         // No events from OrgKdeKwinBlur...
-        unreachable!();
     }
 }
 
@@ -1454,7 +1453,6 @@ impl Dispatch<WlRegion, GlobalData> for WaylandState {
         _conn: &WConnection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        unreachable!();
     }
 }
 
