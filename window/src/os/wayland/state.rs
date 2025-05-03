@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use libc::bind;
 use smithay_client_toolkit::compositor::{CompositorState, SurfaceData};
 use smithay_client_toolkit::data_device_manager::data_device::DataDevice;
 use smithay_client_toolkit::data_device_manager::data_source::CopyPasteSource;
