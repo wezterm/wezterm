@@ -31,13 +31,13 @@ wezterm.action.SpawnCommandInNewWindow {
   -- the current user.
   cwd = '/some/path',
 
-  -- Sets addditional environment variables in the environment for
+  -- Sets additional environment variables in the environment for
   -- this command invocation.
   set_environment_variables = {
     SOMETHING = 'a value',
   },
 
-  -- Specifiy that the multiplexer domain of the currently active pane
+  -- Specify that the multiplexer domain of the currently active pane
   -- should be used to start this process.  This is usually what you
   -- want to happen and this is the default behavior if you omit
   -- the domain.

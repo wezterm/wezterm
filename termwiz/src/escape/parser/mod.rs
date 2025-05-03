@@ -3,9 +3,11 @@ use crate::escape::{
     Action, DeviceControlMode, EnterDeviceControlMode, Esc, OperatingSystemCommand,
     ShortDeviceControl, CSI,
 };
+#[cfg(feature = "tmux_cc")]
 use crate::tmux_cc::Event;
 use log::error;
 use num_traits::FromPrimitive;
+#[cfg(feature = "tmux_cc")]
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use vtparse::{CsiParam, VTActor, VTParser};
@@ -47,6 +49,7 @@ struct ParseState {
     sixel: Option<SixelBuilder>,
     dcs: Option<ShortDeviceControl>,
     get_tcap: Option<GetTcapBuilder>,
+    #[cfg(feature = "tmux_cc")]
     tmux_state: Option<RefCell<crate::tmux_cc::Parser>>,
 }
 
@@ -76,6 +79,7 @@ impl Parser {
     }
 
     /// advance with tmux parser, bypass VTParse
+    #[cfg(feature = "tmux_cc")]
     fn advance_tmux_bytes(&mut self, bytes: &[u8]) -> anyhow::Result<Vec<Event>> {
         let parser_state = self.state.borrow();
         let tmux_state = parser_state.tmux_state.as_ref().unwrap();
@@ -84,7 +88,9 @@ impl Parser {
     }
 
     pub fn parse<F: FnMut(Action)>(&mut self, bytes: &[u8], mut callback: F) {
+        #[cfg(feature = "tmux_cc")]
         let is_tmux_mode: bool = self.state.borrow().tmux_state.is_some();
+        #[cfg(feature = "tmux_cc")]
         if is_tmux_mode {
             match self.advance_tmux_bytes(bytes) {
                 Ok(tmux_events) => {
@@ -105,13 +111,14 @@ impl Parser {
                         .parse(unparsed_str.as_bytes(), &mut perform);
                 }
             }
-        } else {
-            let mut perform = Performer {
-                callback: &mut callback,
-                state: &mut self.state.borrow_mut(),
-            };
-            self.state_machine.parse(bytes, &mut perform);
+            return;
         }
+
+        let mut perform = Performer {
+            callback: &mut callback,
+            state: &mut self.state.borrow_mut(),
+        };
+        self.state_machine.parse(bytes, &mut perform);
     }
 
     /// A specialized version of the parser that halts after recognizing the
@@ -243,6 +250,7 @@ impl<'a, F: FnMut(Action)> VTActor for Performer<'a, F> {
                 data: vec![],
             });
         } else {
+            #[cfg(feature = "tmux_cc")]
             if byte == b'p' && params == [1000] {
                 // into tmux_cc mode
                 self.state.borrow_mut().tmux_state =
@@ -267,6 +275,7 @@ impl<'a, F: FnMut(Action)> VTActor for Performer<'a, F> {
         } else if let Some(tcap) = self.state.get_tcap.as_mut() {
             tcap.push(data);
         } else {
+            #[cfg(feature = "tmux_cc")]
             if let Some(tmux_state) = &self.state.tmux_state {
                 let mut tmux_parser = tmux_state.borrow_mut();
                 match tmux_parser.advance_byte(data) {
@@ -282,9 +291,9 @@ impl<'a, F: FnMut(Action)> VTActor for Performer<'a, F> {
                         self.state.tmux_state = None; // drop tmux state
                     }
                 }
-            } else {
-                (self.callback)(Action::DeviceControl(DeviceControlMode::Data(data)));
+                return;
             }
+            (self.callback)(Action::DeviceControl(DeviceControlMode::Data(data)));
         }
     }
 

@@ -31,7 +31,7 @@ pub(crate) struct ClusteredLine {
     is_double_wide: Option<Box<FixedBitSet>>,
     clusters: Vec<Cluster>,
     /// Length, measured in cells
-    len: u16,
+    len: u32,
     last_cell_width: Option<NonZeroU8>,
 }
 
@@ -176,16 +176,25 @@ impl ClusteredLine {
     }
 
     pub fn append_grapheme(&mut self, text: &str, cell_width: usize, attrs: CellAttributes) {
+        let cell_width = cell_width as u16;
         let new_cluster = match self.clusters.last() {
-            Some(cluster) => cluster.attrs != attrs,
+            Some(cluster) => {
+                if cluster.attrs != attrs {
+                    true
+                } else {
+                    // If we overflow the max length of a run,
+                    // then we need a new cluster
+                    let (_, did_overflow) = cluster.cell_width.overflowing_add(cell_width);
+                    did_overflow
+                }
+            }
             None => true,
         };
         let new_cell_index = self.len as usize;
-        let cell_width = cell_width as u16;
         if new_cluster {
             self.clusters.push(Cluster { attrs, cell_width });
         } else if let Some(cluster) = self.clusters.last_mut() {
-            cluster.cell_width += cell_width as u16;
+            cluster.cell_width += cell_width;
         }
         self.text.push_str(text);
 
@@ -205,16 +214,25 @@ impl ClusteredLine {
             self.is_double_wide.replace(bitset);
         }
         self.last_cell_width = NonZeroU8::new(cell_width as u8);
-        self.len += cell_width;
+        self.len += cell_width as u32;
     }
 
     pub fn append(&mut self, cell: Cell) {
+        let cell_width = cell.width() as u16;
         let new_cluster = match self.clusters.last() {
-            Some(cluster) => cluster.attrs != *cell.attrs(),
+            Some(cluster) => {
+                if cluster.attrs != *cell.attrs() {
+                    true
+                } else {
+                    // If we overflow the max length of a run,
+                    // then we need a new cluster
+                    let (_, did_overflow) = cluster.cell_width.overflowing_add(cell_width);
+                    did_overflow
+                }
+            }
             None => true,
         };
         let new_cell_index = self.len as usize;
-        let cell_width = cell.width() as u16;
         if new_cluster {
             self.clusters.push(Cluster {
                 attrs: (*cell.attrs()).clone(),
@@ -241,7 +259,7 @@ impl ClusteredLine {
             self.is_double_wide.replace(bitset);
         }
         self.last_cell_width = NonZeroU8::new(cell_width as u8);
-        self.len += cell_width;
+        self.len += cell_width as u32;
     }
 
     pub fn prune_trailing_blanks(&mut self) -> bool {

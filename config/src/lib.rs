@@ -18,9 +18,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, UnknownFieldAction, Value};
+use wezterm_term::UnicodeVersion;
 
 mod background;
 mod bell;
+mod cell;
 mod color;
 mod config;
 mod daemon;
@@ -45,6 +47,7 @@ mod wsl;
 pub use crate::config::*;
 pub use background::*;
 pub use bell::*;
+pub use cell::*;
 pub use color::*;
 pub use daemon::*;
 pub use exec_domain::*;
@@ -592,7 +595,7 @@ impl ConfigInner {
                 // But avoid watching the home dir itself, so that we
                 // don't keep reloading every time something in the
                 // home dir changes!
-                // <https://github.com/wez/wezterm/issues/1895>
+                // <https://github.com/wezterm/wezterm/issues/1895>
                 if parent != &*HOME_DIR {
                     watch_paths.push(parent.to_path_buf());
                 }
@@ -792,6 +795,14 @@ impl ConfigHandle {
         Self {
             config: Arc::new(Config::default_config()),
             generation: 0,
+        }
+    }
+
+    pub fn unicode_version(&self) -> UnicodeVersion {
+        UnicodeVersion {
+            version: self.config.unicode_version,
+            ambiguous_are_wide: self.config.treat_east_asian_ambiguous_width_as_wide,
+            cell_widths: CellWidth::compile_to_map(self.config.cell_widths.clone()),
         }
     }
 }

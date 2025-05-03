@@ -1,17 +1,24 @@
 [package]
 authors = ["Wez Furlong <wez@wezfurlong.org>"]
 name = "vtparse"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2018"
-repository = "https://github.com/wez/wezterm"
+repository = "https://github.com/wezterm/wezterm"
 description = "Low level escape sequence parser"
 license = "MIT"
 documentation = "https://docs.rs/vtparse"
 keywords = ["terminal", "escape", "ansi", "sequence", "parser"]
 readme = "README.md"
 
+[features]
+default = ["std"]
+alloc = []
+std = []
+no_std = ["dep:heapless"]
+
 [dependencies]
-utf8parse = "0.2"
+heapless = {workspace = true, optional = true }
+utf8parse.workspace = true
 
 [dev-dependencies]
-k9 = "0.12"
+k9.workspace = true

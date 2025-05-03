@@ -1,10 +1,12 @@
 use crate::cell::{unicode_column_width, AttributeChange, CellAttributes};
 use crate::color::ColorAttribute;
+#[cfg(feature = "image")]
 pub use crate::image::{ImageData, TextureCoordinate};
 use crate::surface::{CursorShape, CursorVisibility, Position};
 use finl_unicode::grapheme_clusters::Graphemes;
 #[cfg(feature = "use_serde")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "image")]
 use std::sync::Arc;
 
 #[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
@@ -63,6 +65,7 @@ pub enum Change {
     /// of the screen, the screen will scroll up.
     /// The cursor Y position is unchanged by rendering the Image.
     /// The cursor X position will be incremented by `Image::width` cells.
+    #[cfg(feature = "image")]
     Image(Image),
     /// Scroll the `region_size` lines starting at `first_row` upwards
     /// by `scroll_count` lines.  The `scroll_count` lines at the top of
@@ -228,6 +231,7 @@ impl ChangeSequence {
                 }
                 self.update_render_height();
             }
+            #[cfg(feature = "image")]
             Change::Image(im) => {
                 self.cursor_x += im.width;
                 self.render_y_max = self.render_y_max.max(self.cursor_y + im.height as isize);
@@ -280,6 +284,7 @@ impl ChangeSequence {
 /// The top left cell from that image, if it were to be included in a diff,
 /// would be recorded as `width=1`, `height=1`, `top_left=(0,0)`, `bottom_right=(1/4,1/3)`.
 #[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
+#[cfg(feature = "image")]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Image {
     /// measured in cells

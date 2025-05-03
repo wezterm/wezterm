@@ -4,14 +4,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
+use std::sync::LazyLock;
 use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, Value};
 
-lazy_static::lazy_static! {
-    static ref SRGB_TO_F32_TABLE: [f32;256] = generate_srgb8_to_linear_f32_table();
-    static ref F32_TO_U8_TABLE: [u32;104] = generate_linear_f32_to_srgb8_table();
-    static ref RGB_TO_SRGB_TABLE: [u8;256] = generate_rgb_to_srgb8_table();
-    static ref RGB_TO_F32_TABLE: [f32;256] = generate_rgb_to_linear_f32_table();
-}
+static SRGB_TO_F32_TABLE: LazyLock<[f32; 256]> = LazyLock::new(generate_srgb8_to_linear_f32_table);
+static F32_TO_U8_TABLE: LazyLock<[u32; 104]> = LazyLock::new(generate_linear_f32_to_srgb8_table);
+static RGB_TO_SRGB_TABLE: LazyLock<[u8; 256]> = LazyLock::new(generate_rgb_to_srgb8_table);
+static RGB_TO_F32_TABLE: LazyLock<[f32; 256]> = LazyLock::new(generate_rgb_to_linear_f32_table);
 
 fn generate_rgb_to_srgb8_table() -> [u8; 256] {
     let mut table = [0; 256];
@@ -330,9 +329,7 @@ impl From<Color> for SrgbaTuple {
     }
 }
 
-lazy_static::lazy_static! {
-    static ref NAMED_COLORS: HashMap<String, SrgbaTuple> = build_colors();
-}
+static NAMED_COLORS: LazyLock<HashMap<String, SrgbaTuple>> = LazyLock::new(build_colors);
 
 fn build_colors() -> HashMap<String, SrgbaTuple> {
     let mut map = HashMap::new();

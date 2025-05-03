@@ -347,6 +347,7 @@ TOC = [
             Page("macOS", "install/macos.md"),
             Page("Linux", "install/linux.md"),
             Page("FreeBSD", "install/freebsd.md"),
+            Page("NetBSD", "install/netbsd.md"),
             Page("Build from source", "install/source.md"),
         ],
     ),
@@ -364,6 +365,7 @@ TOC = [
             Page("Default Key Assignments", "config/default-keys.md"),
             Page("Keyboard Encoding", "config/key-encoding.md"),
             Page("Mouse Binding", "config/mouse.md"),
+            Page("Plugins", "config/plugins.md"),
             GenColorScheme("Color Schemes", "colorschemes"),
             Gen("Recipes", "recipes", extract_title=True),
         ],
@@ -391,6 +393,10 @@ TOC = [
             Gen(
                 "module: wezterm.mux",
                 "config/lua/wezterm.mux",
+            ),
+            Gen(
+                "module: wezterm.plugin",
+                "config/lua/wezterm.plugin",
             ),
             Gen(
                 "module: wezterm.procinfo",

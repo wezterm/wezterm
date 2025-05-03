@@ -1,4 +1,4 @@
-use crate::terminal::Alert;
+use crate::terminal::{Alert, Progress};
 use crate::terminalstate::{
     default_color_map, CharSet, MouseEncoding, TabStop, UnicodeVersionStackEntry,
 };
@@ -10,7 +10,9 @@ use ordered_float::NotNan;
 use std::fmt::Write;
 use std::io::Write as _;
 use std::ops::{Deref, DerefMut};
-use termwiz::cell::{grapheme_column_width, Cell, CellAttributes, SemanticType};
+use termwiz::cell::{
+    grapheme_column_width, is_white_space_grapheme, Cell, CellAttributes, SemanticType,
+};
 use termwiz::escape::csi::{
     CharacterPath, EraseInDisplay, Keyboard, KittyKeyboardFlags, KittyKeyboardMode,
 };
@@ -132,14 +134,31 @@ impl<'a> Performer<'a> {
         for g in Graphemes::new(text) {
             let g = self.remap_grapheme(g);
 
-            let print_width = grapheme_column_width(g, Some(self.unicode_version));
+            let mut print_width = grapheme_column_width(g, Some(&self.unicode_version));
             if print_width == 0 {
                 // We got a zero-width grapheme.
-                // We used to force them into a cell to guarantee that we
-                // preserved them in the model, but it introduces presentation
-                // problems, such as <https://github.com/wez/wezterm/issues/1422>
-                log::trace!("Eliding zero-width grapheme {:?}", g);
-                continue;
+
+                // Relevant reading:
+                // <https://github.com/wezterm/wezterm/issues/1422>
+                // <https://github.com/wezterm/wezterm/issues/6637>
+                // <https://github.com/harfbuzz/harfbuzz/issues/4279>
+                // <https://www.unicode.org/faq/unsup_char.html#2>
+                //
+                // For White_Space we want to ensure that we display as a space.
+                // Other non-printing, zero-width characters can be elided
+                // to avoid presentation problems, but may introduce potential
+                // weirdness elsewhere. For example, U+2068 is a BIDI control
+                // character and will be elided by this logic. A consequence
+                // of that is that when the user copies the surrounding text
+                // from the terminal, that BIDI control will not be present.
+                // We do not currently have a solution for that.
+                if is_white_space_grapheme(g) {
+                    // Ensure that White_Space shows as a space
+                    print_width = 1;
+                } else {
+                    log::trace!("Eliding zero-width grapheme {:?}", g);
+                    continue;
+                }
             }
 
             if self.wrap_next {
@@ -223,7 +242,7 @@ impl<'a> Performer<'a> {
     /// in a mode where all printable output is accumulated for the title.
     /// To combat this, we pop_tmux_title_state when we're obviously moving
     /// to different escape sequence parsing states.
-    /// <https://github.com/wez/wezterm/issues/2442>
+    /// <https://github.com/wezterm/wezterm/issues/2442>
     fn pop_tmux_title_state(&mut self) {
         if let Some(title) = self.accumulating_title.take() {
             log::debug!("ST never received for pending tmux title escape sequence: {title:?}");
@@ -477,7 +496,7 @@ impl<'a> Performer<'a> {
             CSI::Cursor(termwiz::escape::csi::Cursor::Left(n)) => {
                 // We treat CUB (Cursor::Left) the same as Backspace as
                 // that is what xterm does.
-                // <https://github.com/wez/wezterm/issues/1273>
+                // <https://github.com/wezterm/wezterm/issues/1273>
                 for _ in 0..n {
                     self.control(ControlCode::Backspace);
                 }
@@ -696,6 +715,7 @@ impl<'a> Performer<'a> {
                 self.unicode_version_stack.clear();
                 self.suppress_initial_title_change = false;
                 self.accumulating_title.take();
+                self.progress = Progress::default();
 
                 self.screen.full_reset();
                 self.screen.activate_alt_screen(seqno);
@@ -816,7 +836,7 @@ impl<'a> Performer<'a> {
                     self.unicode_version.version = n;
                 }
                 ITermProprietary::UnicodeVersion(ITermUnicodeVersionOp::Push(label)) => {
-                    let vers = self.unicode_version;
+                    let vers = self.unicode_version.clone();
                     self.unicode_version_stack
                         .push(UnicodeVersionStackEntry { vers, label });
                 }
@@ -1054,6 +1074,22 @@ impl<'a> Performer<'a> {
                 }
                 self.implicit_palette_reset_if_same_as_configured();
                 self.palette_did_change();
+            }
+            OperatingSystemCommand::ConEmuProgress(prog) => {
+                use termwiz::escape::osc::Progress as TProg;
+                let prog = match prog {
+                    TProg::None => Progress::None,
+                    TProg::SetPercentage(p) => Progress::Percentage(p),
+                    TProg::SetError(p) => Progress::Error(p),
+                    TProg::SetIndeterminate => Progress::Indeterminate,
+                    TProg::Paused => Progress::None,
+                };
+                if prog != self.progress {
+                    self.progress = prog.clone();
+                    if let Some(handler) = self.alert_handler.as_mut() {
+                        handler.alert(Alert::Progress(prog));
+                    }
+                }
             }
         }
     }

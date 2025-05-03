@@ -1265,8 +1265,8 @@ impl ParseParams for OneBased {
 impl ParseParams for (OneBased, OneBased) {
     fn parse_params(params: &[CsiParam]) -> Result<(OneBased, OneBased), ()> {
         match params {
-            [] => Ok((OneBased::new(1), OneBased::new(1))),
-            [p] => Ok((OneBased::from_esc_param(p)?, OneBased::new(1))),
+            [] | [CsiParam::P(b';')] => Ok((OneBased::new(1), OneBased::new(1))),
+            [a] | [a, CsiParam::P(b';')] => Ok((OneBased::from_esc_param(a)?, OneBased::new(1))),
             [a, CsiParam::P(b';'), b] => {
                 Ok((OneBased::from_esc_param(a)?, OneBased::from_esc_param(b)?))
             }
@@ -2220,6 +2220,7 @@ impl<'a> CSIParser<'a> {
             // other encodings is added and this block is likely copied and pasted
             // or refactored for re-use with them.
             ('M', 35) => MouseButton::None, // mouse motion with no buttons
+            ('m', 35) => MouseButton::None, // mouse motion with no buttons (in Windows Terminal)
             ('M', 3) => MouseButton::None,  // legacy notification about button release
             ('m', 3) => MouseButton::None,  // release+press doesn't make sense
             _ => {
@@ -3009,13 +3010,55 @@ mod test {
             vec![CSI::Cursor(Cursor::Right(4))]
         );
 
-        // Check that we default the second parameter of two
-        // when only one is provided
+        // Check permutations of optional parameters
+        assert_eq!(
+            parse('H', &[], "\x1b[1;1H"),
+            vec![CSI::Cursor(Cursor::Position {
+                line: OneBased::new(1),
+                col: OneBased::new(1)
+            })]
+        );
+        let res: Vec<_> = CSI::parse(&[CsiParam::P(b';')], false, 'H').collect();
+        assert_eq!(encode(&res), "\x1b[1;1H");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::Position {
+                line: OneBased::new(1),
+                col: OneBased::new(1)
+            })]
+        );
         assert_eq!(
             parse('H', &[2], "\x1b[2;1H"),
             vec![CSI::Cursor(Cursor::Position {
                 line: OneBased::new(2),
                 col: OneBased::new(1)
+            })]
+        );
+        let res: Vec<_> =
+            CSI::parse(&[CsiParam::Integer(2), CsiParam::P(b';')], false, 'H').collect();
+        assert_eq!(encode(&res), "\x1b[2;1H");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::Position {
+                line: OneBased::new(2),
+                col: OneBased::new(1)
+            })]
+        );
+        let res: Vec<_> =
+            CSI::parse(&[CsiParam::P(b';'), CsiParam::Integer(2)], false, 'H').collect();
+        assert_eq!(encode(&res), "\x1b[1;2H");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::Position {
+                line: OneBased::new(1),
+                col: OneBased::new(2)
+            })]
+        );
+        assert_eq!(
+            parse('H', &[2, 3], "\x1b[2;3H"),
+            vec![CSI::Cursor(Cursor::Position {
+                line: OneBased::new(2),
+                col: OneBased::new(3)
             })]
         );
     }

@@ -1,4 +1,4 @@
-name: fedora38
+name: fedora41
 
 on:
   pull_request:
@@ -8,7 +8,8 @@ on:
       - "**/*.rs"
       - "**/Cargo.lock"
       - "**/Cargo.toml"
-      - ".github/workflows/gen_fedora38.yml"
+      - ".cargo/config.toml"
+      - ".github/workflows/gen_fedora41.yml"
       - "assets/fonts/**/*"
       - "assets/icon/*"
       - "assets/open-wezterm-here"
@@ -25,7 +26,7 @@ on:
 jobs:
   build:
     runs-on: "ubuntu-latest"
-    container: "fedora:38"
+    container: "fedora:41"
     env:
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
@@ -57,7 +58,7 @@ jobs:
       - name: "Install Rust"
         uses: dtolnay/rust-toolchain@stable
       - name: "Compile with sccache"
-        uses: mozilla-actions/sccache-action@v0.0.5
+        uses: mozilla-actions/sccache-action@v0.0.9
       - name: "Cache Rust Dependencies"
         uses: actions/cache@v4
         id: cache-cargo-vendor
@@ -89,7 +90,7 @@ jobs:
         uses: baptiste0928/cargo-install@v3
         with:
           crate: "cargo-nextest"
-          cache-key: "fedora38"
+          cache-key: "fedora41"
       - name: "Test"
         shell: bash
         run: "cargo nextest run --all --no-fail-fast"
@@ -100,7 +101,7 @@ jobs:
         shell: bash
         run: "mv ~/rpmbuild/RPMS/*/*.rpm ."
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: "fedora38"
+          name: "fedora41"
           path: "wezterm-*.rpm"

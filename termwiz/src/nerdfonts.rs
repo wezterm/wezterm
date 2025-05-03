@@ -1,8 +1,7 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
-lazy_static::lazy_static! {
-    pub static ref NERD_FONTS: HashMap<&'static str, char> = build_map();
-}
+pub static NERD_FONTS: LazyLock<HashMap<&'static str, char>> = LazyLock::new(build_map);
 
 pub use crate::nerdfonts_data::NERD_FONT_GLYPHS;
 

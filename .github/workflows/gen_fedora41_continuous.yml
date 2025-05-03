@@ -1,4 +1,4 @@
-name: fedora38_continuous
+name: fedora41_continuous
 
 on:
   schedule:
@@ -10,7 +10,8 @@ on:
       - "**/*.rs"
       - "**/Cargo.lock"
       - "**/Cargo.toml"
-      - ".github/workflows/gen_fedora38_continuous.yml"
+      - ".cargo/config.toml"
+      - ".github/workflows/gen_fedora41_continuous.yml"
       - "assets/fonts/**/*"
       - "assets/icon/*"
       - "assets/open-wezterm-here"
@@ -27,7 +28,7 @@ on:
 jobs:
   build:
     runs-on: "ubuntu-latest"
-    container: "fedora:38"
+    container: "fedora:41"
     env:
       BUILD_REASON: "Schedule"
       CARGO_INCREMENTAL: "0"
@@ -60,7 +61,7 @@ jobs:
       - name: "Install Rust"
         uses: dtolnay/rust-toolchain@stable
       - name: "Compile with sccache"
-        uses: mozilla-actions/sccache-action@v0.0.5
+        uses: mozilla-actions/sccache-action@v0.0.9
       - name: "Cache Rust Dependencies"
         uses: actions/cache@v4
         id: cache-cargo-vendor
@@ -92,7 +93,7 @@ jobs:
         uses: baptiste0928/cargo-install@v3
         with:
           crate: "cargo-nextest"
-          cache-key: "fedora38"
+          cache-key: "fedora41"
       - name: "Test"
         shell: bash
         run: "cargo nextest run --all --no-fail-fast"
@@ -101,17 +102,22 @@ jobs:
         run: "bash ci/deploy.sh"
       - name: "Move RPM"
         shell: bash
-        run: "mv ~/rpmbuild/RPMS/*/*.rpm wezterm-nightly-fedora38.rpm"
+        run: "mv ~/rpmbuild/RPMS/*/*.rpm wezterm-nightly-fedora41.rpm"
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: "fedora38"
+          name: "fedora41"
           path: "wezterm-*.rpm"
           retention-days: 5
 
   upload:
     runs-on: ubuntu-latest
     needs: build
+    if: github.repository == 'wezterm/wezterm'
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
 
     steps:
       - name: "Workaround git permissions issue"
@@ -120,9 +126,9 @@ jobs:
       - name: "checkout repo"
         uses: actions/checkout@v4
       - name: "Download artifact"
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
-          name: "fedora38"
+          name: "fedora41"
       - name: "Checksum"
         shell: bash
         run: "for f in wezterm-*.rpm ; do sha256sum $f > $f.sha256 ; done"

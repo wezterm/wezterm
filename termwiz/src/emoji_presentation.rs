@@ -2,9 +2,13 @@
 //
 //   ucd-generate property-bool . --include Emoji_Presentation --trie-set
 //
-// Unicode version: 13.0.0.
+// Unicode version: 16.0.0.
 //
-// ucd-generate 0.2.10 is available on crates.io.
+// ucd-generate 0.3.1 is available on crates.io.
+
+#[allow(unused)]
+pub const BY_NAME: &'static [(&'static str, &'static ::ucd_trie::TrieSet)] =
+    &[("Emoji_Presentation", EMOJI_PRESENTATION)];
 
 pub const EMOJI_PRESENTATION: &'static ::ucd_trie::TrieSet = &::ucd_trie::TrieSet {
     tree1_level1: &[
@@ -77,7 +81,7 @@ pub const EMOJI_PRESENTATION: &'static ::ucd_trie::TrieSet = &::ucd_trie::TrieSe
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 4, 5, 6, 0, 0, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
-        18, 13, 19, 13, 20, 0, 0, 0, 21, 0, 0, 0, 0, 22, 23, 13, 24, 0, 25, 26, 27, 0, 0, 0, 0, 0,
+        18, 13, 19, 13, 20, 0, 0, 0, 21, 0, 0, 0, 0, 22, 23, 13, 13, 0, 24, 25, 26, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ],
     tree3_level3: &[
@@ -101,13 +105,12 @@ pub const EMOJI_PRESENTATION: &'static ::ucd_trie::TrieSet = &::ucd_trie::TrieSe
         0x1000600000,
         0xF800000000000000,
         0xFFFF,
-        0x1FF0180000E7103F,
-        0xFFF00000000,
+        0x1FF01800F0E7103F,
+        0x10FFF00000000,
         0xF7FFFFFFFFFFF000,
-        0xFDFFFFFFFFFFFFBF,
-        0xFFFFFFFFFFFFEFFF,
-        0x71F000000000000,
-        0x7F01FFFFFF007F,
-        0x7F0007,
+        0xFFFFFFFFFFFFFFBF,
+        0x1FFF000000000000,
+        0xFFFFFFFFFFFF83FF,
+        0x1FF03FF9FFFC07F,
     ],
 };

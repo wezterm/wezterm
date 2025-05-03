@@ -1,5 +1,6 @@
-use super::quickselect;
+use crate::overlay::quickselect;
 use crate::scripting::guiwin::GuiWin;
+use config::configuration;
 use config::keyassignment::{InputSelector, InputSelectorEntry, KeyAssignment};
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
@@ -119,6 +120,11 @@ impl SelectorState {
         let max_label_len = labels.iter().map(|s| s.len()).max().unwrap_or(0);
         let mut labels_iter = labels.into_iter();
 
+        let config = configuration();
+        let colors = &config.resolved_palette;
+        let input_selector_label_fg = colors.input_selector_label_fg;
+        let input_selector_label_bg = colors.input_selector_label_bg;
+
         for (row_num, (entry_idx, entry)) in self
             .filtered_entries
             .iter()
@@ -142,10 +148,28 @@ impl SelectorState {
             // and we are not filtering
             if !self.filtering {
                 if let Some(label) = labels_iter.next() {
+                    if let Some(input_selector_label_bg) = input_selector_label_bg {
+                        changes.push(
+                            AttributeChange::Background(input_selector_label_bg.into()).into(),
+                        );
+                    }
+                    if let Some(input_selector_label_fg) = input_selector_label_fg {
+                        changes.push(
+                            AttributeChange::Foreground(input_selector_label_fg.into()).into(),
+                        );
+                    }
                     changes.push(Change::Text(format!(" {label:>max_label_len$}. ")));
+                    if input_selector_label_bg.is_some() {
+                        changes.push(AttributeChange::Background(ColorAttribute::Default).into());
+                    }
+                    if input_selector_label_fg.is_some() {
+                        changes.push(AttributeChange::Foreground(ColorAttribute::Default).into());
+                    }
                 } else {
                     changes.push(Change::Text(" ".repeat(max_label_len + 3)));
                 }
+            } else if !self.always_fuzzy {
+                changes.push(Change::Text(" ".repeat(max_label_len + 3)));
             } else {
                 changes.push(Change::Text("    ".to_string()));
             }
@@ -155,11 +179,12 @@ impl SelectorState {
                 line.resize(max_width, termwiz::surface::SEQ_ZERO);
             }
             changes.append(&mut line.changes(&attr));
+            changes.push(Change::Text(" ".to_string()));
             if entry_idx == self.active_idx {
                 changes.push(AttributeChange::Reverse(false).into());
             }
             changes.push(Change::AllAttributes(CellAttributes::default()));
-            changes.push(Change::Text(" \r\n".to_string()));
+            changes.push(Change::Text("\r\n".to_string()));
         }
 
         if self.filtering || !self.filter_term.is_empty() {
@@ -235,13 +260,13 @@ impl SelectorState {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('j'),
                     ..
-                }) if !self.filtering && !self.args.alphabet.contains("j") => {
+                }) if !self.filtering => {
                     self.move_down();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('k'),
                     ..
-                }) if !self.filtering && !self.args.alphabet.contains("k") => {
+                }) if !self.filtering => {
                     self.move_up();
                 }
                 InputEvent::Key(KeyEvent {

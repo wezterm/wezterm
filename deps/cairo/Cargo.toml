@@ -22,9 +22,14 @@ pdf = []
 svg = []
 ps = []
 script = []
+win32-surface = []
+xlib = []
+xcb = []
+freetype = []
+use_glib = []
 
 [dependencies]
-libc = "0.2"
+libc.workspace = true
 
 [build-dependencies]
-cc = {version="1.0", features = ["parallel"]}
+cc.workspace = true

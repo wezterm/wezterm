@@ -9,8 +9,8 @@ You can download a setup.exe style installer to guide the installation
 (requires admin privileges) or a simple zip file and manage the files for
 yourself (no special privileges required).
 
-[:simple-windows: Windows (setup.exe) :material-tray-arrow-down:]({{ windows_exe_stable }}){ .md-button }
-[:simple-windows: Nightly Windows (setup.exe) :material-tray-arrow-down:]({{ windows_exe_nightly }}){ .md-button }
+[:fontawesome-brands-windows: Windows (setup.exe) :material-tray-arrow-down:]({{ windows_exe_stable }}){ .md-button }
+[:fontawesome-brands-windows: Nightly Windows (setup.exe) :material-tray-arrow-down:]({{ windows_exe_nightly }}){ .md-button }
 
 WezTerm is available in a setup.exe style installer; the installer is produced
 with Inno Setup and will install wezterm to your program files directory and
@@ -19,8 +19,8 @@ as a GUI to guide you through the install, but also offers the [standard
 Inno Setup command line options](https://jrsoftware.org/ishelp/index.php?topic=setupcmdline)
 to configure/script the installation process.
 
-[:simple-windows: Windows (zip) :material-tray-arrow-down:]({{ windows_zip_stable }}){ .md-button }
-[:simple-windows: Nightly Windows (zip) :material-tray-arrow-down:]({{ windows_zip_nightly }}){ .md-button }
+[:fontawesome-brands-windows: Windows (zip) :material-tray-arrow-down:]({{ windows_zip_stable }}){ .md-button }
+[:fontawesome-brands-windows: Nightly Windows (zip) :material-tray-arrow-down:]({{ windows_zip_nightly }}){ .md-button }
 
 WezTerm is also available in a simple zip file that can be extracted and
 run from anywhere, including a flash drive for a portable/relocatable
@@ -65,7 +65,7 @@ $ scoop install wezterm
 ### For `Chocolatey` users
 
 If you prefer to use [Chocolatey](https://chocolatey.org) to manage software,
-wezterm is availabe from the Community Repository.  It can be installed like
+wezterm is available from the Community Repository.  It can be installed like
 so:
 
 ```console

@@ -24,10 +24,10 @@ use cocoa::appkit::{
 use cocoa::base::*;
 use cocoa::foundation::{
     NSArray, NSAutoreleasePool, NSFastEnumeration, NSInteger, NSNotFound, NSPoint, NSRect, NSSize,
-    NSUInteger,
+    NSString, NSUInteger,
 };
 use config::window::WindowLevel;
-use config::ConfigHandle;
+use config::{ConfigHandle, RgbaColor, SrgbaTuple};
 use core_foundation::base::{CFTypeID, TCFType};
 use core_foundation::bundle::{CFBundleGetBundleWithIdentifier, CFBundleGetFunctionPointerForName};
 use core_foundation::data::{CFData, CFDataGetBytePtr, CFDataRef};
@@ -37,15 +37,17 @@ use objc::declare::ClassDecl;
 use objc::rc::{StrongPtr, WeakPtr};
 use objc::runtime::{Class, Object, Protocol, Sel};
 use objc::*;
+use objc2_core_graphics::CGColorCreateSRGB;
 use promise::Future;
 use raw_window_handle::{
-    AppKitDisplayHandle, AppKitWindowHandle, HasRawDisplayHandle, HasRawWindowHandle,
-    RawDisplayHandle, RawWindowHandle,
+    AppKitDisplayHandle, AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle,
+    HasWindowHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
 };
 use std::any::Any;
 use std::cell::RefCell;
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr};
 use std::path::PathBuf;
+use std::ptr::NonNull;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Instant;
@@ -525,6 +527,10 @@ impl Window {
             window.setReleasedWhenClosed_(NO);
             window.setBackgroundColor_(cocoa::appkit::NSColor::clearColor(nil));
 
+            // Tell Cocoa that we output in sRGB, so it handles color space
+            // conversion for non-sRGB displays.
+            window.setColorSpace_(cocoa::appkit::NSColorSpace::sRGBColorSpace(nil));
+
             // We could set this, but it makes the entire window, including
             // its titlebar, opaque to this fixed degree.
             // window.setAlphaValue_(0.4);
@@ -661,18 +667,21 @@ impl Window {
     }
 }
 
-unsafe impl HasRawDisplayHandle for Window {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
-        RawDisplayHandle::AppKit(AppKitDisplayHandle::empty())
+impl HasDisplayHandle for Window {
+    fn display_handle(&self) -> Result<DisplayHandle, HandleError> {
+        unsafe {
+            Ok(DisplayHandle::borrow_raw(RawDisplayHandle::AppKit(
+                AppKitDisplayHandle::new(),
+            )))
+        }
     }
 }
 
-unsafe impl HasRawWindowHandle for Window {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        let mut handle = AppKitWindowHandle::empty();
-        handle.ns_window = self.ns_window as *mut _;
-        handle.ns_view = self.ns_view as *mut _;
-        RawWindowHandle::AppKit(handle)
+impl HasWindowHandle for Window {
+    fn window_handle(&self) -> Result<WindowHandle, HandleError> {
+        let handle =
+            AppKitWindowHandle::new(NonNull::new(self.ns_view as *mut _).expect("non-null"));
+        unsafe { Ok(WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle))) }
     }
 }
 
@@ -862,59 +871,56 @@ impl WindowOps for Window {
 
     fn get_os_parameters(
         &self,
-        _config: &ConfigHandle,
+        config: &ConfigHandle,
         window_state: WindowState,
     ) -> anyhow::Result<Option<Parameters>> {
-        let raw = self.raw_window_handle();
-
         // We implement this method primarily to provide Notch-avoidance for
         // systems with a notch.
         // We only need this for non-native full screen mode.
 
-        let native_full_screen = match raw {
-            RawWindowHandle::AppKit(raw) => {
-                let style_mask = unsafe { NSWindow::styleMask(raw.ns_window as *mut Object) };
-                style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask)
-            }
-            _ => false,
+        let native_full_screen = {
+            let style_mask = unsafe { NSWindow::styleMask(self.ns_window) };
+            style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask)
         };
 
-        let border_dimensions =
-            if window_state.contains(WindowState::FULL_SCREEN) && !native_full_screen {
-                let main_screen = unsafe { NSScreen::mainScreen(nil) };
-                let has_safe_area_insets: BOOL =
-                    unsafe { msg_send![main_screen, respondsToSelector: sel!(safeAreaInsets)] };
-                if has_safe_area_insets == YES {
-                    #[derive(Debug)]
-                    struct NSEdgeInsets {
-                        top: CGFloat,
-                        left: CGFloat,
-                        bottom: CGFloat,
-                        right: CGFloat,
-                    }
-                    let insets: NSEdgeInsets = unsafe { msg_send![main_screen, safeAreaInsets] };
-                    log::trace!("{:?}", insets);
-
-                    let scale = unsafe {
-                        let frame = NSScreen::frame(main_screen);
-                        let backing_frame = NSScreen::convertRectToBacking_(main_screen, frame);
-                        backing_frame.size.height / frame.size.height
-                    };
-
-                    let top = (insets.top.ceil() * scale) as usize;
-                    Some(Border {
-                        top: ULength::new(top),
-                        left: ULength::new(insets.left.ceil() as usize),
-                        right: ULength::new(insets.right.ceil() as usize),
-                        bottom: ULength::new(insets.bottom.ceil() as usize),
-                        color: crate::color::LinearRgba::with_components(0., 0., 0., 1.),
-                    })
-                } else {
-                    None
+        let border_dimensions = if window_state.contains(WindowState::FULL_SCREEN)
+            && !native_full_screen
+            && !config.macos_fullscreen_extend_behind_notch
+        {
+            let main_screen = unsafe { NSScreen::mainScreen(nil) };
+            let has_safe_area_insets: BOOL =
+                unsafe { msg_send![main_screen, respondsToSelector: sel!(safeAreaInsets)] };
+            if has_safe_area_insets == YES {
+                #[derive(Debug)]
+                struct NSEdgeInsets {
+                    top: CGFloat,
+                    left: CGFloat,
+                    bottom: CGFloat,
+                    right: CGFloat,
                 }
+                let insets: NSEdgeInsets = unsafe { msg_send![main_screen, safeAreaInsets] };
+                log::trace!("{:?}", insets);
+
+                let scale = unsafe {
+                    let frame = NSScreen::frame(main_screen);
+                    let backing_frame = NSScreen::convertRectToBacking_(main_screen, frame);
+                    backing_frame.size.height / frame.size.height
+                };
+
+                let top = (insets.top.ceil() * scale) as usize;
+                Some(Border {
+                    top: ULength::new(top),
+                    left: ULength::new(insets.left.ceil() as usize),
+                    right: ULength::new(insets.right.ceil() as usize),
+                    bottom: ULength::new(insets.bottom.ceil() as usize),
+                    color: crate::color::LinearRgba::with_components(0., 0., 0., 1.),
+                })
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         Ok(Some(Parameters {
             title_bar: TitleBar {
@@ -1084,9 +1090,9 @@ impl WindowInner {
             // when transparent, also turn off the window shadow,
             // because having the shadow enabled seems to correlate
             // with ghostly remnants see:
-            // https://github.com/wez/wezterm/issues/310.
+            // https://github.com/wezterm/wezterm/issues/310.
             // But allow overriding the shadows independent of opacity as well:
-            // <https://github.com/wez/wezterm/issues/2669>
+            // <https://github.com/wezterm/wezterm/issues/2669>
             let shadow = if self
                 .config
                 .window_decorations
@@ -1103,6 +1109,46 @@ impl WindowInner {
                 is_opaque
             };
             self.window.setHasShadow_(shadow);
+        }
+    }
+
+    fn update_titlebar_background(&self) {
+        if !self
+            .config
+            .window_decorations
+            .contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR)
+        {
+            return;
+        }
+
+        // Set the titlebar background to the theme color falling back to black if there is no
+        // specified color scheme
+        let color = self
+            .config
+            .resolved_palette
+            .background
+            .unwrap_or(RgbaColor::from(SrgbaTuple(0., 0., 0., 255.)));
+
+        unsafe {
+            if let Some(titlebar_view_container) = get_titlebar_view_container(&self.window) {
+                let layer: id = msg_send![*titlebar_view_container.load(), layer];
+
+                if layer.is_null() {
+                    return;
+                }
+
+                // We need to make sure to convert the config color into an sRGB CGColor or the color will be slightly off
+                let srgb_cgcolor = CGColorCreateSRGB(
+                    color.0.into(),
+                    color.1.into(),
+                    color.2.into(),
+                    color.3.into(),
+                );
+
+                let _: () = msg_send![layer, setBackgroundColor: srgb_cgcolor];
+            } else {
+                log::trace!("failed to get titlebar view container from window");
+            }
         }
     }
 
@@ -1129,11 +1175,14 @@ impl WindowInner {
             // stuck with a scale factor of 2 despite us having configured 1.
             self.window
                 .setStyleMask_(NSWindowStyleMask::NSBorderlessWindowMask);
+
             apply_decorations_to_window(
                 &self.window,
                 self.config.window_decorations,
                 self.config.integrated_title_button_style,
             );
+
+            self.update_titlebar_background();
 
             self.window.makeKeyAndOrderFront_(nil)
         }
@@ -1303,6 +1352,7 @@ impl WindowInner {
         }
         self.update_window_shadow();
         self.update_window_background_blur();
+        self.update_titlebar_background();
         self.apply_decorations();
     }
 }
@@ -1350,7 +1400,10 @@ fn apply_decorations_to_window(
         } else {
             appkit::NSWindowTitleVisibility::NSWindowTitleHidden
         });
-        if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS) {
+
+        if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
+            || decorations.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR)
+        {
             window.setTitlebarAppearsTransparent_(YES);
         } else {
             window.setTitlebarAppearsTransparent_(hidden);
@@ -1372,6 +1425,13 @@ fn decoration_to_mask(
             | NSWindowStyleMask::NSClosableWindowMask
             | NSWindowStyleMask::NSMiniaturizableWindowMask
             | NSWindowStyleMask::NSResizableWindowMask
+    } else if decorations
+        == WindowDecorations::MACOS_FORCE_SQUARE_CORNERS | WindowDecorations::RESIZE
+    {
+        NSWindowStyleMask::NSClosableWindowMask
+            | NSWindowStyleMask::NSMiniaturizableWindowMask
+            | NSWindowStyleMask::NSResizableWindowMask
+            | NSWindowStyleMask::NSFullSizeContentViewWindowMask
     } else if decorations == WindowDecorations::RESIZE
         || decorations == WindowDecorations::INTEGRATED_BUTTONS
         || decorations == WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE
@@ -1390,12 +1450,84 @@ fn decoration_to_mask(
         NSWindowStyleMask::NSTitledWindowMask
             | NSWindowStyleMask::NSClosableWindowMask
             | NSWindowStyleMask::NSMiniaturizableWindowMask
+    } else if decorations == WindowDecorations::MACOS_FORCE_SQUARE_CORNERS {
+        NSWindowStyleMask::NSClosableWindowMask
+            | NSWindowStyleMask::NSMiniaturizableWindowMask
+            | NSWindowStyleMask::NSFullSizeContentViewWindowMask
     } else {
         NSWindowStyleMask::NSTitledWindowMask
             | NSWindowStyleMask::NSClosableWindowMask
             | NSWindowStyleMask::NSMiniaturizableWindowMask
             | NSWindowStyleMask::NSResizableWindowMask
     }
+}
+
+unsafe fn get_view_class_name(id: id) -> Option<String> {
+    if id.is_null() {
+        return None;
+    }
+
+    let class_name: id = msg_send![id, className];
+
+    if class_name.is_null() {
+        return None;
+    }
+
+    let cstr = CStr::from_ptr(class_name.UTF8String()).to_str();
+
+    match cstr {
+        Ok(s) => Some(s.to_string()),
+        Err(_) => None,
+    }
+}
+
+fn get_titlebar_view_container(window: &StrongPtr) -> Option<WeakPtr> {
+    // The view container for the titlebar on macos is found next to the primary window view
+    // so we need to traverse up to the super view to find it
+    let super_view = get_view_superview(window)?;
+
+    let sub_views = get_view_subviews(&super_view.load())?;
+
+    let count = unsafe { sub_views.load().count() };
+
+    for i in 0..count {
+        let sub_view: id = unsafe { sub_views.load().objectAtIndex(i) };
+
+        if sub_view.is_null() {
+            continue;
+        }
+
+        let class_name = unsafe { get_view_class_name(sub_view)? };
+
+        if class_name == TITLEBAR_VIEW_NAME {
+            let titlebar_view = unsafe { WeakPtr::new(sub_view) };
+            return Some(titlebar_view);
+        }
+    }
+
+    None
+}
+
+fn get_view_superview(view: &StrongPtr) -> Option<WeakPtr> {
+    let super_view_id: id = unsafe { msg_send![view.contentView(), superview] };
+
+    if super_view_id.is_null() {
+        return None;
+    }
+
+    let super_view = unsafe { WeakPtr::new(super_view_id) };
+
+    Some(super_view)
+}
+
+fn get_view_subviews(view: &StrongPtr) -> Option<WeakPtr> {
+    let sub_views_id: id = unsafe { msg_send![**view, subviews] };
+    if sub_views_id.is_null() {
+        return None;
+    }
+
+    let sub_views = unsafe { WeakPtr::new(sub_views_id) };
+    Some(sub_views)
 }
 
 #[derive(Debug)]
@@ -1691,6 +1823,7 @@ impl Inner {
 
 const VIEW_CLS_NAME: &str = "WezTermWindowView";
 const WINDOW_CLS_NAME: &str = "WezTermWindow";
+const TITLEBAR_VIEW_NAME: &str = "NSTitlebarContainerView";
 
 struct WindowView {
     inner: Rc<RefCell<Inner>>,
@@ -2373,7 +2506,7 @@ impl WindowView {
             } else if virtual_key == kVK_Delete {
                 (true, "\x08")
             } else if virtual_key == kVK_ANSI_KeypadEnter {
-                // https://github.com/wez/wezterm/issues/739
+                // https://github.com/wezterm/wezterm/issues/739
                 // Keypad enter sends ctrl-c for some reason; explicitly
                 // treat that as enter here.
                 (true, "\r")
@@ -2383,7 +2516,7 @@ impl WindowView {
 
         // Shift-Tab on macOS produces \x19 for some reason.
         // Rewrite it to something we understand.
-        // <https://github.com/wez/wezterm/issues/1902>
+        // <https://github.com/wezterm/wezterm/issues/1902>
         let chars = if virtual_key == kVK_Tab && modifiers.contains(Modifiers::SHIFT) {
             "\t"
         } else {
@@ -2557,7 +2690,7 @@ impl WindowView {
                             // but didn't call one of our callbacks.
                             // In theory, we should stop here, but the IME
                             // mysteriously swallows key repeats for certain
-                            // keys (eg: `f`) but not others.
+                            // keys (i.e. b, f, j, m, p, q, v, x) but not others.
                             // To compensate for that, if the current event
                             // is a repeat, and the IME previously generated
                             // `Acted`, we will assume that we're safe to replay
@@ -2603,14 +2736,14 @@ impl WindowView {
         // which isn't particularly helpful. eg: ALT+SHIFT+` produces chars='`' and unmod='~'
         // In this case, we take the key from unmod.
         // We leave `raw` set to None as we want to preserve the value of modifiers.
-        // <https://github.com/wez/wezterm/issues/1706>.
+        // <https://github.com/wezterm/wezterm/issues/1706>.
         // We can't do this for every ALT+SHIFT combo, as the weird behavior doesn't
         // apply to eg: ALT+SHIFT+789 for Norwegian layouts
-        // <https://github.com/wez/wezterm/issues/760>
+        // <https://github.com/wezterm/wezterm/issues/760>
         let swap_unmod_and_chars = (modifiers.contains(Modifiers::SHIFT | Modifiers::ALT)
             && virtual_key == kVK_ANSI_Grave)
             ||
-            // <https://github.com/wez/wezterm/issues/1907>
+            // <https://github.com/wezterm/wezterm/issues/1907>
             (modifiers.contains(Modifiers::SHIFT | Modifiers::CTRL)
                 && virtual_key == kVK_ANSI_Slash);
 
@@ -2649,7 +2782,7 @@ impl WindowView {
                     // But take care: on German layouts CTRL-Backslash has unmod="/"
                     // but chars="\x1c"; we only want to do this transformation when
                     // chars and unmod have that base ASCII relationship.
-                    // <https://github.com/wez/wezterm/issues/1891>
+                    // <https://github.com/wezterm/wezterm/issues/1891>
                     (KeyCode::Char(c), Some(KeyCode::Char(raw)))
                         if is_ascii_control(*c) == Some(raw.to_ascii_lowercase()) =>
                     {
@@ -2686,7 +2819,11 @@ impl WindowView {
 
             if let Some(myself) = Self::get_this(this) {
                 let mut inner = myself.inner.borrow_mut();
-                inner.ime_last_event.take();
+                // Don't clear the last IME event when a key is up otherwise it
+                // could mess up the succeeding key repeats.
+                if key_is_down {
+                    inner.ime_last_event.take();
+                }
                 inner.events.dispatch(WindowEvent::KeyEvent(event));
             }
         }
@@ -2710,7 +2847,7 @@ impl WindowView {
         {
             // Synthesize a key down event for this, because macOS will
             // not do that, even though we tell it that we handled this event.
-            // <https://github.com/wez/wezterm/issues/1867>
+            // <https://github.com/wezterm/wezterm/issues/1867>
             Self::key_common(this, nsevent, true);
 
             // Prevent macOS from calling doCommandBySelector(cancel:)
@@ -2807,7 +2944,7 @@ impl WindowView {
             // the current screen changing. We cannot detect that case here.
             // There is some logic to compensate for this in
             // wezterm-gui/src/termwindow/resize.rs.
-            // <https://github.com/wez/wezterm/issues/3503>
+            // <https://github.com/wezterm/wezterm/issues/3503>
             let is_zoomed = !is_full_screen
                 && inner.window.as_ref().map_or(false, |window| {
                     let window = window.load();

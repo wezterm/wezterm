@@ -1,3 +1,8 @@
+---
+tags:
+  - prompt
+---
+
 # `InputSelector`
 
 {{since('20230408-112425-69ae8472')}}
@@ -15,8 +20,8 @@ upon the input.
   is itself a table with a `label` field and an optional `id` field.
   The label will be shown in the list, while the id can be a different
   string that is meaningful to your action. The label can be used together
-  with [wezterm.format](../wezterm/format.md) to produce styled test.
-* `action` - and event callback registerd via `wezterm.action_callback`.  The
+  with [wezterm.format](../wezterm/format.md) to produce styled text.
+* `action` - and event callback registered via `wezterm.action_callback`.  The
   callback's function signature is `(window, pane, id, label)` where `window` and
   `pane` are the [Window](../window/index.md) and [Pane](../pane/index.md)
   objects from the current pane and window, and `id` and `label` hold the
@@ -231,5 +236,7 @@ return config
 
 
 
-See also [PromptInputLine](PromptInputLine.md).
+See also:
+   * [PromptInputLine](PromptInputLine.md).
+   * [Confirmation](Confirmation.md).
 

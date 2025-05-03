@@ -43,6 +43,7 @@
 mod emoji;
 mod emoji_presentation;
 mod emoji_variation;
+mod white_space;
 mod widechar_width;
 
 pub mod caps;
@@ -52,6 +53,7 @@ pub mod color;
 pub mod error;
 pub mod escape;
 pub mod hyperlink;
+#[cfg(feature = "image")]
 pub mod image;
 pub mod input;
 pub mod istty;
@@ -64,6 +66,7 @@ mod readbuf;
 pub mod render;
 pub mod surface;
 pub mod terminal;
+#[cfg(feature = "tmux_cc")]
 pub mod tmux_cc;
 #[cfg(feature = "widgets")]
 pub mod widgets;

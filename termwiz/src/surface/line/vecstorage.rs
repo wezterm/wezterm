@@ -16,7 +16,9 @@ impl VecStorage {
         Self { cells }
     }
 
+    #[cfg_attr(not(feature = "image"), allow(unused_mut, unused_variables))]
     pub(crate) fn set_cell(&mut self, idx: usize, mut cell: Cell, clear_image_placement: bool) {
+        #[cfg(feature = "image")]
         if !clear_image_placement {
             if let Some(images) = self.cells[idx].attrs().images() {
                 for image in images {

@@ -4,8 +4,11 @@ use crate::cell::{AttributeChange, Blink, CellAttributes, Intensity, Underline};
 use crate::color::{ColorAttribute, ColorSpec};
 use crate::escape::csi::{Cursor, Edit, EraseInDisplay, EraseInLine, Sgr, CSI};
 use crate::escape::esc::EscCode;
-use crate::escape::osc::{ITermDimension, ITermFileData, ITermProprietary, OperatingSystemCommand};
+use crate::escape::osc::OperatingSystemCommand;
+#[cfg(feature = "image")]
+use crate::escape::osc::{ITermDimension, ITermFileData, ITermProprietary};
 use crate::escape::{Esc, OneBased};
+#[cfg(feature = "image")]
 use crate::image::{ImageDataType, TextureCoordinate};
 use crate::render::RenderTty;
 use crate::surface::{Change, CursorShape, CursorVisibility, LineAttribute, Position};
@@ -48,7 +51,7 @@ impl TerminfoRenderer {
         });
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::cognitive_complexity))]
+    #[allow(clippy::cognitive_complexity)]
     fn flush_pending_attr<W: RenderTty + Write>(&mut self, out: &mut W) -> Result<()> {
         macro_rules! attr_on {
             ($cap:ident, $sgr:expr) => {{
@@ -330,10 +333,7 @@ impl TerminfoRenderer {
         Ok(())
     }
 
-    #[cfg_attr(
-        feature = "cargo-clippy",
-        allow(clippy::cyclomatic_complexity, clippy::cognitive_complexity)
-    )]
+    #[allow(clippy::cyclomatic_complexity, clippy::cognitive_complexity)]
     pub fn render_to<W: RenderTty + Write>(
         &mut self,
         changes: &[Change],
@@ -583,6 +583,7 @@ impl TerminfoRenderer {
                         }
                     }
                 },
+                #[cfg(feature = "image")]
                 Change::Image(image) => {
                     if self.caps.iterm2_image() {
                         let data = if image.top_left == TextureCoordinate::new_f32(0.0, 0.0)

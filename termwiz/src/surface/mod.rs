@@ -1,9 +1,9 @@
 use crate::cell::{Cell, CellAttributes};
 use crate::color::ColorAttribute;
+#[cfg(feature = "image")]
 use crate::image::ImageCell;
 use crate::surface::line::CellRef;
 use finl_unicode::grapheme_clusters::Graphemes;
-use ordered_float::NotNan;
 #[cfg(feature = "use_serde")]
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -13,7 +13,9 @@ use wezterm_dynamic::{FromDynamic, ToDynamic};
 pub mod change;
 pub mod line;
 
-pub use self::change::{Change, Image, LineAttribute, TextureCoordinate};
+pub use self::change::{Change, LineAttribute};
+#[cfg(feature = "image")]
+pub use self::change::{Image, TextureCoordinate};
 pub use self::line::Line;
 
 /// Position holds 0-based positioning information, where
@@ -101,7 +103,7 @@ pub const SEQ_ZERO: SequenceNo = 0;
 /// difference between the updated screen and apply those changes to
 /// the render target, and then use `get_changes` to render those without
 /// repainting the world on each update.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Surface {
     width: usize,
     height: usize,
@@ -297,6 +299,7 @@ impl Surface {
             Change::CursorColor(color) => self.cursor_color = *color,
             Change::CursorShape(shape) => self.cursor_shape = Some(*shape),
             Change::CursorVisibility(visibility) => self.cursor_visibility = *visibility,
+            #[cfg(feature = "image")]
             Change::Image(image) => self.add_image(image),
             Change::Title(text) => self.title = text.to_owned(),
             Change::ScrollRegionUp {
@@ -313,7 +316,10 @@ impl Surface {
         }
     }
 
+    #[cfg(feature = "image")]
     fn add_image(&mut self, image: &Image) {
+        use ordered_float::NotNan;
+
         let xsize = (image.bottom_right.x - image.top_left.x) / image.width as f32;
         let ysize = (image.bottom_right.y - image.top_left.y) / image.height as f32;
 

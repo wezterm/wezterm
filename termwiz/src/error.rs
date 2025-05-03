@@ -72,6 +72,7 @@ pub enum InternalError {
     #[error(transparent)]
     FileDescriptor(#[from] filedescriptor::Error),
 
+    #[cfg(feature = "image")]
     #[error(transparent)]
     BlobLease(#[from] wezterm_blob_leases::Error),
 

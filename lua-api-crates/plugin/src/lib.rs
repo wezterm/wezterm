@@ -35,6 +35,9 @@ fn compute_repo_dir(url: &str) -> String {
             c => dir.push_str(&format!("u{}", c as u32)),
         }
     }
+    if dir.ends_with("sZs") {
+        dir.truncate(dir.len() - 3);
+    }
     dir
 }
 
@@ -260,8 +263,8 @@ mod test {
         for (input, expect) in &[
             ("foo", "foo"),
             (
-                "githubsDscom/wez/wezterm-plugins",
-                "githubsDscomsZswezsZswezterm-plugins",
+                "githubsDscom/wezterm/wezterm-plugins",
+                "githubsDscomsZsweztermsZswezterm-plugins",
             ),
             ("localhost:8080/repo", "localhostsCs8080sZsrepo"),
         ] {

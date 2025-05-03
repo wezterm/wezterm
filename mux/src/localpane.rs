@@ -31,7 +31,7 @@ use url::Url;
 use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Alert, AlertHandler, Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent,
+    Alert, AlertHandler, Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, Progress,
     SemanticZone, StableRowIndex, Terminal, TerminalConfiguration, TerminalSize,
 };
 
@@ -172,7 +172,11 @@ impl Pane for LocalPane {
     }
 
     fn get_keyboard_encoding(&self) -> KeyboardEncoding {
-        self.terminal.lock().get_keyboard_encoding()
+        if self.tmux_domain.lock().is_some() {
+            KeyboardEncoding::Xterm
+        } else {
+            self.terminal.lock().get_keyboard_encoding()
+        }
     }
 
     fn get_current_seqno(&self) -> SequenceNo {
@@ -262,7 +266,7 @@ impl Pane for LocalPane {
         let mut proc = self.process.lock();
 
         const EXIT_BEHAVIOR: &str = "This message is shown because \
-            \x1b]8;;https://wezfurlong.org/wezterm/\
+            \x1b]8;;https://wezterm.org/\
             config/lua/config/exit_behavior.html\
             \x1b\\exit_behavior\x1b]8;;\x1b\\";
 
@@ -395,7 +399,7 @@ impl Pane for LocalPane {
     fn key_down(&self, key: KeyCode, mods: KeyModifiers) -> Result<(), Error> {
         Mux::get().record_input_for_current_identity();
         if self.tmux_domain.lock().is_some() {
-            log::error!("key: {:?}", key);
+            log::trace!("key: {:?}", key);
             if key == KeyCode::Char('q') {
                 self.terminal.lock().send_paste("detach\n")?;
             }
@@ -456,6 +460,10 @@ impl Pane for LocalPane {
         }
 
         title
+    }
+
+    fn get_progress(&self) -> Progress {
+        self.terminal.lock().get_progress()
     }
 
     fn palette(&self) -> ColorPalette {
@@ -1045,17 +1053,14 @@ impl LocalPane {
         {
             let leader = self.get_leader(policy);
             if let Some(path) = &leader.current_working_dir {
-                return Url::parse(&format!("file://localhost{}", path.display())).ok();
+                return Url::from_directory_path(path).ok();
             }
             return None;
         }
 
         #[cfg(windows)]
         if let Some(fg) = self.divine_foreground_process(policy) {
-            // Since windows paths typically start with something like C:\,
-            // we cannot simply stick `localhost` on the front; we have to
-            // omit the hostname otherwise the url parser is unhappy.
-            return Url::parse(&format!("file://{}", fg.cwd.display())).ok();
+            return Url::from_directory_path(fg.cwd).ok();
         }
 
         #[allow(unreachable_code)]
@@ -1129,7 +1134,7 @@ impl LocalPane {
 impl Drop for LocalPane {
     fn drop(&mut self) {
         // Avoid lingering zombies if we can, but don't block forever.
-        // <https://github.com/wez/wezterm/issues/558>
+        // <https://github.com/wezterm/wezterm/issues/558>
         if let ProcessState::Running { signaller, .. } = &mut *self.process.lock() {
             let _ = signaller.kill();
         }

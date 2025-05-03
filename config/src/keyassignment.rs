@@ -17,6 +17,9 @@ use wezterm_term::SemanticType;
 pub struct LauncherActionArgs {
     pub flags: LauncherFlags,
     pub title: Option<String>,
+    pub help_text: Option<String>,
+    pub fuzzy_help_text: Option<String>,
+    pub alphabet: Option<String>,
 }
 
 bitflags::bitflags! {
@@ -446,10 +449,13 @@ pub struct QuickSelectArguments {
     pub patterns: Vec<String>,
     #[dynamic(default)]
     pub action: Option<Box<KeyAssignment>>,
+    /// Skip triggering `action` after paste is performed (capital selection)
+    #[dynamic(default)]
+    pub skip_action_on_paste: bool,
     /// Label to use in place of "copy" when `action` is set
     #[dynamic(default)]
     pub label: String,
-    /// How man lines before and how many lines after the viewport to
+    /// How many lines before and how many lines after the viewport to
     /// search to produce the quickselect results
     pub scope_lines: Option<usize>,
 }
@@ -457,9 +463,19 @@ pub struct QuickSelectArguments {
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct PromptInputLine {
     pub action: Box<KeyAssignment>,
+    /// Optional label to pre-fill the input line with
+    #[dynamic(default)]
+    pub initial_value: Option<String>,
     /// Descriptive text to show ahead of prompt
     #[dynamic(default)]
     pub description: String,
+    /// Text to show for prompt
+    #[dynamic(default = "default_prompt")]
+    pub prompt: String,
+}
+
+fn default_prompt() -> String {
+    "> ".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
@@ -499,6 +515,20 @@ fn default_description() -> String {
 
 fn default_fuzzy_description() -> String {
     "Fuzzy matching: ".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct Confirmation {
+    pub action: Box<KeyAssignment>,
+    #[dynamic(default)]
+    pub cancel: Option<Box<KeyAssignment>>,
+    /// Text to show for confirmation
+    #[dynamic(default = "default_message")]
+    pub message: String,
+}
+
+fn default_message() -> String {
+    "🛑 Really continue?".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
@@ -615,6 +645,7 @@ pub enum KeyAssignment {
     ActivateWindowRelativeNoWrap(isize),
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
+    Confirmation(Confirmation),
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

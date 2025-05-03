@@ -9,7 +9,7 @@ use config::{configuration, ExitBehavior, GuiPosition};
 use domain::{Domain, DomainId, DomainState, SplitSource};
 use filedescriptor::{poll, pollfd, socketpair, AsRawSocketDescriptor, FileDescriptor, POLLIN};
 #[cfg(unix)]
-use libc::{SOL_SOCKET, SO_RCVBUF, SO_SNDBUF};
+use libc::{c_int, SOL_SOCKET, SO_RCVBUF, SO_SNDBUF};
 use log::error;
 use metrics::histogram;
 use parking_lot::{
@@ -20,6 +20,8 @@ use portable_pty::{CommandBuilder, ExitStatus, PtySize};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::io::{Read, Write};
+#[cfg(windows)]
+use std::os::raw::c_int;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread;
@@ -241,13 +243,14 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
 }
 
 fn set_socket_buffer(fd: &mut FileDescriptor, option: i32, size: usize) -> anyhow::Result<()> {
+    let size = size as c_int;
     let socklen = std::mem::size_of_val(&size);
     unsafe {
         let res = libc::setsockopt(
             fd.as_socket_descriptor(),
             SOL_SOCKET,
             option,
-            &size as *const usize as *const _,
+            &size as *const c_int as *const _,
             socklen as _,
         );
         if res == 0 {
@@ -260,8 +263,12 @@ fn set_socket_buffer(fd: &mut FileDescriptor, option: i32, size: usize) -> anyho
 
 fn allocate_socketpair() -> anyhow::Result<(FileDescriptor, FileDescriptor)> {
     let (mut tx, mut rx) = socketpair().context("socketpair")?;
-    set_socket_buffer(&mut tx, SO_SNDBUF, BUFSIZE).context("SO_SNDBUF")?;
-    set_socket_buffer(&mut rx, SO_RCVBUF, BUFSIZE).context("SO_RCVBUF")?;
+    set_socket_buffer(&mut tx, SO_SNDBUF, BUFSIZE)
+        .context("SO_SNDBUF")
+        .ok();
+    set_socket_buffer(&mut rx, SO_RCVBUF, BUFSIZE)
+        .context("SO_RCVBUF")
+        .ok();
     Ok((tx, rx))
 }
 
@@ -804,11 +811,16 @@ impl Mux {
 
     fn remove_pane_internal(&self, pane_id: PaneId) {
         log::debug!("removing pane {}", pane_id);
+        let mut changed = false;
         if let Some(pane) = self.panes.write().remove(&pane_id).clone() {
             log::debug!("killing pane {}", pane_id);
             pane.kill();
-            self.recompute_pane_count();
             self.notify(MuxNotification::PaneRemoved(pane_id));
+            changed = true;
+        }
+
+        if changed {
+            self.recompute_pane_count();
         }
     }
 
