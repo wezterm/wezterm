@@ -115,7 +115,7 @@ impl Display for CSI {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
         write!(f, "\x1b[")?;
         match self {
-            CSI::Sgr(sgr) => sgr.fmt(f)?,
+            CSI::Sgr(sgr) => write!(f, "{}m", sgr)?,
             CSI::Cursor(c) => c.fmt(f)?,
             CSI::Edit(e) => e.fmt(f)?,
             CSI::Mode(mode) => mode.fmt(f)?,
@@ -1397,7 +1397,7 @@ impl Display for Sgr {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
         macro_rules! code {
             ($t:ident) => {
-                write!(f, "{}m", SgrCode::$t as i64)?
+                write!(f, "{}", SgrCode::$t as i64)?
             };
         }
 
@@ -1408,7 +1408,7 @@ impl Display for Sgr {
                         $(AnsiColor::$Ansi => code!($code) ,)*
                     }
                 } else {
-                    write!(f, "{}:5:{}m", SgrCode::$eightbit as i64, $idx)?
+                    write!(f, "{}:5:{}", SgrCode::$eightbit as i64, $idx)?
                 }
             }
         }
@@ -1420,9 +1420,9 @@ impl Display for Sgr {
             Sgr::Intensity(Intensity::Normal) => code!(NormalIntensity),
             Sgr::Underline(Underline::Single) => code!(UnderlineOn),
             Sgr::Underline(Underline::Double) => code!(UnderlineDouble),
-            Sgr::Underline(Underline::Curly) => write!(f, "4:3m")?,
-            Sgr::Underline(Underline::Dotted) => write!(f, "4:4m")?,
-            Sgr::Underline(Underline::Dashed) => write!(f, "4:5m")?,
+            Sgr::Underline(Underline::Curly) => write!(f, "4:3")?,
+            Sgr::Underline(Underline::Dotted) => write!(f, "4:4")?,
+            Sgr::Underline(Underline::Dashed) => write!(f, "4:5")?,
             Sgr::Underline(Underline::None) => code!(UnderlineOff),
             Sgr::Blink(Blink::Slow) => code!(BlinkOn),
             Sgr::Blink(Blink::Rapid) => code!(RapidBlinkOn),
@@ -1481,7 +1481,7 @@ impl Display for Sgr {
                 if alpha == 255 {
                     write!(
                         f,
-                        "{}:2::{}:{}:{}m",
+                        "{}:2::{}:{}:{}",
                         SgrCode::ForegroundColor as i64,
                         red,
                         green,
@@ -1490,7 +1490,7 @@ impl Display for Sgr {
                 } else {
                     write!(
                         f,
-                        "{}:6::{}:{}:{}:{}m",
+                        "{}:6::{}:{}:{}:{}",
                         SgrCode::ForegroundColor as i64,
                         red,
                         green,
@@ -1527,7 +1527,7 @@ impl Display for Sgr {
                 if alpha == 255 {
                     write!(
                         f,
-                        "{}:2::{}:{}:{}m",
+                        "{}:2::{}:{}:{}",
                         SgrCode::BackgroundColor as i64,
                         red,
                         green,
@@ -1536,7 +1536,7 @@ impl Display for Sgr {
                 } else {
                     write!(
                         f,
-                        "{}:6::{}:{}:{}:{}m",
+                        "{}:6::{}:{}:{}:{}",
                         SgrCode::BackgroundColor as i64,
                         red,
                         green,
@@ -1551,7 +1551,7 @@ impl Display for Sgr {
                 if alpha == 255 {
                     write!(
                         f,
-                        "{}:2::{}:{}:{}m",
+                        "{}:2::{}:{}:{}",
                         SgrCode::UnderlineColor as i64,
                         red,
                         green,
@@ -1560,7 +1560,7 @@ impl Display for Sgr {
                 } else {
                     write!(
                         f,
-                        "{}:6::{}:{}:{}:{}m",
+                        "{}:6::{}:{}:{}:{}",
                         SgrCode::UnderlineColor as i64,
                         red,
                         green,
@@ -1570,7 +1570,7 @@ impl Display for Sgr {
                 }
             }
             Sgr::UnderlineColor(ColorSpec::PaletteIndex(idx)) => {
-                write!(f, "{}:5:{}m", SgrCode::UnderlineColor as i64, *idx)?
+                write!(f, "{}:5:{}", SgrCode::UnderlineColor as i64, *idx)?
             }
         }
         Ok(())

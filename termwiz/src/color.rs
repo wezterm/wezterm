@@ -296,6 +296,17 @@ impl From<ColorSpec> for ColorAttribute {
     }
 }
 
+impl From<ColorAttribute> for ColorSpec {
+    fn from(color: ColorAttribute) -> Self {
+        match color {
+            ColorAttribute::Default => ColorSpec::Default,
+            ColorAttribute::PaletteIndex(idx) => ColorSpec::PaletteIndex(idx),
+            ColorAttribute::TrueColorWithDefaultFallback(color)
+            | ColorAttribute::TrueColorWithPaletteFallback(color, _) => ColorSpec::TrueColor(color),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
