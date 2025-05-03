@@ -565,7 +565,7 @@ pub struct Config {
     pub macos_window_background_blur: i64,
 
     /// Only works on MacOS
-    #[dynamic(default = "default_false")]
+    #[dynamic(default)]
     pub kde_window_background_blur: bool,
 
     /// Only works on Windows
