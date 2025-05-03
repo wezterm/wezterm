@@ -85,13 +85,7 @@ impl WaylandState {
             SubcompositorState::bind(compositor.wl_compositor().clone(), globals, qh)?;
 
         let blur_manager: Result<OrgKdeKwinBlurManager, BindError> =
-            globals.bind(qh, 1..=1, GlobalData);
-
-        let blur_manager = match blur_manager {
-            Ok(manager) => Some(manager),
-            Err(_) => None,
-        };
-
+            globals.bind(qh, 1..=1, GlobalData).ok();
         let wayland_state = WaylandState {
             registry: RegistryState::new(globals),
             output: OutputState::new(globals, qh),
