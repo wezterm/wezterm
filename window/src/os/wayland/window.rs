@@ -1254,13 +1254,13 @@ impl WaylandWindowInner {
         let qh = conn.event_queue.borrow().handle();
         let wayland_state = conn.wayland_state.borrow();
         if let Some(manager) = &wayland_state.kde_blur_manager {
-                let kde_blur = manager.create(self.surface(), &qh, GlobalData);
-                if self.config.kde_window_background_blur {
-                    kde_blur.set_region(None);
-                } else {
-                    kde_blur.release();
-                }
-                kde_blur.commit();
+            let kde_blur = manager.create(self.surface(), &qh, GlobalData);
+            if self.config.kde_window_background_blur {
+                kde_blur.set_region(None);
+            } else {
+                kde_blur.release();
+            }
+            kde_blur.commit();
         }
     }
 }
