@@ -1427,7 +1427,6 @@ impl Dispatch<OrgKdeKwinBlurManager, GlobalData> for WaylandState {
         _qhandle: &wayland_client::QueueHandle<Self>,
     ) {
         // No events from OrgKdeKwinBlurManager...
-        unreachable!();
     }
 }
 
