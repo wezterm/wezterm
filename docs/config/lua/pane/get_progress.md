@@ -1,4 +1,4 @@
-# `pane:get_title()`
+# `pane:get_progress()`
 
 {{since('nightly')}}
 

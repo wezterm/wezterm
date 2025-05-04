@@ -475,6 +475,7 @@ __wezterm_semantic_precmd() {
       PS1='\[\e]133;P;k=i\a\]'$PS1'\[\e]133;B\a\]'
       PS2='\[\e]133;P;k=s\a\]'$PS2'\[\e]133;B\a\]'
     fi
+    __wezterm_check_ps1="$PS1"
   fi
   if [[ "$__wezterm_semantic_precmd_executing" != "" ]] ; then
     # Report last command status
@@ -494,7 +495,7 @@ __wezterm_semantic_precmd() {
 
 function __wezterm_semantic_preexec() {
   # Restore the original PS1/PS2 if set
-  if [ -n "${__wezterm_save_ps1+1}" ]; then
+  if [[ -n "${__wezterm_save_ps1+1}" && "${__wezterm_check_ps1-}" == "${PS1}" ]]; then
 	  PS1="$__wezterm_save_ps1"
 	  PS2="$__wezterm_save_ps2"
 	  unset __wezterm_save_ps1

@@ -117,6 +117,8 @@ As features stabilize some brief notes about them will accumulate here.
 * Git branch and progress bar symbols have been added to
   [custom_block_glyphs](config/lua/config/custom_block_glyphs.md). Thanks to
   @BenBergman! #6328 #6873 #6875
+* [cell_widths](config/lua/config/cell_widths.md) option for explicit
+  control over cell widths. Thanks to @hamano! #6289 #6290
 
 #### Fixed
 * Race condition when very quickly adjusting font scale, and other improvements
@@ -217,6 +219,9 @@ As features stabilize some brief notes about them will accumulate here.
 * Long CSI sequences were not parsed correctly. Thanks to @jdugan6240! #5161
   #6194
 * IBus IME working unreliably. Thanks to @pjm0616! #5125
+* Pixel aliasing issue when using
+  [window_content_alignment](config/lua/config/window_content_alignment.md) =
+  `Center`. Thanks to @juster-0! #6929 #6928 #6823
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg

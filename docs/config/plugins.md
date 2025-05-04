@@ -4,7 +4,7 @@
 <!-- See also https://github.com/wez/wezterm/commit/e4ae8a844d8feaa43e1de34c5cc8b4f07ce525dd -->
 
 A Wezterm plugin is a package of Lua files that provide
-some some predefined functionality not in the core product.
+some predefined functionality not in the core product.
 
 A plugin is distributed via a Git URL.
 

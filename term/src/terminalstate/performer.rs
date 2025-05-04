@@ -134,7 +134,7 @@ impl<'a> Performer<'a> {
         for g in Graphemes::new(text) {
             let g = self.remap_grapheme(g);
 
-            let mut print_width = grapheme_column_width(g, Some(self.unicode_version));
+            let mut print_width = grapheme_column_width(g, Some(&self.unicode_version));
             if print_width == 0 {
                 // We got a zero-width grapheme.
 
@@ -836,7 +836,7 @@ impl<'a> Performer<'a> {
                     self.unicode_version.version = n;
                 }
                 ITermProprietary::UnicodeVersion(ITermUnicodeVersionOp::Push(label)) => {
-                    let vers = self.unicode_version;
+                    let vers = self.unicode_version.clone();
                     self.unicode_version_stack
                         .push(UnicodeVersionStackEntry { vers, label });
                 }
