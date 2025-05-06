@@ -25,11 +25,13 @@ config.color_scheme = 'AdventureTime'
 return config
 ```
 
-_See [wezterm.config_builder](lua/wezterm/config_builder.md),
-[initial_cols](lua/config/initial_cols.md),
-[initial_rows](lua/config/initial_rows.md),
-[font_size](lua/config/font_size.md), and
-[color_scheme](lua/config/color_schemes.md) for details._
+For more details, see:
+
+- [wezterm.config_builder](lua/wezterm/config_builder.md)
+- [initial_cols](lua/config/initial_cols.md)
+- [initial_rows](lua/config/initial_rows.md)
+- [font_size](lua/config/font_size.md)
+- [color_scheme](lua/config/color_schemes.md)
 
 ## Configuration Files
 
