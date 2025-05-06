@@ -1,4 +1,3 @@
-
 ## Quick Start
 
 Create a file named `.wezterm.lua` in your home directory, with the following
@@ -35,7 +34,7 @@ For more details, see:
 
 ## Configuration Files
 
-`wezterm` will look for a [lua](https://www.lua.org/manual/5.3/manual.html)
+WezTerm will look for a [Lua](https://www.lua.org/manual/5.3/manual.html)
 configuration file using the logic shown below.
 
 !!! tip
@@ -78,10 +77,10 @@ error will be shown and the default configuration will be used instead.
     drive mode.  It is **not** recommended to store your configs in that
     location if you are not running off a thumb drive.
 
-`wezterm` will watch the config file that it loads; if/when it changes, the
+WezTerm will watch the config file that it loads; if/when it changes, the
 configuration will be automatically reloaded and the majority of options will
-take effect immediately.  You may also use the `CTRL+SHIFT+R` keyboard shortcut
-to force the configuration to be reloaded.
+take effect immediately.  You may also use the <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>
+keyboard shortcut to force the configuration to be reloaded.
 
 !!! info
     **The configuration file may be evaluated multiple times for each wezterm
@@ -91,33 +90,14 @@ to force the configuration to be reloaded.
     processes can result in many of them being spawned over time if you launch
     many copies of wezterm, or are frequently reloading your config file.
 
-### Configuration Overrides
+### Configuration File Structure
 
-{{since('20210314-114017-04b7cedd')}}
+Since WezTerm's configuration is written in the Lua programming language,
+you're permitted a great degree of flexibility; your configuration can even be
+broken up into [separate modules](#making-your-own-lua-modules).
 
-`wezterm` allows overriding configuration values via the command line; here are
-a couple of examples:
-
-```bash
-$ wezterm --config enable_scroll_bar=true
-$ wezterm --config 'exit_behavior="Hold"'
-```
-
-Configuration specified via the command line will always override the values
-provided by the configuration file, even if the configuration file is reloaded.
-
-Each window can have an additional set of window-specific overrides applied to
-it by code in your configuration file.  That's useful for eg: setting
-transparency or any other arbitrary option on a per-window basis.  Read the
-[window:set_config_overrides](lua/window/set_config_overrides.md) documentation
-for more information and examples of how to use that functionality.
-
-## Configuration File Structure
-
-The `wezterm.lua` configuration file is a lua script which allows for a high
-degree of flexibility.   The script is expected to return a configuration
-table, so a basic empty (and rather useless!) configuration file will look like
-this:
+The configuration script is expected to return a configuration table, so a
+basic empty (and rather useless!) configuration file will look like this:
 
 ```lua
 return {}
@@ -166,7 +146,7 @@ just the config assignments:
 config.color_scheme = 'Batman'
 ```
 
-## Making your own Lua Modules
+### Making Your Own Lua Modules
 
 If you'd like to break apart your configuration into multiple files, you'll
 be interested in this information.
@@ -221,8 +201,30 @@ helpers.apply_to_config(config)
 return config
 ```
 
+<a id="configuration-overrides"></a><!-- old section name, to preserve inbound links -->
+## Overriding Config Settings from the Command Line 
+
+{{since('20210314-114017-04b7cedd')}}
+
+WezTerm allows overriding configuration values via the command line; here are
+a couple of examples:
+
+```bash
+$ wezterm --config enable_scroll_bar=true
+$ wezterm --config 'exit_behavior="Hold"'
+```
+
+Configuration specified via the command line will always override the values
+provided by the configuration file, even if the configuration file is reloaded.
+
+Each window can have an additional set of window-specific overrides applied to
+it by code in your configuration file.  That's useful for eg: setting
+transparency or any other arbitrary option on a per-window basis.  Read the
+[window:set_config_overrides](lua/window/set_config_overrides.md) documentation
+for more information and examples of how to use that functionality.
 
 ## Configuration Reference
 
 Continue browsing this section of the docs for an overview of the commonly
-adjusted settings, or visit the [Lua Config Reference](lua/config/index.md) for a more detailed list of possibilities.
+adjusted settings, or visit the [Lua Config Reference](lua/config/index.md) for
+a more detailed list of possibilities.

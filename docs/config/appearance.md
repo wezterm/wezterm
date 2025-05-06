@@ -1,4 +1,55 @@
-### Color Scheme
+The configuration settings described below assume you have created a
+`.wezterm.lua` or `wezterm.lua` containing at least the following:
+
+```lua
+local wezterm = require 'wezterm'
+local config = {}
+
+-- add your customizations here…
+
+return config
+```
+
+See [Configuration Files](files.md#configuration-files) for details
+of the configuration file format.
+
+## Text appearance
+
+In order to change he appearance of the terminal text in WezTerm, add the lines
+below to your config file before the `return config`.
+
+### Font face and size
+
+```lua
+config.font_size = 10
+config.font = wezterm.font 'JetBrains Mono'
+```
+
+_For more details, see [font_size](lua/config/font_size.md) and
+[font](lua/config/font.md)._
+
+### Text Background Opacity
+
+{{since('20201031-154415-9614e117')}}
+
+When using a background image or background opacity, the image content can
+have relatively low contrast with respect to the text you are trying to
+read in your terminal.
+
+The `text_background_opacity` setting specifies the alpha channel value to use
+for the background color of cells other than the default background color.
+
+The default for this setting is `1.0`, which means that the background
+color is fully opaque.
+
+The range of values permitted are `0.0` (completely translucent)
+through to `1.0` (completely opaque).
+
+```lua
+config.text_background_opacity = 0.3
+```
+
+## Color Scheme
 
 WezTerm ships with over 700 color schemes available from
 [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes#screenshots),
@@ -9,16 +60,11 @@ WezTerm ships with over 700 color schemes available from
 You can select a color scheme with a line like this:
 
 ```lua
-local wezterm = require 'wezterm'
-local config = {}
-
 config.color_scheme = 'Batman'
-
-return config
 ```
 
 You can find a list of available color schemes and screenshots
-in [The Color Schemes Section](../colorschemes/index.md).
+in the [Color Schemes](../colorschemes/index.md) section.
 
 If you'd like to automatically adjust your color scheme based on the
 system dark mode or light mode appearance, see the example in
@@ -34,7 +80,8 @@ system dark mode or light mode appearance, see the example in
 
 The `color_scheme` option takes precedence over the `colors` section below,
 and is mutually exclusive with it. If you want to merge/override colors
-you need to use [wezterm.color.get_default_colors()](lua/wezterm.color/get_default_colors.md) and explicitly merge them.
+you need to use [wezterm.color.get_default_colors()](lua/wezterm.color/get_default_colors.md)
+and explicitly merge them.
 
 {{since('20220903-194523-3bb1ed61')}}
 
@@ -52,9 +99,6 @@ you can use `#RRGGBB` to specify a color code using the
 usual hex notation; eg: `#000000` is equivalent to `black`:
 
 ```lua
-local wezterm = require 'wezterm'
-local config = {}
-
 config.colors = {
   -- The default text color
   foreground = 'silver',
@@ -131,8 +175,6 @@ config.colors = {
   quick_select_match_bg = { AnsiColor = 'Navy' },
   quick_select_match_fg = { Color = '#ffffff' },
 }
-
-return config
 ```
 
 {{since('20220101-133340-7edc5b5a')}}
@@ -222,8 +264,8 @@ builting color scheme.
 ### Defining a Color Scheme in a separate file
 
 If you'd like to factor your color schemes out into separate files, you
-can create a [TOML format](https://toml.io/en/) file with a `[colors]` section; take a look at [one of
-the available color schemes for an example](https://github.com/wez/wezterm/tree/main/config/src/scheme_data.rs).
+can create a [TOML format](https://toml.io/en/) file with a `[colors]` section;
+take a look at [one of the available color schemes for an example](https://github.com/wez/wezterm/tree/main/config/src/scheme_data.rs).
 
 It is recommended that you place your custom scheme in a directory
 named `$HOME/.config/wezterm/colors` if you're on a POSIX system.
@@ -242,11 +284,12 @@ config.color_scheme_dirs = { '/some/path/to/my/color/schemes' }
 Color scheme names that are defined in files in your `color_scheme_dirs` list
 take precedence over the built-in color schemes.
 
-### Dynamic Color Escape Sequences
+<a id="dynamic-colors"></a>
+## Dynamic Color Escape Sequences 
 
 Wezterm supports dynamically changing its color palette via escape sequences.
 
-[The dynamic-colors directory](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/dynamic-colors)
+The [`dynamic-colors` directory](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/dynamic-colors)
 of the color scheme repo contains shell scripts that can change the color
 scheme immediately on the fly.  This can be used in your own scripts to alter
 the terminal appearance programmatically:
@@ -260,7 +303,7 @@ $ for scheme in *.sh ; do ; echo $scheme ; \
 
   <video width="80%" controls src="../screenshots/wezterm-dynamic-colors.mp4" loop></video>
 
-### Tab Bar Appearance & Colors
+## Tab Bar Appearance & Colors
 
 The tab bar has two modes; the default is a native looking style, but
 it is also possible to enable a retro aesthetic.  The configuration
@@ -278,7 +321,7 @@ details.
 * [tab_max_width](lua/config/tab_max_width.md) sets the maximum width, measured in cells,
   of a given tab when using retro tab mode.
 
-#### Native (Fancy) Tab Bar appearance
+### Native (Fancy) Tab Bar appearance
 
 The following options affect the fancy tab bar:
 
@@ -316,7 +359,7 @@ config.colors = {
 In addition, the tab bar colors mentioned below also apply
 to the items displayed in the tab bar.
 
-#### Retro Tab Bar appearance
+### Retro Tab Bar appearance
 
 The following options control the appearance of the tab bar:
 
@@ -396,13 +439,27 @@ config.colors = {
 }
 ```
 
+## Window appearance
+
+### Initial Geometry
+
+You can set the initial geometry for new windows like so:
+
+```lua
+config.initial_cols = 120
+config.initial_rows = 28
+```
+
+_For more information, see [initial_cols](lua/config/initial_cols.md) and
+[initial_rows](lua/config/initial_rows.md)._
+
 ### Window Padding
 
 You may add padding around the edges of the terminal area.
 
 [See the window_padding docs for more info](lua/config/window_padding.md)
 
-## Styling Inactive Panes
+### Styling Inactive Panes
 
 {{since('20201031-154415-9614e117')}}
 
@@ -439,7 +496,7 @@ The range of these values is 0.0 and up; they are used to multiply the existing
 values, so the default of 1.0 preserves the existing component, whilst 0.5 will
 reduce it by half, and 2.0 will double the value.
 
-## Window Background Image
+### Window Background Image
 
 ![Screenshot](../screenshots/wezterm-vday-screenshot.png)
 
@@ -488,7 +545,7 @@ If you'd like to have control over scaling, tiling/repeating, scrolling
 behavior and more, take a look at the more powerful
 [background](lua/config/background.md) configuration option.
 
-## Window Background Gradient
+### Window Background Gradient
 
 {{since('20210814-124438-54e29167')}}
 
@@ -497,7 +554,7 @@ behavior and more, take a look at the more powerful
 See [window_background_gradient](lua/config/window_background_gradient.md)
 for configuration information on gradients.
 
-## Window Background Opacity
+### Window Background Opacity
 
 {{since('20201031-154415-9614e117')}}
 
@@ -521,25 +578,3 @@ performance.
 ```lua
 config.window_background_opacity = 1.0
 ```
-
-## Text Background Opacity
-
-{{since('20201031-154415-9614e117')}}
-
-When using a background image or background opacity, the image content can
-have relatively low contrast with respect to the text you are trying to
-read in your terminal.
-
-The `text_background_opacity` setting specifies the alpha channel value to use
-for the background color of cells other than the default background color.
-
-The default for this setting is `1.0`, which means that the background
-color is fully opaque.
-
-The range of values permitted are `0.0` (completely translucent)
-through to `1.0` (completely opaque).
-
-```lua
-config.text_background_opacity = 0.3
-```
-

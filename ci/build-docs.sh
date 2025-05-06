@@ -29,7 +29,7 @@ function ghapi() {
   if hash gh 2>/dev/null && test \( -n "$BUILD_REASON" -a -n "$GH_TOKEN" \) -o -z "$BUILD_REASON"; then
     gh api $1
   else
-    curl https://api.github.com$1
+    curl -L https://api.github.com$1
   fi
 }
 
@@ -53,7 +53,7 @@ cp assets/fonts/SymbolsNerdFontMono-Regular.ttf docs/fonts/
 docker build -t wezterm/mkdocs-material -f ci/Dockerfile.docs .
 
 if [ "$SERVE" == "yes" ] ; then
-  docker run --rm -it --network=host -v ${PWD}:/docs wezterm/mkdocs-material serve
+  docker run --rm -it --network=host -v ${PWD}:/docs wezterm/mkdocs-material serve --livereload --dirtyreload
 else
-  docker run --rm -e CARDS=true -v ${PWD}:/docs wezterm/mkdocs-material build
+  docker run --rm -e CARDS=true -v ${PWD}:/docs wezterm/mkdocs-material build --strict
 fi
