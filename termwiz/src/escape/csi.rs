@@ -68,10 +68,7 @@ pub enum Keyboard {
         flags: KittyKeyboardFlags,
         mode: KittyKeyboardMode,
     },
-    PushKittyState {
-        flags: KittyKeyboardFlags,
-        mode: KittyKeyboardMode,
-    },
+    PushKittyState(KittyKeyboardFlags),
     PopKittyState(u32),
     QueryKittySupport,
     ReportKittyState(KittyKeyboardFlags),
@@ -126,9 +123,7 @@ impl Display for CSI {
             CSI::Keyboard(Keyboard::SetKittyState { flags, mode }) => {
                 write!(f, "={};{}u", flags.bits(), *mode as u16)?
             }
-            CSI::Keyboard(Keyboard::PushKittyState { flags, mode }) => {
-                write!(f, ">{};{}u", flags.bits(), *mode as u16)?
-            }
+            CSI::Keyboard(Keyboard::PushKittyState(flags)) => write!(f, ">{}u", flags.bits())?,
             CSI::Keyboard(Keyboard::PopKittyState(n)) => write!(f, "<{}u", *n)?,
             CSI::Keyboard(Keyboard::QueryKittySupport) => write!(f, "?u")?,
             CSI::Keyboard(Keyboard::ReportKittyState(flags)) => write!(f, "?{}u", flags.bits())?,
@@ -1789,30 +1784,14 @@ impl<'a> CSIParser<'a> {
                     _ => return Err(()),
                 },
             })),
-            ('u', [CsiParam::P(b'>')]) => Ok(CSI::Keyboard(Keyboard::PushKittyState {
-                flags: KittyKeyboardFlags::NONE,
-                mode: KittyKeyboardMode::AssignAll,
-            })),
+            ('u', [CsiParam::P(b'>')]) => Ok(CSI::Keyboard(Keyboard::PushKittyState(
+                KittyKeyboardFlags::NONE,
+            ))),
             ('u', [CsiParam::P(b'>'), CsiParam::Integer(flags)]) => {
-                Ok(CSI::Keyboard(Keyboard::PushKittyState {
-                    flags: KittyKeyboardFlags::from_bits_truncate(
-                        (*flags).try_into().map_err(|_| ())?,
-                    ),
-                    mode: KittyKeyboardMode::AssignAll,
-                }))
+                Ok(CSI::Keyboard(Keyboard::PushKittyState(
+                    KittyKeyboardFlags::from_bits_truncate((*flags).try_into().map_err(|_| ())?),
+                )))
             }
-            (
-                'u',
-                [CsiParam::P(b'>'), CsiParam::Integer(flags), CsiParam::P(b';'), CsiParam::Integer(mode)],
-            ) => Ok(CSI::Keyboard(Keyboard::PushKittyState {
-                flags: KittyKeyboardFlags::from_bits_truncate((*flags).try_into().map_err(|_| ())?),
-                mode: match *mode {
-                    1 => KittyKeyboardMode::AssignAll,
-                    2 => KittyKeyboardMode::SetSpecified,
-                    3 => KittyKeyboardMode::ClearSpecified,
-                    _ => return Err(()),
-                },
-            })),
             ('u', [CsiParam::P(b'?')]) => Ok(CSI::Keyboard(Keyboard::QueryKittySupport)),
             ('u', [CsiParam::P(b'?'), CsiParam::Integer(flags)]) => {
                 Ok(CSI::Keyboard(Keyboard::ReportKittyState(
