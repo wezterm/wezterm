@@ -176,23 +176,7 @@ impl Window {
     }
 
     pub fn save_last_active(&mut self) {
-        const LAST_TAB_MARK: char = '*';
-        if let Some(idx) = self.get_last_active_idx() {
-            self.get_by_idx(idx).map(|tab| {
-                let mut rename = tab.get_title();
-                if rename.ends_with(LAST_TAB_MARK) {
-                    rename.pop();
-                    tab.set_title(&rename)
-                }
-            });
-        }
-
-        self.last_active = self.get_by_idx(self.active).map(|tab| {
-            let mut rename = tab.get_title();
-            rename.push(LAST_TAB_MARK);
-            tab.set_title(&rename);
-            tab.tab_id()
-        });
+        self.last_active = self.get_by_idx(self.active).map(|tab| tab.tab_id());
     }
 
     #[inline]
