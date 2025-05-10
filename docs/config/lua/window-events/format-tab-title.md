@@ -46,6 +46,13 @@ wezterm.on(
         { Text = ' ' .. title .. ' ' },
       }
     end
+    if tab.is_last then
+      -- Green color and append '*' to last tab.
+      return {
+        { Background = { Color = 'green' } },
+        { Text = ' ' .. title .. '*' },
+      }
+    end
     return title
   end
 )
