@@ -3462,11 +3462,7 @@ impl TermWindow {
                     tab_index: idx,
                     tab_id: tab.tab_id(),
                     is_active: tab_index == idx,
-                    is_last: if let Some(tab_index_last) = window.get_last_active_idx() {
-                        tab_index_last == idx
-                    } else {
-                        false
-                    },
+                    is_last: window.get_last_active_idx().map(|last| last == idx).unwrap_or(false),
                     window_id: self.mux_window_id,
                     tab_title: tab.get_title(),
                     active_pane: panes
