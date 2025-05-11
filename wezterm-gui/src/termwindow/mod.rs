@@ -212,7 +212,7 @@ pub struct TabInformation {
     pub tab_id: TabId,
     pub tab_index: usize,
     pub is_active: bool,
-    pub is_last: bool,
+    pub is_last_active: bool,
     pub active_pane: Option<PaneInformation>,
     pub window_id: MuxWindowId,
     pub tab_title: String,
@@ -223,7 +223,7 @@ impl UserData for TabInformation {
         fields.add_field_method_get("tab_id", |_, this| Ok(this.tab_id));
         fields.add_field_method_get("tab_index", |_, this| Ok(this.tab_index));
         fields.add_field_method_get("is_active", |_, this| Ok(this.is_active));
-        fields.add_field_method_get("is_last", |_, this| Ok(this.is_last));
+        fields.add_field_method_get("is_last_active", |_, this| Ok(this.is_last_active));
         fields.add_field_method_get("active_pane", |_, this| {
             if let Some(pane) = &this.active_pane {
                 Ok(Some(pane.clone()))
@@ -3462,7 +3462,10 @@ impl TermWindow {
                     tab_index: idx,
                     tab_id: tab.tab_id(),
                     is_active: tab_index == idx,
-                    is_last: window.get_last_active_idx().map(|last| last == idx).unwrap_or(false),
+                    is_last_active: window
+                        .get_last_active_idx()
+                        .map(|last_active| last_active == idx)
+                        .unwrap_or(false),
                     window_id: self.mux_window_id,
                     tab_title: tab.get_title(),
                     active_pane: panes
