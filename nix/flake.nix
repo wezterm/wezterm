@@ -25,7 +25,7 @@
       flake = false;
     };
     harfbuzz = {
-      url = "github:harfbuzz/harfbuzz/9.0.0";
+      url = "github:harfbuzz/harfbuzz/10.4.0";
       flake = false;
     };
     libpng = {
@@ -131,14 +131,17 @@
               --replace-fail 'hash hostnamectl 2>/dev/null' 'command type -P hostnamectl &>/dev/null'
           '';
 
+          # Disable cargo-auditable until https://github.com/rust-secure-code/cargo-auditable/issues/124 is fixed
+          auditable = false;
+
           preFixup =
-            lib.optionalString stdenv.isLinux ''
+            lib.optionalString stdenv.isLinux /* bash */ ''
               patchelf \
                 --add-needed "${pkgs.libGL}/lib/libEGL.so.1" \
                 --add-needed "${pkgs.vulkan-loader}/lib/libvulkan.so.1" \
                 $out/bin/wezterm-gui
             ''
-            + lib.optionalString stdenv.isDarwin ''
+            + lib.optionalString stdenv.isDarwin /* bash */ ''
               mkdir -p "$out/Applications"
               OUT_APP="$out/Applications/WezTerm.app"
               cp -r assets/macos/WezTerm.app "$OUT_APP"
