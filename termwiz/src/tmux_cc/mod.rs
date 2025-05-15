@@ -922,7 +922,7 @@ impl Parser {
                 if self.begun.is_some() {
                     log::error!(
                         "expected %end or %error before %begin ({})",
-                        String::from_utf8_lossy(&self.buffer).as_ref()
+                        String::from_utf8_lossy(&self.buffer)
                     );
                 }
                 self.begun.replace(Guarded {
@@ -937,9 +937,7 @@ impl Parser {
             Ok(event) => Some(event),
             Err(err) => {
                 log::error!("Unrecognized tmux cc line: {}", err);
-                return Err(anyhow::anyhow!(String::from_utf8_lossy(&self.buffer)
-                    .as_ref()
-                    .to_owned()));
+                anyhow::bail!("{}", String::from_utf8_lossy(&self.buffer));
             }
         };
 
@@ -966,7 +964,7 @@ mod tests {
                 number: 321,
                 flags: 0,
             },
-            parse_line("%begin 12345 321 0".to_owned().as_bytes()).unwrap()
+            parse_line(b"%begin 12345 321 0").unwrap()
         );
 
         assert_eq!(
@@ -975,7 +973,7 @@ mod tests {
                 number: 321,
                 flags: 0,
             },
-            parse_line("%end 12345 321 0".to_owned().as_bytes()).unwrap()
+            parse_line(b"%end 12345 321 0").unwrap()
         );
     }
 
