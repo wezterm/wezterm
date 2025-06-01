@@ -720,6 +720,8 @@ pub enum CopyModeAssignment {
     JumpBackward { prev_char: bool },
     JumpAgain,
     JumpReverse,
+    SearchForwardRelativeToCursor,
+    SearchBackwardRelativeToCursor,
 }
 
 pub type KeyTable = HashMap<(KeyCode, Modifiers), KeyTableEntry>;
