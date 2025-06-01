@@ -49,6 +49,7 @@ enum ActivateMatchPosition {
     First,
     AfterCursor,
     BeforeCursor,
+    AtCursor,
 }
 
 use ActivateMatchPosition::*;
@@ -265,7 +266,7 @@ impl CopyRenderable {
                         *match_number += 1;
                     }
                 }
-                AfterCursor => {
+                AfterCursor | AtCursor => {
                     if (self.cursor.x < res.start_x && self.cursor.y == res.start_y)
                         || self.cursor.y < res.start_y
                     {
@@ -413,7 +414,9 @@ impl CopyRenderable {
             if !self.results.is_empty() {
                 let match_number = match self.activate_match_pos {
                     First => 0,
-                    BeforeCursor => {
+                    BeforeCursor | AtCursor => {
+                        // We don't need to set activate_match_pos here because backward search from the end of the
+                        // currently matching pattern leads to the same match position being activated
                         if match_number == self.results.len() {
                             0
                         } else {
@@ -421,6 +424,15 @@ impl CopyRenderable {
                         }
                     }
                     AfterCursor => {
+                        // This is to prevent the activated match position from changing when update_search method
+                        // is called without from methods that don't update the activate_match_pos attribute
+                        // We need to handle this if we have searched for a pattern after the current cursor
+                        // position because current position of the cursor is at the end of the pattern matched
+                        // after the previous position of the cursor.
+                        // We update the attribute to the below line to prevent the current cursor position from
+                        // changing in calls to update_search by methods not updating the attribute
+                        self.activate_match_pos = AtCursor;
+
                         if match_number == 0 {
                             self.results.len() - 1
                         } else {
@@ -708,14 +720,26 @@ impl CopyRenderable {
         self.update_search();
     }
 
-    fn edit_pattern(&mut self, activate_match_pos: ActivateMatchPosition) {
+    fn edit_pattern(&mut self) {
+        self.activate_match_pos = First;
         self.editing_search = true;
-        self.activate_match_pos = activate_match_pos;
         self.update_key_table();
     }
 
     fn accept_pattern(&mut self) {
         self.editing_search = false;
+        self.update_key_table();
+    }
+
+    fn search_forward_relative_to_cursor(&mut self) {
+        self.activate_match_pos = AfterCursor;
+        self.editing_search = true;
+        self.update_key_table();
+    }
+
+    fn search_backward_relative_to_cursor(&mut self) {
+        self.activate_match_pos = BeforeCursor;
+        self.editing_search = true;
         self.update_key_table();
     }
 
@@ -1332,7 +1356,7 @@ impl Pane for CopyOverlay {
                     NextMatchPage => render.next_match_page(),
                     CycleMatchType => render.cycle_match_type(),
                     ClearPattern => render.clear_pattern(),
-                    EditPattern => render.edit_pattern(First),
+                    EditPattern => render.edit_pattern(),
                     AcceptPattern => render.accept_pattern(),
                     SetSelectionMode(mode) => render.set_selection_mode(mode),
                     ClearSelectionMode => render.clear_selection_mode(),
@@ -1344,8 +1368,8 @@ impl Pane for CopyOverlay {
                     JumpBackward { prev_char } => render.jump(false, *prev_char),
                     JumpAgain => render.jump_again(false),
                     JumpReverse => render.jump_again(true),
-                    SearchForwardRelativeToCursor => render.edit_pattern(AfterCursor),
-                    SearchBackwardRelativeToCursor => render.edit_pattern(BeforeCursor),
+                    SearchForwardRelativeToCursor => render.search_forward_relative_to_cursor(),
+                    SearchBackwardRelativeToCursor => render.search_backward_relative_to_cursor(),
                 }
                 PerformAssignmentResult::Handled
             }
