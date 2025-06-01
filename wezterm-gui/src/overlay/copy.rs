@@ -52,8 +52,6 @@ enum ActivateMatchPosition {
     AtCursor,
 }
 
-use ActivateMatchPosition::*;
-
 #[derive(Copy, Clone, Debug)]
 struct PendingJump {
     forward: bool,
@@ -173,7 +171,7 @@ impl CopyOverlay {
             searching: None,
             pending_jump: None,
             last_jump: None,
-            activate_match_pos: First,
+            activate_match_pos: ActivateMatchPosition::First,
         };
 
         let search_row = render.compute_search_row();
@@ -259,21 +257,21 @@ impl CopyRenderable {
         results.reverse();
         for (result_index, res) in results.iter().enumerate() {
             match self.activate_match_pos {
-                BeforeCursor => {
+                ActivateMatchPosition::BeforeCursor => {
                     if (self.cursor.x <= res.start_x && self.cursor.y == res.start_y)
                         || self.cursor.y < res.start_y
                     {
                         *match_number += 1;
                     }
                 }
-                AfterCursor | AtCursor => {
+                ActivateMatchPosition::AfterCursor | ActivateMatchPosition::AtCursor => {
                     if (self.cursor.x < res.start_x && self.cursor.y == res.start_y)
                         || self.cursor.y < res.start_y
                     {
                         *match_number += 1;
                     }
                 }
-                First => {}
+                ActivateMatchPosition::First => {}
             }
             let result_index = self.results.len() + result_index;
             for idx in res.start_y..=res.end_y {
@@ -413,8 +411,8 @@ impl CopyRenderable {
         if range.start == dims.scrollback_top {
             if !self.results.is_empty() {
                 let match_number = match self.activate_match_pos {
-                    First => 0,
-                    BeforeCursor | AtCursor => {
+                    ActivateMatchPosition::First => 0,
+                    ActivateMatchPosition::BeforeCursor | ActivateMatchPosition::AtCursor => {
                         // We don't need to set activate_match_pos here because backward search from the end of the
                         // currently matching pattern leads to the same match position being activated
                         if match_number == self.results.len() {
@@ -423,7 +421,7 @@ impl CopyRenderable {
                             match_number
                         }
                     }
-                    AfterCursor => {
+                    ActivateMatchPosition::AfterCursor => {
                         // This is to prevent the activated match position from changing when update_search method
                         // is called without from methods that don't update the activate_match_pos attribute
                         // We need to handle this if we have searched for a pattern after the current cursor
@@ -431,7 +429,7 @@ impl CopyRenderable {
                         // after the previous position of the cursor.
                         // We update the attribute to the below line to prevent the current cursor position from
                         // changing in calls to update_search by methods not updating the attribute
-                        self.activate_match_pos = AtCursor;
+                        self.activate_match_pos = ActivateMatchPosition::AtCursor;
 
                         if match_number == 0 {
                             self.results.len() - 1
@@ -721,7 +719,7 @@ impl CopyRenderable {
     }
 
     fn edit_pattern(&mut self) {
-        self.activate_match_pos = First;
+        self.activate_match_pos = ActivateMatchPosition::First;
         self.editing_search = true;
         self.update_key_table();
     }
@@ -732,13 +730,13 @@ impl CopyRenderable {
     }
 
     fn search_forward_relative_to_cursor(&mut self) {
-        self.activate_match_pos = AfterCursor;
+        self.activate_match_pos = ActivateMatchPosition::AfterCursor;
         self.editing_search = true;
         self.update_key_table();
     }
 
     fn search_backward_relative_to_cursor(&mut self) {
-        self.activate_match_pos = BeforeCursor;
+        self.activate_match_pos = ActivateMatchPosition::BeforeCursor;
         self.editing_search = true;
         self.update_key_table();
     }
