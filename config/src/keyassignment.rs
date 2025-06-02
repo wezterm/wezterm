@@ -113,6 +113,7 @@ pub enum SelectionMode {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, FromDynamic, ToDynamic)]
 pub enum ActivateMatchPosition {
+    First,
     AfterCursor,
     BeforeCursor,
 }

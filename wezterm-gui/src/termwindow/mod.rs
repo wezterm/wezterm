@@ -2899,6 +2899,9 @@ impl TermWindow {
                         config::keyassignment::ActivateMatchPosition::BeforeCursor => {
                             ActivateMatchPosition::BeforeCursor
                         }
+                        config::keyassignment::ActivateMatchPosition::First => {
+                            ActivateMatchPosition::First
+                        }
                     };
                     if let Some(existing) = pane.downcast_ref::<CopyOverlay>() {
                         let mut params = existing.get_params();
