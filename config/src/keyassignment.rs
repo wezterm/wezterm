@@ -112,14 +112,14 @@ pub enum SelectionMode {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, FromDynamic, ToDynamic)]
-pub enum SearchDirection {
-    Forward,
-    Backward,
+pub enum ActivateMatchPosition {
+    AfterCursor,
+    BeforeCursor,
 }
 
-impl Default for SearchDirection {
+impl Default for ActivateMatchPosition {
     fn default() -> Self {
-        Self::Forward
+        Self::AfterCursor
     }
 }
 
@@ -597,7 +597,7 @@ pub enum KeyAssignment {
     Search(Pattern),
     ExtendedSearch {
         pattern: Pattern,
-        direction: SearchDirection,
+        direction: ActivateMatchPosition,
     },
     ActivateCopyMode,
 
