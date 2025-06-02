@@ -2886,10 +2886,13 @@ impl TermWindow {
                         });
                 }
             }
-            ExtendedSearch { pattern, direction } => {
+            ExtendedSearch {
+                pattern,
+                activate_match,
+            } => {
                 if let Some(pane) = self.get_active_pane_or_overlay() {
                     let mut replace_current = false;
-                    let activate_match_pos = match direction {
+                    let activate_match_pos = match activate_match {
                         config::keyassignment::ActivateMatchPosition::AfterCursor => {
                             ActivateMatchPosition::AfterCursor
                         }

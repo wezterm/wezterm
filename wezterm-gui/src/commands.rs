@@ -796,7 +796,7 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &[],
             icon: Some("oct_search"),
         },
-        ExtendedSearch { pattern: _, direction: _ } => CommandDef {
+        ExtendedSearch { pattern: _, activate_match: _ } => CommandDef {
             brief: "Search pane output with additional arguments".into(),
             doc: "Enters the search mode UI for the current pane".into(),
             keys: vec![],
