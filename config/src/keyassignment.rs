@@ -118,12 +118,6 @@ pub enum ActivateMatchPosition {
     BeforeCursor,
 }
 
-impl Default for ActivateMatchPosition {
-    fn default() -> Self {
-        Self::AfterCursor
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, FromDynamic, ToDynamic)]
 pub enum Pattern {
     CaseSensitiveString(String),
