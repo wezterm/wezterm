@@ -2853,6 +2853,7 @@ impl TermWindow {
                     if let Some(existing) = pane.downcast_ref::<CopyOverlay>() {
                         let mut params = existing.get_params();
                         params.editing_search = true;
+                        params.activate_match_pos = ActivateMatchPosition::First;
                         if !pattern.is_empty() {
                             params.pattern = self.resolve_search_pattern(pattern.clone(), &pane);
                         }
