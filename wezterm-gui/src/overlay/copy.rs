@@ -52,6 +52,12 @@ pub enum ActivateMatchPosition {
     AtCursor,
 }
 
+impl Default for ActivateMatchPosition {
+    fn default() -> Self {
+        Self::First
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 struct PendingJump {
     forward: bool,

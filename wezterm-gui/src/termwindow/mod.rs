@@ -2853,7 +2853,7 @@ impl TermWindow {
                     if let Some(existing) = pane.downcast_ref::<CopyOverlay>() {
                         let mut params = existing.get_params();
                         params.editing_search = true;
-                        params.activate_match_pos = ActivateMatchPosition::First;
+                        params.activate_match_pos = ActivateMatchPosition::default();
                         if !pattern.is_empty() {
                             params.pattern = self.resolve_search_pattern(pattern.clone(), &pane);
                         }
@@ -2866,7 +2866,7 @@ impl TermWindow {
                             CopyModeParams {
                                 pattern: self.resolve_search_pattern(pattern.clone(), &pane),
                                 editing_search: true,
-                                activate_match_pos: ActivateMatchPosition::First,
+                                activate_match_pos: ActivateMatchPosition::default(),
                             },
                         )?;
                         self.assign_overlay_for_pane(pane.pane_id(), search);
@@ -2970,7 +2970,7 @@ impl TermWindow {
                             CopyModeParams {
                                 pattern: MuxPattern::default(),
                                 editing_search: false,
-                                activate_match_pos: ActivateMatchPosition::First,
+                                activate_match_pos: ActivateMatchPosition::default(),
                             },
                         )?;
                         self.assign_overlay_for_pane(pane.pane_id(), copy);
