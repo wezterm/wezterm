@@ -45,7 +45,7 @@ pub struct CopyOverlay {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ActivateMatchPosition {
+pub enum ActivateMatchPosition {
     First,
     AfterCursor,
     BeforeCursor,
@@ -116,6 +116,7 @@ struct Dimensions {
 pub struct CopyModeParams {
     pub pattern: Pattern,
     pub editing_search: bool,
+    pub activate_match_pos: ActivateMatchPosition,
 }
 
 impl CopyOverlay {
@@ -171,7 +172,7 @@ impl CopyOverlay {
             searching: None,
             pending_jump: None,
             last_jump: None,
-            activate_match_pos: ActivateMatchPosition::First,
+            activate_match_pos: params.activate_match_pos,
         };
 
         let search_row = render.compute_search_row();
@@ -195,12 +196,14 @@ impl CopyOverlay {
         CopyModeParams {
             pattern: render.get_pattern(),
             editing_search: render.editing_search,
+            activate_match_pos: render.activate_match_pos,
         }
     }
 
     pub fn apply_params(&self, params: CopyModeParams) {
         let mut render = self.render.lock();
         render.editing_search = params.editing_search;
+        render.activate_match_pos = params.activate_match_pos;
         if render.get_pattern() != params.pattern {
             render.pattern_type = PatternType::from(&params.pattern);
             render
@@ -719,25 +722,12 @@ impl CopyRenderable {
     }
 
     fn edit_pattern(&mut self) {
-        self.activate_match_pos = ActivateMatchPosition::First;
         self.editing_search = true;
         self.update_key_table();
     }
 
     fn accept_pattern(&mut self) {
         self.editing_search = false;
-        self.update_key_table();
-    }
-
-    fn search_forward_relative_to_cursor(&mut self) {
-        self.activate_match_pos = ActivateMatchPosition::AfterCursor;
-        self.editing_search = true;
-        self.update_key_table();
-    }
-
-    fn search_backward_relative_to_cursor(&mut self) {
-        self.activate_match_pos = ActivateMatchPosition::BeforeCursor;
-        self.editing_search = true;
         self.update_key_table();
     }
 
@@ -1366,8 +1356,6 @@ impl Pane for CopyOverlay {
                     JumpBackward { prev_char } => render.jump(false, *prev_char),
                     JumpAgain => render.jump_again(false),
                     JumpReverse => render.jump_again(true),
-                    SearchForwardRelativeToCursor => render.search_forward_relative_to_cursor(),
-                    SearchBackwardRelativeToCursor => render.search_backward_relative_to_cursor(),
                 }
                 PerformAssignmentResult::Handled
             }

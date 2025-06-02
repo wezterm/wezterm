@@ -6,8 +6,8 @@ use crate::frontend::{front_end, try_front_end};
 use crate::inputmap::InputMap;
 use crate::overlay::{
     confirm_close_pane, confirm_close_tab, confirm_close_window, confirm_quit_program, launcher,
-    start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay, LauncherArgs, LauncherFlags,
-    QuickSelectOverlay,
+    start_overlay, start_overlay_pane, ActivateMatchPosition, CopyModeParams, CopyOverlay,
+    LauncherArgs, LauncherFlags, QuickSelectOverlay,
 };
 use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::scripting::guiwin::GuiWin;
@@ -31,7 +31,7 @@ use ::window::*;
 use anyhow::{anyhow, ensure, Context};
 use config::keyassignment::{
     Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
-    QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
+    QuickSelectArguments, RotationDirection, SearchDirection, SpawnCommand, SplitSize,
 };
 use config::window::WindowLevel;
 use config::{
@@ -2865,6 +2865,50 @@ impl TermWindow {
                             CopyModeParams {
                                 pattern: self.resolve_search_pattern(pattern.clone(), &pane),
                                 editing_search: true,
+                                activate_match_pos: ActivateMatchPosition::First,
+                            },
+                        )?;
+                        self.assign_overlay_for_pane(pane.pane_id(), search);
+                    }
+                    self.pane_state(pane.pane_id())
+                        .overlay
+                        .as_mut()
+                        .map(|overlay| {
+                            overlay.key_table_state.activate(KeyTableArgs {
+                                name: "search_mode",
+                                timeout_milliseconds: None,
+                                replace_current,
+                                one_shot: false,
+                                until_unknown: false,
+                                prevent_fallback: false,
+                            });
+                        });
+                }
+            }
+            ExtendedSearch { pattern, direction } => {
+                if let Some(pane) = self.get_active_pane_or_overlay() {
+                    let mut replace_current = false;
+                    let activate_match_pos = match direction {
+                        SearchDirection::Forward => ActivateMatchPosition::AfterCursor,
+                        SearchDirection::Backward => ActivateMatchPosition::BeforeCursor,
+                    };
+                    if let Some(existing) = pane.downcast_ref::<CopyOverlay>() {
+                        let mut params = existing.get_params();
+                        params.editing_search = true;
+                        params.activate_match_pos = activate_match_pos;
+                        if !pattern.is_empty() {
+                            params.pattern = self.resolve_search_pattern(pattern.clone(), &pane);
+                        }
+                        existing.apply_params(params);
+                        replace_current = true;
+                    } else {
+                        let search = CopyOverlay::with_pane(
+                            self,
+                            &pane,
+                            CopyModeParams {
+                                pattern: self.resolve_search_pattern(pattern.clone(), &pane),
+                                editing_search: true,
+                                activate_match_pos,
                             },
                         )?;
                         self.assign_overlay_for_pane(pane.pane_id(), search);
@@ -2915,6 +2959,7 @@ impl TermWindow {
                             CopyModeParams {
                                 pattern: MuxPattern::default(),
                                 editing_search: false,
+                                activate_match_pos: ActivateMatchPosition::First,
                             },
                         )?;
                         self.assign_overlay_for_pane(pane.pane_id(), copy);
