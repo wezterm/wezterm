@@ -1079,10 +1079,10 @@ impl CopyRenderable {
                 let mut balance = direction;
                 let dims = self.delegate.get_dimensions();
 
-                let range_to_process = if direction == 1 {
-                    y..dims.scrollback_top + dims.scrollback_rows as isize
-                } else {
+                let range_to_process = if direction == -1 {
                     dims.scrollback_top..y + 1
+                } else {
+                    y..dims.scrollback_top + dims.scrollback_rows as isize
                 };
 
                 let (_top, mut lines_to_process) = self.delegate.get_lines(range_to_process);
