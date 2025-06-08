@@ -32,17 +32,7 @@ wezterm.on('swap-pane', function(window, pane)
     return
   end
 
-  local target_index = nil
-  for i, p in ipairs(cur_tab:panes()) do
-    if p:pane_id() == marked_pane[1] then
-      target_index = i - 1
-      break
-    end
-  end
-
-  if target_index then
-    cur_tab:swap_active_with_index(target_index, true)
-  end
+  cur_tab:swap_active_with_id(marked_pane[1], true)
 end)
 
 config = {
