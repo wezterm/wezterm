@@ -408,5 +408,5 @@ If you prefer to disable ligatures you can instruct *harfbuzz*, the underlying
 font shaping software, to disable them by adding this to your configuration:
 
 ```lua
-config.harfbuzz_features = { calt=0, clig=0, liga=0 }
+config.harfbuzz_features = { 'calt = 0', 'clig = 0', 'liga = 0' }
 ```
