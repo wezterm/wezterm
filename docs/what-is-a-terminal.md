@@ -121,7 +121,7 @@ The value of the `TERM` environment variable would then be used to resolve
 the data from the terminal database by the library linked into the shell
 so that it could produce appropriately formatted output.
 
-## Running other programs
+## Running Other Programs
 
 When a shell spawns a child process it passes to it the input/output streams
 associated with the TTY and allows it to run. The shell is not involved in the
@@ -163,7 +163,7 @@ of them will send data to the terminal output.
 The terminal only has a single stream of output data. As far as it is
 concerned, `stdout` and `stderr` do not exist, there is only "output".
 
-## Foreground process
+## Foreground Process
 
 Seeing the above diagram, you might wonder how the input/output is kept
 straight when there are multiple programs that are consuming/producing it.
