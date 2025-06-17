@@ -59,7 +59,7 @@ flowchart LR
         direction LR
         TTY["TTY device<br>(e.g. <code>/dev/tty/0</code>)"]
     end
-    
+
     subgraph Userspace
     SHELL["Shell Program (e.g. <code>zsh</code>)"] <-- "input<br>output" --> TTY
     end
@@ -77,7 +77,6 @@ terminal, what are they?
 
 The various terminal devices typically used
 [ASCII](https://en.wikipedia.org/wiki/ASCII) to represent English text and then
-a range of special byte sequences to control things like bold text.  Different
 a range of special byte sequences to control things like bold text. Different
 vendors may have selected different byte sequences for the same concept.
 
@@ -259,7 +258,6 @@ emulator, the way it works is so fundamentally different from the unix approach
 that it has caused headaches for portable software.
 
 There was no PTY equivalent and the terminal emulation was closed off and
-restricted to that provided by the system.  Some enterprising developers were
 restricted to that provided by the system. Some enterprising developers were
 able to build terminal emulators that worked a little more like the unix
 equivalents with clever tricks that were essentially screen-scraping, but there
