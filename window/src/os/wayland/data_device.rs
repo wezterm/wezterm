@@ -112,8 +112,9 @@ impl DataDeviceHandler for WaylandState {
                 return;
             }
 
-            if let Some(copy_and_paste) = self.resolve_copy_and_paste() {
-                copy_and_paste.lock().unwrap().confirm_selection(offer);
+            for pending_mouse in self.surface_to_pending.values() {
+                let copy_and_paste = &pending_mouse.lock().unwrap().copy_and_paste;
+                copy_and_paste.lock().unwrap().confirm_selection(offer.clone());
             }
         }
     }
