@@ -1,3 +1,8 @@
+---
+tags:
+  - prompt
+---
+
 # `InputSelector`
 
 {{since('20230408-112425-69ae8472')}}
@@ -231,5 +236,7 @@ return config
 
 
 
-See also [PromptInputLine](PromptInputLine.md).
+See also:
+   * [PromptInputLine](PromptInputLine.md).
+   * [Confirmation](Confirmation.md).
 

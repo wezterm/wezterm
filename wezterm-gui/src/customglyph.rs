@@ -5,7 +5,7 @@ use ::window::color::SrgbaPixel;
 use config::DimensionContext;
 use std::ops::Range;
 use termwiz::surface::CursorShape;
-use tiny_skia::{FillRule, Paint, Path, PathBuilder, PixmapMut, Stroke, Transform};
+use tiny_skia::{BlendMode, FillRule, Paint, Path, PathBuilder, PixmapMut, Stroke, Transform};
 use wezterm_font::units::{IntPixelLength, PixelLength};
 use window::{BitmapImage, Image, Point, Rect, Size};
 
@@ -44,6 +44,39 @@ bitflags::bitflags! {
         const RIGHT = 1<<2;
         const LOWER = 1<<3;
         const LEFT = 1<<4;
+    }
+}
+
+bitflags::bitflags! {
+    pub struct ProgressChunk: u8{
+        const LEFT = 1<<1;
+        const RIGHT = 1<<2;
+        const MIDDLE = 1<<3;
+        const FULL = 1<<4;
+    }
+}
+
+bitflags::bitflags! {
+    /// Components to make up graph branch diagrams (eg. for git history)
+    pub struct Branch: u16{
+        const VERTICAL = 1<<1;
+        const HORIZONTAL = 1<<2;
+        /// 
+        const RIGHT_TO_DOWN = 1<<3;
+        /// 
+        const RIGHT_TO_UP = 1<<4;
+        /// 
+        const LEFT_TO_DOWN = 1<<5;
+        /// 
+        const LEFT_TO_UP = 1<<6;
+        /// 
+        const CIRCLE_FILLED = 1<<7;
+        /// 
+        const CIRCLE_OUTLINE = 1<<8;
+        const LEFT = 1<<9;
+        const RIGHT = 1<<10;
+        const UP = 1<<11;
+        const DOWN = 1<<12;
     }
 }
 
@@ -111,11 +144,17 @@ pub enum BlockCoord {
     /// stroke widths; if the widths were all the same then you'd
     /// just specify the points in the path and not worry about it.
     FracWithOffset(i8, i8, LineScale),
+    /// Like Zero but for a square centered in the glyph
+    SquareZero,
+    /// Like One but for a square centered in the glyph
+    SquareOne,
+    /// Like Frac but for a square centered in the glyph
+    SquareFrac(i8, i8),
 }
 
 impl BlockCoord {
     /// Compute the actual pixel value given the max dimension.
-    pub fn to_pixel(self, max: usize, underline_height: f32) -> f32 {
+    pub fn to_pixel(self, max: usize, underline_height: f32, max_square: usize) -> f32 {
         /// For interior points, adjust so that we get the middle of the row;
         /// in AA modes with 1px wide strokes this gives better results.
         fn hint(v: f32) -> f32 {
@@ -131,6 +170,11 @@ impl BlockCoord {
             Self::Frac(num, den) => hint(max as f32 * num as f32 / den as f32),
             Self::FracWithOffset(num, den, under) => {
                 hint((max as f32 * num as f32 / den as f32) + (underline_height * under.to_scale()))
+            }
+            Self::SquareZero => 0. + (max - max_square) as f32 / 2.0,
+            Self::SquareOne => max as f32 - (max - max_square) as f32 / 2.0,
+            Self::SquareFrac(num, den) => {
+                hint(max_square as f32 * num as f32 / den as f32 + (max - max_square) as f32 / 2.0)
             }
         }
     }
@@ -162,20 +206,6 @@ pub enum Block {
     QuadrantUR,
     QuadrantLL,
     QuadrantLR,
-    /// Sextants by enum combination
-    // ╭───┬───╮
-    // │ 1 │ 2 │
-    // ├───┼───┤
-    // │ 3 │ 4 │
-    // ├───┼───┤
-    // │ 5 │ 6 │
-    // ╰───┴───╯
-    Sextant1,
-    Sextant2,
-    Sextant3,
-    Sextant4,
-    Sextant5,
-    Sextant6,
 }
 
 /// Represents a Block Element glyph, decoded from
@@ -190,8 +220,17 @@ pub enum BlockKey {
     Triangles(Triangle, BlockAlpha),
     /// A combination of small diagonal lines
     CellDiagonals(CellDiagonal),
+    /// A sextant block pattern
+    Sextant(u8),
+    /// An octant block pattern
+    Octant(u8),
     /// A braille dot pattern
     Braille(u8),
+    /// A progress bar pattern
+    Progress(ProgressChunk),
+    /// A graph branch pattern
+    Branches(Branch),
+    Spinner(u8),
 
     Poly(&'static [Poly]),
 
@@ -201,6 +240,324 @@ pub enum BlockKey {
         cell_size: Size,
     },
 }
+
+// Lookup table from sextant Unicode range 0x1fb00..=0x1fb3b to sextant pattern:
+// `pattern` is a byte whose bits corresponds to elements on a 2 by 3 grid.
+// The position of a sextant for a bit position (0-indexed) is as follows:
+// ╭───┬───╮
+// │ 0 │ 1 │
+// ├───┼───┤
+// │ 2 │ 3 │
+// ├───┼───┤
+// │ 4 │ 5 │
+// ╰───┴───╯
+const SEXTANT_PATTERNS: [u8; 60] = [
+    0b000001, // [🬀] BLOCK SEXTANT-1
+    0b000010, // [🬁] BLOCK SEXTANT-2
+    0b000011, // [🬂] BLOCK SEXTANT-12
+    0b000100, // [🬃] BLOCK SEXTANT-3
+    0b000101, // [🬄] BLOCK SEXTANT-13
+    0b000110, // [🬅] BLOCK SEXTANT-23
+    0b000111, // [🬆] BLOCK SEXTANT-123
+    0b001000, // [🬇] BLOCK SEXTANT-4
+    0b001001, // [🬈] BLOCK SEXTANT-14
+    0b001010, // [🬉] BLOCK SEXTANT-24
+    0b001011, // [🬊] BLOCK SEXTANT-124
+    0b001100, // [🬋] BLOCK SEXTANT-34
+    0b001101, // [🬌] BLOCK SEXTANT-134
+    0b001110, // [🬍] BLOCK SEXTANT-234
+    0b001111, // [🬎] BLOCK SEXTANT-1234
+    0b010000, // [🬏] BLOCK SEXTANT-5
+    0b010001, // [🬐] BLOCK SEXTANT-15
+    0b010010, // [🬑] BLOCK SEXTANT-25
+    0b010011, // [🬒] BLOCK SEXTANT-125
+    0b010100, // [🬓] BLOCK SEXTANT-35
+    0b010110, // [🬔] BLOCK SEXTANT-235
+    0b010111, // [🬕] BLOCK SEXTANT-1235
+    0b011000, // [🬖] BLOCK SEXTANT-45
+    0b011001, // [🬗] BLOCK SEXTANT-145
+    0b011010, // [🬘] BLOCK SEXTANT-245
+    0b011011, // [🬙] BLOCK SEXTANT-1245
+    0b011100, // [🬚] BLOCK SEXTANT-345
+    0b011101, // [🬛] BLOCK SEXTANT-1345
+    0b011110, // [🬜] BLOCK SEXTANT-2345
+    0b011111, // [🬝] BLOCK SEXTANT-12345
+    0b100000, // [🬞] BLOCK SEXTANT-6
+    0b100001, // [🬟] BLOCK SEXTANT-16
+    0b100010, // [🬠] BLOCK SEXTANT-26
+    0b100011, // [🬡] BLOCK SEXTANT-126
+    0b100100, // [🬢] BLOCK SEXTANT-36
+    0b100101, // [🬣] BLOCK SEXTANT-136
+    0b100110, // [🬤] BLOCK SEXTANT-236
+    0b100111, // [🬥] BLOCK SEXTANT-1236
+    0b101000, // [🬦] BLOCK SEXTANT-46
+    0b101001, // [🬧] BLOCK SEXTANT-146
+    0b101011, // [🬨] BLOCK SEXTANT-1246
+    0b101100, // [🬩] BLOCK SEXTANT-346
+    0b101101, // [🬪] BLOCK SEXTANT-1346
+    0b101110, // [🬫] BLOCK SEXTANT-2346
+    0b101111, // [🬬] BLOCK SEXTANT-12346
+    0b110000, // [🬭] BLOCK SEXTANT-56
+    0b110001, // [🬮] BLOCK SEXTANT-156
+    0b110010, // [🬯] BLOCK SEXTANT-256
+    0b110011, // [🬰] BLOCK SEXTANT-1256
+    0b110100, // [🬱] BLOCK SEXTANT-356
+    0b110101, // [🬲] BLOCK SEXTANT-1356
+    0b110110, // [🬳] BLOCK SEXTANT-2356
+    0b110111, // [🬴] BLOCK SEXTANT-12356
+    0b111000, // [🬵] BLOCK SEXTANT-456
+    0b111001, // [🬶] BLOCK SEXTANT-1456
+    0b111010, // [🬷] BLOCK SEXTANT-2456
+    0b111011, // [🬸] BLOCK SEXTANT-12456
+    0b111100, // [🬹] BLOCK SEXTANT-3456
+    0b111101, // [🬺] BLOCK SEXTANT-13456
+    0b111110, // [🬻] BLOCK SEXTANT-23456
+];
+
+// Lookup table from octant Unicode range 0x1cd00..=0x1cde5 to octant pattern:
+// `pattern` is a byte whose bits corresponds to elements on a 2 by 4 grid.
+// The position of a octant for a bit position (0-indexed) is as follows:
+// ╭───┬───╮
+// │ 0 │ 1 │
+// ├───┼───┤
+// │ 2 │ 3 │
+// ├───┼───┤
+// │ 4 │ 5 │
+// ├───┼───┤
+// │ 6 │ 7 │
+// ╰───┴───╯
+const OCTANT_PATTERNS: [u8; 230] = [
+    0b00000100, // 1CD00;BLOCK OCTANT-3
+    0b00000110, // 1CD01;BLOCK OCTANT-23
+    0b00000111, // 1CD02;BLOCK OCTANT-123
+    0b00001000, // 1CD03;BLOCK OCTANT-4
+    0b00001001, // 1CD04;BLOCK OCTANT-14
+    0b00001011, // 1CD05;BLOCK OCTANT-124
+    0b00001100, // 1CD06;BLOCK OCTANT-34
+    0b00001101, // 1CD07;BLOCK OCTANT-134
+    0b00001110, // 1CD08;BLOCK OCTANT-234
+    0b00010000, // 1CD09;BLOCK OCTANT-5
+    0b00010001, // 1CD0A;BLOCK OCTANT-15
+    0b00010010, // 1CD0B;BLOCK OCTANT-25
+    0b00010011, // 1CD0C;BLOCK OCTANT-125
+    0b00010101, // 1CD0D;BLOCK OCTANT-135
+    0b00010110, // 1CD0E;BLOCK OCTANT-235
+    0b00010111, // 1CD0F;BLOCK OCTANT-1235
+    0b00011000, // 1CD10;BLOCK OCTANT-45
+    0b00011001, // 1CD11;BLOCK OCTANT-145
+    0b00011010, // 1CD12;BLOCK OCTANT-245
+    0b00011011, // 1CD13;BLOCK OCTANT-1245
+    0b00011100, // 1CD14;BLOCK OCTANT-345
+    0b00011101, // 1CD15;BLOCK OCTANT-1345
+    0b00011110, // 1CD16;BLOCK OCTANT-2345
+    0b00011111, // 1CD17;BLOCK OCTANT-12345
+    0b00100000, // 1CD18;BLOCK OCTANT-6
+    0b00100001, // 1CD19;BLOCK OCTANT-16
+    0b00100010, // 1CD1A;BLOCK OCTANT-26
+    0b00100011, // 1CD1B;BLOCK OCTANT-126
+    0b00100100, // 1CD1C;BLOCK OCTANT-36
+    0b00100101, // 1CD1D;BLOCK OCTANT-136
+    0b00100110, // 1CD1E;BLOCK OCTANT-236
+    0b00100111, // 1CD1F;BLOCK OCTANT-1236
+    0b00101001, // 1CD20;BLOCK OCTANT-146
+    0b00101010, // 1CD21;BLOCK OCTANT-246
+    0b00101011, // 1CD22;BLOCK OCTANT-1246
+    0b00101100, // 1CD23;BLOCK OCTANT-346
+    0b00101101, // 1CD24;BLOCK OCTANT-1346
+    0b00101110, // 1CD25;BLOCK OCTANT-2346
+    0b00101111, // 1CD26;BLOCK OCTANT-12346
+    0b00110000, // 1CD27;BLOCK OCTANT-56
+    0b00110001, // 1CD28;BLOCK OCTANT-156
+    0b00110010, // 1CD29;BLOCK OCTANT-256
+    0b00110011, // 1CD2A;BLOCK OCTANT-1256
+    0b00110100, // 1CD2B;BLOCK OCTANT-356
+    0b00110101, // 1CD2C;BLOCK OCTANT-1356
+    0b00110110, // 1CD2D;BLOCK OCTANT-2356
+    0b00110111, // 1CD2E;BLOCK OCTANT-12356
+    0b00111000, // 1CD2F;BLOCK OCTANT-456
+    0b00111001, // 1CD30;BLOCK OCTANT-1456
+    0b00111010, // 1CD31;BLOCK OCTANT-2456
+    0b00111011, // 1CD32;BLOCK OCTANT-12456
+    0b00111100, // 1CD33;BLOCK OCTANT-3456
+    0b00111101, // 1CD34;BLOCK OCTANT-13456
+    0b00111110, // 1CD35;BLOCK OCTANT-23456
+    0b01000001, // 1CD36;BLOCK OCTANT-17
+    0b01000010, // 1CD37;BLOCK OCTANT-27
+    0b01000011, // 1CD38;BLOCK OCTANT-127
+    0b01000100, // 1CD39;BLOCK OCTANT-37
+    0b01000101, // 1CD3A;BLOCK OCTANT-137
+    0b01000110, // 1CD3B;BLOCK OCTANT-237
+    0b01000111, // 1CD3C;BLOCK OCTANT-1237
+    0b01001000, // 1CD3D;BLOCK OCTANT-47
+    0b01001001, // 1CD3E;BLOCK OCTANT-147
+    0b01001010, // 1CD3F;BLOCK OCTANT-247
+    0b01001011, // 1CD40;BLOCK OCTANT-1247
+    0b01001100, // 1CD41;BLOCK OCTANT-347
+    0b01001101, // 1CD42;BLOCK OCTANT-1347
+    0b01001110, // 1CD43;BLOCK OCTANT-2347
+    0b01001111, // 1CD44;BLOCK OCTANT-12347
+    0b01010001, // 1CD45;BLOCK OCTANT-157
+    0b01010010, // 1CD46;BLOCK OCTANT-257
+    0b01010011, // 1CD47;BLOCK OCTANT-1257
+    0b01010100, // 1CD48;BLOCK OCTANT-357
+    0b01010110, // 1CD49;BLOCK OCTANT-2357
+    0b01010111, // 1CD4A;BLOCK OCTANT-12357
+    0b01011000, // 1CD4B;BLOCK OCTANT-457
+    0b01011001, // 1CD4C;BLOCK OCTANT-1457
+    0b01011011, // 1CD4D;BLOCK OCTANT-12457
+    0b01011100, // 1CD4E;BLOCK OCTANT-3457
+    0b01011101, // 1CD4F;BLOCK OCTANT-13457
+    0b01011110, // 1CD50;BLOCK OCTANT-23457
+    0b01100000, // 1CD51;BLOCK OCTANT-67
+    0b01100001, // 1CD52;BLOCK OCTANT-167
+    0b01100010, // 1CD53;BLOCK OCTANT-267
+    0b01100011, // 1CD54;BLOCK OCTANT-1267
+    0b01100100, // 1CD55;BLOCK OCTANT-367
+    0b01100101, // 1CD56;BLOCK OCTANT-1367
+    0b01100110, // 1CD57;BLOCK OCTANT-2367
+    0b01100111, // 1CD58;BLOCK OCTANT-12367
+    0b01101000, // 1CD59;BLOCK OCTANT-467
+    0b01101001, // 1CD5A;BLOCK OCTANT-1467
+    0b01101010, // 1CD5B;BLOCK OCTANT-2467
+    0b01101011, // 1CD5C;BLOCK OCTANT-12467
+    0b01101100, // 1CD5D;BLOCK OCTANT-3467
+    0b01101101, // 1CD5E;BLOCK OCTANT-13467
+    0b01101110, // 1CD5F;BLOCK OCTANT-23467
+    0b01101111, // 1CD60;BLOCK OCTANT-123467
+    0b01110000, // 1CD61;BLOCK OCTANT-567
+    0b01110001, // 1CD62;BLOCK OCTANT-1567
+    0b01110010, // 1CD63;BLOCK OCTANT-2567
+    0b01110011, // 1CD64;BLOCK OCTANT-12567
+    0b01110100, // 1CD65;BLOCK OCTANT-3567
+    0b01110101, // 1CD66;BLOCK OCTANT-13567
+    0b01110110, // 1CD67;BLOCK OCTANT-23567
+    0b01110111, // 1CD68;BLOCK OCTANT-123567
+    0b01111000, // 1CD69;BLOCK OCTANT-4567
+    0b01111001, // 1CD6A;BLOCK OCTANT-14567
+    0b01111010, // 1CD6B;BLOCK OCTANT-24567
+    0b01111011, // 1CD6C;BLOCK OCTANT-124567
+    0b01111100, // 1CD6D;BLOCK OCTANT-34567
+    0b01111101, // 1CD6E;BLOCK OCTANT-134567
+    0b01111110, // 1CD6F;BLOCK OCTANT-234567
+    0b01111111, // 1CD70;BLOCK OCTANT-1234567
+    0b10000001, // 1CD71;BLOCK OCTANT-18
+    0b10000010, // 1CD72;BLOCK OCTANT-28
+    0b10000011, // 1CD73;BLOCK OCTANT-128
+    0b10000100, // 1CD74;BLOCK OCTANT-38
+    0b10000101, // 1CD75;BLOCK OCTANT-138
+    0b10000110, // 1CD76;BLOCK OCTANT-238
+    0b10000111, // 1CD77;BLOCK OCTANT-1238
+    0b10001000, // 1CD78;BLOCK OCTANT-48
+    0b10001001, // 1CD79;BLOCK OCTANT-148
+    0b10001010, // 1CD7A;BLOCK OCTANT-248
+    0b10001011, // 1CD7B;BLOCK OCTANT-1248
+    0b10001100, // 1CD7C;BLOCK OCTANT-348
+    0b10001101, // 1CD7D;BLOCK OCTANT-1348
+    0b10001110, // 1CD7E;BLOCK OCTANT-2348
+    0b10001111, // 1CD7F;BLOCK OCTANT-12348
+    0b10010000, // 1CD80;BLOCK OCTANT-58
+    0b10010001, // 1CD81;BLOCK OCTANT-158
+    0b10010010, // 1CD82;BLOCK OCTANT-258
+    0b10010011, // 1CD83;BLOCK OCTANT-1258
+    0b10010100, // 1CD84;BLOCK OCTANT-358
+    0b10010101, // 1CD85;BLOCK OCTANT-1358
+    0b10010110, // 1CD86;BLOCK OCTANT-2358
+    0b10010111, // 1CD87;BLOCK OCTANT-12358
+    0b10011000, // 1CD88;BLOCK OCTANT-458
+    0b10011001, // 1CD89;BLOCK OCTANT-1458
+    0b10011010, // 1CD8A;BLOCK OCTANT-2458
+    0b10011011, // 1CD8B;BLOCK OCTANT-12458
+    0b10011100, // 1CD8C;BLOCK OCTANT-3458
+    0b10011101, // 1CD8D;BLOCK OCTANT-13458
+    0b10011110, // 1CD8E;BLOCK OCTANT-23458
+    0b10011111, // 1CD8F;BLOCK OCTANT-123458
+    0b10100001, // 1CD90;BLOCK OCTANT-168
+    0b10100010, // 1CD91;BLOCK OCTANT-268
+    0b10100011, // 1CD92;BLOCK OCTANT-1268
+    0b10100100, // 1CD93;BLOCK OCTANT-368
+    0b10100110, // 1CD94;BLOCK OCTANT-2368
+    0b10100111, // 1CD95;BLOCK OCTANT-12368
+    0b10101000, // 1CD96;BLOCK OCTANT-468
+    0b10101001, // 1CD97;BLOCK OCTANT-1468
+    0b10101011, // 1CD98;BLOCK OCTANT-12468
+    0b10101100, // 1CD99;BLOCK OCTANT-3468
+    0b10101101, // 1CD9A;BLOCK OCTANT-13468
+    0b10101110, // 1CD9B;BLOCK OCTANT-23468
+    0b10110000, // 1CD9C;BLOCK OCTANT-568
+    0b10110001, // 1CD9D;BLOCK OCTANT-1568
+    0b10110010, // 1CD9E;BLOCK OCTANT-2568
+    0b10110011, // 1CD9F;BLOCK OCTANT-12568
+    0b10110100, // 1CDA0;BLOCK OCTANT-3568
+    0b10110101, // 1CDA1;BLOCK OCTANT-13568
+    0b10110110, // 1CDA2;BLOCK OCTANT-23568
+    0b10110111, // 1CDA3;BLOCK OCTANT-123568
+    0b10111000, // 1CDA4;BLOCK OCTANT-4568
+    0b10111001, // 1CDA5;BLOCK OCTANT-14568
+    0b10111010, // 1CDA6;BLOCK OCTANT-24568
+    0b10111011, // 1CDA7;BLOCK OCTANT-124568
+    0b10111100, // 1CDA8;BLOCK OCTANT-34568
+    0b10111101, // 1CDA9;BLOCK OCTANT-134568
+    0b10111110, // 1CDAA;BLOCK OCTANT-234568
+    0b10111111, // 1CDAB;BLOCK OCTANT-1234568
+    0b11000001, // 1CDAC;BLOCK OCTANT-178
+    0b11000010, // 1CDAD;BLOCK OCTANT-278
+    0b11000011, // 1CDAE;BLOCK OCTANT-1278
+    0b11000100, // 1CDAF;BLOCK OCTANT-378
+    0b11000101, // 1CDB0;BLOCK OCTANT-1378
+    0b11000110, // 1CDB1;BLOCK OCTANT-2378
+    0b11000111, // 1CDB2;BLOCK OCTANT-12378
+    0b11001000, // 1CDB3;BLOCK OCTANT-478
+    0b11001001, // 1CDB4;BLOCK OCTANT-1478
+    0b11001010, // 1CDB5;BLOCK OCTANT-2478
+    0b11001011, // 1CDB6;BLOCK OCTANT-12478
+    0b11001100, // 1CDB7;BLOCK OCTANT-3478
+    0b11001101, // 1CDB8;BLOCK OCTANT-13478
+    0b11001110, // 1CDB9;BLOCK OCTANT-23478
+    0b11001111, // 1CDBA;BLOCK OCTANT-123478
+    0b11010000, // 1CDBB;BLOCK OCTANT-578
+    0b11010001, // 1CDBC;BLOCK OCTANT-1578
+    0b11010010, // 1CDBD;BLOCK OCTANT-2578
+    0b11010011, // 1CDBE;BLOCK OCTANT-12578
+    0b11010100, // 1CDBF;BLOCK OCTANT-3578
+    0b11010101, // 1CDC0;BLOCK OCTANT-13578
+    0b11010110, // 1CDC1;BLOCK OCTANT-23578
+    0b11010111, // 1CDC2;BLOCK OCTANT-123578
+    0b11011000, // 1CDC3;BLOCK OCTANT-4578
+    0b11011001, // 1CDC4;BLOCK OCTANT-14578
+    0b11011010, // 1CDC5;BLOCK OCTANT-24578
+    0b11011011, // 1CDC6;BLOCK OCTANT-124578
+    0b11011100, // 1CDC7;BLOCK OCTANT-34578
+    0b11011101, // 1CDC8;BLOCK OCTANT-134578
+    0b11011110, // 1CDC9;BLOCK OCTANT-234578
+    0b11011111, // 1CDCA;BLOCK OCTANT-1234578
+    0b11100000, // 1CDCB;BLOCK OCTANT-678
+    0b11100001, // 1CDCC;BLOCK OCTANT-1678
+    0b11100010, // 1CDCD;BLOCK OCTANT-2678
+    0b11100011, // 1CDCE;BLOCK OCTANT-12678
+    0b11100100, // 1CDCF;BLOCK OCTANT-3678
+    0b11100101, // 1CDD0;BLOCK OCTANT-13678
+    0b11100110, // 1CDD1;BLOCK OCTANT-23678
+    0b11100111, // 1CDD2;BLOCK OCTANT-123678
+    0b11101000, // 1CDD3;BLOCK OCTANT-4678
+    0b11101001, // 1CDD4;BLOCK OCTANT-14678
+    0b11101010, // 1CDD5;BLOCK OCTANT-24678
+    0b11101011, // 1CDD6;BLOCK OCTANT-124678
+    0b11101100, // 1CDD7;BLOCK OCTANT-34678
+    0b11101101, // 1CDD8;BLOCK OCTANT-134678
+    0b11101110, // 1CDD9;BLOCK OCTANT-234678
+    0b11101111, // 1CDDA;BLOCK OCTANT-1234678
+    0b11110001, // 1CDDB;BLOCK OCTANT-15678
+    0b11110010, // 1CDDC;BLOCK OCTANT-25678
+    0b11110011, // 1CDDD;BLOCK OCTANT-125678
+    0b11110100, // 1CDDE;BLOCK OCTANT-35678
+    0b11110110, // 1CDDF;BLOCK OCTANT-235678
+    0b11110111, // 1CDE0;BLOCK OCTANT-1235678
+    0b11111000, // 1CDE1;BLOCK OCTANT-45678
+    0b11111001, // 1CDE2;BLOCK OCTANT-145678
+    0b11111011, // 1CDE3;BLOCK OCTANT-1245678
+    0b11111101, // 1CDE4;BLOCK OCTANT-1345678
+    0b11111110, // 1CDE5;BLOCK OCTANT-2345678
+];
 
 /// Filled polygon used to describe the more complex shapes in
 /// <https://unicode.org/charts/PDF/U1FB00.pdf>
@@ -225,6 +582,10 @@ pub enum PolyCommand {
         center: BlockPoint,
         radiuses: BlockPoint,
     },
+    Circle {
+        center: BlockPoint,
+        radius: BlockCoord,
+    },
     Close,
 }
 
@@ -232,36 +593,46 @@ impl PolyCommand {
     fn to_skia(&self, width: usize, height: usize, underline_height: f32, pb: &mut PathBuilder) {
         match self {
             Self::MoveTo(x, y) => pb.move_to(
-                x.to_pixel(width, underline_height),
-                y.to_pixel(height, underline_height),
+                x.to_pixel(width, underline_height, width.min(height)),
+                y.to_pixel(height, underline_height, width.min(height)),
             ),
             Self::LineTo(x, y) => pb.line_to(
-                x.to_pixel(width, underline_height),
-                y.to_pixel(height, underline_height),
+                x.to_pixel(width, underline_height, width.min(height)),
+                y.to_pixel(height, underline_height, width.min(height)),
             ),
             Self::QuadTo {
                 control: (x1, y1),
                 to: (x, y),
             } => pb.quad_to(
-                x1.to_pixel(width, underline_height),
-                y1.to_pixel(height, underline_height),
-                x.to_pixel(width, underline_height),
-                y.to_pixel(height, underline_height),
+                x1.to_pixel(width, underline_height, width.min(height)),
+                y1.to_pixel(height, underline_height, width.min(height)),
+                x.to_pixel(width, underline_height, width.min(height)),
+                y.to_pixel(height, underline_height, width.min(height)),
             ),
             Self::Oval {
                 center: (x, y),
                 radiuses: (w, h),
             } => {
-                let x = x.to_pixel(width, underline_height) - width as f32;
-                let y = y.to_pixel(height, underline_height) - height as f32;
-                let w = w.to_pixel(width, underline_height) * 2.0;
-                let h = h.to_pixel(height, underline_height) * 2.0;
+                let x = x.to_pixel(width, underline_height, width.min(height)) - width as f32;
+                let y = y.to_pixel(height, underline_height, width.min(height)) - height as f32;
+                let w = w.to_pixel(width, underline_height, width.min(height)) * 2.0;
+                let h = h.to_pixel(height, underline_height, width.min(height)) * 2.0;
 
                 if let Some(oval) = tiny_skia::Rect::from_xywh(x, y, w, h) {
                     pb.push_oval(oval);
                 } else {
                     log::error!("Can't push oval, values: {:?}", self);
                 }
+            }
+            Self::Circle {
+                center: (x, y),
+                radius: r,
+            } => {
+                let x = x.to_pixel(width, underline_height, width.min(height));
+                let y = y.to_pixel(height, underline_height, width.min(height));
+                let r = r.to_pixel(width.min(height), underline_height, width.min(height));
+
+                pb.push_circle(x, y, r);
             }
             Self::Close => pb.close(),
         };
@@ -1468,7 +1839,7 @@ impl BlockKey {
                 },
                 Poly {
                     path: &[
-                        PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
+                        PolyCommand::MoveTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
                         PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
                         PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
                         PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::One),
@@ -3307,237 +3678,22 @@ impl BlockKey {
             0x259e => Self::Blocks(&[Block::QuadrantUR, Block::QuadrantLL]),
             // [▟] QUADRANT UPPER RIGHT AND LOWER LEFT AND LOWER RIGHT
             0x259f => Self::Blocks(&[Block::QuadrantUR, Block::QuadrantLL, Block::QuadrantLR]),
-            // [🬀] BLOCK SEXTANT-1
-            0x1fb00 => Self::Blocks(&[Block::Sextant1]),
-            // [🬁] BLOCK SEXTANT-2
-            0x1fb01 => Self::Blocks(&[Block::Sextant2]),
-            // [🬂] BLOCK SEXTANT-12
-            0x1fb02 => Self::Blocks(&[Block::Sextant1, Block::Sextant2]),
-            // [🬃] BLOCK SEXTANT-3
-            0x1fb03 => Self::Blocks(&[Block::Sextant3]),
-            // [🬄] BLOCK SEXTANT-13
-            0x1fb04 => Self::Blocks(&[Block::Sextant1, Block::Sextant3]),
-            // [🬅] BLOCK SEXTANT-23
-            0x1fb05 => Self::Blocks(&[Block::Sextant2, Block::Sextant3]),
-            // [🬆] BLOCK SEXTANT-123
-            0x1fb06 => Self::Blocks(&[Block::Sextant1, Block::Sextant2, Block::Sextant3]),
-            // [🬇] BLOCK SEXTANT-4
-            0x1fb07 => Self::Blocks(&[Block::Sextant4]),
-            // [🬈] BLOCK SEXTANT-14
-            0x1fb08 => Self::Blocks(&[Block::Sextant1, Block::Sextant4]),
-            // [🬉] BLOCK SEXTANT-24
-            0x1fb09 => Self::Blocks(&[Block::Sextant2, Block::Sextant4]),
-            // [🬊] BLOCK SEXTANT-124
-            0x1fb0a => Self::Blocks(&[Block::Sextant1, Block::Sextant2, Block::Sextant4]),
-            // [🬋] BLOCK SEXTANT-34
-            0x1fb0b => Self::Blocks(&[Block::Sextant3, Block::Sextant4]),
-            // [🬌] BLOCK SEXTANT-134
-            0x1fb0c => Self::Blocks(&[Block::Sextant1, Block::Sextant3, Block::Sextant4]),
-            // [🬍] BLOCK SEXTANT-234
-            0x1fb0d => Self::Blocks(&[Block::Sextant2, Block::Sextant3, Block::Sextant4]),
-            // [🬎] BLOCK SEXTANT-1234
-            0x1fb0e => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant2,
-                Block::Sextant3,
-                Block::Sextant4,
-            ]),
-            // [🬏] BLOCK SEXTANT-5
-            0x1fb0f => Self::Blocks(&[Block::Sextant5]),
-            // [🬐] BLOCK SEXTANT-15
-            0x1fb10 => Self::Blocks(&[Block::Sextant1, Block::Sextant5]),
-            // [🬑] BLOCK SEXTANT-25
-            0x1fb11 => Self::Blocks(&[Block::Sextant2, Block::Sextant5]),
-            // [🬒] BLOCK SEXTANT-125
-            0x1fb12 => Self::Blocks(&[Block::Sextant1, Block::Sextant2, Block::Sextant5]),
-            // [🬓] BLOCK SEXTANT-35
-            0x1fb13 => Self::Blocks(&[Block::Sextant3, Block::Sextant5]),
-            // [🬔] BLOCK SEXTANT-235
-            0x1fb14 => Self::Blocks(&[Block::Sextant2, Block::Sextant3, Block::Sextant5]),
-            // [🬕] BLOCK SEXTANT-1235
-            0x1fb15 => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant2,
-                Block::Sextant3,
-                Block::Sextant5,
-            ]),
-            // [🬖] BLOCK SEXTANT-45
-            0x1fb16 => Self::Blocks(&[Block::Sextant4, Block::Sextant5]),
-            // [🬗] BLOCK SEXTANT-145
-            0x1fb17 => Self::Blocks(&[Block::Sextant1, Block::Sextant4, Block::Sextant5]),
-            // [🬘] BLOCK SEXTANT-245
-            0x1fb18 => Self::Blocks(&[Block::Sextant2, Block::Sextant4, Block::Sextant5]),
-            // [🬙] BLOCK SEXTANT-1245
-            0x1fb19 => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant2,
-                Block::Sextant4,
-                Block::Sextant5,
-            ]),
-            // [🬚] BLOCK SEXTANT-345
-            0x1fb1a => Self::Blocks(&[Block::Sextant3, Block::Sextant4, Block::Sextant5]),
-            // [🬛] BLOCK SEXTANT-1345
-            0x1fb1b => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant3,
-                Block::Sextant4,
-                Block::Sextant5,
-            ]),
-            // [🬜] BLOCK SEXTANT-2345
-            0x1fb1c => Self::Blocks(&[
-                Block::Sextant2,
-                Block::Sextant3,
-                Block::Sextant4,
-                Block::Sextant5,
-            ]),
-            // [🬝] BLOCK SEXTANT-12345
-            0x1fb1d => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant2,
-                Block::Sextant3,
-                Block::Sextant4,
-                Block::Sextant5,
-            ]),
-            // [🬞] BLOCK SEXTANT-6
-            0x1fb1e => Self::Blocks(&[Block::Sextant6]),
-            // [🬟] BLOCK SEXTANT-16
-            0x1fb1f => Self::Blocks(&[Block::Sextant1, Block::Sextant6]),
-            // [🬠] BLOCK SEXTANT-26
-            0x1fb20 => Self::Blocks(&[Block::Sextant2, Block::Sextant6]),
-            // [🬡] BLOCK SEXTANT-126
-            0x1fb21 => Self::Blocks(&[Block::Sextant1, Block::Sextant2, Block::Sextant6]),
-            // [🬢] BLOCK SEXTANT-36
-            0x1fb22 => Self::Blocks(&[Block::Sextant3, Block::Sextant6]),
-            // [🬣] BLOCK SEXTANT-136
-            0x1fb23 => Self::Blocks(&[Block::Sextant1, Block::Sextant3, Block::Sextant6]),
-            // [🬤] BLOCK SEXTANT-236
-            0x1fb24 => Self::Blocks(&[Block::Sextant2, Block::Sextant3, Block::Sextant6]),
-            // [🬥] BLOCK SEXTANT-1236
-            0x1fb25 => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant2,
-                Block::Sextant3,
-                Block::Sextant6,
-            ]),
-            // [🬦] BLOCK SEXTANT-46
-            0x1fb26 => Self::Blocks(&[Block::Sextant4, Block::Sextant6]),
-            // [🬧] BLOCK SEXTANT-146
-            0x1fb27 => Self::Blocks(&[Block::Sextant1, Block::Sextant4, Block::Sextant6]),
-            // [🬨] BLOCK SEXTANT-1246
-            0x1fb28 => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant2,
-                Block::Sextant4,
-                Block::Sextant6,
-            ]),
-            // [🬩] BLOCK SEXTANT-346
-            0x1fb29 => Self::Blocks(&[Block::Sextant3, Block::Sextant4, Block::Sextant6]),
-            // [🬪] BLOCK SEXTANT-1346
-            0x1fb2a => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant3,
-                Block::Sextant4,
-                Block::Sextant6,
-            ]),
-            // [🬫] BLOCK SEXTANT-2346
-            0x1fb2b => Self::Blocks(&[
-                Block::Sextant2,
-                Block::Sextant3,
-                Block::Sextant4,
-                Block::Sextant6,
-            ]),
-            // [🬬] BLOCK SEXTANT-12346
-            0x1fb2c => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant2,
-                Block::Sextant3,
-                Block::Sextant4,
-                Block::Sextant6,
-            ]),
-            // [🬭] BLOCK SEXTANT-56
-            0x1fb2d => Self::Blocks(&[Block::Sextant5, Block::Sextant6]),
-            // [🬮] BLOCK SEXTANT-156
-            0x1fb2e => Self::Blocks(&[Block::Sextant1, Block::Sextant5, Block::Sextant6]),
-            // [🬯] BLOCK SEXTANT-256
-            0x1fb2f => Self::Blocks(&[Block::Sextant2, Block::Sextant5, Block::Sextant6]),
-            // [🬰] BLOCK SEXTANT-1256
-            0x1fb30 => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant2,
-                Block::Sextant5,
-                Block::Sextant6,
-            ]),
-            // [🬱] BLOCK SEXTANT-356
-            0x1fb31 => Self::Blocks(&[Block::Sextant3, Block::Sextant5, Block::Sextant6]),
-            // [🬲] BLOCK SEXTANT-1356
-            0x1fb32 => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant3,
-                Block::Sextant5,
-                Block::Sextant6,
-            ]),
-            // [🬳] BLOCK SEXTANT-2356
-            0x1fb33 => Self::Blocks(&[
-                Block::Sextant2,
-                Block::Sextant3,
-                Block::Sextant5,
-                Block::Sextant6,
-            ]),
-            // [🬴] BLOCK SEXTANT-12356
-            0x1fb34 => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant2,
-                Block::Sextant3,
-                Block::Sextant5,
-                Block::Sextant6,
-            ]),
-            // [🬵] BLOCK SEXTANT-456
-            0x1fb35 => Self::Blocks(&[Block::Sextant4, Block::Sextant5, Block::Sextant6]),
-            // [🬶] BLOCK SEXTANT-1456
-            0x1fb36 => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant4,
-                Block::Sextant5,
-                Block::Sextant6,
-            ]),
-            // [🬷] BLOCK SEXTANT-2456
-            0x1fb37 => Self::Blocks(&[
-                Block::Sextant2,
-                Block::Sextant4,
-                Block::Sextant5,
-                Block::Sextant6,
-            ]),
-            // [🬸] BLOCK SEXTANT-12456
-            0x1fb38 => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant2,
-                Block::Sextant4,
-                Block::Sextant5,
-                Block::Sextant6,
-            ]),
-            // [🬹] BLOCK SEXTANT-3456
-            0x1fb39 => Self::Blocks(&[
-                Block::Sextant3,
-                Block::Sextant4,
-                Block::Sextant5,
-                Block::Sextant6,
-            ]),
-            // [🬺] BLOCK SEXTANT-13456
-            0x1fb3a => Self::Blocks(&[
-                Block::Sextant1,
-                Block::Sextant3,
-                Block::Sextant4,
-                Block::Sextant5,
-                Block::Sextant6,
-            ]),
-            // [🬻] BLOCK SEXTANT-23456
-            0x1fb3b => Self::Blocks(&[
-                Block::Sextant2,
-                Block::Sextant3,
-                Block::Sextant4,
-                Block::Sextant5,
-                Block::Sextant6,
-            ]),
+            // Sextant blocks
+            n @ 0x1fb00..=0x1fb3b => Self::Sextant(SEXTANT_PATTERNS[(n & 0x3f) as usize]),
+            // Octant blocks
+            n @ 0x1cd00..=0x1cde5 => Self::Octant(OCTANT_PATTERNS[(n & 0xff) as usize]),
+            // [𜺠] RIGHT HALF LOWER ONE QUARTER BLOCK (corresponds to OCTANT-8)
+            0x1cea0 => Self::Octant(0b10000000),
+            // [𜺣; EFT HALF LOWER ONE QUARTER BLOCK (corresponds to OCTANT-7)
+            0x1cea3 => Self::Octant(0b01000000),
+            // [𜺨] LEFT HALF UPPER ONE QUARTER BLOCK (corresponds to OCTANT-1)
+            0x1cea8 => Self::Octant(0b00000001),
+            // [𜺫] RIGHT HALF UPPER ONE QUARTER BLOCK (corresponds to OCTANT-2)
+            0x1ceab => Self::Octant(0b00000010),
+            // [🯦] MIDDLE LEFT ONE QUARTER BLOCK (corresponds to OCTANT-35)
+            0x1fbe6 => Self::Octant(0b00010100),
+            // [🯧] MIDDLE RIGHT ONE QUARTER BLOCK (corresponds to OCTANT-46)
+            0x1fbe7 => Self::Octant(0b00101000),
             // [🬼] LOWER LEFT BLOCK DIAGONAL LOWER MIDDLE LEFT TO LOWER CENTRE
             0x1fb3c => Self::Poly(&[Poly {
                 path: &[
@@ -4600,6 +4756,233 @@ impl BlockKey {
                 intensity: BlockAlpha::Full,
                 style: PolyStyle::Outline,
             }]),
+            // [] Progress chunk - left empty
+            0xee00 => Self::Progress(ProgressChunk::LEFT),
+            // [] Progress chunk - middle empty
+            0xee01 => Self::Progress(ProgressChunk::MIDDLE),
+            // [] Progress chunk - right empty
+            0xee02 => Self::Progress(ProgressChunk::RIGHT),
+            // [] Progress chunk - left full
+            0xee03 => Self::Progress(ProgressChunk::LEFT | ProgressChunk::FULL),
+            // [] Progress chunk - middle full
+            0xee04 => Self::Progress(ProgressChunk::MIDDLE | ProgressChunk::FULL),
+            // [] Progress chunk - right full
+            0xee05 => Self::Progress(ProgressChunk::RIGHT | ProgressChunk::FULL),
+            n @ 0xee06..=0xee0b => Self::Spinner((n & 0xff) as u8 - 6),
+            // [] Branch drawing horizontal
+            0xF5D0 => Self::Branches(Branch::HORIZONTAL),
+            // [] Branch drawing vertical
+            0xF5D1 => Self::Branches(Branch::VERTICAL),
+            // [] Branch drawing fade out to right
+            0xF5D2 => Self::Poly(&[Poly {
+                path: &[
+                    PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
+                    PolyCommand::LineTo(BlockCoord::Frac(5, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(6, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::LineTo(BlockCoord::Frac(10, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(12, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::LineTo(BlockCoord::Frac(15, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(18, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::LineTo(BlockCoord::Frac(20, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(24, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::LineTo(BlockCoord::Frac(25, 30), BlockCoord::Frac(1, 2)),
+                ],
+                intensity: BlockAlpha::Full,
+                style: PolyStyle::OutlineHeavy,
+            }]),
+            // [] Branch drawing fade out to left
+            0xF5D3 => Self::Poly(&[Poly {
+                path: &[
+                    PolyCommand::MoveTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
+                    PolyCommand::LineTo(BlockCoord::Frac(30 - 5, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(30 - 6, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::LineTo(BlockCoord::Frac(30 - 10, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(30 - 12, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::LineTo(BlockCoord::Frac(30 - 15, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(30 - 18, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::LineTo(BlockCoord::Frac(30 - 20, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(30 - 24, 30), BlockCoord::Frac(1, 2)),
+                    PolyCommand::LineTo(BlockCoord::Frac(30 - 25, 30), BlockCoord::Frac(1, 2)),
+                ],
+                intensity: BlockAlpha::Full,
+                style: PolyStyle::OutlineHeavy,
+            }]),
+            // [] Branch drawing fade out to lower
+            0xF5D4 => Self::Poly(&[Poly {
+                path: &[
+                    PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
+                    PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(5, 30)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(6, 30)),
+                    PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(10, 30)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(12, 30)),
+                    PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(15, 30)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(18, 30)),
+                    PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(20, 30)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(24, 30)),
+                    PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(25, 30)),
+                ],
+                intensity: BlockAlpha::Full,
+                style: PolyStyle::OutlineHeavy,
+            }]),
+            // [] Branch drawing fade out to upper
+            0xF5D5 => Self::Poly(&[Poly {
+                path: &[
+                    PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::One),
+                    PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 5, 30)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 6, 30)),
+                    PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 10, 30)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 12, 30)),
+                    PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 15, 30)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 18, 30)),
+                    PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 20, 30)),
+                    PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 24, 30)),
+                    PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 25, 30)),
+                ],
+                intensity: BlockAlpha::Full,
+                style: PolyStyle::OutlineHeavy,
+            }]),
+            // [] Branch drawing arc down and right
+            0xF5D6 => Self::Branches(Branch::RIGHT_TO_DOWN),
+            // [] Branch drawing arc down and left
+            0xF5D7 => Self::Branches(Branch::LEFT_TO_DOWN),
+            // [] Branch drawing arc up and right
+            0xF5D8 => Self::Branches(Branch::RIGHT_TO_UP),
+            // [] Branch drawing arc up and left
+            0xF5D9 => Self::Branches(Branch::LEFT_TO_UP),
+            // [] Branch drawing merge from lower and right
+            0xF5DA => Self::Branches(Branch::VERTICAL | Branch::RIGHT_TO_UP),
+            // [] Branch drawing branch to upper and right
+            0xF5DB => Self::Branches(Branch::VERTICAL | Branch::RIGHT_TO_DOWN),
+            // [] Branch drawing upper to right and lower to right
+            0xF5DC => Self::Branches(Branch::RIGHT_TO_UP | Branch::RIGHT_TO_DOWN),
+            // [] Branch drawing merge from left and down
+            0xF5DD => Self::Branches(Branch::VERTICAL | Branch::LEFT_TO_UP),
+            // [] Branch drawing branch to left and up
+            0xF5DE => Self::Branches(Branch::VERTICAL | Branch::LEFT_TO_DOWN),
+            // [] Branch drawing upper to left and lower to left
+            0xF5DF => Self::Branches(Branch::LEFT_TO_UP | Branch::LEFT_TO_DOWN),
+            // [] Branch drawing from left to right and left to down
+            0xF5E0 => Self::Branches(Branch::HORIZONTAL | Branch::LEFT_TO_DOWN),
+            // [] Branch drawing from right to left and right to down
+            0xF5E1 => Self::Branches(Branch::HORIZONTAL | Branch::RIGHT_TO_DOWN),
+            // [] Branch drawing from down to left and down to right
+            0xF5E2 => Self::Branches(Branch::LEFT_TO_DOWN | Branch::RIGHT_TO_DOWN),
+            // [] Branch drawing from left to up and left to right
+            0xF5E3 => Self::Branches(Branch::HORIZONTAL | Branch::LEFT_TO_UP),
+            // [] Branch drawing from right to up and right to left
+            0xF5E4 => Self::Branches(Branch::HORIZONTAL | Branch::RIGHT_TO_UP),
+            // [] Branch drawing from up to left and up to right
+            0xF5E5 => Self::Branches(Branch::LEFT_TO_UP | Branch::RIGHT_TO_UP),
+            // [] Branch drawing from up to left, up to right, and up to down
+            0xF5E6 => Self::Branches(Branch::VERTICAL | Branch::LEFT_TO_UP | Branch::RIGHT_TO_UP),
+            // [] Branch drawing from down to left, down to right, and down to up
+            0xF5E7 => {
+                Self::Branches(Branch::VERTICAL | Branch::LEFT_TO_DOWN | Branch::RIGHT_TO_DOWN)
+            }
+            // [] Branch drawing from left to right, left to up, and left to down
+            0xF5E8 => {
+                Self::Branches(Branch::HORIZONTAL | Branch::LEFT_TO_UP | Branch::LEFT_TO_DOWN)
+            }
+            // [] Branch drawing from right to left, right to up, and right to down
+            0xF5E9 => {
+                Self::Branches(Branch::HORIZONTAL | Branch::RIGHT_TO_DOWN | Branch::RIGHT_TO_UP)
+            }
+            // [] Branch drawing from up to down, up to left, and down to right
+            0xF5EA => Self::Branches(Branch::VERTICAL | Branch::LEFT_TO_UP | Branch::RIGHT_TO_DOWN),
+            // [] Branch drawing from up to down, up to right, and down to left
+            0xF5EB => Self::Branches(Branch::VERTICAL | Branch::LEFT_TO_DOWN | Branch::RIGHT_TO_UP),
+            // [] Branch drawing from left to right, left to up, and right to down
+            0xF5EC => {
+                Self::Branches(Branch::HORIZONTAL | Branch::LEFT_TO_UP | Branch::RIGHT_TO_DOWN)
+            }
+            // [] Branch drawing from left to right, left to down, and right to up
+            0xF5ED => {
+                Self::Branches(Branch::HORIZONTAL | Branch::LEFT_TO_DOWN | Branch::RIGHT_TO_UP)
+            }
+            // [] Branch drawing filled circle
+            0xF5EE => Self::Branches(Branch::CIRCLE_FILLED),
+            // [] Branch drawing outline circle
+            0xF5EF => Self::Branches(Branch::CIRCLE_OUTLINE),
+            // [] Branch drawing filled circle connected to right
+            0xF5F0 => Self::Branches(Branch::CIRCLE_FILLED | Branch::RIGHT),
+            // [] Branch drawing outline circle connected to right
+            0xF5F1 => Self::Branches(Branch::CIRCLE_OUTLINE | Branch::RIGHT),
+            // [] Branch drawing filled circle connected to left
+            0xF5F2 => Self::Branches(Branch::CIRCLE_FILLED | Branch::LEFT),
+            // [] Branch drawing outline circle connected to left
+            0xF5F3 => Self::Branches(Branch::CIRCLE_OUTLINE | Branch::LEFT),
+            // [] Branch drawing filled circle connected to left and right
+            0xF5F4 => Self::Branches(Branch::CIRCLE_FILLED | Branch::LEFT | Branch::RIGHT),
+            // [] Branch drawing outline circle connected to left and right
+            0xF5F5 => Self::Branches(Branch::CIRCLE_OUTLINE | Branch::LEFT | Branch::RIGHT),
+            // [] Branch drawing filled circle connected to down
+            0xF5F6 => Self::Branches(Branch::CIRCLE_FILLED | Branch::DOWN),
+            // [] Branch drawing outline circle connected to down
+            0xF5F7 => Self::Branches(Branch::CIRCLE_OUTLINE | Branch::DOWN),
+            // [] Branch drawing filled circle connected to up
+            0xF5F8 => Self::Branches(Branch::CIRCLE_FILLED | Branch::UP),
+            // [] Branch drawing outline circle connected to up
+            0xF5F9 => Self::Branches(Branch::CIRCLE_OUTLINE | Branch::UP),
+            // [] Branch drawing filled circle connected to up and down
+            0xF5FA => Self::Branches(Branch::CIRCLE_FILLED | Branch::UP | Branch::DOWN),
+            // [] Branch drawing outline circle connected to up and down
+            0xF5FB => Self::Branches(Branch::CIRCLE_OUTLINE | Branch::UP | Branch::DOWN),
+            // [] Branch drawing filled circle connected to right and down
+            0xF5FC => Self::Branches(Branch::CIRCLE_FILLED | Branch::RIGHT | Branch::DOWN),
+            // [] Branch drawing outline circle connected to right and down
+            0xF5FD => Self::Branches(Branch::CIRCLE_OUTLINE | Branch::RIGHT | Branch::DOWN),
+            // [] Branch drawing filled circle connected to left and down
+            0xF5FE => Self::Branches(Branch::CIRCLE_FILLED | Branch::LEFT | Branch::DOWN),
+            // [] Branch drawing outline circle connected to left and down
+            0xF5FF => Self::Branches(Branch::CIRCLE_OUTLINE | Branch::LEFT | Branch::DOWN),
+            // [] Branch drawing filled circle connected to right and up
+            0xF600 => Self::Branches(Branch::CIRCLE_FILLED | Branch::RIGHT | Branch::UP),
+            // [] Branch drawing outline circle connected to right and up
+            0xF601 => Self::Branches(Branch::CIRCLE_OUTLINE | Branch::RIGHT | Branch::UP),
+            // [] Branch drawing filled circle connected to left and up
+            0xF602 => Self::Branches(Branch::CIRCLE_FILLED | Branch::LEFT | Branch::UP),
+            // [] Branch drawing outline circle connected to left and up
+            0xF603 => Self::Branches(Branch::CIRCLE_OUTLINE | Branch::LEFT | Branch::UP),
+            // [] Branch drawing filled circle connected to right, up, and down
+            0xF604 => {
+                Self::Branches(Branch::CIRCLE_FILLED | Branch::RIGHT | Branch::UP | Branch::DOWN)
+            }
+            // [] Branch drawing outline circle connected to right, up, and down
+            0xF605 => {
+                Self::Branches(Branch::CIRCLE_OUTLINE | Branch::RIGHT | Branch::UP | Branch::DOWN)
+            }
+            // [] Branch drawing filled circle connected to left, up, and down
+            0xF606 => {
+                Self::Branches(Branch::CIRCLE_FILLED | Branch::LEFT | Branch::UP | Branch::DOWN)
+            }
+            // [] Branch drawing outline circle connected to left, up, and down
+            0xF607 => {
+                Self::Branches(Branch::CIRCLE_OUTLINE | Branch::LEFT | Branch::UP | Branch::DOWN)
+            }
+            // [] Branch drawing filled circle connected to left, right, and down
+            0xF608 => {
+                Self::Branches(Branch::CIRCLE_FILLED | Branch::LEFT | Branch::RIGHT | Branch::DOWN)
+            }
+            // [] Branch drawing outline circle connected to left, right, and down
+            0xF609 => {
+                Self::Branches(Branch::CIRCLE_OUTLINE | Branch::LEFT | Branch::RIGHT | Branch::DOWN)
+            }
+            // [] Branch drawing filled circle connected to left, right, and up
+            0xF60A => {
+                Self::Branches(Branch::CIRCLE_FILLED | Branch::LEFT | Branch::RIGHT | Branch::UP)
+            }
+            // [] Branch drawing outline circle connected to left, right, and up
+            0xF60B => {
+                Self::Branches(Branch::CIRCLE_OUTLINE | Branch::LEFT | Branch::RIGHT | Branch::UP)
+            }
+            // [] Branch drawing filled circle connected to left, right, up, and down
+            0xF60C => Self::Branches(
+                Branch::CIRCLE_FILLED | Branch::LEFT | Branch::RIGHT | Branch::UP | Branch::DOWN,
+            ),
+            // [] Branch drawing outline circle connected to left, right, up, and down
+            0xF60D => Self::Branches(
+                Branch::CIRCLE_OUTLINE | Branch::LEFT | Branch::RIGHT | Branch::UP | Branch::DOWN,
+            ),
             _ => return None,
         })
     }
@@ -4632,6 +5015,7 @@ impl GlyphCache {
         polys: &[Poly],
         buffer: &mut Image,
         aa: PolyAA,
+        blend_mode: BlendMode,
     ) {
         let (width, height) = buffer.image_dimensions();
         let mut pixmap =
@@ -4645,6 +5029,7 @@ impl GlyphCache {
         } in polys
         {
             let mut paint = Paint::default();
+            paint.blend_mode = blend_mode;
             let intensity = intensity.to_scale();
             paint.set_color(
                 tiny_skia::Color::from_rgba(intensity, intensity, intensity, intensity).unwrap(),
@@ -4711,6 +5096,7 @@ impl GlyphCache {
                     }],
                     &mut buffer,
                     PolyAA::AntiAlias,
+                    BlendMode::default(),
                 );
             }
             Some(CursorShape::BlinkingBar | CursorShape::SteadyBar) => {
@@ -4726,6 +5112,7 @@ impl GlyphCache {
                     }],
                     &mut buffer,
                     PolyAA::AntiAlias,
+                    BlendMode::default(),
                 );
             }
             Some(CursorShape::BlinkingUnderline | CursorShape::SteadyUnderline) => {
@@ -4741,6 +5128,7 @@ impl GlyphCache {
                     }],
                     &mut buffer,
                     PolyAA::AntiAlias,
+                    BlendMode::default(),
                 );
             }
         }
@@ -4785,7 +5173,7 @@ impl GlyphCache {
             BlockKey::Blocks(blocks) => {
                 let width = metrics.cell_size.width as f32;
                 let height = metrics.cell_size.height as f32;
-                let (x_half, y_half, y_third) = (width / 2., height / 2., height / 3.);
+                let (x_half, y_half) = (width / 2., height / 2.);
                 let (x_eighth, y_eighth) = (width / 8., height / 8.);
 
                 for block in blocks.iter() {
@@ -4835,36 +5223,6 @@ impl GlyphCache {
                         Block::QuadrantLR => {
                             fill_rect(&mut buffer, x_half..width, y_half..height, BlockAlpha::Full)
                         }
-                        Block::Sextant1 => {
-                            fill_rect(&mut buffer, 0.0..x_half, 0.0..y_third, BlockAlpha::Full)
-                        }
-                        Block::Sextant2 => {
-                            fill_rect(&mut buffer, x_half..width, 0.0..y_third, BlockAlpha::Full)
-                        }
-                        Block::Sextant3 => fill_rect(
-                            &mut buffer,
-                            0.0..x_half,
-                            y_third..(y_third * 2.),
-                            BlockAlpha::Full,
-                        ),
-                        Block::Sextant4 => fill_rect(
-                            &mut buffer,
-                            x_half..width,
-                            y_third..(y_third * 2.),
-                            BlockAlpha::Full,
-                        ),
-                        Block::Sextant5 => fill_rect(
-                            &mut buffer,
-                            0.0..x_half,
-                            (y_third * 2.)..height,
-                            BlockAlpha::Full,
-                        ),
-                        Block::Sextant6 => fill_rect(
-                            &mut buffer,
-                            x_half..width,
-                            (y_third * 2.)..height,
-                            BlockAlpha::Full,
-                        ),
                     }
                 }
             }
@@ -4883,6 +5241,7 @@ impl GlyphCache {
                         } else {
                             PolyAA::MoarPixels
                         },
+                        BlendMode::default(),
                     );
                 };
 
@@ -4965,6 +5324,7 @@ impl GlyphCache {
                         } else {
                             PolyAA::MoarPixels
                         },
+                        BlendMode::default(),
                     );
                 };
 
@@ -5000,6 +5360,42 @@ impl GlyphCache {
                 }
                 if diagonals.contains(CellDiagonal::LOWER_RIGHT) {
                     draw(&[D!(), R!()]);
+                }
+            }
+            BlockKey::Sextant(pattern) => {
+                let width = metrics.cell_size.width as f32;
+                let height = metrics.cell_size.height as f32;
+                let (x_half, y_third) = (width / 2., height / 3.);
+                for row in 0..3 {
+                    for col in 0..2 {
+                        let bit = 2 * row + col;
+                        if pattern & (1u8 << bit) != 0 {
+                            fill_rect(
+                                &mut buffer,
+                                col as f32 * x_half..(col + 1) as f32 * x_half,
+                                row as f32 * y_third..(row + 1) as f32 * y_third,
+                                BlockAlpha::Full,
+                            );
+                        }
+                    }
+                }
+            }
+            BlockKey::Octant(pattern) => {
+                let width = metrics.cell_size.width as f32;
+                let height = metrics.cell_size.height as f32;
+                let (x_half, y_fourth) = (width / 2., height / 4.);
+                for row in 0..4 {
+                    for col in 0..2 {
+                        let bit = 2 * row + col;
+                        if pattern & (1u8 << bit) != 0 {
+                            fill_rect(
+                                &mut buffer,
+                                col as f32 * x_half..(col + 1) as f32 * x_half,
+                                row as f32 * y_fourth..(row + 1) as f32 * y_fourth,
+                                BlockAlpha::Full,
+                            );
+                        }
+                    }
                 }
             }
             BlockKey::Braille(dots_pattern) => {
@@ -5062,6 +5458,528 @@ impl GlyphCache {
                     pixmap.fill_path(&path, &paint, FillRule::Winding, identity, None);
                 }
             }
+            BlockKey::Progress(chunks) => {
+                let mut draw = |cmd: &'static [PolyCommand], style: PolyStyle| {
+                    self.draw_polys(
+                        &metrics,
+                        &[Poly {
+                            path: cmd,
+                            intensity: BlockAlpha::Full,
+                            style: style,
+                        }],
+                        &mut buffer,
+                        if config::configuration().anti_alias_custom_block_glyphs {
+                            PolyAA::AntiAlias
+                        } else {
+                            PolyAA::MoarPixels
+                        },
+                        BlendMode::default(),
+                    );
+                };
+
+                if chunks.contains(ProgressChunk::LEFT) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::One, BlockCoord::Frac(1, 6)),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 6), BlockCoord::Frac(1, 6)),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 6), BlockCoord::Frac(6 - 1, 6)),
+                            PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(6 - 1, 6)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                    );
+
+                    if chunks.contains(ProgressChunk::FULL) {
+                        draw(
+                            &[
+                                PolyCommand::MoveTo(
+                                    BlockCoord::One,
+                                    BlockCoord::FracWithOffset(1, 6, LineScale::Mul(6)),
+                                ),
+                                PolyCommand::LineTo(
+                                    BlockCoord::FracWithOffset(1, 6, LineScale::Mul(6)),
+                                    BlockCoord::FracWithOffset(1, 6, LineScale::Mul(6)),
+                                ),
+                                PolyCommand::LineTo(
+                                    BlockCoord::FracWithOffset(1, 6, LineScale::Mul(6)),
+                                    BlockCoord::FracWithOffset(6 - 1, 6, LineScale::Mul(-6)),
+                                ),
+                                PolyCommand::LineTo(
+                                    BlockCoord::One,
+                                    BlockCoord::FracWithOffset(6 - 1, 6, LineScale::Mul(-6)),
+                                ),
+                                PolyCommand::Close,
+                            ],
+                            PolyStyle::Fill,
+                        );
+                    }
+                }
+                if chunks.contains(ProgressChunk::RIGHT) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 6)),
+                            PolyCommand::LineTo(BlockCoord::Frac(6 - 1, 6), BlockCoord::Frac(1, 6)),
+                            PolyCommand::LineTo(
+                                BlockCoord::Frac(6 - 1, 6),
+                                BlockCoord::Frac(6 - 1, 6),
+                            ),
+                            PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Frac(6 - 1, 6)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                    );
+
+                    if chunks.contains(ProgressChunk::FULL) {
+                        draw(
+                            &[
+                                PolyCommand::MoveTo(
+                                    BlockCoord::Zero,
+                                    BlockCoord::FracWithOffset(1, 6, LineScale::Mul(6)),
+                                ),
+                                PolyCommand::LineTo(
+                                    BlockCoord::FracWithOffset(6 - 1, 6, LineScale::Mul(-6)),
+                                    BlockCoord::FracWithOffset(1, 6, LineScale::Mul(6)),
+                                ),
+                                PolyCommand::LineTo(
+                                    BlockCoord::FracWithOffset(6 - 1, 6, LineScale::Mul(-6)),
+                                    BlockCoord::FracWithOffset(6 - 1, 6, LineScale::Mul(-6)),
+                                ),
+                                PolyCommand::LineTo(
+                                    BlockCoord::Zero,
+                                    BlockCoord::FracWithOffset(6 - 1, 6, LineScale::Mul(-6)),
+                                ),
+                                PolyCommand::Close,
+                            ],
+                            PolyStyle::Fill,
+                        );
+                    }
+                }
+                if chunks.contains(ProgressChunk::MIDDLE) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 6)),
+                            PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 6)),
+                            PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(6 - 1, 6)),
+                            PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(6 - 1, 6)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                    );
+
+                    if chunks.contains(ProgressChunk::FULL) {
+                        draw(
+                            &[
+                                PolyCommand::MoveTo(
+                                    BlockCoord::Zero,
+                                    BlockCoord::FracWithOffset(1, 6, LineScale::Mul(6)),
+                                ),
+                                PolyCommand::LineTo(
+                                    BlockCoord::One,
+                                    BlockCoord::FracWithOffset(1, 6, LineScale::Mul(6)),
+                                ),
+                                PolyCommand::LineTo(
+                                    BlockCoord::One,
+                                    BlockCoord::FracWithOffset(6 - 1, 6, LineScale::Mul(-6)),
+                                ),
+                                PolyCommand::LineTo(
+                                    BlockCoord::Zero,
+                                    BlockCoord::FracWithOffset(6 - 1, 6, LineScale::Mul(-6)),
+                                ),
+                                PolyCommand::Close,
+                            ],
+                            PolyStyle::Fill,
+                        );
+                    }
+                }
+            }
+            BlockKey::Branches(pattern) => {
+                let mut draw =
+                    |cmd: &'static [PolyCommand], style: PolyStyle, blend_mode: BlendMode| {
+                        self.draw_polys(
+                            &metrics,
+                            &[Poly {
+                                path: cmd,
+                                intensity: BlockAlpha::Full,
+                                style: style,
+                            }],
+                            &mut buffer,
+                            if config::configuration().anti_alias_custom_block_glyphs {
+                                PolyAA::AntiAlias
+                            } else {
+                                PolyAA::MoarPixels
+                            },
+                            blend_mode,
+                        );
+                    };
+
+                if pattern.contains(Branch::VERTICAL) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::One),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::HORIZONTAL) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
+                            PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::RIGHT_TO_DOWN) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::One),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(7, 8)),
+                            PolyCommand::QuadTo {
+                                control: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                to: (BlockCoord::Frac(7, 8), BlockCoord::Frac(1, 2)),
+                            },
+                            PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::LEFT_TO_DOWN) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::One),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(7, 8)),
+                            PolyCommand::QuadTo {
+                                control: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                to: (BlockCoord::Frac(1, 8), BlockCoord::Frac(1, 2)),
+                            },
+                            PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::RIGHT_TO_UP) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 8)),
+                            PolyCommand::QuadTo {
+                                control: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                to: (BlockCoord::Frac(7, 8), BlockCoord::Frac(1, 2)),
+                            },
+                            PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::LEFT_TO_UP) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 8)),
+                            PolyCommand::QuadTo {
+                                control: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                to: (BlockCoord::Frac(1, 8), BlockCoord::Frac(1, 2)),
+                            },
+                            PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::LEFT) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::RIGHT) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::UP) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::DOWN) {
+                    draw(
+                        &[
+                            PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::One),
+                            PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                        ],
+                        PolyStyle::OutlineHeavy,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::CIRCLE_FILLED) {
+                    draw(
+                        &[PolyCommand::Circle {
+                            center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                            radius: BlockCoord::Frac(2, 5),
+                        }],
+                        PolyStyle::Fill,
+                        BlendMode::default(),
+                    );
+                }
+                if pattern.contains(Branch::CIRCLE_OUTLINE) {
+                    draw(
+                        &[PolyCommand::Circle {
+                            center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                            radius: BlockCoord::Frac(2, 5),
+                        }],
+                        PolyStyle::Fill,
+                        BlendMode::default(),
+                    );
+                    draw(
+                        &[PolyCommand::Circle {
+                            center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                            radius: BlockCoord::Frac(3, 10),
+                        }],
+                        PolyStyle::Fill,
+                        BlendMode::Clear,
+                    );
+                }
+            }
+            BlockKey::Spinner(segment) => {
+                let mut draw =
+                    |cmd: &'static [PolyCommand], style: PolyStyle, blend_mode: BlendMode| {
+                        self.draw_polys(
+                            &metrics,
+                            &[Poly {
+                                path: cmd,
+                                intensity: BlockAlpha::Full,
+                                style: style,
+                            }],
+                            &mut buffer,
+                            if config::configuration().anti_alias_custom_block_glyphs {
+                                PolyAA::AntiAlias
+                            } else {
+                                PolyAA::MoarPixels
+                            },
+                            blend_mode,
+                        );
+                    };
+
+                match segment {
+                    0 => {
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::Frac(1, 2),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::default(),
+                        );
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::FracWithOffset(1, 2, LineScale::Mul(-3)),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                        draw(
+                            &[
+                                PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                PolyCommand::LineTo(BlockCoord::SquareOne, BlockCoord::SquareZero),
+                                PolyCommand::LineTo(BlockCoord::One, BlockCoord::One),
+                                PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::One),
+                                PolyCommand::LineTo(BlockCoord::SquareZero, BlockCoord::SquareZero),
+                                PolyCommand::Close,
+                            ],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                    }
+                    1 => {
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::Frac(1, 2),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::default(),
+                        );
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::FracWithOffset(1, 2, LineScale::Mul(-3)),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                        draw(
+                            &[
+                                PolyCommand::MoveTo(
+                                    BlockCoord::SquareFrac(1, 2),
+                                    BlockCoord::SquareFrac(1, 2),
+                                ),
+                                PolyCommand::LineTo(BlockCoord::SquareFrac(1, 2), BlockCoord::Zero),
+                                PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Zero),
+                                PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::One),
+                                PolyCommand::LineTo(BlockCoord::SquareOne, BlockCoord::One),
+                                PolyCommand::LineTo(BlockCoord::SquareOne, BlockCoord::SquareOne),
+                                PolyCommand::Close,
+                            ],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                    }
+                    2 => {
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::Frac(1, 2),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::default(),
+                        );
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::FracWithOffset(1, 2, LineScale::Mul(-3)),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                        draw(
+                            &[
+                                PolyCommand::MoveTo(
+                                    BlockCoord::SquareFrac(1, 2),
+                                    BlockCoord::SquareFrac(1, 2),
+                                ),
+                                PolyCommand::LineTo(BlockCoord::SquareOne, BlockCoord::SquareZero),
+                                PolyCommand::LineTo(BlockCoord::One, BlockCoord::Zero),
+                                PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Zero),
+                                PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::One),
+                                PolyCommand::LineTo(
+                                    BlockCoord::SquareFrac(1, 3),
+                                    BlockCoord::SquareOne,
+                                ),
+                            ],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                    }
+                    3 => {
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::Frac(1, 2),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::default(),
+                        );
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::FracWithOffset(1, 2, LineScale::Mul(-3)),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                        draw(
+                            &[
+                                PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::SquareFrac(1, 2)),
+                                PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Zero),
+                                PolyCommand::LineTo(BlockCoord::One, BlockCoord::Zero),
+                                PolyCommand::LineTo(BlockCoord::One, BlockCoord::SquareFrac(1, 2)),
+                            ],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                    }
+                    4 => {
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::Frac(1, 2),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::default(),
+                        );
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::FracWithOffset(1, 2, LineScale::Mul(-3)),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                        draw(
+                            &[
+                                PolyCommand::MoveTo(
+                                    BlockCoord::SquareFrac(1, 2),
+                                    BlockCoord::SquareFrac(1, 2),
+                                ),
+                                PolyCommand::LineTo(BlockCoord::SquareZero, BlockCoord::SquareZero),
+                                PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Zero),
+                                PolyCommand::LineTo(BlockCoord::One, BlockCoord::Zero),
+                                PolyCommand::LineTo(BlockCoord::One, BlockCoord::One),
+                                PolyCommand::LineTo(
+                                    BlockCoord::SquareFrac(2, 3),
+                                    BlockCoord::SquareOne,
+                                ),
+                            ],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                    }
+                    5 => {
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::Frac(1, 2),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::default(),
+                        );
+                        draw(
+                            &[PolyCommand::Circle {
+                                center: (BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
+                                radius: BlockCoord::FracWithOffset(1, 2, LineScale::Mul(-3)),
+                            }],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                        draw(
+                            &[
+                                PolyCommand::MoveTo(
+                                    BlockCoord::SquareFrac(1, 2),
+                                    BlockCoord::SquareFrac(1, 2),
+                                ),
+                                PolyCommand::LineTo(BlockCoord::SquareFrac(1, 2), BlockCoord::Zero),
+                                PolyCommand::LineTo(BlockCoord::One, BlockCoord::Zero),
+                                PolyCommand::LineTo(BlockCoord::One, BlockCoord::One),
+                                PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::One),
+                                PolyCommand::LineTo(BlockCoord::SquareZero, BlockCoord::SquareOne),
+                                PolyCommand::Close,
+                            ],
+                            PolyStyle::Fill,
+                            BlendMode::Clear,
+                        );
+                    }
+                    _ => {}
+                }
+            }
             BlockKey::Poly(polys) | BlockKey::PolyWithCustomMetrics { polys, .. } => {
                 self.draw_polys(
                     &metrics,
@@ -5072,6 +5990,7 @@ impl GlyphCache {
                     } else {
                         PolyAA::MoarPixels
                     },
+                    BlendMode::default(),
                 );
             }
         }

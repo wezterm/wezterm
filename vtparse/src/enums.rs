@@ -27,7 +27,7 @@ pub enum Action {
 impl Action {
     #[inline(always)]
     pub fn from_u16(v: u16) -> Self {
-        unsafe { std::mem::transmute(v) }
+        unsafe { core::mem::transmute(v) }
     }
 }
 
@@ -57,6 +57,6 @@ pub enum State {
 impl State {
     #[inline(always)]
     pub fn from_u16(v: u16) -> Self {
-        unsafe { std::mem::transmute(v) }
+        unsafe { core::mem::transmute(v) }
     }
 }

@@ -46,6 +46,13 @@ wezterm.on(
         { Text = ' ' .. title .. ' ' },
       }
     end
+    if tab.is_last_active then
+      -- Green color and append '*' to previously active tab.
+      return {
+        { Background = { Color = 'green' } },
+        { Text = ' ' .. title .. '*' },
+      }
+    end
     return title
   end
 )

@@ -7,6 +7,7 @@
 //! menus.
 use crate::commands::derive_command_from_key_assignment;
 use crate::inputmap::InputMap;
+use crate::overlay::quickselect;
 use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::termwindow::TermWindowNotif;
 use config::configuration;
@@ -57,6 +58,9 @@ pub struct LauncherArgs {
     title: String,
     active_workspace: String,
     workspaces: Vec<String>,
+    help_text: String,
+    fuzzy_help_text: String,
+    alphabet: String,
 }
 
 impl LauncherArgs {
@@ -67,6 +71,9 @@ impl LauncherArgs {
         mux_window_id: WindowId,
         pane_id: PaneId,
         domain_id_of_current_tab: DomainId,
+        help_text: &str,
+        fuzzy_help_text: &str,
+        alphabet: &str,
     ) -> Self {
         let mux = Mux::get();
 
@@ -155,6 +162,9 @@ impl LauncherArgs {
             title: title.to_string(),
             workspaces,
             active_workspace,
+            help_text: help_text.to_string(),
+            fuzzy_help_text: fuzzy_help_text.to_string(),
+            alphabet: alphabet.to_string(),
         }
     }
 }
@@ -171,7 +181,12 @@ struct LauncherState {
     pane_id: PaneId,
     window: ::window::Window,
     filtering: bool,
-    flags: LauncherFlags,
+    help_text: String,
+    fuzzy_help_text: String,
+    labels: Vec<String>,
+    alphabet: String,
+    selection: String,
+    always_fuzzy: bool,
 }
 
 impl LauncherState {
@@ -352,6 +367,14 @@ impl LauncherState {
     fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
         let size = term.get_screen_size()?;
         let max_width = size.cols.saturating_sub(6);
+        let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
+        if max_items != self.max_items {
+            self.labels = quickselect::compute_labels_for_alphabet_with_preserved_case(
+                &self.alphabet,
+                self.filtered_entries.len().min(max_items + 1),
+            );
+            self.max_items = max_items;
+        }
 
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
@@ -361,16 +384,19 @@ impl LauncherState {
             },
             Change::Text(format!(
                 "{}\r\n",
-                truncate_right(
-                    "Select an item and press Enter=launch  \
-                     Esc=cancel  /=filter",
-                    max_width
-                )
+                truncate_right(&self.help_text, max_width)
             )),
             Change::AllAttributes(CellAttributes::default()),
         ];
 
-        let max_items = self.max_items;
+        let labels = &self.labels;
+        let max_label_len = labels.iter().map(|s| s.len()).max().unwrap_or(0);
+        let mut labels_iter = labels.into_iter();
+
+        let config = configuration();
+        let colors = &config.resolved_palette;
+        let launcher_label_fg = colors.launcher_label_fg;
+        let launcher_label_bg = colors.launcher_label_bg;
 
         for (row_num, (entry_idx, entry)) in self
             .filtered_entries
@@ -390,8 +416,29 @@ impl LauncherState {
                 attr.set_reverse(true);
             }
 
-            if row_num < 9 && !self.filtering {
-                changes.push(Change::Text(format!(" {}. ", row_num + 1)));
+            // from above we know that row_num <= max_items
+            // show labels as long as we have more labels left
+            // and we are not filtering
+            if !self.filtering {
+                if let Some(label) = labels_iter.next() {
+                    if let Some(launcher_label_bg) = launcher_label_bg {
+                        changes.push(AttributeChange::Background(launcher_label_bg.into()).into());
+                    }
+                    if let Some(launcher_label_fg) = launcher_label_fg {
+                        changes.push(AttributeChange::Foreground(launcher_label_fg.into()).into());
+                    }
+                    changes.push(Change::Text(format!(" {label:>max_label_len$}. ")));
+                    if launcher_label_bg.is_some() {
+                        changes.push(AttributeChange::Background(ColorAttribute::Default).into());
+                    }
+                    if launcher_label_fg.is_some() {
+                        changes.push(AttributeChange::Foreground(ColorAttribute::Default).into());
+                    }
+                } else {
+                    changes.push(Change::Text(" ".repeat(max_label_len + 3)));
+                }
+            } else if !self.always_fuzzy {
+                changes.push(Change::Text(" ".repeat(max_label_len + 3)));
             } else {
                 changes.push(Change::Text("    ".to_string()));
             }
@@ -401,11 +448,13 @@ impl LauncherState {
                 line.resize(max_width, termwiz::surface::SEQ_ZERO);
             }
             changes.append(&mut line.changes(&attr));
-            changes.push(Change::Text(" \r\n".to_string()));
+            changes.push(Change::Text(" ".to_string()));
 
             if entry_idx == self.active_idx {
                 changes.push(AttributeChange::Reverse(false).into());
             }
+            changes.push(Change::AllAttributes(CellAttributes::default()));
+            changes.push(Change::Text("\r\n".to_string()));
         }
 
         if self.filtering || !self.filter_term.is_empty() {
@@ -416,7 +465,7 @@ impl LauncherState {
                 },
                 Change::ClearToEndOfLine(ColorAttribute::Default),
                 Change::Text(truncate_right(
-                    &format!("Fuzzy matching: {}", self.filter_term),
+                    &format!("{}{}", &self.fuzzy_help_text, self.filter_term),
                     max_width,
                 )),
             ]);
@@ -458,10 +507,17 @@ impl LauncherState {
             match event {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
-                    ..
-                }) if !self.filtering && c >= '1' && c <= '9' => {
-                    if self.launch(self.top_row + (c as u32 - '1' as u32) as usize) {
-                        break;
+                    modifiers: Modifiers::NONE,
+                }) if !self.filtering && self.alphabet.contains(c) => {
+                    self.selection.push(c);
+                    if let Some(pos) = self.labels.iter().position(|x| *x == self.selection) {
+                        // since the number of labels is always <= self.max_items
+                        // by construction, we have pos as usize <= self.max_items
+                        // for free
+                        self.active_idx = self.top_row + pos as usize;
+                        if self.launch(self.active_idx) {
+                            break;
+                        }
                     }
                 }
                 InputEvent::Key(KeyEvent {
@@ -498,12 +554,14 @@ impl LauncherState {
                     key: KeyCode::Backspace,
                     ..
                 }) => {
-                    if self.filter_term.pop().is_none()
-                        && !self.flags.contains(LauncherFlags::FUZZY)
-                    {
-                        self.filtering = false;
+                    if !self.filtering {
+                        self.selection.pop();
+                    } else {
+                        if self.filter_term.pop().is_none() && !self.always_fuzzy {
+                            self.filtering = false;
+                        }
+                        self.update_filter();
                     }
-                    self.update_filter();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('G') | KeyCode::Char('['),
@@ -577,9 +635,6 @@ impl LauncherState {
                         break;
                     }
                 }
-                InputEvent::Resized { rows, .. } => {
-                    self.max_items = rows.saturating_sub(ROW_OVERHEAD);
-                }
                 _ => {}
             }
             self.render(term)?;
@@ -593,20 +648,25 @@ pub fn launcher(
     args: LauncherArgs,
     mut term: TermWizTerminal,
     window: ::window::Window,
+    initial_choice_idx: usize,
 ) -> anyhow::Result<()> {
-    let size = term.get_screen_size()?;
-    let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
+    let filtering = args.flags.contains(LauncherFlags::FUZZY);
     let mut state = LauncherState {
-        active_idx: 0,
-        max_items,
+        active_idx: initial_choice_idx,
+        max_items: 0,
         pane_id: args.pane_id,
         top_row: 0,
         entries: vec![],
         filter_term: String::new(),
         filtered_entries: vec![],
         window,
-        filtering: args.flags.contains(LauncherFlags::FUZZY),
-        flags: args.flags,
+        filtering,
+        help_text: args.help_text.clone(),
+        fuzzy_help_text: args.fuzzy_help_text.clone(),
+        labels: vec![],
+        selection: String::new(),
+        alphabet: args.alphabet.clone(),
+        always_fuzzy: filtering,
     };
 
     term.set_raw_mode()?;

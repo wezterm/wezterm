@@ -23,10 +23,12 @@ on:
 jobs:
   noResponse:
     runs-on: ubuntu-latest
+    if: github.repository == 'wezterm/wezterm'
     steps:
-      - uses: actions/stale@v9.0.0
+      - uses: actions/stale@v9.1.0
         with:
           only-labels: waiting-on-op
+          labels-to-remove-when-unstale: waiting-on-op
           days-before-stale: -1
           days-before-close: -1
           days-before-issue-stale: 14

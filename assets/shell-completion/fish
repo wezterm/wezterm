@@ -189,7 +189,7 @@ complete -c wezterm -n "__fish_seen_subcommand_from imgcat" -l resample-filter -
 complete -c wezterm -n "__fish_seen_subcommand_from imgcat" -l resize -d 'Pre-process the image to resize it to the specified dimensions, expressed as eg: 800x600 (width x height). The resize is independent of other parameters that control the image placement and dimensions in the terminal; this is provided as a convenience preprocessing step' -r
 complete -c wezterm -n "__fish_seen_subcommand_from imgcat" -l no-preserve-aspect-ratio -d 'Do not respect the aspect ratio.  The default is to respect the aspect ratio'
 complete -c wezterm -n "__fish_seen_subcommand_from imgcat" -l no-move-cursor -d 'Do not move the cursor after displaying the image. Note that when used like this from the shell, there is a very high chance that shell prompt will overwrite the image; you may wish to also use `--hold` in that case'
-complete -c wezterm -n "__fish_seen_subcommand_from imgcat" -l hold -d 'Wait for enter to be pressed after displaying the image'
+complete -c wezterm -n "__fish_seen_subcommand_from imgcat" -l hold -d 'Wait for enter/escape/ctrl-c/ctrl-d to be pressed after displaying the image'
 complete -c wezterm -n "__fish_seen_subcommand_from imgcat" -l no-resample -d 'Do not resample images whose frames are larger than the max-pixels value. Note that this will typically result in the image refusing to display in wezterm'
 complete -c wezterm -n "__fish_seen_subcommand_from imgcat" -l show-resample-timing -d 'When resampling or resizing, display some diagnostics around the timing/performance of that operation'
 complete -c wezterm -n "__fish_seen_subcommand_from imgcat" -s h -l help -d 'Print help (see more with \'--help\')'

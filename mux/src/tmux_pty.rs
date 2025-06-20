@@ -84,7 +84,7 @@ impl Child for TmuxChild {
     }
 
     fn process_id(&self) -> Option<u32> {
-        Some(0)
+        None
     }
 
     #[cfg(windows)]
@@ -125,7 +125,10 @@ impl ChildKiller for TmuxChild {
 impl MasterPty for TmuxPty {
     fn resize(&self, size: portable_pty::PtySize) -> Result<(), anyhow::Error> {
         let mut cmd_queue = self.cmd_queue.lock();
-        cmd_queue.push_back(Box::new(Resize { size }));
+        cmd_queue.push_back(Box::new(Resize {
+            size,
+            pane_id: self.master_pane.lock().pane_id,
+        }));
         TmuxDomainState::schedule_send_next_command(self.domain_id);
         Ok(())
     }

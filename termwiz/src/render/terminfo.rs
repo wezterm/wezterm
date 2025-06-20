@@ -4,8 +4,11 @@ use crate::cell::{AttributeChange, Blink, CellAttributes, Intensity, Underline};
 use crate::color::{ColorAttribute, ColorSpec};
 use crate::escape::csi::{Cursor, Edit, EraseInDisplay, EraseInLine, Sgr, CSI};
 use crate::escape::esc::EscCode;
-use crate::escape::osc::{ITermDimension, ITermFileData, ITermProprietary, OperatingSystemCommand};
+use crate::escape::osc::OperatingSystemCommand;
+#[cfg(feature = "use_image")]
+use crate::escape::osc::{ITermDimension, ITermFileData, ITermProprietary};
 use crate::escape::{Esc, OneBased};
+#[cfg(feature = "use_image")]
 use crate::image::{ImageDataType, TextureCoordinate};
 use crate::render::RenderTty;
 use crate::surface::{Change, CursorShape, CursorVisibility, LineAttribute, Position};
@@ -580,6 +583,7 @@ impl TerminfoRenderer {
                         }
                     }
                 },
+                #[cfg(feature = "use_image")]
                 Change::Image(image) => {
                     if self.caps.iterm2_image() {
                         let data = if image.top_left == TextureCoordinate::new_f32(0.0, 0.0)

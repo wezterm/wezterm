@@ -13,6 +13,8 @@ dhat-heap.json
 /wezterm*.tar.xz
 /pkg
 /target/
+/wezterm-char-props/codegen/target
+/wezterm-char-props/codegen/Cargo.lock
 /termwiz/codegen/target
 /termwiz/codegen/Cargo.lock
 /gh_pages/

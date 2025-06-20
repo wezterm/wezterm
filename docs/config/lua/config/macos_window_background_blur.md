@@ -25,3 +25,6 @@ The default value for `macos_window_background_blur` is `0`.
 
 See also [win32_system_backdrop](win32_system_backdrop.md) for a similar
 effect on Windows.
+
+See also [kde_window_background_blur](kde_window_background_blur.md) for a similar
+effect on KDE Wayland.

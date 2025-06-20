@@ -36,7 +36,7 @@ Options:
           that case
 
       --hold
-          Wait for enter to be pressed after displaying the image
+          Wait for enter/escape/ctrl-c/ctrl-d to be pressed after displaying the image
 
       --tmux-passthru <TMUX_PASSTHRU>
           How to manage passing the escape through to tmux

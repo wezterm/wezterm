@@ -1,7 +1,12 @@
 use crate::Value;
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::ops::{Deref, DerefMut};
+use core::cmp::Ordering;
+use core::ops::{Deref, DerefMut};
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+use alloc::borrow::Borrow;
+use alloc::collections::BTreeMap;
 
 /// We'd like to avoid allocating when resolving struct fields,
 /// so this is the borrowed version of Value.
@@ -33,7 +38,7 @@ impl<'a> ObjectKeyTrait for BorrowedKey<'a> {
     }
 }
 
-impl<'a> std::borrow::Borrow<dyn ObjectKeyTrait + 'a> for Value {
+impl<'a> Borrow<dyn ObjectKeyTrait + 'a> for Value {
     fn borrow(&self) -> &(dyn ObjectKeyTrait + 'a) {
         self
     }
@@ -59,8 +64,8 @@ impl<'a> Ord for (dyn ObjectKeyTrait + 'a) {
     }
 }
 
-impl<'a> std::hash::Hash for (dyn ObjectKeyTrait + 'a) {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl<'a> core::hash::Hash for (dyn ObjectKeyTrait + 'a) {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.key().hash(state)
     }
 }
@@ -77,8 +82,8 @@ impl Object {
     }
 }
 
-impl std::fmt::Debug for Object {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for Object {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {
         self.inner.fmt(fmt)
     }
 }
@@ -99,7 +104,7 @@ impl PartialOrd for Object {
 
 impl Drop for Object {
     fn drop(&mut self) {
-        for (_, child) in std::mem::take(&mut self.inner) {
+        for (_, child) in core::mem::take(&mut self.inner) {
             crate::drop::safely(child);
         }
     }

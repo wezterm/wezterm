@@ -20,7 +20,7 @@ use socket2::{Domain, Socket, Type};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::ToSocketAddrs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub(crate) struct DescriptorState {
@@ -50,6 +50,8 @@ pub(crate) struct SessionInner {
     pub sender_read: FileDescriptor,
     pub session_was_dropped: bool,
     pub shown_accept_env_error: bool,
+    pub last_keep_alive: Instant,
+    pub keep_alive: Option<Duration>,
 }
 
 impl Drop for SessionInner {
@@ -411,10 +413,42 @@ impl SessionInner {
         }
     }
 
+    fn do_keepalive(&mut self, sess: &mut SessionWrap) -> anyhow::Result<()> {
+        match sess {
+            #[cfg(feature = "ssh2")]
+            SessionWrap::Ssh2(_sess) => Ok(()),
+            #[cfg(feature = "libssh-rs")]
+            SessionWrap::LibSsh(sess) => {
+                // We implement a very basic keep alive mechanism here;
+                // every ServerAliveInterval seconds (if non-zero), we will
+                // send an ignore packet.
+                // Unlike the openssh client, we do not have a ServerAliveCountMax
+                // limit (because it is not clear how we could correctly implement
+                // that based on what we can see here in this crate), nor do we
+                // explicitly trigger a disconnect if there is an error with
+                // the ignore packet.
+                if let Some(duration) = self.keep_alive {
+                    if self.last_keep_alive.elapsed() >= duration {
+                        log::trace!("sending keep alive");
+                        self.last_keep_alive = Instant::now();
+                        let ignore_me = [0x42; 128];
+                        if let Err(err) = sess.sess.send_ignore(&ignore_me) {
+                            log::warn!(
+                                "Error sending IGNORE packet: {err:#}. Is peer disconnected?"
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     fn request_loop(&mut self, sess: &mut SessionWrap) -> anyhow::Result<()> {
         let mut sleep_delay = Duration::from_millis(100);
 
         loop {
+            self.do_keepalive(sess)?;
             self.tick_io()?;
             self.drain_request_pipe();
             self.dispatch_pending_requests(sess)?;

@@ -2,9 +2,9 @@ use crate::terminalstate::image::*;
 use crate::terminalstate::{default_color_map, ImageAttachParams};
 use crate::TerminalState;
 use ::image::RgbaImage;
-use termwiz::color::RgbColor;
-use termwiz::escape::{Sixel, SixelData};
-use termwiz::image::ImageDataType;
+use wezterm_cell::color::RgbColor;
+use wezterm_cell::image::ImageDataType;
+use wezterm_escape_parser::{Sixel, SixelData};
 
 impl TerminalState {
     pub(crate) fn sixel(&mut self, sixel: Box<Sixel>) {
@@ -89,7 +89,7 @@ impl TerminalState {
                     // Looking at red, we need to rotate left by 120 to
                     // go from sixel red to standard hsl red.
                     // Negative values wrap around the circle.
-                    // https://github.com/wez/wezterm/issues/775
+                    // https://github.com/wezterm/wezterm/issues/775
                     let angle = (*hue_angle as f64) - 120.0;
                     let angle = if angle < 0. { 360.0 + angle } else { angle };
                     let c = csscolorparser::Color::from_hsla(

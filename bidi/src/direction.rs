@@ -40,7 +40,7 @@ impl Direction {
 
 pub enum DirectionIter<I: DoubleEndedIterator<Item = T>, T> {
     LTR(I),
-    RTL(std::iter::Rev<I>),
+    RTL(core::iter::Rev<I>),
 }
 
 impl<I: DoubleEndedIterator<Item = T>, T> DirectionIter<I, T> {

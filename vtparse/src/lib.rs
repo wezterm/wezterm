@@ -11,10 +11,19 @@
 //! [termwiz](https://docs.rs/termwiz/) crate if you don't want to have to research
 //! all those possible escape sequences for yourself.
 #![allow(clippy::upper_case_acronyms)]
+#![cfg_attr(not(feature = "std"), no_std)]
 use utf8parse::Parser as Utf8Parser;
 mod enums;
 use crate::enums::*;
 mod transitions;
+
+#[cfg(any(feature = "std", feature = "alloc"))]
+extern crate alloc;
+
+#[cfg(any(feature = "std", feature = "alloc"))]
+use alloc::vec::Vec;
+#[cfg(all(not(feature = "std"), not(feature = "alloc")))]
+use heapless::Vec;
 
 use transitions::{ENTRY, EXIT, TRANSITIONS};
 
@@ -170,12 +179,14 @@ pub trait VTActor {
 
     /// Called when an APC string is terminated by ST
     /// `data` is the data contained within the APC sequence.
+    #[cfg(any(feature = "std", feature = "alloc"))]
     fn apc_dispatch(&mut self, data: Vec<u8>);
 }
 
 /// `VTAction` is an alternative way to work with the parser; rather
 /// than implementing the VTActor trait you can use `CollectingVTActor`
 /// to capture the sequence of events into a `Vec<VTAction>`.
+#[cfg(any(feature = "std", feature = "alloc"))]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum VTAction {
     Print(char),
@@ -207,26 +218,30 @@ pub enum VTAction {
 /// into an internal vector.
 /// It can be iterated via `into_iter` or have the internal
 /// vector extracted via `into_vec`.
+#[cfg(any(feature = "std", feature = "alloc"))]
 #[derive(Default)]
 pub struct CollectingVTActor {
     actions: Vec<VTAction>,
 }
 
+#[cfg(any(feature = "std", feature = "alloc"))]
 impl IntoIterator for CollectingVTActor {
     type Item = VTAction;
-    type IntoIter = std::vec::IntoIter<VTAction>;
+    type IntoIter = alloc::vec::IntoIter<VTAction>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.actions.into_iter()
     }
 }
 
+#[cfg(any(feature = "std", feature = "alloc"))]
 impl CollectingVTActor {
     pub fn into_vec(self) -> Vec<VTAction> {
         self.actions
     }
 }
 
+#[cfg(any(feature = "std", feature = "alloc"))]
 impl VTActor for CollectingVTActor {
     fn print(&mut self, b: char) {
         self.actions.push(VTAction::Print(b));
@@ -295,10 +310,13 @@ impl VTActor for CollectingVTActor {
 
 const MAX_INTERMEDIATES: usize = 2;
 const MAX_OSC: usize = 64;
-const MAX_PARAMS: usize = 32;
+const MAX_PARAMS: usize = 256;
 
 struct OscState {
+    #[cfg(any(feature = "std", feature = "alloc"))]
     buffer: Vec<u8>,
+    #[cfg(not(any(feature = "std", feature = "alloc")))]
+    buffer: heapless::Vec<u8, { MAX_OSC * 16 }>,
     param_indices: [usize; MAX_OSC],
     num_params: usize,
     full: bool,
@@ -317,13 +335,24 @@ impl OscState {
                 }
             }
         } else if !self.full {
+            let mut buf = [0u8; 8];
+            let extend_result = self
+                .buffer
+                .extend_from_slice(param.encode_utf8(&mut buf).as_bytes());
+
+            #[cfg(all(not(feature = "std"), not(feature = "alloc")))]
+            {
+                if extend_result.is_err() {
+                    self.full = true;
+                    return;
+                }
+            }
+
+            let _ = extend_result;
+
             if self.num_params == 0 {
                 self.num_params = 1;
             }
-
-            let mut buf = [0u8; 8];
-            self.buffer
-                .extend_from_slice(param.encode_utf8(&mut buf).as_bytes());
         }
     }
 }
@@ -342,6 +371,7 @@ pub struct VTParser {
     num_params: usize,
     current_param: Option<CsiParam>,
     params_full: bool,
+    #[cfg(any(feature = "std", feature = "alloc"))]
     apc_data: Vec<u8>,
 
     utf8_parser: Utf8Parser,
@@ -367,10 +397,19 @@ pub struct VTParser {
 /// and I are intermediate bytes in the range 0x20-0x2F
 /// and F is the final byte in the range 0x40-0x7E
 ///
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub enum CsiParam {
     Integer(i64),
     P(u8),
+}
+
+impl core::fmt::Debug for CsiParam {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Self::Integer(i) => write!(fmt, "Integer({i})"),
+            Self::P(n) => write!(fmt, "P({})", char::from(*n)),
+        }
+    }
 }
 
 impl Default for CsiParam {
@@ -388,8 +427,8 @@ impl CsiParam {
     }
 }
 
-impl std::fmt::Display for CsiParam {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Display for CsiParam {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             CsiParam::Integer(v) => {
                 write!(f, "{}", v)?;
@@ -422,13 +461,14 @@ impl VTParser {
                 full: false,
             },
 
-            params: Default::default(),
+            params: [CsiParam::default(); MAX_PARAMS],
             num_params: 0,
             params_full: false,
             current_param: None,
 
             utf8_parser: Utf8Parser::new(),
-            apc_data: vec![],
+            #[cfg(any(feature = "std", feature = "alloc"))]
+            apc_data: Vec::new(),
         }
     }
 
@@ -492,7 +532,13 @@ impl VTParser {
                 self.num_params = 0;
                 self.params_full = false;
                 self.current_param.take();
-                self.apc_data.clear();
+                #[cfg(any(feature = "std", feature = "alloc"))]
+                {
+                    self.apc_data.clear();
+                    self.apc_data.shrink_to_fit();
+                    self.osc.buffer.clear();
+                    self.osc.buffer.shrink_to_fit();
+                }
             }
             Action::Collect => {
                 if self.num_intermediates < MAX_INTERMEDIATES {
@@ -565,6 +611,8 @@ impl VTParser {
             Action::Unhook => actor.dcs_unhook(),
             Action::OscStart => {
                 self.osc.buffer.clear();
+                #[cfg(any(feature = "std", feature = "alloc"))]
+                self.osc.buffer.shrink_to_fit();
                 self.osc.num_params = 0;
                 self.osc.full = false;
             }
@@ -591,13 +639,19 @@ impl VTParser {
             }
 
             Action::ApcStart => {
-                self.apc_data.clear();
+                #[cfg(any(feature = "std", feature = "alloc"))]
+                {
+                    self.apc_data.clear();
+                    self.apc_data.shrink_to_fit();
+                }
             }
             Action::ApcPut => {
+                #[cfg(any(feature = "std", feature = "alloc"))]
                 self.apc_data.push(param);
             }
             Action::ApcEnd => {
-                actor.apc_dispatch(std::mem::take(&mut self.apc_data));
+                #[cfg(any(feature = "std", feature = "alloc"))]
+                actor.apc_dispatch(core::mem::take(&mut self.apc_data));
             }
 
             Action::Utf8 => self.next_utf8(actor, param),
@@ -623,7 +677,7 @@ impl VTParser {
             }
 
             fn invalid_sequence(&mut self) {
-                self.codepoint(std::char::REPLACEMENT_CHARACTER);
+                self.codepoint(char::REPLACEMENT_CHARACTER);
             }
         }
 
@@ -894,43 +948,25 @@ mod test {
 
     #[test]
     fn test_csi_too_many_params() {
+        // Due to the much higher CSI element limit,
+        // we must construct this test differently.
+        let mut input = "\x1b[0".to_string();
+        let mut params = vec![CsiParam::default()];
+
+        for n in 1..=127 {
+            input.push_str(&format!(";{n}"));
+            params.push(CsiParam::P(b';'));
+            params.push(CsiParam::Integer(n));
+        }
+        input.push_str(";128");
+
+        input.push('p');
+        params.push(CsiParam::P(b';'));
+
         assert_eq!(
-            parse_as_vec(b"\x1b[0;1;2;3;4;5;6;7;8;9;0;1;2;3;4;51;6p"),
+            parse_as_vec(input.as_bytes()),
             vec![VTAction::CsiDispatch {
-                params: vec![
-                    CsiParam::Integer(0),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(1),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(2),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(3),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(4),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(5),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(6),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(7),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(8),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(9),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(0),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(1),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(2),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(3),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(4),
-                    CsiParam::P(b';'),
-                    CsiParam::Integer(51),
-                    CsiParam::P(b';'),
-                ],
+                params: params,
                 parameters_truncated: false,
                 byte: b'p'
             }]

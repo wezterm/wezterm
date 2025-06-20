@@ -423,6 +423,7 @@ impl WindowsConsoleRenderer {
                 Change::CursorColor(_color) => {}
                 Change::CursorShape(_shape) => {}
                 Change::CursorVisibility(_visibility) => {}
+                #[cfg(feature = "use_image")]
                 Change::Image(image) => {
                     // Images are not supported, so just blank out the cells and
                     // move the cursor to the right spot

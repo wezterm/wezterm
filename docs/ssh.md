@@ -59,6 +59,14 @@ All other options are parsed but have no effect.  Notably, neither `Match` or
 
 `ProxyUseFDpass` is now supported. (But not on Microsoft Windows).
 
+`ServerAliveInterval` is now supported by the `libssh` backend.  Setting it to
+a non-zero value will cause wezterm to send an `IGNORE` packet on that interval.
+`ServerAliveCountMax` is NOT supported by this backend.  This keepalive
+mechanism will not actively track the number of keepalives or disconnect the
+session; the packets are sent in a fire-and-forget manner as a least effort way
+to keep some traffic flowing on the connection to persuade intervening network
+hardware to keep the session alive.
+
 ### CLI Overrides
 
 `wezterm ssh` CLI allows overriding config settings via the command line.  This

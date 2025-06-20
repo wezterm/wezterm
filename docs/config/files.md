@@ -11,14 +11,27 @@ local wezterm = require 'wezterm'
 -- This will hold the configuration.
 local config = wezterm.config_builder()
 
--- This is where you actually apply your config choices
+-- This is where you actually apply your config choices.
 
--- For example, changing the color scheme:
+-- For example, changing the initial geometry for new windows:
+config.initial_cols = 120
+config.initial_rows = 28
+
+-- or, changing the font size and color scheme.
+config.font_size = 10
 config.color_scheme = 'AdventureTime'
 
--- and finally, return the configuration to wezterm
+-- Finally, return the configuration to wezterm:
 return config
 ```
+
+For more details, see:
+
+- [wezterm.config_builder](lua/wezterm/config_builder.md)
+- [initial_cols](lua/config/initial_cols.md)
+- [initial_rows](lua/config/initial_rows.md)
+- [font_size](lua/config/font_size.md)
+- [color_scheme](lua/config/color_schemes.md)
 
 ## Configuration Files
 
@@ -27,7 +40,7 @@ configuration file using the logic shown below.
 
 !!! tip
     The recommendation is to place your configuration file at `$HOME/.wezterm.lua`
-    (`%HOME%/.wezterm.lua` on Windows) to get started.
+    (`%USERPROFILE%/.wezterm.lua` on Windows) to get started.
 
 More complex configurations that need to span multiple files can be placed in
 `$XDG_CONFIG_HOME/wezterm/wezterm.lua` (for X11/Wayland) or

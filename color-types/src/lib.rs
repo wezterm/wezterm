@@ -1,18 +1,36 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
+use core::hash::{Hash, Hasher};
+use core::str::FromStr;
+#[cfg(feature = "std")]
 use csscolorparser::Color;
+#[cfg(not(feature = "std"))]
+#[allow(unused)]
+use num_traits::float::Float;
 #[cfg(feature = "use_serde")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "std")]
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::str::FromStr;
+#[cfg(feature = "std")]
+use std::sync::LazyLock;
 use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, Value};
 
-lazy_static::lazy_static! {
-    static ref SRGB_TO_F32_TABLE: [f32;256] = generate_srgb8_to_linear_f32_table();
-    static ref F32_TO_U8_TABLE: [u32;104] = generate_linear_f32_to_srgb8_table();
-    static ref RGB_TO_SRGB_TABLE: [u8;256] = generate_rgb_to_srgb8_table();
-    static ref RGB_TO_F32_TABLE: [f32;256] = generate_rgb_to_linear_f32_table();
-}
+extern crate alloc;
 
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+#[cfg(feature = "std")]
+static SRGB_TO_F32_TABLE: LazyLock<[f32; 256]> = LazyLock::new(generate_srgb8_to_linear_f32_table);
+#[cfg(feature = "std")]
+static F32_TO_U8_TABLE: LazyLock<[u32; 104]> = LazyLock::new(generate_linear_f32_to_srgb8_table);
+#[cfg(feature = "std")]
+static RGB_TO_SRGB_TABLE: LazyLock<[u8; 256]> = LazyLock::new(generate_rgb_to_srgb8_table);
+#[cfg(feature = "std")]
+static RGB_TO_F32_TABLE: LazyLock<[f32; 256]> = LazyLock::new(generate_rgb_to_linear_f32_table);
+
+#[cfg(feature = "std")]
 fn generate_rgb_to_srgb8_table() -> [u8; 256] {
     let mut table = [0; 256];
     for (val, entry) in table.iter_mut().enumerate() {
@@ -22,6 +40,7 @@ fn generate_rgb_to_srgb8_table() -> [u8; 256] {
     table
 }
 
+#[cfg(feature = "std")]
 fn generate_rgb_to_linear_f32_table() -> [f32; 256] {
     let mut table = [0.; 256];
     for (val, entry) in table.iter_mut().enumerate() {
@@ -30,6 +49,7 @@ fn generate_rgb_to_linear_f32_table() -> [f32; 256] {
     table
 }
 
+#[cfg(feature = "std")]
 fn generate_srgb8_to_linear_f32_table() -> [f32; 256] {
     let mut table = [0.; 256];
     for (val, entry) in table.iter_mut().enumerate() {
@@ -44,6 +64,7 @@ fn generate_srgb8_to_linear_f32_table() -> [f32; 256] {
 }
 
 #[allow(clippy::unreadable_literal)]
+#[cfg(feature = "std")]
 fn generate_linear_f32_to_srgb8_table() -> [u32; 104] {
     // My intent was to generate this array on the fly using the code that is commented
     // out below.  It is based on this gist:
@@ -129,16 +150,17 @@ fn linear_f32_to_srgbf32(f: f32) -> f32 {
     }
 }
 
+#[cfg(feature = "std")]
 pub fn linear_u8_to_srgb8(f: u8) -> u8 {
     unsafe { *RGB_TO_SRGB_TABLE.get_unchecked(f as usize) }
 }
 
-#[allow(clippy::unreadable_literal)]
-const ALMOST_ONE: u32 = 0x3f7fffff;
-#[allow(clippy::unreadable_literal)]
-const MINVAL: u32 = (127 - 13) << 23;
-
+#[cfg(feature = "std")]
 fn linear_f32_to_srgb8_using_table(f: f32) -> u8 {
+    #[allow(clippy::unreadable_literal)]
+    const ALMOST_ONE: u32 = 0x3f7fffff;
+    #[allow(clippy::unreadable_literal)]
+    const MINVAL: u32 = (127 - 13) << 23;
     let minval = f32::from_bits(MINVAL);
     let almost_one = f32::from_bits(ALMOST_ONE);
 
@@ -160,13 +182,43 @@ fn linear_f32_to_srgb8_using_table(f: f32) -> u8 {
     ((bias + scale * t) >> 16) as u8
 }
 
+fn linear_f32_to_srgb8(f: f32) -> u8 {
+    #[cfg(feature = "std")]
+    {
+        return linear_f32_to_srgb8_using_table(f);
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        (linear_f32_to_srgbf32(f) * 255.) as u8
+    }
+}
+
 /// Convert from srgb in u8 0-255 to linear floating point rgb 0-1.0
 fn srgb8_to_linear_f32(val: u8) -> f32 {
-    unsafe { *SRGB_TO_F32_TABLE.get_unchecked(val as usize) }
+    #[cfg(feature = "std")]
+    {
+        return unsafe { *SRGB_TO_F32_TABLE.get_unchecked(val as usize) };
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        let c = (val as f32) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
 }
 
 fn rgb_to_linear_f32(val: u8) -> f32 {
-    unsafe { *RGB_TO_F32_TABLE.get_unchecked(val as usize) }
+    #[cfg(feature = "std")]
+    {
+        unsafe { *RGB_TO_F32_TABLE.get_unchecked(val as usize) }
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        (val as f32) / 255.0
+    }
 }
 
 /// A pixel holding SRGBA32 data in big endian format
@@ -319,6 +371,7 @@ impl From<SrgbaTuple> for (f32, f32, f32, f32) {
     }
 }
 
+#[cfg(feature = "std")]
 impl From<Color> for SrgbaTuple {
     fn from(color: Color) -> Self {
         Self(
@@ -330,19 +383,20 @@ impl From<Color> for SrgbaTuple {
     }
 }
 
-lazy_static::lazy_static! {
-    static ref NAMED_COLORS: HashMap<String, SrgbaTuple> = build_colors();
-}
+#[cfg(feature = "std")]
+static NAMED_COLORS: LazyLock<HashMap<String, SrgbaTuple>> = LazyLock::new(build_colors);
 
-fn build_colors() -> HashMap<String, SrgbaTuple> {
-    let mut map = HashMap::new();
-    let rgb_txt = include_str!("rgb.txt");
+const RGB_TXT: &str = core::include_str!("rgb.txt");
 
-    map.insert("transparent".to_string(), SrgbaTuple(0., 0., 0., 0.));
-    map.insert("none".to_string(), SrgbaTuple(0., 0., 0., 0.));
-    map.insert("clear".to_string(), SrgbaTuple(0., 0., 0., 0.));
+fn iter_rgb_txt(mut func: impl FnMut(&str, SrgbaTuple) -> bool) {
+    let transparent = SrgbaTuple(0., 0., 0., 0.);
+    for name in &["transparent", "none", "clear"] {
+        if (func)(name, transparent) {
+            return;
+        }
+    }
 
-    for line in rgb_txt.lines() {
+    for line in RGB_TXT.lines() {
         let mut fields = line.split_ascii_whitespace();
         let red = fields.next().unwrap();
         let green = fields.next().unwrap();
@@ -350,17 +404,27 @@ fn build_colors() -> HashMap<String, SrgbaTuple> {
         let name = fields.collect::<Vec<&str>>().join(" ");
 
         let name = name.to_ascii_lowercase();
-        map.insert(
-            name,
-            SrgbaTuple(
-                red.parse::<f32>().unwrap() / 255.,
-                green.parse::<f32>().unwrap() / 255.,
-                blue.parse::<f32>().unwrap() / 255.,
-                1.0,
-            ),
+        let color = SrgbaTuple(
+            red.parse::<f32>().unwrap() / 255.,
+            green.parse::<f32>().unwrap() / 255.,
+            blue.parse::<f32>().unwrap() / 255.,
+            1.0,
         );
-    }
 
+        if (func)(&name, color) {
+            return;
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+fn build_colors() -> HashMap<String, SrgbaTuple> {
+    let mut map = HashMap::new();
+
+    iter_rgb_txt(|name, color| {
+        map.insert(name.to_string(), color);
+        false
+    });
     map
 }
 
@@ -370,7 +434,23 @@ impl SrgbaTuple {
     /// The list of names can be found here:
     /// <https://en.wikipedia.org/wiki/X11_color_names>
     pub fn from_named(name: &str) -> Option<Self> {
-        NAMED_COLORS.get(&name.to_ascii_lowercase()).cloned()
+        #[cfg(feature = "std")]
+        {
+            return NAMED_COLORS.get(&name.to_ascii_lowercase()).cloned();
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let mut result = None;
+            iter_rgb_txt(|candidate, color| {
+                if candidate.eq_ignore_ascii_case(name) {
+                    result.replace(color);
+                    true
+                } else {
+                    false
+                }
+            });
+            result
+        }
     }
 
     /// Returns self multiplied by the supplied alpha value.
@@ -445,20 +525,24 @@ impl SrgbaTuple {
         )
     }
 
+    #[cfg(feature = "std")]
     pub fn to_laba(self) -> (f64, f64, f64, f64) {
         Color::new(self.0.into(), self.1.into(), self.2.into(), self.3.into()).to_lab()
     }
 
+    #[cfg(feature = "std")]
     pub fn to_hsla(self) -> (f64, f64, f64, f64) {
         Color::new(self.0.into(), self.1.into(), self.2.into(), self.3.into()).to_hsla()
     }
 
+    #[cfg(feature = "std")]
     pub fn from_hsla(h: f64, s: f64, l: f64, a: f64) -> Self {
         let Color { r, g, b, a } = Color::from_hsla(h, s, l, a);
         Self(r as f32, g as f32, b as f32, a as f32)
     }
 
     /// Scale the color towards the maximum saturation by factor, a value ranging from 0.0 to 1.0.
+    #[cfg(feature = "std")]
     pub fn saturate(&self, factor: f64) -> Self {
         let (h, s, l, a) = self.to_hsla();
         let s = apply_scale(s, factor);
@@ -466,6 +550,7 @@ impl SrgbaTuple {
     }
 
     /// Increase the saturation by amount, a value ranging from 0.0 to 1.0.
+    #[cfg(feature = "std")]
     pub fn saturate_fixed(&self, amount: f64) -> Self {
         let (h, s, l, a) = self.to_hsla();
         let s = apply_fixed(s, amount);
@@ -473,6 +558,7 @@ impl SrgbaTuple {
     }
 
     /// Scale the color towards the maximum lightness by factor, a value ranging from 0.0 to 1.0
+    #[cfg(feature = "std")]
     pub fn lighten(&self, factor: f64) -> Self {
         let (h, s, l, a) = self.to_hsla();
         let l = apply_scale(l, factor);
@@ -480,6 +566,7 @@ impl SrgbaTuple {
     }
 
     /// Lighten the color by amount, a value ranging from 0.0 to 1.0
+    #[cfg(feature = "std")]
     pub fn lighten_fixed(&self, amount: f64) -> Self {
         let (h, s, l, a) = self.to_hsla();
         let l = apply_fixed(l, amount);
@@ -487,24 +574,29 @@ impl SrgbaTuple {
     }
 
     /// Rotate the hue angle by the specified number of degrees
+    #[cfg(feature = "std")]
     pub fn adjust_hue_fixed(&self, amount: f64) -> Self {
         let (h, s, l, a) = self.to_hsla();
         let h = normalize_angle(h + amount);
         Self::from_hsla(h, s, l, a)
     }
 
+    #[cfg(feature = "std")]
     pub fn complement(&self) -> Self {
         self.adjust_hue_fixed(180.)
     }
 
+    #[cfg(feature = "std")]
     pub fn complement_ryb(&self) -> Self {
         self.adjust_hue_fixed_ryb(180.)
     }
 
+    #[cfg(feature = "std")]
     pub fn triad(&self) -> (Self, Self) {
         (self.adjust_hue_fixed(120.), self.adjust_hue_fixed(-120.))
     }
 
+    #[cfg(feature = "std")]
     pub fn square(&self) -> (Self, Self, Self) {
         (
             self.adjust_hue_fixed(90.),
@@ -515,6 +607,7 @@ impl SrgbaTuple {
 
     /// Rotate the hue angle by the specified number of degrees, using
     /// the RYB color wheel
+    #[cfg(feature = "std")]
     pub fn adjust_hue_fixed_ryb(&self, amount: f64) -> Self {
         let (h, s, l, a) = self.to_hsla();
         let h = rgb_hue_to_ryb_hue(h);
@@ -523,6 +616,7 @@ impl SrgbaTuple {
         Self::from_hsla(h, s, l, a)
     }
 
+    #[cfg(feature = "std")]
     fn lab_value(&self) -> deltae::LabValue {
         let (l, a, b, _alpha) = self.to_laba();
         deltae::LabValue {
@@ -532,27 +626,36 @@ impl SrgbaTuple {
         }
     }
 
+    #[cfg(feature = "std")]
     pub fn delta_e(&self, other: &Self) -> f32 {
         let a = self.lab_value();
         let b = other.lab_value();
         *deltae::DeltaE::new(a, b, deltae::DEMethod::DE2000).value()
     }
 
-    pub fn contrast_ratio(&self, other: &Self) -> f64 {
-        let (_, _, l_a, _) = self.to_hsla();
-        let (_, _, l_b, _) = other.to_hsla();
-        let a = l_a + 0.05;
-        let b = l_b + 0.05;
-        if a > b {
-            a / b
-        } else {
-            b / a
-        }
+    #[cfg(feature = "std")]
+    pub fn contrast_ratio(&self, other: &Self) -> f32 {
+        self.to_linear().contrast_ratio(&other.to_linear())
+    }
+
+    /// Assuming that `self` represents the foreground color
+    /// and `other` represents the background color, if the
+    /// contrast ratio is below min_ratio, returns Some color
+    /// that equals or exceeds the min_ratio to use as an alternative
+    /// foreground color.
+    /// If the ratio is already suitable, returns None; the caller should
+    /// continue to use `self` as the foreground color.
+    #[cfg(feature = "std")]
+    pub fn ensure_contrast_ratio(&self, other: &Self, min_ratio: f32) -> Option<Self> {
+        self.to_linear()
+            .ensure_contrast_ratio(&other.to_linear(), min_ratio)
+            .map(|linear| linear.to_srgb())
     }
 }
 
 /// Convert an RGB color space hue angle to an RYB colorspace hue angle
 /// <https://github.com/TNMEM/Material-Design-Color-Picker/blob/1afe330c67d9db4deef7031d601324b538b43b09/rybcolor.js#L33>
+#[cfg(feature = "std")]
 fn rgb_hue_to_ryb_hue(hue: f64) -> f64 {
     if hue < 35. {
         map_range(hue, 0., 35., 0., 60.)
@@ -572,6 +675,7 @@ fn rgb_hue_to_ryb_hue(hue: f64) -> f64 {
 }
 
 /// Convert an RYB color space hue angle to an RGB colorspace hue angle
+#[cfg(feature = "std")]
 fn ryb_huge_to_rgb_hue(hue: f64) -> f64 {
     if hue < 60. {
         map_range(hue, 0., 60., 0., 35.)
@@ -590,12 +694,14 @@ fn ryb_huge_to_rgb_hue(hue: f64) -> f64 {
     }
 }
 
+#[cfg(feature = "std")]
 fn map_range(x: f64, x1: f64, x2: f64, y1: f64, y2: f64) -> f64 {
     let a_slope = (y2 - y1) / (x2 - x1);
     let a_slope_intercept = y1 - (a_slope * x1);
     x * a_slope + a_slope_intercept
 }
 
+#[cfg(feature = "std")]
 fn normalize_angle(t: f64) -> f64 {
     let mut t = t % 360.0;
     if t < 0.0 {
@@ -604,12 +710,14 @@ fn normalize_angle(t: f64) -> f64 {
     t
 }
 
+#[cfg(feature = "std")]
 fn apply_scale(current: f64, factor: f64) -> f64 {
     let difference = if factor >= 0. { 1.0 - current } else { current };
     let delta = difference.max(0.) * factor;
     (current + delta).max(0.)
 }
 
+#[cfg(feature = "std")]
 fn apply_fixed(current: f64, amount: f64) -> f64 {
     (current + amount).max(0.)
 }
@@ -774,9 +882,13 @@ impl FromStr for SrgbaTuple {
             } else {
                 Err(())
             }
-        } else if let Ok(c) = csscolorparser::parse(s) {
-            Ok(Self(c.r as f32, c.g as f32, c.b as f32, c.a as f32))
         } else {
+            #[cfg(feature = "std")]
+            {
+                if let Ok(c) = csscolorparser::parse(s) {
+                    return Ok(Self(c.r as f32, c.g as f32, c.b as f32, c.a as f32));
+                }
+            }
             Self::from_named(s).ok_or(())
         }
     }
@@ -870,9 +982,9 @@ impl LinearRgba {
     /// Convert to an SRGB u32 pixel
     pub fn srgba_pixel(self) -> SrgbaPixel {
         SrgbaPixel::rgba(
-            linear_f32_to_srgb8_using_table(self.0),
-            linear_f32_to_srgb8_using_table(self.1),
-            linear_f32_to_srgb8_using_table(self.2),
+            linear_f32_to_srgb8(self.0),
+            linear_f32_to_srgb8(self.1),
+            linear_f32_to_srgb8(self.2),
             (self.3 * 255.) as u8,
         )
     }
@@ -890,6 +1002,113 @@ impl LinearRgba {
             linear_f32_to_srgbf32(self.2),
             self.3,
         )
+    }
+
+    #[cfg(feature = "std")]
+    pub fn relative_luminance(&self) -> f32 {
+        0.2126 * self.0 + 0.7152 * self.1 + 0.0722 * self.2
+    }
+
+    #[cfg(feature = "std")]
+    pub fn contrast_ratio(&self, other: &Self) -> f32 {
+        let lum_a = self.relative_luminance();
+        let lum_b = other.relative_luminance();
+        Self::lum_contrast_ratio(lum_a, lum_b)
+    }
+
+    #[cfg(feature = "std")]
+    fn lum_contrast_ratio(lum_a: f32, lum_b: f32) -> f32 {
+        let a = lum_a + 0.05;
+        let b = lum_b + 0.05;
+        if a > b {
+            a / b
+        } else {
+            b / a
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn to_oklaba(&self) -> [f32; 4] {
+        let (r, g, b, alpha) = (self.0, self.1, self.2, self.3);
+        let l_ = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
+        let m_ = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
+        let s_ = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
+        let l = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
+        let a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
+        let b = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+        [l, a, b, alpha]
+    }
+
+    #[cfg(feature = "std")]
+    fn from_oklaba(l: f32, a: f32, b: f32, alpha: f32) -> Self {
+        let l_ = (l + 0.3963377774 * a + 0.2158037573 * b).powi(3);
+        let m_ = (l - 0.1055613458 * a - 0.0638541728 * b).powi(3);
+        let s_ = (l - 0.0894841775 * a - 1.2914855480 * b).powi(3);
+
+        let r = 4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_;
+        let g = -1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_;
+        let b = -0.0041960863 * l_ - 0.7034186147 * m_ + 1.7076147010 * s_;
+
+        Self(r, g, b, alpha)
+    }
+
+    /// Assuming that `self` represents the foreground color
+    /// and `other` represents the background color, if the
+    /// contrast ratio is below min_ratio, returns Some color
+    /// that equals or exceeds the min_ratio to use as an alternative
+    /// foreground color.
+    /// If the ratio is already suitable, returns None; the caller should
+    /// continue to use `self` as the foreground color.
+    #[cfg(feature = "std")]
+    pub fn ensure_contrast_ratio(&self, other: &Self, min_ratio: f32) -> Option<Self> {
+        if self == other {
+            // Intentionally the same color, don't try to fixup
+            return None;
+        }
+
+        let fg_lum = self.relative_luminance();
+        let bg_lum = other.relative_luminance();
+        let ratio = Self::lum_contrast_ratio(fg_lum, bg_lum);
+        if ratio >= min_ratio {
+            // Already has desired ratio or better
+            return None;
+        }
+
+        let [_fg_l, fg_a, fg_b, fg_alpha] = self.to_oklaba();
+
+        let reduced_lum = ((bg_lum + 0.05) / min_ratio - 0.05).clamp(0.05, 1.0);
+        let reduced_col = Self::from_oklaba(reduced_lum, fg_a, fg_b, fg_alpha);
+        let reduced_ratio = reduced_col.contrast_ratio(other);
+
+        let increased_lum = ((bg_lum + 0.05) * min_ratio - 0.05).clamp(0.05, 1.0);
+        let increased_col = Self::from_oklaba(increased_lum, fg_a, fg_b, fg_alpha);
+        let increased_ratio = reduced_col.contrast_ratio(other);
+
+        // Prefer the reduced luminance version if the fg is dimmer than bg
+        if fg_lum < bg_lum {
+            if reduced_ratio >= min_ratio {
+                return Some(reduced_col);
+            }
+        }
+        // Otherwise, let's find a satisfactory alternative
+        if increased_ratio >= min_ratio {
+            return Some(increased_col);
+        }
+        if reduced_ratio >= min_ratio {
+            return Some(reduced_col);
+        }
+
+        // Didn't find one that satifies the min_ratio, but did we find
+        // one that is better than the existing ratio?
+        if reduced_ratio > ratio {
+            return Some(reduced_col);
+        }
+        if increased_ratio > ratio {
+            return Some(increased_col);
+        }
+
+        // What they had was as good as it gets
+        None
     }
 }
 
@@ -959,5 +1178,29 @@ mod tests {
 
         let grey = SrgbaTuple::from_str("rgb:f0f0/f0f0/f0f0").unwrap();
         assert_eq!(grey.to_rgb_string(), "#f0f0f0");
+    }
+
+    #[test]
+    fn linear_rgb_contrast_ratio() {
+        let a = LinearRgba::with_srgba(255, 0, 0, 1);
+        let b = LinearRgba::with_srgba(0, 255, 0, 1);
+        let contrast_ratio = a.contrast_ratio(&b);
+        assert!(
+            (2.91 - contrast_ratio).abs() < 0.01,
+            "contrast({}) == 2.91",
+            contrast_ratio
+        );
+    }
+
+    #[test]
+    fn srgba_contrast_ratio() {
+        let a = SrgbaTuple::from_str("hsl:0   100  50").unwrap();
+        let b = SrgbaTuple::from_str("hsl:120 100  50").unwrap();
+        let contrast_ratio = a.contrast_ratio(&b);
+        assert!(
+            (2.91 - contrast_ratio).abs() < 0.01,
+            "contrast({}) == 2.91",
+            contrast_ratio
+        );
     }
 }

@@ -43,7 +43,7 @@ The default assignment is equivalent to this config:
 
 ```lua
 -- Control the size of the font.
--- Uses the same font as window_frame.font
+-- Uses the same font as window_frame.font if char_select_font option is not set
 -- char_select_font_size = 18.0,
 
 config.keys = {
@@ -73,6 +73,7 @@ The `CharSelect` action accepts a lua table with the following fields:
   `"SmileysAndEmotion"` otherwise.
 
 See also:
+* [char_select_font](../config/char_select_font.md)
 * [char_select_font_size](../config/char_select_font_size.md)
 * [char_select_fg_color](../config/char_select_fg_color.md)
 * [char_select_bg_color](../config/char_select_bg_color.md)

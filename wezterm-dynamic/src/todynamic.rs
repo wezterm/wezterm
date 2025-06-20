@@ -1,7 +1,17 @@
 use crate::object::Object;
 use crate::value::Value;
 use ordered_float::OrderedFloat;
-use std::collections::{BTreeMap, HashMap};
+#[cfg(feature = "std")]
+use std::collections::HashMap;
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 /// The ToDynamic trait allows a type to emit a representation of itself
 /// as the Value type.
@@ -33,12 +43,25 @@ impl ToDynamic for ordered_float::NotNan<f64> {
     }
 }
 
+#[cfg(feature = "std")]
 impl ToDynamic for std::time::Duration {
     fn to_dynamic(&self) -> Value {
         Value::F64(OrderedFloat(self.as_secs_f64()))
     }
 }
 
+impl<K: ToDynamic + ToString + 'static, T: ToDynamic> ToDynamic for BTreeMap<K, T> {
+    fn to_dynamic(&self) -> Value {
+        Value::Object(
+            self.iter()
+                .map(|(k, v)| (k.to_dynamic(), v.to_dynamic()))
+                .collect::<BTreeMap<_, _>>()
+                .into(),
+        )
+    }
+}
+
+#[cfg(feature = "std")]
 impl<K: ToDynamic + ToString + 'static, T: ToDynamic> ToDynamic for HashMap<K, T> {
     fn to_dynamic(&self) -> Value {
         Value::Object(
@@ -50,7 +73,7 @@ impl<K: ToDynamic + ToString + 'static, T: ToDynamic> ToDynamic for HashMap<K, T
     }
 }
 
-impl<T: ToDynamic> ToDynamic for std::sync::Arc<T> {
+impl<T: ToDynamic> ToDynamic for Arc<T> {
     fn to_dynamic(&self) -> Value {
         self.as_ref().to_dynamic()
     }
@@ -111,6 +134,7 @@ impl ToDynamic for str {
     }
 }
 
+#[cfg(feature = "std")]
 impl ToDynamic for std::path::PathBuf {
     fn to_dynamic(&self) -> Value {
         Value::String(self.to_string_lossy().to_string())

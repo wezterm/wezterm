@@ -475,7 +475,14 @@ impl Config {
     }
 
     fn resolve_local_host(&self, include_domain_name: bool) -> String {
-        let hostname = gethostname::gethostname().to_string_lossy().to_string();
+        let hostname = if cfg!(test) {
+            // Use a fixed and plausible name for the local hostname
+            // when running tests.  This isn't an ideal solution, but
+            // it is convenient and sufficient at the time of writing
+            "localhost".to_string()
+        } else {
+            gethostname::gethostname().to_string_lossy().to_string()
+        };
 
         if include_domain_name {
             hostname
@@ -643,12 +650,37 @@ impl Config {
         None
     }
 
+    fn resolve_uid(&self) -> String {
+        #[cfg(test)]
+        if let Some(env) = self.environment.as_ref() {
+            // For testing purposes only, allow pretending that we
+            // have a specific fixed UID so that test expectations
+            // are easier to handle with snapshots
+            if let Some(uid) = env.get("WEZTERM_SSH_UID") {
+                return uid.to_string();
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            let uid = unsafe { libc::getuid() };
+            return uid.to_string();
+        }
+
+        #[cfg(not(unix))]
+        {
+            String::new()
+        }
+    }
+
     /// Perform token substitution
     fn expand_tokens(&self, value: &mut String, tokens: &[&str], token_map: &ConfigMap) {
         let orig_value = value.to_string();
         for &t in tokens {
             if let Some(v) = token_map.get(t) {
                 *value = value.replace(t, v);
+            } else if t == "%i" {
+                *value = value.replace(t, &self.resolve_uid());
             } else if t == "%u" {
                 *value = value.replace(t, &self.resolve_local_user());
             } else if t == "%l" {
@@ -670,6 +702,27 @@ impl Config {
                     }
                     *value = items.join(" ");
                 }
+            } else if t == "%j" {
+                // %j: The contents of the ProxyJump option, or the empty string if this option is unset
+                // We don't directly support ProxyJump, and this %j token referencing
+                // may technically put this into two-phase evaluation territory which
+                // we don't support.
+                // Let's silently gloss over this and treat this token as the empty
+                // string.
+                // Someone in the future will probably curse this.
+                *value = value.replace(t, "");
+            } else if t == "%T" {
+                // %T: The local tun(4) or tap(4) network interface assigned if tunnel
+                // forwarding was requested, or "NONE" otherwise.
+                // We don't support this function, so it is always NONE
+                *value = value.replace(t, "NONE");
+            } else if t == "%C" && value.contains("%C") {
+                // %C: Hash of %l%h%p%r%j
+                use sha2::Digest;
+                let mut c_value = "%l%h%p%r%j".to_string();
+                self.expand_tokens(&mut c_value, tokens, token_map);
+                let hashed = hex::encode(sha2::Sha256::digest(&c_value.as_bytes()));
+                *value = value.replace("%C", &hashed);
             } else if value.contains(t) {
                 log::warn!("Unsupported token {t} when evaluating `{orig_value}`");
             }
@@ -751,6 +804,36 @@ mod test {
     use k9::snapshot;
 
     #[test]
+    fn parse_keepalive() {
+        let mut config = Config::new();
+        config.add_config_string(
+            r#"
+        Host foo
+            ServerAliveInterval 60
+            "#,
+        );
+        let mut fake_env = ConfigMap::new();
+        fake_env.insert("HOME".to_string(), "/home/me".to_string());
+        fake_env.insert("USER".to_string(), "me".to_string());
+        config.assign_environment(fake_env);
+
+        let opts = config.for_host("foo");
+        snapshot!(
+            opts,
+            r#"
+{
+    "hostname": "foo",
+    "identityfile": "/home/me/.ssh/id_dsa /home/me/.ssh/id_ecdsa /home/me/.ssh/id_ed25519 /home/me/.ssh/id_rsa",
+    "port": "22",
+    "serveraliveinterval": "60",
+    "user": "me",
+    "userknownhostsfile": "/home/me/.ssh/known_hosts /home/me/.ssh/known_hosts2",
+}
+"#
+        );
+    }
+
+    #[test]
     fn parse_proxy_command_tokens() {
         let mut config = Config::new();
         config.add_config_string(
@@ -824,6 +907,39 @@ Config {
     options: {},
     tokens: {},
     environment: None,
+}
+"#
+        );
+    }
+
+    #[test]
+    fn misc_tokens() {
+        let mut config = Config::new();
+
+        let mut fake_env = ConfigMap::new();
+        fake_env.insert("HOME".to_string(), "/home/me".to_string());
+        fake_env.insert("USER".to_string(), "me".to_string());
+        fake_env.insert("WEZTERM_SSH_UID".to_string(), "1000".to_string());
+        config.assign_environment(fake_env);
+
+        config.add_config_string(
+            r#"
+        Host target-host
+            LocalCommand C=%C d=%d h=%h i=%i L=%L l=%L n=%n p=%p r=%r T=%T u=%u
+            "#,
+        );
+
+        let opts = config.for_host("target-host");
+        snapshot!(
+            opts,
+            r#"
+{
+    "hostname": "target-host",
+    "identityfile": "/home/me/.ssh/id_dsa /home/me/.ssh/id_ecdsa /home/me/.ssh/id_ed25519 /home/me/.ssh/id_rsa",
+    "localcommand": "C=8de28522efb92214d9c442ea0402863e34d095a4006467ad9136a48e930870ea d=/home/me h=target-host i=1000 L=localhost l=localhost n=target-host p=22 r=me T=NONE u=me",
+    "port": "22",
+    "user": "me",
+    "userknownhostsfile": "/home/me/.ssh/known_hosts /home/me/.ssh/known_hosts2",
 }
 "#
         );

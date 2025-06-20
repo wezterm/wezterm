@@ -469,7 +469,7 @@ impl GlState {
             // with the mesa environment set, and if we did, it would just
             // cause us to try software mode instead of the native opengl
             // drivers we'd pick up from the WGL fallback.
-            if cfg!(windows) {
+            if cfg!(windows) || cfg!(target_os = "macos") {
                 break;
             }
             if prefer_swrast {

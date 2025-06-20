@@ -22,6 +22,7 @@ use raw_window_handle::{
 };
 use smithay_client_toolkit::compositor::{CompositorHandler, SurfaceData, SurfaceDataExt};
 use smithay_client_toolkit::data_device_manager::ReadPipe;
+use smithay_client_toolkit::globals::GlobalData;
 use smithay_client_toolkit::reexports::csd_frame::{
     DecorationsFrame, FrameAction, ResizeEdge, WindowState as SCTKWindowState,
 };
@@ -37,9 +38,12 @@ use smithay_client_toolkit::shell::WaylandSurface;
 use wayland_client::protocol::wl_callback::WlCallback;
 use wayland_client::protocol::wl_keyboard::{Event as WlKeyboardEvent, KeyState};
 use wayland_client::protocol::wl_pointer::{ButtonState, WlPointer};
+use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_client::{Connection as WConnection, Proxy};
+use wayland_client::{Connection as WConnection, Dispatch, Proxy, QueueHandle};
 use wayland_egl::{is_available as egl_is_available, WlEglSurface};
+use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
+use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwinBlurManager;
 use wezterm_font::FontConfiguration;
 use wezterm_input_types::{
     KeyboardLedStatus, Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress,
@@ -313,6 +317,8 @@ impl WaylandWindow {
             .events
             .assign_window(window_handle.clone());
 
+        inner.borrow().update_window_background_blur();
+
         {
             let windows = &conn.wayland_state.borrow().windows;
             windows.borrow_mut().insert(window_id, inner.clone());
@@ -466,6 +472,22 @@ impl WindowOps for WaylandWindow {
             Ok(())
         });
     }
+
+    fn maximize(&self) {
+        WaylandConnection::with_window_inner(self.0, move |inner| Ok(inner.maximize()));
+    }
+
+    fn restore(&self) {
+        WaylandConnection::with_window_inner(self.0, move |inner| Ok(inner.restore()));
+    }
+
+    fn config_did_change(&self, config: &ConfigHandle) {
+        let config = config.clone();
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.config_did_change(config);
+            Ok(())
+        });
+    }
 }
 #[derive(Default, Clone, Debug)]
 pub(crate) struct PendingEvent {
@@ -571,7 +593,7 @@ impl WaylandWindowInner {
         // correctly.
         // Therefore, when frame_callback is set to some, we need to send the NeedRepaint
         // event again to ensure the window is displayed.
-        // Fix: https://github.com/wez/wezterm/issues/5103
+        // Fix: https://github.com/wezterm/wezterm/issues/5103
         if self.frame_callback.is_some() {
             self.events.dispatch(WindowEvent::NeedRepaint);
         }
@@ -580,11 +602,8 @@ impl WaylandWindowInner {
     }
 
     fn refresh_frame(&mut self) {
-        if let Some(window) = self.window.as_mut() {
-            if self.window_frame.is_dirty() && !self.window_frame.is_hidden() {
-                self.window_frame.draw();
-            }
-            window.wl_surface().commit();
+        if self.window_frame.is_dirty() && !self.window_frame.is_hidden() {
+            self.window_frame.draw();
         }
     }
 
@@ -840,12 +859,11 @@ impl WaylandWindowInner {
 
                 log::trace!("Resizing frame");
                 if !self.window_frame.is_hidden() {
-                    // Clamp the size to at least one pixel.
-                    let width =
-                        NonZeroU32::new(pixel_width as u32).unwrap_or(NonZeroU32::new(1).unwrap());
-                    let height =
-                        NonZeroU32::new(pixel_height as u32).unwrap_or(NonZeroU32::new(1).unwrap());
+                    // Clamp the size to at least one surface heigh/width.
+                    let width = NonZeroU32::new(w).unwrap_or(NonZeroU32::new(1).unwrap());
+                    let height = NonZeroU32::new(h).unwrap_or(NonZeroU32::new(1).unwrap());
                     self.window_frame.resize(width, height);
+                    pending.refresh_decorations = true
                 }
                 let (x, y) = self.window_frame.location();
                 self.window
@@ -903,11 +921,12 @@ impl WaylandWindowInner {
                         ) {
                             self.surface().attach(Some(buffer.wl_buffer()), 0, 0);
                             self.surface().set_buffer_scale(factor as i32);
+                            self.surface().commit();
+
                             self.surface_factor = factor;
                         }
                     }
                 }
-                self.refresh_frame();
                 self.do_paint().unwrap();
             }
         }
@@ -924,6 +943,10 @@ impl WaylandWindowInner {
     }
 
     fn set_cursor(&mut self, cursor: Option<MouseCursor>) {
+        if !PendingMouse::in_window(&self.pending_mouse) {
+            return;
+        }
+
         let conn = Connection::get().unwrap().wayland();
         let state = conn.wayland_state.borrow_mut();
         let pointer = match &state.pointer {
@@ -1062,8 +1085,8 @@ impl WaylandWindowInner {
         // which is necessary for the frame callback to get triggered.
         // Ordering the repaint after requesting the callback ensures that
         // we will get woken at the appropriate time.
-        // <https://github.com/wez/wezterm/issues/3468>
-        // <https://github.com/wez/wezterm/issues/3126>
+        // <https://github.com/wezterm/wezterm/issues/3468>
+        // <https://github.com/wezterm/wezterm/issues/3126>
         self.events.dispatch(WindowEvent::NeedRepaint);
 
         Ok(())
@@ -1208,6 +1231,38 @@ impl WaylandWindowInner {
             _ => log::warn!("unhandled FrameAction: {:?}", action),
         }
     }
+
+    fn maximize(&mut self) {
+        if let Some(window) = self.window.as_mut() {
+            window.set_maximized();
+        }
+    }
+
+    fn restore(&mut self) {
+        if let Some(window) = self.window.as_mut() {
+            window.unset_maximized();
+        }
+    }
+
+    fn config_did_change(&mut self, config: ConfigHandle) {
+        self.config = config;
+        self.update_window_background_blur();
+    }
+
+    fn update_window_background_blur(&self) {
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let qh = conn.event_queue.borrow().handle();
+        let wayland_state = conn.wayland_state.borrow();
+        if let Some(manager) = &wayland_state.kde_blur_manager {
+            let kde_blur = manager.create(self.surface(), &qh, GlobalData);
+            if self.config.kde_window_background_blur {
+                kde_blur.set_region(None);
+            } else {
+                kde_blur.release();
+            }
+            kde_blur.commit();
+        }
+    }
 }
 
 impl WaylandState {
@@ -1223,7 +1278,6 @@ impl WaylandState {
             .window_by_id(window_id)
             .expect("Inner Window should exist");
 
-        let is_frame_hidden = window_inner.borrow().window_frame.is_hidden();
         let p = window_inner.borrow().pending_event.clone();
         let mut pending_event = p.lock().unwrap();
 
@@ -1260,31 +1314,6 @@ impl WaylandState {
                     state |= WindowState::MAXIMIZED;
                 }
 
-                // For MAXIMIZED and FULL_SCREEN window configure contains Windowed size.
-                // Replacing it with Wayland suggested bounds.
-                if state.intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN) {
-                    if let Some((w, h)) = configure.suggested_bounds {
-                        pending_event.configure.replace((w, h));
-                    }
-                } else if configure
-                    .state
-                    .contains(SCTKWindowState::TILED_TOP | SCTKWindowState::TILED_BOTTOM)
-                    && is_frame_hidden
-                {
-                    // Tiled window without borders will take exactly half of the screen.
-                    if let Some((w, h)) = configure.suggested_bounds {
-                        pending_event.configure.replace((w / 2, h));
-                    }
-                } else if configure
-                    .state
-                    .contains(SCTKWindowState::TILED_LEFT | SCTKWindowState::TILED_RIGHT)
-                    && is_frame_hidden
-                {
-                    // Tiled window without borders will take exactly half of the screen.
-                    if let Some((w, h)) = configure.suggested_bounds {
-                        pending_event.configure.replace((w, h / 2));
-                    }
-                }
                 log::debug!(
                     "Config: self.window_state={:?}, states: {:?} {:?}",
                     pending_event.window_state,
@@ -1385,6 +1414,44 @@ impl WindowHandler for WaylandState {
         _serial: u32,
     ) {
         self.handle_window_event(window, WaylandWindowEvent::Request(configure));
+    }
+}
+
+impl Dispatch<OrgKdeKwinBlurManager, GlobalData> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &OrgKdeKwinBlurManager,
+        _event: <OrgKdeKwinBlurManager as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        // No events from OrgKdeKwinBlurManager...
+    }
+}
+
+impl Dispatch<OrgKdeKwinBlur, GlobalData> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &OrgKdeKwinBlur,
+        _event: <OrgKdeKwinBlur as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        // No events from OrgKdeKwinBlur...
+    }
+}
+
+impl Dispatch<WlRegion, GlobalData> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlRegion,
+        _event: <WlRegion as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
     }
 }
 

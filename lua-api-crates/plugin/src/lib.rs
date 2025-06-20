@@ -160,7 +160,7 @@ impl RepoSpec {
         let target_dir = TempDir::new_in(&plugins_dir)?;
         log::debug!("Cloning {} into temporary dir {target_dir:?}", self.url);
         Repository::clone_recurse(&self.url, target_dir.path())?;
-        let target_dir = target_dir.into_path();
+        let target_dir = target_dir.keep();
         let checkout_path = self.checkout_path();
         match std::fs::rename(&target_dir, &checkout_path) {
             Ok(_) => {
@@ -263,8 +263,8 @@ mod test {
         for (input, expect) in &[
             ("foo", "foo"),
             (
-                "githubsDscom/wez/wezterm-plugins",
-                "githubsDscomsZswezsZswezterm-plugins",
+                "githubsDscom/wezterm/wezterm-plugins",
+                "githubsDscomsZsweztermsZswezterm-plugins",
             ),
             ("localhost:8080/repo", "localhostsCs8080sZsrepo"),
         ] {

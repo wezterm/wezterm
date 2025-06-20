@@ -1,9 +1,20 @@
 use crate::error::Error;
 use crate::value::Value;
+use core::convert::TryInto;
+#[cfg(feature = "std")]
+use core::hash::Hash;
 use ordered_float::OrderedFloat;
+#[cfg(feature = "std")]
 use std::collections::HashMap;
-use std::convert::TryInto;
-use std::hash::Hash;
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 /// Specify how FromDynamic will treat unknown fields
 /// when converting from Value to a given target type
@@ -55,6 +66,7 @@ impl FromDynamic for ordered_float::NotNan<f64> {
     }
 }
 
+#[cfg(feature = "std")]
 impl FromDynamic for std::time::Duration {
     fn from_dynamic(value: &Value, options: FromDynamicOptions) -> Result<Self, Error> {
         let f = f64::from_dynamic(value, options)?;
@@ -69,10 +81,10 @@ impl<T: FromDynamic> FromDynamic for Box<T> {
     }
 }
 
-impl<T: FromDynamic> FromDynamic for std::sync::Arc<T> {
+impl<T: FromDynamic> FromDynamic for Arc<T> {
     fn from_dynamic(value: &Value, options: FromDynamicOptions) -> Result<Self, Error> {
         let value = T::from_dynamic(value, options)?;
-        Ok(std::sync::Arc::new(value))
+        Ok(Arc::new(value))
     }
 }
 
@@ -106,6 +118,25 @@ impl<T: FromDynamic, const N: usize> FromDynamic for [T; N] {
     }
 }
 
+impl<K: FromDynamic + Eq + Ord, T: FromDynamic> FromDynamic for BTreeMap<K, T> {
+    fn from_dynamic(value: &Value, options: FromDynamicOptions) -> Result<Self, Error> {
+        match value {
+            Value::Object(obj) => {
+                let mut map = BTreeMap::new();
+                for (k, v) in obj.iter() {
+                    map.insert(K::from_dynamic(k, options)?, T::from_dynamic(v, options)?);
+                }
+                Ok(map)
+            }
+            other => Err(Error::NoConversion {
+                source_type: other.variant_name().to_string(),
+                dest_type: "BTreeMap",
+            }),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
 impl<K: FromDynamic + Eq + Hash, T: FromDynamic> FromDynamic for HashMap<K, T> {
     fn from_dynamic(value: &Value, options: FromDynamicOptions) -> Result<Self, Error> {
         match value {
@@ -134,7 +165,7 @@ impl<T: FromDynamic> FromDynamic for Vec<T> {
             // lua uses tables for everything; we can end up here if we got an empty
             // table and treated it as an object. Allow that to stand-in for an empty
             // array instead.
-            Value::Object(obj) if obj.is_empty() => Ok(vec![]),
+            Value::Object(obj) if obj.is_empty() => Ok(Vec::new()),
             other => Err(Error::NoConversion {
                 source_type: other.variant_name().to_string(),
                 dest_type: "Vec",
@@ -167,6 +198,7 @@ impl FromDynamic for bool {
     }
 }
 
+#[cfg(feature = "std")]
 impl FromDynamic for std::path::PathBuf {
     fn from_dynamic(value: &Value, _options: FromDynamicOptions) -> Result<Self, Error> {
         match value {

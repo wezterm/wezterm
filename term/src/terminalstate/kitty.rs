@@ -9,13 +9,13 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
-use termwiz::escape::apc::{
+use wezterm_cell::image::ImageDataType;
+use wezterm_escape_parser::apc::{
     KittyFrameCompositionMode, KittyImage, KittyImageCompression, KittyImageData, KittyImageDelete,
     KittyImageFormat, KittyImageFrame, KittyImageFrameCompose, KittyImagePlacement,
     KittyImageTransmit, KittyImageVerbosity,
 };
-use termwiz::image::ImageDataType;
-use termwiz::surface::change::ImageData;
+use wezterm_surface::change::ImageData;
 
 #[derive(Debug, Default)]
 pub struct KittyImageState {

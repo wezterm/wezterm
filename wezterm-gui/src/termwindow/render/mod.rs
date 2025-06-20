@@ -12,7 +12,10 @@ use crate::utilsprites::RenderMetrics;
 use ::window::bitmaps::{TextureCoord, TextureRect, TextureSize};
 use ::window::{DeadKeyStatus, PointF, RectF, SizeF, WindowOps};
 use anyhow::{anyhow, Context};
-use config::{BoldBrightening, ConfigHandle, DimensionContext, TextStyle, VisualBellTarget};
+use config::{
+    BoldBrightening, ConfigHandle, DimensionContext, HorizontalWindowContentAlignment, TextStyle,
+    VerticalWindowContentAlignment, VisualBellTarget,
+};
 use euclid::num::Zero;
 use mux::pane::{Pane, PaneId};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
@@ -352,9 +355,43 @@ impl crate::TermWindow {
             .window_padding
             .left
             .evaluate_as_pixels(h_context);
+        let padding_right = self.config.window_padding.right;
         let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context);
+        let padding_bottom = self
+            .config
+            .window_padding
+            .bottom
+            .evaluate_as_pixels(v_context);
 
-        (padding_left, padding_top)
+        let horizontal_gap = self.dimensions.pixel_width as f32
+            - self.terminal_size.pixel_width as f32
+            - padding_left
+            - if self.show_scroll_bar && padding_right.is_zero() {
+                h_context.pixel_cell
+            } else {
+                padding_right.evaluate_as_pixels(h_context)
+            };
+        let vertical_gap = self.dimensions.pixel_height as f32
+            - self.terminal_size.pixel_height as f32
+            - padding_top
+            - padding_bottom
+            - if self.show_tab_bar {
+                self.tab_bar_pixel_height().unwrap_or(0.)
+            } else {
+                0.
+            };
+        let left_gap = match self.config.window_content_alignment.horizontal {
+            HorizontalWindowContentAlignment::Left => 0.,
+            HorizontalWindowContentAlignment::Center => (horizontal_gap / 2.).round(),
+            HorizontalWindowContentAlignment::Right => horizontal_gap,
+        };
+        let top_gap = match self.config.window_content_alignment.vertical {
+            VerticalWindowContentAlignment::Top => 0.,
+            VerticalWindowContentAlignment::Center => (vertical_gap / 2.).round(),
+            VerticalWindowContentAlignment::Bottom => vertical_gap,
+        };
+
+        (padding_left + left_gap, padding_top + top_gap)
     }
 
     fn resolve_lock_glyph(
@@ -483,6 +520,15 @@ impl crate::TermWindow {
         Ok(())
     }
 
+    fn ensure_min_contrast(&self, fg_color: LinearRgba, bg_color: LinearRgba) -> LinearRgba {
+        match self.config.text_min_contrast_ratio {
+            Some(ratio) => fg_color
+                .ensure_contrast_ratio(&bg_color, ratio)
+                .unwrap_or(fg_color),
+            None => fg_color,
+        }
+    }
+
     pub fn compute_cell_fg_bg(&self, params: ComputeCellFgBgParams) -> ComputeCellFgBgResult {
         if params.cursor.is_some() {
             if let Some(bg_color_mix) = self.get_intensity_if_bell_target_ringing(
@@ -490,12 +536,13 @@ impl crate::TermWindow {
                 params.config,
                 VisualBellTarget::CursorColor,
             ) {
-                let (fg_color, bg_color) =
-                    if self.config.force_reverse_video_cursor && params.cursor_is_default_color {
-                        (params.bg_color, params.fg_color)
-                    } else {
-                        (params.cursor_fg, params.cursor_bg)
-                    };
+                let (fg_color, bg_color) = if self.use_reverse_video_cursor(&params) {
+                    (params.bg_color, params.fg_color)
+                } else {
+                    (params.cursor_fg, params.cursor_bg)
+                };
+
+                let fg_color = self.ensure_min_contrast(fg_color, bg_color);
 
                 // interpolate between the background color
                 // and the the target color
@@ -524,12 +571,13 @@ impl crate::TermWindow {
                 self.dead_key_status != DeadKeyStatus::None || self.leader_is_active();
 
             if dead_key_or_leader && params.is_active_pane {
-                let (fg_color, bg_color) =
-                    if self.config.force_reverse_video_cursor && params.cursor_is_default_color {
-                        (params.bg_color, params.fg_color)
-                    } else {
-                        (params.cursor_fg, params.cursor_bg)
-                    };
+                let (fg_color, bg_color) = if self.use_reverse_video_cursor(&params) {
+                    (params.bg_color, params.fg_color)
+                } else {
+                    (params.cursor_fg, params.cursor_bg)
+                };
+
+                let fg_color = self.ensure_min_contrast(fg_color, bg_color);
 
                 let color = params
                     .config
@@ -585,7 +633,7 @@ impl crate::TermWindow {
                 CursorShape::BlinkingBlock | CursorShape::SteadyBlock,
                 CursorVisibility::Visible,
             ) => {
-                if self.config.force_reverse_video_cursor && params.cursor_is_default_color {
+                if self.use_reverse_video_cursor(&params) {
                     (params.bg_color, params.fg_color, params.fg_color)
                 } else {
                     (
@@ -604,7 +652,7 @@ impl crate::TermWindow {
                 | CursorShape::SteadyBar,
                 CursorVisibility::Visible,
             ) => {
-                if self.config.force_reverse_video_cursor && params.cursor_is_default_color {
+                if self.use_reverse_video_cursor(&params) {
                     (params.fg_color, params.bg_color, params.fg_color)
                 } else {
                     (params.fg_color, params.bg_color, params.cursor_bg)
@@ -613,6 +661,8 @@ impl crate::TermWindow {
             // Normally, render the cell as configured (or if the window is unfocused)
             _ => (params.fg_color, params.bg_color, params.cursor_border_color),
         };
+
+        let fg_color = self.ensure_min_contrast(fg_color, bg_color);
 
         let blinking = params.cursor.is_some()
             && params.is_active_pane
@@ -670,6 +720,13 @@ impl crate::TermWindow {
                 None
             },
         }
+    }
+
+    fn use_reverse_video_cursor(&self, params: &ComputeCellFgBgParams) -> bool {
+        self.config.force_reverse_video_cursor
+            && params.cursor_is_default_color
+            && params.fg_color.contrast_ratio(&params.bg_color)
+                >= self.config.reverse_video_cursor_min_contrast
     }
 
     fn glyph_infos_to_glyphs(

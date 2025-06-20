@@ -1,0 +1,31 @@
+name: update-flake-lock
+on:
+  workflow_dispatch:
+  schedule:
+    # once a month
+    - cron: '0 0 1 * *'
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    if: github.repository == 'wezterm/wezterm'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Cache build artifacts
+        uses: DeterminateSystems/flakehub-cache-action@main
+      - name: Check flake
+        uses: DeterminateSystems/flake-checker-action@main
+      - name: Update flake.lock
+        uses: DeterminateSystems/update-flake-lock@main
+        with:
+          token: "${{ secrets.FLAKE_LOCK_GH_PAT }}"
+          pr-title: 'Update flake.lock' # Title of PR to be created
+          pr-labels: | # Labels to be set on the PR
+            dependencies
+            automated
+          pr-assignees: happenslol,gabyx,emiller88
+          pr-reviewers: bew
+          path-to-flake-dir: 'nix/'

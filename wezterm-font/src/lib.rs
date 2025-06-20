@@ -415,7 +415,7 @@ impl FallbackResolveInfo {
                     .lock()
                     .unwrap()
                     .replace((Instant::now(), self.config.generation()));
-                let url = "https://wezfurlong.org/wezterm/config/fonts.html";
+                let url = "https://wezterm.org/config/fonts.html";
                 log::warn!(
                     "No fonts contain glyphs for these codepoints: {}.\n\
                      Placeholder glyphs are being displayed instead.\n\
@@ -450,6 +450,14 @@ impl FallbackResolveInfo {
             }
         }
     }
+}
+
+#[derive(PartialEq, Eq)]
+enum Entity {
+    Title,
+    CommandPalette,
+    CharSelect,
+    PaneSelect,
 }
 
 struct FontConfigInner {
@@ -584,18 +592,33 @@ impl FontConfigInner {
         )
     }
 
-    fn make_title_font_impl(
+    fn make_entity_font_impl(
         &self,
         myself: &Rc<Self>,
-        pref_size: Option<f64>,
-        make_bold: bool,
+        entity: Entity,
     ) -> anyhow::Result<Rc<LoadedFont>> {
         let config = self.config.borrow();
+        let make_bold = entity != Entity::CommandPalette;
         let (sys_font, sys_size) = self.compute_title_font(&config, make_bold);
 
-        let font_size = pref_size.unwrap_or(sys_size);
+        let (font_size, text_style) = match entity {
+            Entity::Title => (config.window_frame.font_size.unwrap_or(sys_size), None),
+            Entity::CommandPalette => (
+                config.command_palette_font_size,
+                config.command_palette_font.as_ref(),
+            ),
+            Entity::CharSelect => (
+                config.char_select_font_size,
+                config.char_select_font.as_ref(),
+            ),
+            Entity::PaneSelect => (
+                config.pane_select_font_size,
+                config.pane_select_font.as_ref(),
+            ),
+        };
 
-        let text_style = config.window_frame.font.as_ref().unwrap_or(&sys_font);
+        let text_style =
+            text_style.unwrap_or(config.window_frame.font.as_ref().unwrap_or(&sys_font));
 
         let dpi = *self.dpi.borrow() as u32;
         let pixel_size = (font_size * dpi as f64 / 72.0) as u16;
@@ -631,15 +654,13 @@ impl FontConfigInner {
     }
 
     fn title_font(&self, myself: &Rc<Self>) -> anyhow::Result<Rc<LoadedFont>> {
-        let config = self.config.borrow();
-
         let mut title_font = self.title_font.borrow_mut();
 
         if let Some(entry) = title_font.as_ref() {
             return Ok(Rc::clone(entry));
         }
 
-        let loaded = self.make_title_font_impl(myself, config.window_frame.font_size, true)?;
+        let loaded = self.make_entity_font_impl(myself, Entity::Title)?;
 
         title_font.replace(Rc::clone(&loaded));
 
@@ -647,16 +668,13 @@ impl FontConfigInner {
     }
 
     fn command_palette_font(&self, myself: &Rc<Self>) -> anyhow::Result<Rc<LoadedFont>> {
-        let config = self.config.borrow();
-
         let mut command_palette_font = self.command_palette_font.borrow_mut();
 
         if let Some(entry) = command_palette_font.as_ref() {
             return Ok(Rc::clone(entry));
         }
 
-        let loaded =
-            self.make_title_font_impl(myself, Some(config.command_palette_font_size), false)?;
+        let loaded = self.make_entity_font_impl(myself, Entity::CommandPalette)?;
 
         command_palette_font.replace(Rc::clone(&loaded));
 
@@ -664,15 +682,13 @@ impl FontConfigInner {
     }
 
     fn char_select_font(&self, myself: &Rc<Self>) -> anyhow::Result<Rc<LoadedFont>> {
-        let config = self.config.borrow();
-
         let mut char_select_font = self.char_select_font.borrow_mut();
 
         if let Some(entry) = char_select_font.as_ref() {
             return Ok(Rc::clone(entry));
         }
 
-        let loaded = self.make_title_font_impl(myself, Some(config.char_select_font_size), true)?;
+        let loaded = self.make_entity_font_impl(myself, Entity::CharSelect)?;
 
         char_select_font.replace(Rc::clone(&loaded));
 
@@ -680,15 +696,13 @@ impl FontConfigInner {
     }
 
     fn pane_select_font(&self, myself: &Rc<Self>) -> anyhow::Result<Rc<LoadedFont>> {
-        let config = self.config.borrow();
-
         let mut pane_select_font = self.pane_select_font.borrow_mut();
 
         if let Some(entry) = pane_select_font.as_ref() {
             return Ok(Rc::clone(entry));
         }
 
-        let loaded = self.make_title_font_impl(myself, Some(config.pane_select_font_size), true)?;
+        let loaded = self.make_entity_font_impl(myself, Entity::PaneSelect)?;
 
         pane_select_font.replace(Rc::clone(&loaded));
 
@@ -835,7 +849,7 @@ impl FontConfigInner {
                 config::show_error(&format!(
                     "{}. Fallback(s) are being used instead, and the terminal \
                     may not render as intended{}. See \
-                    https://wezfurlong.org/wezterm/config/fonts.html for more information",
+                    https://wezterm.org/config/fonts.html for more information",
                     explanation, styled_extra
                 ));
             }

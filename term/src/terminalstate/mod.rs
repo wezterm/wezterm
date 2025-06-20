@@ -12,18 +12,18 @@ use std::num::NonZeroUsize;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use terminfo::{Database, Value};
-use termwiz::cell::UnicodeVersion;
-use termwiz::escape::csi::{
+use termwiz::input::KeyboardEncoding;
+use url::Url;
+use wezterm_bidi::ParagraphDirectionHint;
+use wezterm_cell::image::ImageData;
+use wezterm_cell::UnicodeVersion;
+use wezterm_escape_parser::csi::{
     Cursor, CursorStyle, DecPrivateMode, DecPrivateModeCode, Device, Edit, EraseInDisplay,
     EraseInLine, Mode, Sgr, TabulationClear, TerminalMode, TerminalModeCode, Window, XtSmGraphics,
     XtSmGraphicsAction, XtSmGraphicsItem, XtSmGraphicsStatus, XtermKeyModifierResource,
 };
-use termwiz::escape::{OneBased, OperatingSystemCommand, CSI};
-use termwiz::image::ImageData;
-use termwiz::input::KeyboardEncoding;
-use termwiz::surface::{CursorShape, CursorVisibility, SequenceNo};
-use url::Url;
-use wezterm_bidi::ParagraphDirectionHint;
+use wezterm_escape_parser::{OneBased, OperatingSystemCommand, CSI};
+use wezterm_surface::{CursorShape, CursorVisibility, SequenceNo};
 
 mod image;
 mod iterm;
@@ -131,7 +131,7 @@ impl TabStop {
 }
 
 #[derive(Debug, Clone)]
-struct SavedCursor {
+pub(crate) struct SavedCursor {
     position: CursorPosition,
     wrap_next: bool,
     pen: CellAttributes,
@@ -148,8 +148,6 @@ struct ScreenOrAlt {
     alt_screen: Screen,
     /// Tells us which screen is active
     alt_screen_is_active: bool,
-    saved_cursor: Option<SavedCursor>,
-    alt_saved_cursor: Option<SavedCursor>,
 }
 
 impl Deref for ScreenOrAlt {
@@ -188,8 +186,6 @@ impl ScreenOrAlt {
             screen,
             alt_screen,
             alt_screen_is_active: false,
-            saved_cursor: None,
-            alt_saved_cursor: None,
         }
     }
 
@@ -235,9 +231,9 @@ impl ScreenOrAlt {
 
     pub fn saved_cursor(&mut self) -> &mut Option<SavedCursor> {
         if self.alt_screen_is_active {
-            &mut self.alt_saved_cursor
+            &mut self.alt_screen.saved_cursor
         } else {
-            &mut self.saved_cursor
+            &mut self.screen.saved_cursor
         }
     }
 
@@ -339,6 +335,7 @@ pub struct TerminalState {
     title: String,
     /// The icon title string (OSC 1)
     icon_title: Option<String>,
+    progress: Progress,
 
     palette: Option<ColorPalette>,
 
@@ -583,6 +580,7 @@ impl TerminalState {
             focused: true,
             bidi_enabled: None,
             bidi_hint: None,
+            progress: Progress::default(),
         }
     }
 
@@ -642,6 +640,10 @@ impl TerminalState {
     /// if it is set, otherwise return the OSC 2 window title.
     pub fn get_title(&self) -> &str {
         self.icon_title.as_ref().unwrap_or(&self.title)
+    }
+
+    pub fn get_progress(&self) -> Progress {
+        self.progress.clone()
     }
 
     /// Returns the current working directory associated with the
@@ -852,6 +854,7 @@ impl TerminalState {
         let (cursor_main, cursor_alt) = if self.screen.alt_screen_is_active {
             (
                 self.screen
+                    .screen
                     .saved_cursor
                     .as_ref()
                     .map(|s| s.position)
@@ -862,7 +865,8 @@ impl TerminalState {
             (
                 self.cursor,
                 self.screen
-                    .alt_saved_cursor
+                    .alt_screen
+                    .saved_cursor
                     .as_ref()
                     .map(|s| s.position)
                     .unwrap_or_else(CursorPosition::default),
@@ -889,7 +893,7 @@ impl TerminalState {
                 &Position::Absolute(adjusted_cursor_alt.y),
             );
 
-            if let Some(saved) = self.screen.saved_cursor.as_mut() {
+            if let Some(saved) = self.screen.screen.saved_cursor.as_mut() {
                 saved.position.x = adjusted_cursor_main.x;
                 saved.position.y = adjusted_cursor_main.y;
                 saved.position.seqno = self.seqno;
@@ -900,7 +904,7 @@ impl TerminalState {
                 &Position::Absolute(adjusted_cursor_main.x as i64),
                 &Position::Absolute(adjusted_cursor_main.y),
             );
-            if let Some(saved) = self.screen.alt_saved_cursor.as_mut() {
+            if let Some(saved) = self.screen.alt_screen.saved_cursor.as_mut() {
                 saved.position.x = adjusted_cursor_alt.x;
                 saved.position.y = adjusted_cursor_alt.y;
                 saved.position.seqno = self.seqno;
@@ -2007,7 +2011,7 @@ impl TerminalState {
         // The concept of uninitialized cells in wezterm is not the same as that on VT520 or that
         // on xterm, so, to prevent a lot of noise in esctest, treat them as spaces, at least when
         // asking for the checksum of a single cell (which is what esctest does).
-        // See: https://github.com/wez/wezterm/pull/4565
+        // See: https://github.com/wezterm/wezterm/pull/4565
         if checksum == 0 {
             32u16
         } else {
@@ -2202,7 +2206,7 @@ impl TerminalState {
                     // the logic for updating the cursor position, it causes regressions
                     // in the test suite.
                     // So this is here for now until a better solution is found.
-                    // <https://github.com/wez/wezterm/issues/3548>
+                    // <https://github.com/wezterm/wezterm/issues/3548>
                     EraseInLine::EraseToEndOfLine => cx + if self.wrap_next { 1 } else { 0 }..cols,
                     EraseInLine::EraseToStartOfLine => 0..cx + 1,
                     EraseInLine::EraseLine => 0..cols,

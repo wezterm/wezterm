@@ -7,7 +7,6 @@ use crate::escape::parser::Parser;
 use crate::escape::{Action, CSI};
 use crate::keymap::{Found, KeyMap};
 use crate::readbuf::ReadBuffer;
-use bitflags::bitflags;
 #[cfg(feature = "use_serde")]
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -45,21 +44,7 @@ use winapi::um::wincon::{
     WINDOW_BUFFER_SIZE_EVENT, WINDOW_BUFFER_SIZE_RECORD,
 };
 
-bitflags! {
-    #[cfg_attr(feature="use_serde", derive(Serialize, Deserialize))]
-    #[derive(Debug, Default, Clone, PartialEq, Eq)]
-    pub struct MouseButtons: u8 {
-        const NONE = 0;
-        const LEFT = 1<<1;
-        const RIGHT = 1<<2;
-        const MIDDLE = 1<<3;
-        const VERT_WHEEL = 1<<4;
-        const HORZ_WHEEL = 1<<5;
-        /// if set then the wheel movement was in the positive
-        /// direction, else the negative direction
-        const WHEEL_POSITIVE = 1<<6;
-    }
-}
+pub use wezterm_escape_parser::csi::MouseButtons;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputEvent {
@@ -1342,7 +1327,7 @@ impl InputParser {
                         // end marker in 8K, 16K, 24K etc. of text until the final buffer is received.
                         // Ensure that we use saturating math here for the case where the amount
                         // of buffered data after the begin paste is smaller than the end paste marker
-                        // <https://github.com/wez/wezterm/pull/1832>
+                        // <https://github.com/wezterm/wezterm/pull/1832>
                         self.state =
                             InputState::Pasting(self.buf.len().saturating_sub(end_paste.len()));
                         return;

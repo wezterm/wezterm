@@ -32,6 +32,7 @@ use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::{delegate_dispatch, Connection, QueueHandle};
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
+use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwinBlurManager;
 
 use crate::x11::KeyboardWithFallback;
 
@@ -71,6 +72,7 @@ pub(super) struct WaylandState {
     pub(super) primary_selection_source: Option<(PrimarySelectionSource, String)>,
     pub(super) shm: Shm,
     pub(super) mem_pool: RefCell<SlotPool>,
+    pub(super) kde_blur_manager: Option<OrgKdeKwinBlurManager>,
 }
 
 impl WaylandState {
@@ -82,6 +84,7 @@ impl WaylandState {
         let subcompositor =
             SubcompositorState::bind(compositor.wl_compositor().clone(), globals, qh)?;
 
+        let blur_manager: Option<OrgKdeKwinBlurManager> = globals.bind(qh, 1..=1, GlobalData).ok();
         let wayland_state = WaylandState {
             registry: RegistryState::new(globals),
             output: OutputState::new(globals, qh),
@@ -113,6 +116,7 @@ impl WaylandState {
             primary_selection_source: None,
             shm,
             mem_pool: RefCell::new(mem_pool),
+            kde_blur_manager: blur_manager,
         };
         Ok(wayland_state)
     }

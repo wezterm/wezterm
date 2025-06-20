@@ -1,0 +1,29 @@
+[package]
+authors = ["Wez Furlong"]
+name = "wezterm-char-props"
+version = "0.1.3"
+edition = "2021"
+repository = "https://github.com/wezterm/wezterm"
+description = "Unicode and other character properties"
+license = "MIT"
+documentation = "https://docs.rs/wezterm-char-props"
+keywords = ["terminal", "unicode", "nerdfonts", "emoji"]
+readme = "README.md"
+
+[dependencies]
+phf.workspace = true
+serde = {workspace=true, optional=true}
+ucd-trie.workspace = true
+
+[features]
+default = ["std"]
+std = ["serde/std", "ucd-trie/std", "phf/std"]
+use_serde = ["serde"]
+
+[dev-dependencies]
+k9.workspace = true
+
+[[bench]]
+name = "wcwidth"
+harness = false
+

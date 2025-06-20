@@ -130,6 +130,12 @@ config.colors = {
   quick_select_label_fg = { Color = '#ffffff' },
   quick_select_match_bg = { AnsiColor = 'Navy' },
   quick_select_match_fg = { Color = '#ffffff' },
+
+  input_selector_label_bg = { AnsiColor = 'Black' }, -- {{since('nightly', inline=True)}}
+  input_selector_label_fg = { Color = '#ffffff' }, -- {{since('nightly', inline=True)}}
+
+  launcher_label_bg = { AnsiColor = 'Black' }, -- {{since('nightly', inline=True)}}
+  launcher_label_fg = { Color = '#ffffff' }, -- {{since('nightly', inline=True)}}
 }
 
 return config
@@ -223,7 +229,7 @@ builting color scheme.
 
 If you'd like to factor your color schemes out into separate files, you
 can create a [TOML format](https://toml.io/en/) file with a `[colors]` section; take a look at [one of
-the available color schemes for an example](https://github.com/wez/wezterm/tree/main/config/src/scheme_data.rs).
+the available color schemes for an example](https://github.com/wezterm/wezterm/tree/main/config/src/scheme_data.rs).
 
 It is recommended that you place your custom scheme in a directory
 named `$HOME/.config/wezterm/colors` if you're on a POSIX system.

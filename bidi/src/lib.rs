@@ -1,9 +1,15 @@
+#![no_std]
+use alloc::borrow::Cow;
+use core::ops::Range;
 use level::MAX_DEPTH;
 use level_stack::{LevelStack, Override};
 use log::trace;
-use std::borrow::Cow;
-use std::ops::Range;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
+
+extern crate alloc;
+use crate::alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
 
 mod bidi_brackets;
 mod bidi_class;
@@ -1870,8 +1876,8 @@ struct Pair {
     closing_pos: usize,
 }
 
-impl std::fmt::Debug for Pair {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for Pair {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(fmt, "Pair{{{},{}}}", self.opening_pos, self.closing_pos)
     }
 }
@@ -1884,8 +1890,8 @@ struct BracketStack {
     pairs: Vec<Pair>,
 }
 
-impl std::fmt::Debug for BracketStack {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for BracketStack {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {
         fmt.debug_struct("BracketStack")
             .field("closing_bracket", &&self.closing_bracket[0..self.depth])
             .field("position", &&self.position[0..self.depth])
@@ -1984,7 +1990,7 @@ fn lookup_closing(c: char) -> Option<(char, BracketType)> {
 }
 
 pub fn bidi_class_for_char(c: char) -> BidiClass {
-    use std::cmp::Ordering;
+    use core::cmp::Ordering;
     if let Ok(idx) = bidi_class::BIDI_CLASS.binary_search_by(|&(lower, upper, _)| {
         if c >= lower && c <= upper {
             Ordering::Equal
@@ -2010,6 +2016,7 @@ pub fn bidi_class_for_char(c: char) -> BidiClass {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
     use k9::assert_equal as assert_eq;
 
     #[test]

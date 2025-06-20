@@ -1,14 +1,25 @@
 use crate::fromdynamic::{FromDynamicOptions, UnknownFieldAction};
 use crate::object::Object;
 use crate::value::Value;
+#[cfg(feature = "std")]
 use std::cell::RefCell;
+#[cfg(feature = "std")]
 use std::rc::Rc;
 use thiserror::Error;
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
+
+#[cfg(feature = "std")]
 pub trait WarningCollector {
     fn warn(&self, message: String);
 }
 
+#[cfg(feature = "std")]
 thread_local! {
     static WARNING_COLLECTOR: RefCell<Option<Box<dyn WarningCollector>>> = RefCell::new(None);
 }
@@ -72,6 +83,7 @@ pub enum Error {
 impl Error {
     /// Log a warning; if a warning collector is set for the current thread,
     /// use it, otherwise, log a regular warning message.
+    #[cfg(feature = "std")]
     pub fn warn(message: String) {
         WARNING_COLLECTOR.with(|collector| {
             let collector = collector.borrow();
@@ -83,6 +95,7 @@ impl Error {
         });
     }
 
+    #[cfg(feature = "std")]
     pub fn capture_warnings<F: FnOnce() -> T, T>(f: F) -> (T, Vec<String>) {
         let warnings = Rc::new(RefCell::new(vec![]));
 
@@ -109,6 +122,7 @@ impl Error {
     }
 
     /// Replace the warning collector for the current thread
+    #[cfg(feature = "std")]
     fn set_warning_collector<T: WarningCollector + 'static>(c: T) {
         WARNING_COLLECTOR.with(|collector| {
             collector.borrow_mut().replace(Box::new(c));
@@ -116,6 +130,7 @@ impl Error {
     }
 
     /// Clear the warning collector for the current thread
+    #[cfg(feature = "std")]
     fn clear_warning_collector() {
         WARNING_COLLECTOR.with(|collector| {
             collector.borrow_mut().take();
@@ -127,7 +142,7 @@ impl Error {
         object: &crate::Object,
         possible: &'static [&'static str],
     ) -> Vec<Self> {
-        let mut errors = vec![];
+        let mut errors = Vec::new();
 
         for key in object.keys() {
             match key {
@@ -170,6 +185,7 @@ impl Error {
         match options.deprecated_fields {
             UnknownFieldAction::Deny => Err(err),
             UnknownFieldAction::Warn => {
+                #[cfg(feature = "std")]
                 Self::warn(format!("{:#}", err));
                 Ok(())
             }
@@ -192,11 +208,15 @@ impl Error {
             return Ok(());
         }
 
-        let show_warning = options.unknown_fields == UnknownFieldAction::Warn || errors.len() > 1;
+        #[cfg(feature = "std")]
+        {
+            let show_warning =
+                options.unknown_fields == UnknownFieldAction::Warn || errors.len() > 1;
 
-        if show_warning {
-            for err in &errors {
-                Self::warn(format!("{:#}", err));
+            if show_warning {
+                for err in &errors {
+                    Self::warn(format!("{:#}", err));
+                }
             }
         }
 
@@ -209,6 +229,12 @@ impl Error {
         Ok(())
     }
 
+    #[cfg(not(feature = "std"))]
+    fn possible_matches(_used: &str, _possible: &'static [&'static str]) -> &'static str {
+        ""
+    }
+
+    #[cfg(feature = "std")]
     fn possible_matches(used: &str, possible: &'static [&'static str]) -> String {
         // Produce similar field name list
         let mut candidates: Vec<(f64, &str)> = possible
@@ -216,7 +242,7 @@ impl Error {
             .map(|&name| (strsim::jaro_winkler(used, name), name))
             .filter(|(confidence, _)| *confidence > 0.8)
             .collect();
-        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(core::cmp::Ordering::Equal));
         let suggestions: Vec<&str> = candidates.into_iter().map(|(_, name)| name).collect();
 
         // Filter the suggestions out of the allowed field names
