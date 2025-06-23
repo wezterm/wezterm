@@ -1290,6 +1290,7 @@ impl TerminalState {
                 ident.push_str(";6"); // Selective erase
                 ident.push_str(";18"); // windowing extensions
                 ident.push_str(";22"); // ANSI color, vt525
+                ident.push_str(";52"); // Clipboard access
                 ident.push('c');
 
                 self.writer.write(ident.as_bytes()).ok();
