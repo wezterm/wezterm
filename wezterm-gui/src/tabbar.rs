@@ -104,12 +104,30 @@ fn call_format_tab_title(
 }
 
 /// pct is a percentage in the range 0-100.
-/// We want to map it to one of the nerdfonts
-/// `md_circle_slice_1..=8` glyphs which occupy
-/// the range 0xf0a9e ..= 0xf0aa5.
-/// 100/8 -> 12.5, rounding down to 12
+/// We want to map it to one of the nerdfonts:
+///
+/// * `md-checkbox_blank_circle_outline` (0xf0130) for an empty circle
+/// * `md_circle_slice_1..=7` (0xf0a9e ..= 0xf0aa4) for a partly filled
+///   circle
+/// * `md_circle_slice_8` (0xf0aa5) for a filled circle
+///
+/// We use an empty circle for values close to 0%, a filled circle for values
+/// close to 100%, and a partly filled circle for the rest (roughly evenly
+/// distributed).
 fn pct_to_glyph(pct: u8) -> char {
-    char::from_u32(0xf0a9e + (pct as u32 / 12)).unwrap_or('\u{f0aa5}')
+    match pct {
+        0..=5 => '\u{f0130}',    // empty circle
+        6..=18 => '\u{f0a9e}',   // centered at 12 (slightly smaller than 12.5)
+        19..=31 => '\u{f0a9f}',  // centered at 25
+        32..=43 => '\u{f0aa0}',  // centered at 37.5
+        44..=56 => '\u{f0aa1}',  // half-filled circle, centered at 50
+        57..=68 => '\u{f0aa2}',  // centered at 62.5
+        69..=81 => '\u{f0aa3}',  // centered at 75
+        82..=94 => '\u{f0aa4}',  // centered at 88 (slightly larger than 87.5)
+        95..=100 => '\u{f0aa5}', // filled circle
+        // Any other value is mapped to a filled circle.
+        _ => '\u{f0aa5}',
+    }
 }
 
 fn compute_tab_title(
