@@ -29,6 +29,7 @@ on:
 jobs:
   build:
     runs-on: "ubuntu-latest"
+    if: github.repository == 'wezterm/wezterm'
     container:
       image: "ubuntu:20.04"
       options: --privileged

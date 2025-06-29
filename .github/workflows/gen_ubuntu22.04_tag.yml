@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: "ubuntu-latest"
+    if: github.repository == 'wezterm/wezterm'
     container: "ubuntu:22.04"
     env:
       CARGO_INCREMENTAL: "0"

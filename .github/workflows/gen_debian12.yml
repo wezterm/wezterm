@@ -26,6 +26,7 @@ on:
 jobs:
   build:
     runs-on: "ubuntu-latest"
+    if: github.repository == 'wezterm/wezterm'
     container: "debian:12"
     env:
       CARGO_INCREMENTAL: "0"

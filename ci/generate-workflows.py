@@ -389,7 +389,7 @@ rustup default {toolchain}
                 RunStep(
                     name="Install Rust (Intel)",
                     run="rustup target add x86_64-apple-darwin",
-                )
+                ),
             ]
         else:
             steps += [
@@ -575,7 +575,7 @@ rustup default {toolchain}
         if self.app_image:
             patterns.append("*src.tar.gz")
             patterns.append("*.AppImage")
-            #patterns.append("*.zsync") broken upstream: <https://github.com/linuxdeploy/linuxdeploy/issues/309>
+            # patterns.append("*.zsync") broken upstream: <https://github.com/linuxdeploy/linuxdeploy/issues/309>
         return patterns
 
     def upload_artifact_nightly(self):
@@ -1063,6 +1063,7 @@ def generate_actions(namer, jobber, trigger, is_continuous, is_tag=False):
 jobs:
   build:
     runs-on: {yv(job.runs_on)}
+    if: github.repository == 'wezterm/wezterm'
     {container}
 """
             )

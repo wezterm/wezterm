@@ -28,6 +28,7 @@ on:
 jobs:
   build:
     runs-on: "ubuntu-latest"
+    if: github.repository == 'wezterm/wezterm'
     container: "quay.io/centos/centos:stream9"
     env:
       BUILD_REASON: "Schedule"
