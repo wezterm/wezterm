@@ -2758,11 +2758,6 @@ impl TermWindow {
                     w.hide();
                 }
             }
-            HideOtherApplications => {
-                if let Some(w) = window.as_ref() {
-                    w.hide_other_apps();
-                }
-            }
             Show => {
                 if let Some(w) = window.as_ref() {
                     w.show();
@@ -2797,6 +2792,10 @@ impl TermWindow {
             HideApplication => {
                 let con = Connection::get().expect("call on gui thread");
                 con.hide_application();
+            }
+            HideOtherApplications => {
+                let con = Connection::get().expect("call on gui thread");
+                con.hide_other_applications();
             }
             QuitApplication => {
                 let mux = Mux::get();
