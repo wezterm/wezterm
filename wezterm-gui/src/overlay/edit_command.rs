@@ -289,6 +289,7 @@ fn draw(
         Change::Text("-".repeat(9 + description.len())),
         Change::Text("\r\n\r\n".to_string()),
     ];
+
     changes.push(Change::Attribute(AttributeChange::Intensity(
         Intensity::Bold,
     )));
@@ -307,6 +308,7 @@ fn draw(
         changes.push(Change::Attribute(AttributeChange::Foreground(
             ColorAttribute::Default,
         )));
+
         changes.push(Change::Text(format!(" {} (", switch.description)));
         if switch.value {
             changes.push(Change::Attribute(AttributeChange::Intensity(
@@ -324,6 +326,7 @@ fn draw(
     }
 
     changes.push(Change::Text("\r\n\r\n".to_string()));
+
     changes.push(Change::Attribute(AttributeChange::Intensity(
         Intensity::Bold,
     )));
@@ -332,6 +335,7 @@ fn draw(
     )));
     changes.push(Change::Text("Options".to_string()));
     changes.push(Change::AllAttributes(CellAttributes::default()));
+
     for option in options {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -341,7 +345,9 @@ fn draw(
         changes.push(Change::Attribute(AttributeChange::Foreground(
             ColorAttribute::Default,
         )));
+
         changes.push(Change::Text(format!(" {} (", option.description)));
+
         if let Some(val) = &option.value {
             changes.push(Change::Attribute(AttributeChange::Intensity(
                 Intensity::Bold,
@@ -354,6 +360,7 @@ fn draw(
         } else {
             changes.push(Change::Text(format!("{}=", option.flag)));
         }
+
         changes.push(Change::Text(")".to_string()));
     }
 
@@ -366,6 +373,7 @@ fn draw(
     )));
     changes.push(Change::Text("Arguments".to_string()));
     changes.push(Change::AllAttributes(CellAttributes::default()));
+
     for positional_arg in arguments {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
