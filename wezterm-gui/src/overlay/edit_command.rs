@@ -184,6 +184,7 @@ pub fn show_edit_command_overlay(
                     let val = option.value.take();
                     if val.is_none() {
                         term.render(&[Change::CursorVisibility(CursorVisibility::Visible)])?;
+
                         let mut host = PromptHost::new();
                         let mut editor = LineEditor::new(&mut term);
                         let mut prompt = option.description.clone();
@@ -193,14 +194,6 @@ pub fn show_edit_command_overlay(
                         prompt.push_str(": ");
                         editor.set_prompt(&prompt);
                         let line = editor.read_line_with_optional_initial_value(&mut host, None)?;
-                        term.render(&[
-                            Change::CursorVisibility(CursorVisibility::Hidden),
-                            Change::CursorPosition {
-                                x: Position::Absolute(0),
-                                y: Position::Relative(-1),
-                            },
-                            Change::ClearToEndOfLine(ColorAttribute::Default),
-                        ])?;
                         if let Some(line) = line {
                             option.value = if line.len() == 0 {
                                 option.default.clone()
@@ -208,6 +201,7 @@ pub fn show_edit_command_overlay(
                                 Some(line)
                             };
                         }
+                        term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
                     }
                     draw(
                         &mut term,
