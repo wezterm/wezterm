@@ -112,7 +112,7 @@ pub fn show_edit_command_overlay(
     term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
 
     let description = &args.description;
-    let mut switches: Vec<EditingCommandSwitch> = args
+    let mut editing_switches: Vec<EditingCommandSwitch> = args
         .switches
         .iter()
         .map(|switch| EditingCommandSwitch {
@@ -133,7 +133,7 @@ pub fn show_edit_command_overlay(
             flag: option.flag.clone(),
         })
         .collect();
-    let mut arguments: Vec<EditingCommandArgument> = args
+    let mut editing_arguments: Vec<EditingCommandArgument> = args
         .arguments
         .iter()
         .map(|argument| EditingCommandArgument {
@@ -145,9 +145,9 @@ pub fn show_edit_command_overlay(
     draw(
         &mut term,
         description,
-        &mut switches,
+        &mut editing_switches,
         &mut editing_options,
-        &mut arguments,
+        &mut editing_arguments,
     )?;
 
     let mut flag_mode = false;
@@ -168,7 +168,7 @@ pub fn show_edit_command_overlay(
                 key: KeyCode::Char(c),
                 ..
             }) if flag_mode => {
-                if let Some(switch) = switches
+                if let Some(switch) = editing_switches
                     .iter_mut()
                     .find(|switch| switch.key.chars().next() == Some(c))
                 {
@@ -176,9 +176,9 @@ pub fn show_edit_command_overlay(
                     draw(
                         &mut term,
                         description,
-                        &mut switches,
+                        &mut editing_switches,
                         &mut editing_options,
-                        &mut arguments,
+                        &mut editing_arguments,
                     )?;
                 } else if let Some(option) = editing_options
                     .iter_mut()
@@ -209,9 +209,9 @@ pub fn show_edit_command_overlay(
                     draw(
                         &mut term,
                         description,
-                        &mut switches,
+                        &mut editing_switches,
                         &mut editing_options,
-                        &mut arguments,
+                        &mut editing_arguments,
                     )?;
                 }
                 flag_mode = false;
@@ -226,11 +226,11 @@ pub fn show_edit_command_overlay(
                 key: KeyCode::Char(c),
                 ..
             }) => {
-                if let Some(positional_arg) = arguments
+                if let Some(positional_arg) = editing_arguments
                     .iter()
                     .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
                 {
-                    let switches: Vec<EditedCommandSwitch> = switches
+                    let switches: Vec<EditedCommandSwitch> = editing_switches
                         .iter()
                         .map(|switch| EditedCommandSwitch {
                             key: switch.key.clone(),
