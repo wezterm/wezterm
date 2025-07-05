@@ -1,14 +1,15 @@
 use crate::scripting::guiwin::GuiWin;
 use config::keyassignment::{EditCommand, KeyAssignment};
 use config::{AnsiColor, ColorAttribute};
+use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
-use serde::Serialize;
 use std::rc::Rc;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::lineedit::{Action, BasicHistory, History, LineEditor, LineEditorHost};
 use termwiz::surface::{Change, CursorVisibility, Position};
 use termwiz::terminal::Terminal;
+use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_term::{AttributeChange, CellAttributes, Intensity};
 use window::Modifiers;
 
@@ -74,24 +75,26 @@ struct EditingCommandArgument {
     description: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 struct EditedCommandSwitch {
     key: String,
     value: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 struct EditedCommandOption {
     key: String,
     value: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 struct EditedCommand {
     switches: Vec<EditedCommandSwitch>,
     options: Vec<EditedCommandOption>,
     argument: String,
 }
+
+impl_lua_conversion_dynamic!(EditedCommand);
 
 pub fn show_edit_command_overlay(
     mut term: TermWizTerminal,
@@ -404,8 +407,7 @@ async fn do_event(
     edited_command: EditedCommand,
 ) -> anyhow::Result<()> {
     if let Some(lua) = lua {
-        let serialized = serde_json::to_string(&edited_command).unwrap();
-        let args = lua.pack_multi((window, pane, serialized))?;
+        let args = lua.pack_multi((window, pane, edited_command))?;
 
         if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
             log::error!("while processing {} event: {:#}", name, err);
