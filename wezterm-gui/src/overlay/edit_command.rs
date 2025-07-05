@@ -150,6 +150,8 @@ pub fn show_edit_command_overlay(
         arguments.push(argument.key.clone());
     }
 
+    let mut flag_mode = false;
+
     term.render(&changes)?;
 
     while let Ok(Some(event)) = term.poll_input(None) {
@@ -165,65 +167,47 @@ pub fn show_edit_command_overlay(
                 break;
             }
             InputEvent::Key(KeyEvent {
+                key: KeyCode::Char(c),
+                ..
+            }) if flag_mode => {
+                if let Some(switch) = switches
+                    .iter_mut()
+                    .find(|switch| switch.key.chars().next() == Some(c))
+                {
+                    switch.value = !switch.value;
+                } else if let Some(option) = editing_options
+                    .iter_mut()
+                    .find(|option| option.key.chars().next() == Some(c))
+                {
+                    let val = option.value.take();
+                    if val.is_none() {
+                        term.render(&[Change::CursorVisibility(CursorVisibility::Visible)])?;
+                        let mut host = PromptHost::new();
+                        let mut editor = LineEditor::new(&mut term);
+                        let mut prompt = option.description.clone();
+                        if let Some(default) = option.default.clone() {
+                            prompt.push_str(&format!(" (default {})", default));
+                        }
+                        prompt.push_str(": ");
+                        editor.set_prompt(&prompt);
+                        let line = editor.read_line_with_optional_initial_value(&mut host, None)?;
+                        term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
+                        if let Some(line) = line {
+                            option.value = if line.len() == 0 {
+                                option.default.clone()
+                            } else {
+                                Some(line)
+                            };
+                        }
+                    }
+                }
+                flag_mode = false;
+            }
+            InputEvent::Key(KeyEvent {
                 key: KeyCode::Char('-'),
                 modifiers: Modifiers::NONE,
             }) => {
-                if let Ok(Some(event)) = term.poll_input(None) {
-                    match event {
-                        InputEvent::Key(KeyEvent {
-                            key: KeyCode::Char('G' | 'C' | 'D' | '['),
-                            modifiers: Modifiers::CTRL,
-                        })
-                        | InputEvent::Key(KeyEvent {
-                            key: KeyCode::Escape,
-                            ..
-                        }) => {
-                            break;
-                        }
-                        InputEvent::Key(KeyEvent {
-                            key: KeyCode::Char(c),
-                            ..
-                        }) => {
-                            if let Some(switch) = switches
-                                .iter_mut()
-                                .find(|switch| switch.key.chars().next() == Some(c))
-                            {
-                                switch.value = !switch.value;
-                            } else if let Some(option) = editing_options
-                                .iter_mut()
-                                .find(|option| option.key.chars().next() == Some(c))
-                            {
-                                let val = option.value.take();
-                                if val.is_none() {
-                                    term.render(&[Change::CursorVisibility(
-                                        CursorVisibility::Visible,
-                                    )])?;
-                                    let mut host = PromptHost::new();
-                                    let mut editor = LineEditor::new(&mut term);
-                                    let mut prompt = option.description.clone();
-                                    if let Some(default) = option.default.clone() {
-                                        prompt.push_str(&format!(" (default {})", default));
-                                    }
-                                    prompt.push_str(": ");
-                                    editor.set_prompt(&prompt);
-                                    let line = editor
-                                        .read_line_with_optional_initial_value(&mut host, None)?;
-                                    term.render(&[Change::CursorVisibility(
-                                        CursorVisibility::Hidden,
-                                    )])?;
-                                    if let Some(line) = line {
-                                        option.value = if line.len() == 0 {
-                                            option.default.clone()
-                                        } else {
-                                            Some(line)
-                                        };
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                flag_mode = true;
             }
             InputEvent::Key(KeyEvent {
                 key: KeyCode::Char(c),
