@@ -50,6 +50,29 @@ impl LineEditorHost for PromptHost {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct EditingCommandSwitch {
+    key: String,
+    value: bool,
+    description: String,
+    flag: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct EditingCommandOption {
+    key: String,
+    value: Option<String>,
+    default: Option<String>,
+    description: String,
+    flag: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct EditingCommandArgument {
+    key: String,
+    description: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct EditedCommandSwitch {
     key: String,
@@ -60,14 +83,6 @@ struct EditedCommandSwitch {
 struct EditedCommandOption {
     key: String,
     value: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct EditingCommandOption {
-    key: String,
-    value: Option<String>,
-    default: Option<String>,
-    description: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -84,76 +99,54 @@ pub fn show_edit_command_overlay(
     pane: MuxPane,
 ) -> anyhow::Result<()> {
     let name = match *args.action {
-        KeyAssignment::EmitEvent(id) => id,
+        KeyAssignment::EmitEvent(ref id) => id,
         _ => anyhow::bail!("EditCommand requires action to be defined by wezterm.action_callback"),
     };
 
     term.no_grab_mouse_in_raw_mode();
 
-    let mut changes = vec![
-        Change::CursorVisibility(CursorVisibility::Hidden),
-        Change::Text(format!("{}\r\n\r\nSwitches", args.description)),
-    ];
+    term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
 
-    for switch in &args.switches {
-        changes.push(Change::Text(format!(
-            "\r\n\t-{} {} ({})",
-            switch.key, switch.description, switch.flag
-        )));
-    }
+    let description = &args.description;
+    let mut switches: Vec<EditingCommandSwitch> = args
+        .switches
+        .iter()
+        .map(|switch| EditingCommandSwitch {
+            key: switch.key.clone(),
+            value: switch.default,
+            description: switch.description.clone(),
+            flag: switch.flag.clone(),
+        })
+        .collect();
+    let mut editing_options: Vec<EditingCommandOption> = args
+        .options
+        .iter()
+        .map(|option| EditingCommandOption {
+            key: option.key.clone(),
+            value: option.default.clone(),
+            default: option.default.clone(),
+            description: option.description.clone(),
+            flag: option.flag.clone(),
+        })
+        .collect();
+    let mut arguments: Vec<EditingCommandArgument> = args
+        .arguments
+        .iter()
+        .map(|argument| EditingCommandArgument {
+            key: argument.key.clone(),
+            description: argument.description.clone(),
+        })
+        .collect();
 
-    changes.push(Change::Text("\r\n\r\nOptions".to_string()));
-    for option in &args.options {
-        changes.push(Change::Text(format!(
-            "\r\n\t-{} {} ({}=",
-            option.key, option.description, option.flag,
-        )));
-        if let Some(default) = &option.default {
-            changes.push(Change::Text(format!("{})", default)))
-        } else {
-            changes.push(Change::Text(")".to_string()))
-        }
-    }
-
-    changes.push(Change::Text("\r\n\r\nArguments".to_string()));
-    for positional_arg in &args.arguments {
-        changes.push(Change::Text(format!(
-            "\r\n\t{} {}",
-            positional_arg.key, positional_arg.description
-        )));
-    }
-
-    changes.push(Change::Text("\r\n".to_string()));
-
-    let (mut switches, mut editing_options, mut arguments) = (vec![], vec![], vec![]);
-
-    for switch in &args.switches {
-        switches.push({
-            EditedCommandSwitch {
-                key: switch.key.clone(),
-                value: switch.default,
-            }
-        });
-    }
-
-    for option in &args.options {
-        editing_options.push({
-            EditingCommandOption {
-                key: option.key.clone(),
-                value: option.default.clone(),
-                default: option.default.clone(),
-                description: option.description.clone(),
-            }
-        });
-    }
-
-    for argument in &args.arguments {
-        arguments.push(argument.key.clone());
-    }
+    draw(
+        &mut term,
+        description,
+        &mut switches,
+        &mut editing_options,
+        &mut arguments,
+    )?;
 
     let mut flag_mode = false;
-
-    term.render(&changes)?;
 
     while let Ok(Some(event)) = term.poll_input(None) {
         match event {
@@ -176,6 +169,13 @@ pub fn show_edit_command_overlay(
                     .find(|switch| switch.key.chars().next() == Some(c))
                 {
                     switch.value = !switch.value;
+                    draw(
+                        &mut term,
+                        description,
+                        &mut switches,
+                        &mut editing_options,
+                        &mut arguments,
+                    )?;
                 } else if let Some(option) = editing_options
                     .iter_mut()
                     .find(|option| option.key.chars().next() == Some(c))
@@ -208,6 +208,13 @@ pub fn show_edit_command_overlay(
                             };
                         }
                     }
+                    draw(
+                        &mut term,
+                        description,
+                        &mut switches,
+                        &mut editing_options,
+                        &mut arguments,
+                    )?;
                 }
                 flag_mode = false;
             }
@@ -223,20 +230,28 @@ pub fn show_edit_command_overlay(
             }) => {
                 if let Some(positional_arg) = arguments
                     .iter()
-                    .find(|positional_arg| positional_arg.chars().next() == Some(c))
+                    .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
                 {
-                    let mut options = vec![];
-                    for option in editing_options {
-                        options.push(EditedCommandOption {
-                            key: option.key,
-                            value: option.value,
-                        });
-                    }
+                    let switches: Vec<EditedCommandSwitch> = switches
+                        .iter()
+                        .map(|switch| EditedCommandSwitch {
+                            key: switch.key.clone(),
+                            value: switch.value,
+                        })
+                        .collect();
+                    let options: Vec<EditedCommandOption> = editing_options
+                        .iter()
+                        .map(|option| EditedCommandOption {
+                            key: option.key.clone(),
+                            value: option.value.clone(),
+                        })
+                        .collect();
                     let edit_command = EditedCommand {
                         switches,
                         options,
-                        argument: positional_arg.to_string(),
+                        argument: positional_arg.key.to_string(),
                     };
+                    let name = name.to_string();
                     promise::spawn::spawn_into_main_thread(async move {
                         trampoline(name, window, pane, edit_command);
                         anyhow::Result::<()>::Ok(())
@@ -248,6 +263,56 @@ pub fn show_edit_command_overlay(
             _ => {}
         }
     }
+
+    Ok(())
+}
+
+fn draw(
+    term: &mut TermWizTerminal,
+    description: &str,
+    switches: &mut Vec<EditingCommandSwitch>,
+    options: &mut Vec<EditingCommandOption>,
+    arguments: &mut Vec<EditingCommandArgument>,
+) -> anyhow::Result<()> {
+    let mut changes = vec![
+        Change::ClearScreen(ColorAttribute::Default),
+        Change::CursorPosition {
+            x: Position::Absolute(0),
+            y: Position::Absolute(0),
+        },
+        Change::Text(format!("{}\r\n\r\nSwitches", description)),
+    ];
+
+    for switch in switches {
+        changes.push(Change::Text(format!(
+            "\r\n\t-{} {} ({})",
+            switch.key, switch.description, switch.flag
+        )));
+    }
+
+    changes.push(Change::Text("\r\n\r\nOptions".to_string()));
+    for option in options {
+        changes.push(Change::Text(format!(
+            "\r\n\t-{} {} ({}=",
+            option.key, option.description, option.flag,
+        )));
+        if let Some(val) = &option.value {
+            changes.push(Change::Text(format!("{})", val)))
+        } else {
+            changes.push(Change::Text(")".to_string()))
+        }
+    }
+
+    changes.push(Change::Text("\r\n\r\nArguments".to_string()));
+    for positional_arg in arguments {
+        changes.push(Change::Text(format!(
+            "\r\n\t{} {}",
+            positional_arg.key, positional_arg.description
+        )));
+    }
+
+    changes.push(Change::Text("\r\n\r\n\r\n".to_string()));
+    term.render(&changes)?;
 
     Ok(())
 }
