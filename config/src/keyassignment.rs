@@ -532,6 +532,38 @@ fn default_message() -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct EditCommandSwitch {
+    pub key: String,
+    pub default: bool,
+    pub description: String,
+    pub flag: String,
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct EditCommandOption {
+    pub key: String,
+    #[dynamic(default)]
+    pub default: Option<String>,
+    pub description: String,
+    pub flag: String,
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct EditCommandArgument {
+    pub key: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct EditCommand {
+    pub action: Box<KeyAssignment>,
+    pub description: String,
+    pub switches: Vec<EditCommandSwitch>,
+    pub options: Vec<EditCommandOption>,
+    pub arguments: Vec<EditCommandArgument>,
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub enum KeyAssignment {
     SpawnTab(SpawnTabDomain),
     SpawnWindow,
@@ -646,6 +678,7 @@ pub enum KeyAssignment {
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
     Confirmation(Confirmation),
+    EditCommand(EditCommand),
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 
