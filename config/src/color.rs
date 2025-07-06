@@ -176,6 +176,11 @@ pub struct Palette {
 
     pub launcher_label_fg: Option<ColorSpec>,
     pub launcher_label_bg: Option<ColorSpec>,
+    
+    pub edit_command_description_fg: Option<ColorSpec>,
+    pub edit_command_section_header_fg: Option<ColorSpec>,
+    pub edit_command_key_fg: Option<ColorSpec>,
+    pub edit_command_flag_fg: Option<ColorSpec>,
 }
 impl_lua_conversion_dynamic!(Palette);
 
@@ -229,6 +234,10 @@ impl Palette {
             input_selector_label_bg: overlay!(input_selector_label_bg),
             launcher_label_fg: overlay!(launcher_label_fg),
             launcher_label_bg: overlay!(launcher_label_bg),
+            edit_command_description_fg: overlay!(edit_command_description_fg),
+            edit_command_section_header_fg: overlay!(edit_command_section_header_fg),
+            edit_command_key_fg: overlay!(edit_command_key_fg),
+            edit_command_flag_fg: overlay!(edit_command_flag_fg),
         }
     }
 }

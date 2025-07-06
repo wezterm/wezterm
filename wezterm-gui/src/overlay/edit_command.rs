@@ -1,4 +1,5 @@
 use crate::scripting::guiwin::GuiWin;
+use config::configuration;
 use config::keyassignment::{EditCommand, KeyAssignment};
 use config::{AnsiColor, ColorAttribute};
 use luahelper::impl_lua_conversion_dynamic;
@@ -52,6 +53,39 @@ impl LineEditorHost for PromptHost {
     }
 }
 
+struct EditingCommandColors {
+    description_fg: ColorAttribute,
+    section_header_fg: ColorAttribute,
+    key_fg: ColorAttribute,
+    flag_fg: ColorAttribute,
+}
+
+impl EditingCommandColors {
+    fn new() -> Self {
+        let config = configuration();
+        let colors = &config.resolved_palette;
+
+        Self {
+            description_fg: colors
+                .edit_command_description_fg
+                .unwrap_or(AnsiColor::Teal.into())
+                .into(),
+            section_header_fg: colors
+                .edit_command_section_header_fg
+                .unwrap_or(AnsiColor::Navy.into())
+                .into(),
+            key_fg: colors
+                .edit_command_key_fg
+                .unwrap_or(AnsiColor::Purple.into())
+                .into(),
+            flag_fg: colors
+                .edit_command_flag_fg
+                .unwrap_or(AnsiColor::Red.into())
+                .into(),
+        }
+    }
+}
+
 struct EditingCommandSwitch {
     key: String,
     value: bool,
@@ -81,6 +115,7 @@ struct EditingCommandState<'a> {
     switches: Vec<EditingCommandSwitch>,
     options: Vec<EditingCommandOption>,
     arguments: Vec<EditingCommandArgument>,
+    colors: EditingCommandColors,
 }
 
 impl<'a> EditingCommandState<'a> {
@@ -120,6 +155,7 @@ impl<'a> EditingCommandState<'a> {
                     description: argument.description.clone(),
                 })
                 .collect(),
+            colors: EditingCommandColors::new(),
         }
     }
 
@@ -131,7 +167,7 @@ impl<'a> EditingCommandState<'a> {
                 y: Position::Absolute(0),
             },
             Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
-            Change::Attribute(AttributeChange::Foreground(AnsiColor::Teal.into())),
+            Change::Attribute(AttributeChange::Foreground(self.colors.description_fg)),
             Change::Text("Command".to_string()),
             Change::AllAttributes(CellAttributes::default()),
             Change::Text(format!(": {}\r\n", self.description)),
@@ -143,7 +179,7 @@ impl<'a> EditingCommandState<'a> {
             Intensity::Bold,
         )));
         changes.push(Change::Attribute(AttributeChange::Foreground(
-            AnsiColor::Blue.into(),
+            self.colors.section_header_fg,
         )));
         changes.push(Change::Text("Switches".to_string()));
         changes.push(Change::AllAttributes(CellAttributes::default()));
@@ -151,7 +187,7 @@ impl<'a> EditingCommandState<'a> {
         for switch in &self.switches {
             changes.push(Change::Text("\r\n\t".to_string()));
             changes.push(Change::Attribute(AttributeChange::Foreground(
-                AnsiColor::Purple.into(),
+                self.colors.key_fg,
             )));
             changes.push(Change::Text(format!("-{}", switch.key)));
             changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -164,7 +200,7 @@ impl<'a> EditingCommandState<'a> {
                     Intensity::Bold,
                 )));
                 changes.push(Change::Attribute(AttributeChange::Foreground(
-                    AnsiColor::Red.into(),
+                    self.colors.flag_fg,
                 )));
                 changes.push(Change::Text(switch.flag.to_string()));
                 changes.push(Change::AllAttributes(CellAttributes::default()));
@@ -180,7 +216,7 @@ impl<'a> EditingCommandState<'a> {
             Intensity::Bold,
         )));
         changes.push(Change::Attribute(AttributeChange::Foreground(
-            AnsiColor::Blue.into(),
+            self.colors.section_header_fg,
         )));
         changes.push(Change::Text("Options".to_string()));
         changes.push(Change::AllAttributes(CellAttributes::default()));
@@ -188,7 +224,7 @@ impl<'a> EditingCommandState<'a> {
         for option in &self.options {
             changes.push(Change::Text("\r\n\t".to_string()));
             changes.push(Change::Attribute(AttributeChange::Foreground(
-                AnsiColor::Purple.into(),
+                self.colors.key_fg,
             )));
             changes.push(Change::Text(format!("-{}", option.key)));
             changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -202,7 +238,7 @@ impl<'a> EditingCommandState<'a> {
                     Intensity::Bold,
                 )));
                 changes.push(Change::Attribute(AttributeChange::Foreground(
-                    AnsiColor::Red.into(),
+                    self.colors.flag_fg,
                 )));
                 changes.push(Change::Text(format!("{}={}", option.flag, val)));
                 changes.push(Change::AllAttributes(CellAttributes::default()));
@@ -218,7 +254,7 @@ impl<'a> EditingCommandState<'a> {
             Intensity::Bold,
         )));
         changes.push(Change::Attribute(AttributeChange::Foreground(
-            AnsiColor::Blue.into(),
+            self.colors.section_header_fg,
         )));
         changes.push(Change::Text("Arguments".to_string()));
         changes.push(Change::AllAttributes(CellAttributes::default()));
@@ -226,7 +262,7 @@ impl<'a> EditingCommandState<'a> {
         for positional_arg in &self.arguments {
             changes.push(Change::Text("\r\n\t".to_string()));
             changes.push(Change::Attribute(AttributeChange::Foreground(
-                AnsiColor::Purple.into(),
+                self.colors.key_fg,
             )));
             changes.push(Change::Text(positional_arg.key.clone()));
             changes.push(Change::Attribute(AttributeChange::Foreground(
