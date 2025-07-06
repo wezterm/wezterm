@@ -79,6 +79,126 @@ struct EditingCommandState<'a> {
     arguments: Vec<EditingCommandArgument>,
 }
 
+impl EditingCommandState<'_> {
+    fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
+        let mut changes = vec![
+            Change::ClearScreen(ColorAttribute::Default),
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(0),
+            },
+            Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
+            Change::Attribute(AttributeChange::Foreground(AnsiColor::Teal.into())),
+            Change::Text("Command".to_string()),
+            Change::AllAttributes(CellAttributes::default()),
+            Change::Text(format!(": {}\r\n", self.description)),
+            Change::Text("-".repeat(9 + self.description.len())),
+            Change::Text("\r\n\r\n".to_string()),
+        ];
+
+        changes.push(Change::Attribute(AttributeChange::Intensity(
+            Intensity::Bold,
+        )));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            AnsiColor::Blue.into(),
+        )));
+        changes.push(Change::Text("Switches".to_string()));
+        changes.push(Change::AllAttributes(CellAttributes::default()));
+
+        for switch in &self.switches {
+            changes.push(Change::Text("\r\n\t".to_string()));
+            changes.push(Change::Attribute(AttributeChange::Foreground(
+                AnsiColor::Purple.into(),
+            )));
+            changes.push(Change::Text(format!("-{}", switch.key)));
+            changes.push(Change::Attribute(AttributeChange::Foreground(
+                ColorAttribute::Default,
+            )));
+
+            changes.push(Change::Text(format!(" {} (", switch.description)));
+            if switch.value {
+                changes.push(Change::Attribute(AttributeChange::Intensity(
+                    Intensity::Bold,
+                )));
+                changes.push(Change::Attribute(AttributeChange::Foreground(
+                    AnsiColor::Red.into(),
+                )));
+                changes.push(Change::Text(switch.flag.to_string()));
+                changes.push(Change::AllAttributes(CellAttributes::default()));
+            } else {
+                changes.push(Change::Text(switch.flag.to_string()));
+            }
+            changes.push(Change::Text(")".to_string()));
+        }
+
+        changes.push(Change::Text("\r\n\r\n".to_string()));
+
+        changes.push(Change::Attribute(AttributeChange::Intensity(
+            Intensity::Bold,
+        )));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            AnsiColor::Blue.into(),
+        )));
+        changes.push(Change::Text("Options".to_string()));
+        changes.push(Change::AllAttributes(CellAttributes::default()));
+
+        for option in &self.options {
+            changes.push(Change::Text("\r\n\t".to_string()));
+            changes.push(Change::Attribute(AttributeChange::Foreground(
+                AnsiColor::Purple.into(),
+            )));
+            changes.push(Change::Text(format!("-{}", option.key)));
+            changes.push(Change::Attribute(AttributeChange::Foreground(
+                ColorAttribute::Default,
+            )));
+
+            changes.push(Change::Text(format!(" {} (", option.description)));
+
+            if let Some(val) = &option.value {
+                changes.push(Change::Attribute(AttributeChange::Intensity(
+                    Intensity::Bold,
+                )));
+                changes.push(Change::Attribute(AttributeChange::Foreground(
+                    AnsiColor::Red.into(),
+                )));
+                changes.push(Change::Text(format!("{}={}", option.flag, val)));
+                changes.push(Change::AllAttributes(CellAttributes::default()));
+            } else {
+                changes.push(Change::Text(format!("{}=", option.flag)));
+            }
+
+            changes.push(Change::Text(")".to_string()));
+        }
+
+        changes.push(Change::Text("\r\n\r\n".to_string()));
+        changes.push(Change::Attribute(AttributeChange::Intensity(
+            Intensity::Bold,
+        )));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            AnsiColor::Blue.into(),
+        )));
+        changes.push(Change::Text("Arguments".to_string()));
+        changes.push(Change::AllAttributes(CellAttributes::default()));
+
+        for positional_arg in &self.arguments {
+            changes.push(Change::Text("\r\n\t".to_string()));
+            changes.push(Change::Attribute(AttributeChange::Foreground(
+                AnsiColor::Purple.into(),
+            )));
+            changes.push(Change::Text(positional_arg.key.clone()));
+            changes.push(Change::Attribute(AttributeChange::Foreground(
+                ColorAttribute::Default,
+            )));
+            changes.push(Change::Text(format!(" {}", positional_arg.description)));
+        }
+
+        changes.push(Change::Text("\r\n\r\n\r\n".to_string()));
+        term.render(&changes)?;
+
+        Ok(())
+    }
+}
+
 #[derive(FromDynamic, ToDynamic)]
 struct EditedCommandSwitch {
     key: String,
@@ -148,7 +268,7 @@ pub fn show_edit_command_overlay(
             .collect(),
     };
 
-    render(&mut term, &mut state)?;
+    state.render(&mut term)?;
 
     let mut flag_mode = false;
 
@@ -174,7 +294,7 @@ pub fn show_edit_command_overlay(
                     .find(|switch| switch.key.chars().next() == Some(c))
                 {
                     switch.value = !switch.value;
-                    render(&mut term, &mut state)?;
+                    state.render(&mut term)?;
                 } else if let Some(option) = state
                     .options
                     .iter_mut()
@@ -202,7 +322,7 @@ pub fn show_edit_command_overlay(
                         }
                         term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
                     }
-                    render(&mut term, &mut state)?;
+                    state.render(&mut term)?;
                 }
                 flag_mode = false;
             }
@@ -252,124 +372,6 @@ pub fn show_edit_command_overlay(
             _ => {}
         }
     }
-
-    Ok(())
-}
-
-fn render(term: &mut TermWizTerminal, state: &mut EditingCommandState) -> termwiz::Result<()> {
-    let mut changes = vec![
-        Change::ClearScreen(ColorAttribute::Default),
-        Change::CursorPosition {
-            x: Position::Absolute(0),
-            y: Position::Absolute(0),
-        },
-        Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
-        Change::Attribute(AttributeChange::Foreground(AnsiColor::Teal.into())),
-        Change::Text("Command".to_string()),
-        Change::AllAttributes(CellAttributes::default()),
-        Change::Text(format!(": {}\r\n", state.description)),
-        Change::Text("-".repeat(9 + state.description.len())),
-        Change::Text("\r\n\r\n".to_string()),
-    ];
-
-    changes.push(Change::Attribute(AttributeChange::Intensity(
-        Intensity::Bold,
-    )));
-    changes.push(Change::Attribute(AttributeChange::Foreground(
-        AnsiColor::Blue.into(),
-    )));
-    changes.push(Change::Text("Switches".to_string()));
-    changes.push(Change::AllAttributes(CellAttributes::default()));
-
-    for switch in &state.switches {
-        changes.push(Change::Text("\r\n\t".to_string()));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            AnsiColor::Purple.into(),
-        )));
-        changes.push(Change::Text(format!("-{}", switch.key)));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            ColorAttribute::Default,
-        )));
-
-        changes.push(Change::Text(format!(" {} (", switch.description)));
-        if switch.value {
-            changes.push(Change::Attribute(AttributeChange::Intensity(
-                Intensity::Bold,
-            )));
-            changes.push(Change::Attribute(AttributeChange::Foreground(
-                AnsiColor::Red.into(),
-            )));
-            changes.push(Change::Text(switch.flag.to_string()));
-            changes.push(Change::AllAttributes(CellAttributes::default()));
-        } else {
-            changes.push(Change::Text(switch.flag.to_string()));
-        }
-        changes.push(Change::Text(")".to_string()));
-    }
-
-    changes.push(Change::Text("\r\n\r\n".to_string()));
-
-    changes.push(Change::Attribute(AttributeChange::Intensity(
-        Intensity::Bold,
-    )));
-    changes.push(Change::Attribute(AttributeChange::Foreground(
-        AnsiColor::Blue.into(),
-    )));
-    changes.push(Change::Text("Options".to_string()));
-    changes.push(Change::AllAttributes(CellAttributes::default()));
-
-    for option in &state.options {
-        changes.push(Change::Text("\r\n\t".to_string()));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            AnsiColor::Purple.into(),
-        )));
-        changes.push(Change::Text(format!("-{}", option.key)));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            ColorAttribute::Default,
-        )));
-
-        changes.push(Change::Text(format!(" {} (", option.description)));
-
-        if let Some(val) = &option.value {
-            changes.push(Change::Attribute(AttributeChange::Intensity(
-                Intensity::Bold,
-            )));
-            changes.push(Change::Attribute(AttributeChange::Foreground(
-                AnsiColor::Red.into(),
-            )));
-            changes.push(Change::Text(format!("{}={}", option.flag, val)));
-            changes.push(Change::AllAttributes(CellAttributes::default()));
-        } else {
-            changes.push(Change::Text(format!("{}=", option.flag)));
-        }
-
-        changes.push(Change::Text(")".to_string()));
-    }
-
-    changes.push(Change::Text("\r\n\r\n".to_string()));
-    changes.push(Change::Attribute(AttributeChange::Intensity(
-        Intensity::Bold,
-    )));
-    changes.push(Change::Attribute(AttributeChange::Foreground(
-        AnsiColor::Blue.into(),
-    )));
-    changes.push(Change::Text("Arguments".to_string()));
-    changes.push(Change::AllAttributes(CellAttributes::default()));
-
-    for positional_arg in &state.arguments {
-        changes.push(Change::Text("\r\n\t".to_string()));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            AnsiColor::Purple.into(),
-        )));
-        changes.push(Change::Text(positional_arg.key.clone()));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            ColorAttribute::Default,
-        )));
-        changes.push(Change::Text(format!(" {}", positional_arg.description)));
-    }
-
-    changes.push(Change::Text("\r\n\r\n\r\n".to_string()));
-    term.render(&changes)?;
 
     Ok(())
 }
