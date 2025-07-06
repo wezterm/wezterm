@@ -241,6 +241,49 @@ impl<'a> EditingCommandState<'a> {
         Ok(())
     }
 
+    fn trigger_event(&self, positional_arg: &EditingCommandArgument) {
+        let name = self.name.clone();
+        let window = self.window.clone();
+        let pane = self.pane;
+        let edit_command = EditedCommand {
+            switches: self
+                .switches
+                .iter()
+                .map(|switch| EditedCommandSwitch {
+                    key: switch.key.clone(),
+                    value: switch.value,
+                })
+                .collect(),
+            options: self
+                .options
+                .iter()
+                .map(|option| EditedCommandOption {
+                    key: option.key.clone(),
+                    value: option.value.clone(),
+                })
+                .collect(),
+            argument: positional_arg.key.to_string(),
+        };
+        promise::spawn::spawn_into_main_thread(async move {
+            trampoline(name, window, pane, edit_command);
+            anyhow::Result::<()>::Ok(())
+        })
+        .detach();
+    }
+
+    fn launch(&self, c: char) -> bool {
+        if let Some(positional_arg) = self
+            .arguments
+            .iter()
+            .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
+        {
+            self.trigger_event(positional_arg);
+            true
+        } else {
+            false
+        }
+    }
+
     fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         while let Ok(Some(event)) = term.poll_input(None) {
             match event {
@@ -307,38 +350,7 @@ impl<'a> EditingCommandState<'a> {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
-                    if let Some(positional_arg) = self
-                        .arguments
-                        .iter()
-                        .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
-                    {
-                        let name = self.name.clone();
-                        let window = self.window.clone();
-                        let pane = self.pane;
-                        let edit_command = EditedCommand {
-                            switches: self
-                                .switches
-                                .iter()
-                                .map(|switch| EditedCommandSwitch {
-                                    key: switch.key.clone(),
-                                    value: switch.value,
-                                })
-                                .collect(),
-                            options: self
-                                .options
-                                .iter()
-                                .map(|option| EditedCommandOption {
-                                    key: option.key.clone(),
-                                    value: option.value.clone(),
-                                })
-                                .collect(),
-                            argument: positional_arg.key.to_string(),
-                        };
-                        promise::spawn::spawn_into_main_thread(async move {
-                            trampoline(name, window, pane, edit_command);
-                            anyhow::Result::<()>::Ok(())
-                        })
-                        .detach();
+                    if self.launch(c) {
                         break;
                     }
                 }
