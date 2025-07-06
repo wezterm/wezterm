@@ -245,25 +245,7 @@ impl<'a> EditingCommandState<'a> {
         let name = self.name.clone();
         let window = self.window.clone();
         let pane = self.pane;
-        let edit_command = EditedCommand {
-            switches: self
-                .switches
-                .iter()
-                .map(|switch| EditedCommandSwitch {
-                    key: switch.key.clone(),
-                    value: switch.value,
-                })
-                .collect(),
-            options: self
-                .options
-                .iter()
-                .map(|option| EditedCommandOption {
-                    key: option.key.clone(),
-                    value: option.value.clone(),
-                })
-                .collect(),
-            argument: positional_arg.key.to_string(),
-        };
+        let edit_command = EditedCommand::new(&self, positional_arg);
         promise::spawn::spawn_into_main_thread(async move {
             trampoline(name, window, pane, edit_command);
             anyhow::Result::<()>::Ok(())
@@ -379,6 +361,30 @@ struct EditedCommand {
     switches: Vec<EditedCommandSwitch>,
     options: Vec<EditedCommandOption>,
     argument: String,
+}
+
+impl EditedCommand {
+    fn new(state: &EditingCommandState, positional_arg: &EditingCommandArgument) -> Self {
+        Self {
+            switches: state
+                .switches
+                .iter()
+                .map(|switch| EditedCommandSwitch {
+                    key: switch.key.clone(),
+                    value: switch.value,
+                })
+                .collect(),
+            options: state
+                .options
+                .iter()
+                .map(|option| EditedCommandOption {
+                    key: option.key.clone(),
+                    value: option.value.clone(),
+                })
+                .collect(),
+            argument: positional_arg.key.to_string(),
+        }
+    }
 }
 
 impl_lua_conversion_dynamic!(EditedCommand);
