@@ -104,10 +104,10 @@ struct EditingCommandOption {
 struct EditingCommandArgument {
     key: String,
     description: String,
+    action: Box<KeyAssignment>,
 }
 
 struct EditingCommandState<'a> {
-    name: String,
     window: GuiWin,
     pane: MuxPane,
     flag_mode: bool,
@@ -119,9 +119,8 @@ struct EditingCommandState<'a> {
 }
 
 impl<'a> EditingCommandState<'a> {
-    fn new(args: &'a EditCommand, name: String, window: GuiWin, pane: MuxPane) -> Self {
+    fn new(args: &'a EditCommand, window: GuiWin, pane: MuxPane) -> Self {
         Self {
-            name,
             window,
             pane,
             flag_mode: false,
@@ -153,6 +152,7 @@ impl<'a> EditingCommandState<'a> {
                 .map(|argument| EditingCommandArgument {
                     key: argument.key.clone(),
                     description: argument.description.clone(),
+                    action: argument.action.clone(),
                 })
                 .collect(),
             colors: EditingCommandColors::new(),
@@ -277,29 +277,16 @@ impl<'a> EditingCommandState<'a> {
         Ok(())
     }
 
-    fn trigger_event(&self, positional_arg: &EditingCommandArgument) {
-        let name = self.name.clone();
+    fn trigger_event(&self, name: &str) {
+        let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
-        let edit_command = EditedCommand::new(&self, positional_arg);
+        let edit_command = EditedCommand::new(&self);
         promise::spawn::spawn_into_main_thread(async move {
             trampoline(name, window, pane, edit_command);
             anyhow::Result::<()>::Ok(())
         })
         .detach();
-    }
-
-    fn launch(&self, c: char) -> bool {
-        if let Some(positional_arg) = self
-            .arguments
-            .iter()
-            .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
-        {
-            self.trigger_event(positional_arg);
-            true
-        } else {
-            false
-        }
     }
 
     fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
@@ -368,7 +355,16 @@ impl<'a> EditingCommandState<'a> {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
-                    if self.launch(c) {
+                    if let Some(positional_arg) = self
+                        .arguments
+                        .iter()
+                        .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
+                    {
+                        let name = match *positional_arg.action {
+                            KeyAssignment::EmitEvent(ref id) => id,
+                            _ => anyhow::bail!("EditCommand requires action to be defined by wezterm.action_callback")
+                        };
+                        self.trigger_event(name);
                         break;
                     }
                 }
@@ -396,11 +392,10 @@ struct EditedCommandOption {
 struct EditedCommand {
     switches: Vec<EditedCommandSwitch>,
     options: Vec<EditedCommandOption>,
-    argument: String,
 }
 
 impl EditedCommand {
-    fn new(state: &EditingCommandState, positional_arg: &EditingCommandArgument) -> Self {
+    fn new(state: &EditingCommandState) -> Self {
         Self {
             switches: state
                 .switches
@@ -418,7 +413,6 @@ impl EditedCommand {
                     value: option.value.clone(),
                 })
                 .collect(),
-            argument: positional_arg.key.to_string(),
         }
     }
 }
@@ -459,15 +453,10 @@ pub fn show_edit_command_overlay(
     window: GuiWin,
     pane: MuxPane,
 ) -> anyhow::Result<()> {
-    let name = match *args.action {
-        KeyAssignment::EmitEvent(ref id) => id.to_string(),
-        _ => anyhow::bail!("EditCommand requires action to be defined by wezterm.action_callback"),
-    };
-
     term.no_grab_mouse_in_raw_mode();
     term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
 
-    let mut state = EditingCommandState::new(&args, name, window, pane);
+    let mut state = EditingCommandState::new(&args, window, pane);
     state.render(&mut term)?;
     state.run_loop(&mut term)
 }

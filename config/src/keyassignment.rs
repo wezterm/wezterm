@@ -552,11 +552,11 @@ pub struct EditCommandOption {
 pub struct EditCommandArgument {
     pub key: String,
     pub description: String,
+    pub action: Box<KeyAssignment>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct EditCommand {
-    pub action: Box<KeyAssignment>,
     pub description: String,
     pub switches: Vec<EditCommandSwitch>,
     pub options: Vec<EditCommandOption>,
