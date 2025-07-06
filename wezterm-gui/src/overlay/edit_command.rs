@@ -52,7 +52,6 @@ impl LineEditorHost for PromptHost {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
 struct EditingCommandSwitch {
     key: String,
     value: bool,
@@ -60,7 +59,6 @@ struct EditingCommandSwitch {
     flag: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
 struct EditingCommandOption {
     key: String,
     value: Option<String>,
@@ -69,13 +67,11 @@ struct EditingCommandOption {
     flag: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
 struct EditingCommandArgument {
     key: String,
     description: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
 struct EditingCommandState<'a> {
     description: &'a str,
     switches: Vec<EditingCommandSwitch>,
@@ -83,19 +79,19 @@ struct EditingCommandState<'a> {
     arguments: Vec<EditingCommandArgument>,
 }
 
-#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+#[derive(FromDynamic, ToDynamic)]
 struct EditedCommandSwitch {
     key: String,
     value: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+#[derive(FromDynamic, ToDynamic)]
 struct EditedCommandOption {
     key: String,
     value: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+#[derive(FromDynamic, ToDynamic)]
 struct EditedCommand {
     switches: Vec<EditedCommandSwitch>,
     options: Vec<EditedCommandOption>,
