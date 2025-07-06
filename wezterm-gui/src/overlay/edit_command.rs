@@ -389,25 +389,6 @@ impl EditedCommand {
 
 impl_lua_conversion_dynamic!(EditedCommand);
 
-pub fn show_edit_command_overlay(
-    mut term: TermWizTerminal,
-    args: EditCommand,
-    window: GuiWin,
-    pane: MuxPane,
-) -> anyhow::Result<()> {
-    let name = match *args.action {
-        KeyAssignment::EmitEvent(ref id) => id.to_string(),
-        _ => anyhow::bail!("EditCommand requires action to be defined by wezterm.action_callback"),
-    };
-
-    term.no_grab_mouse_in_raw_mode();
-    term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
-
-    let mut state = EditingCommandState::new(&args, name, window, pane);
-    state.render(&mut term)?;
-    state.run_loop(&mut term)
-}
-
 fn trampoline(name: String, window: GuiWin, pane: MuxPane, edited_command: EditedCommand) {
     promise::spawn::spawn(async move {
         config::with_lua_config_on_main_thread(move |lua| {
@@ -434,4 +415,23 @@ async fn do_event(
     }
 
     Ok(())
+}
+
+pub fn show_edit_command_overlay(
+    mut term: TermWizTerminal,
+    args: EditCommand,
+    window: GuiWin,
+    pane: MuxPane,
+) -> anyhow::Result<()> {
+    let name = match *args.action {
+        KeyAssignment::EmitEvent(ref id) => id.to_string(),
+        _ => anyhow::bail!("EditCommand requires action to be defined by wezterm.action_callback"),
+    };
+
+    term.no_grab_mouse_in_raw_mode();
+    term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
+
+    let mut state = EditingCommandState::new(&args, name, window, pane);
+    state.render(&mut term)?;
+    state.run_loop(&mut term)
 }
