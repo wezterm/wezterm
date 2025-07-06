@@ -271,7 +271,7 @@ fn render(
     switches: &mut Vec<EditingCommandSwitch>,
     options: &mut Vec<EditingCommandOption>,
     arguments: &mut Vec<EditingCommandArgument>,
-) -> anyhow::Result<()> {
+) -> termwiz::Result<()> {
     let mut changes = vec![
         Change::ClearScreen(ColorAttribute::Default),
         Change::CursorPosition {
