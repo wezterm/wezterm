@@ -225,25 +225,23 @@ pub fn show_edit_command_overlay(
                     .iter()
                     .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
                 {
-                    let switches: Vec<EditedCommandSwitch> = state
-                        .switches
-                        .iter()
-                        .map(|switch| EditedCommandSwitch {
-                            key: switch.key.clone(),
-                            value: switch.value,
-                        })
-                        .collect();
-                    let options: Vec<EditedCommandOption> = state
-                        .options
-                        .iter()
-                        .map(|option| EditedCommandOption {
-                            key: option.key.clone(),
-                            value: option.value.clone(),
-                        })
-                        .collect();
                     let edit_command = EditedCommand {
-                        switches,
-                        options,
+                        switches: state
+                            .switches
+                            .iter()
+                            .map(|switch| EditedCommandSwitch {
+                                key: switch.key.clone(),
+                                value: switch.value,
+                            })
+                            .collect(),
+                        options: state
+                            .options
+                            .iter()
+                            .map(|option| EditedCommandOption {
+                                key: option.key.clone(),
+                                value: option.value.clone(),
+                            })
+                            .collect(),
                         argument: positional_arg.key.to_string(),
                     };
                     let name = name.to_string();
