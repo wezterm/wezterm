@@ -142,7 +142,7 @@ pub fn show_edit_command_overlay(
         })
         .collect();
 
-    draw(
+    render(
         &mut term,
         description,
         &mut editing_switches,
@@ -173,7 +173,7 @@ pub fn show_edit_command_overlay(
                     .find(|switch| switch.key.chars().next() == Some(c))
                 {
                     switch.value = !switch.value;
-                    draw(
+                    render(
                         &mut term,
                         description,
                         &mut editing_switches,
@@ -206,7 +206,7 @@ pub fn show_edit_command_overlay(
                         }
                         term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
                     }
-                    draw(
+                    render(
                         &mut term,
                         description,
                         &mut editing_switches,
@@ -265,7 +265,7 @@ pub fn show_edit_command_overlay(
     Ok(())
 }
 
-fn draw(
+fn render(
     term: &mut TermWizTerminal,
     description: &str,
     switches: &mut Vec<EditingCommandSwitch>,
