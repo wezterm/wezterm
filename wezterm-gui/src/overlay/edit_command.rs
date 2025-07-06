@@ -75,6 +75,14 @@ struct EditingCommandArgument {
     description: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct EditingCommandState<'a> {
+    description: &'a str,
+    switches: Vec<EditingCommandSwitch>,
+    options: Vec<EditingCommandOption>,
+    arguments: Vec<EditingCommandArgument>,
+}
+
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 struct EditedCommandSwitch {
     key: String,
@@ -111,44 +119,40 @@ pub fn show_edit_command_overlay(
 
     term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
 
-    let description = &args.description;
-    let mut editing_switches: Vec<EditingCommandSwitch> = args
-        .switches
-        .iter()
-        .map(|switch| EditingCommandSwitch {
-            key: switch.key.clone(),
-            value: switch.default,
-            description: switch.description.clone(),
-            flag: switch.flag.clone(),
-        })
-        .collect();
-    let mut editing_options: Vec<EditingCommandOption> = args
-        .options
-        .iter()
-        .map(|option| EditingCommandOption {
-            key: option.key.clone(),
-            value: option.default.clone(),
-            default: option.default.clone(),
-            description: option.description.clone(),
-            flag: option.flag.clone(),
-        })
-        .collect();
-    let mut editing_arguments: Vec<EditingCommandArgument> = args
-        .arguments
-        .iter()
-        .map(|argument| EditingCommandArgument {
-            key: argument.key.clone(),
-            description: argument.description.clone(),
-        })
-        .collect();
+    let mut state = EditingCommandState {
+        description: &args.description,
+        switches: args
+            .switches
+            .iter()
+            .map(|switch| EditingCommandSwitch {
+                key: switch.key.clone(),
+                value: switch.default,
+                description: switch.description.clone(),
+                flag: switch.flag.clone(),
+            })
+            .collect(),
+        options: args
+            .options
+            .iter()
+            .map(|option| EditingCommandOption {
+                key: option.key.clone(),
+                value: option.default.clone(),
+                default: option.default.clone(),
+                description: option.description.clone(),
+                flag: option.flag.clone(),
+            })
+            .collect(),
+        arguments: args
+            .arguments
+            .iter()
+            .map(|argument| EditingCommandArgument {
+                key: argument.key.clone(),
+                description: argument.description.clone(),
+            })
+            .collect(),
+    };
 
-    render(
-        &mut term,
-        description,
-        &mut editing_switches,
-        &mut editing_options,
-        &mut editing_arguments,
-    )?;
+    render(&mut term, &mut state)?;
 
     let mut flag_mode = false;
 
@@ -168,19 +172,15 @@ pub fn show_edit_command_overlay(
                 key: KeyCode::Char(c),
                 ..
             }) if flag_mode => {
-                if let Some(switch) = editing_switches
+                if let Some(switch) = state
+                    .switches
                     .iter_mut()
                     .find(|switch| switch.key.chars().next() == Some(c))
                 {
                     switch.value = !switch.value;
-                    render(
-                        &mut term,
-                        description,
-                        &mut editing_switches,
-                        &mut editing_options,
-                        &mut editing_arguments,
-                    )?;
-                } else if let Some(option) = editing_options
+                    render(&mut term, &mut state)?;
+                } else if let Some(option) = state
+                    .options
                     .iter_mut()
                     .find(|option| option.key.chars().next() == Some(c))
                 {
@@ -206,13 +206,7 @@ pub fn show_edit_command_overlay(
                         }
                         term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
                     }
-                    render(
-                        &mut term,
-                        description,
-                        &mut editing_switches,
-                        &mut editing_options,
-                        &mut editing_arguments,
-                    )?;
+                    render(&mut term, &mut state)?;
                 }
                 flag_mode = false;
             }
@@ -226,18 +220,21 @@ pub fn show_edit_command_overlay(
                 key: KeyCode::Char(c),
                 ..
             }) => {
-                if let Some(positional_arg) = editing_arguments
+                if let Some(positional_arg) = state
+                    .arguments
                     .iter()
                     .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
                 {
-                    let switches: Vec<EditedCommandSwitch> = editing_switches
+                    let switches: Vec<EditedCommandSwitch> = state
+                        .switches
                         .iter()
                         .map(|switch| EditedCommandSwitch {
                             key: switch.key.clone(),
                             value: switch.value,
                         })
                         .collect();
-                    let options: Vec<EditedCommandOption> = editing_options
+                    let options: Vec<EditedCommandOption> = state
+                        .options
                         .iter()
                         .map(|option| EditedCommandOption {
                             key: option.key.clone(),
@@ -265,13 +262,7 @@ pub fn show_edit_command_overlay(
     Ok(())
 }
 
-fn render(
-    term: &mut TermWizTerminal,
-    description: &str,
-    switches: &mut Vec<EditingCommandSwitch>,
-    options: &mut Vec<EditingCommandOption>,
-    arguments: &mut Vec<EditingCommandArgument>,
-) -> termwiz::Result<()> {
+fn render(term: &mut TermWizTerminal, state: &mut EditingCommandState) -> termwiz::Result<()> {
     let mut changes = vec![
         Change::ClearScreen(ColorAttribute::Default),
         Change::CursorPosition {
@@ -282,8 +273,8 @@ fn render(
         Change::Attribute(AttributeChange::Foreground(AnsiColor::Teal.into())),
         Change::Text("Command".to_string()),
         Change::AllAttributes(CellAttributes::default()),
-        Change::Text(format!(": {}\r\n", description)),
-        Change::Text("-".repeat(9 + description.len())),
+        Change::Text(format!(": {}\r\n", state.description)),
+        Change::Text("-".repeat(9 + state.description.len())),
         Change::Text("\r\n\r\n".to_string()),
     ];
 
@@ -296,7 +287,7 @@ fn render(
     changes.push(Change::Text("Switches".to_string()));
     changes.push(Change::AllAttributes(CellAttributes::default()));
 
-    for switch in switches {
+    for switch in &state.switches {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             AnsiColor::Purple.into(),
@@ -333,7 +324,7 @@ fn render(
     changes.push(Change::Text("Options".to_string()));
     changes.push(Change::AllAttributes(CellAttributes::default()));
 
-    for option in options {
+    for option in &state.options {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             AnsiColor::Purple.into(),
@@ -371,7 +362,7 @@ fn render(
     changes.push(Change::Text("Arguments".to_string()));
     changes.push(Change::AllAttributes(CellAttributes::default()));
 
-    for positional_arg in arguments {
+    for positional_arg in &state.arguments {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             AnsiColor::Purple.into(),
