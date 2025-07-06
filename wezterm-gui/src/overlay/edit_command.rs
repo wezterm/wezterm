@@ -79,7 +79,42 @@ struct EditingCommandState<'a> {
     arguments: Vec<EditingCommandArgument>,
 }
 
-impl EditingCommandState<'_> {
+impl<'a> EditingCommandState<'a> {
+    fn new(args: &'a EditCommand) -> Self {
+        Self {
+            description: &args.description,
+            switches: args
+                .switches
+                .iter()
+                .map(|switch| EditingCommandSwitch {
+                    key: switch.key.clone(),
+                    value: switch.default,
+                    description: switch.description.clone(),
+                    flag: switch.flag.clone(),
+                })
+                .collect(),
+            options: args
+                .options
+                .iter()
+                .map(|option| EditingCommandOption {
+                    key: option.key.clone(),
+                    value: option.default.clone(),
+                    default: option.default.clone(),
+                    description: option.description.clone(),
+                    flag: option.flag.clone(),
+                })
+                .collect(),
+            arguments: args
+                .arguments
+                .iter()
+                .map(|argument| EditingCommandArgument {
+                    key: argument.key.clone(),
+                    description: argument.description.clone(),
+                })
+                .collect(),
+        }
+    }
+
     fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
@@ -235,38 +270,7 @@ pub fn show_edit_command_overlay(
 
     term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
 
-    let mut state = EditingCommandState {
-        description: &args.description,
-        switches: args
-            .switches
-            .iter()
-            .map(|switch| EditingCommandSwitch {
-                key: switch.key.clone(),
-                value: switch.default,
-                description: switch.description.clone(),
-                flag: switch.flag.clone(),
-            })
-            .collect(),
-        options: args
-            .options
-            .iter()
-            .map(|option| EditingCommandOption {
-                key: option.key.clone(),
-                value: option.default.clone(),
-                default: option.default.clone(),
-                description: option.description.clone(),
-                flag: option.flag.clone(),
-            })
-            .collect(),
-        arguments: args
-            .arguments
-            .iter()
-            .map(|argument| EditingCommandArgument {
-                key: argument.key.clone(),
-                description: argument.description.clone(),
-            })
-            .collect(),
-    };
+    let mut state = EditingCommandState::new(&args);
 
     state.render(&mut term)?;
 
