@@ -73,6 +73,9 @@ struct EditingCommandArgument {
 }
 
 struct EditingCommandState<'a> {
+    name: String,
+    window: GuiWin,
+    pane: MuxPane,
     flag_mode: bool,
     description: &'a str,
     switches: Vec<EditingCommandSwitch>,
@@ -81,8 +84,11 @@ struct EditingCommandState<'a> {
 }
 
 impl<'a> EditingCommandState<'a> {
-    fn new(args: &'a EditCommand) -> Self {
+    fn new(args: &'a EditCommand, name: String, window: GuiWin, pane: MuxPane) -> Self {
         Self {
+            name,
+            window,
+            pane,
             flag_mode: false,
             description: &args.description,
             switches: args
@@ -234,6 +240,114 @@ impl<'a> EditingCommandState<'a> {
 
         Ok(())
     }
+
+    fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
+        while let Ok(Some(event)) = term.poll_input(None) {
+            match event {
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('G' | 'C' | 'D' | '['),
+                    modifiers: Modifiers::CTRL,
+                })
+                | InputEvent::Key(KeyEvent {
+                    key: KeyCode::Escape,
+                    ..
+                }) => {
+                    break;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char(c),
+                    ..
+                }) if self.flag_mode => {
+                    if let Some(switch) = self
+                        .switches
+                        .iter_mut()
+                        .find(|switch| switch.key.chars().next() == Some(c))
+                    {
+                        switch.value = !switch.value;
+                        self.render(term)?;
+                    } else if let Some(option) = self
+                        .options
+                        .iter_mut()
+                        .find(|option| option.key.chars().next() == Some(c))
+                    {
+                        let val = option.value.take();
+                        if val.is_none() {
+                            term.render(&[Change::CursorVisibility(CursorVisibility::Visible)])?;
+
+                            let mut host = PromptHost::new();
+                            let mut editor = LineEditor::new(term);
+                            let mut prompt = option.description.clone();
+                            if let Some(default) = option.default.clone() {
+                                prompt.push_str(&format!(" (default {})", default));
+                            }
+                            prompt.push_str(": ");
+                            editor.set_prompt(&prompt);
+                            let line =
+                                editor.read_line_with_optional_initial_value(&mut host, None)?;
+                            if let Some(line) = line {
+                                option.value = if line.len() == 0 {
+                                    option.default.clone()
+                                } else {
+                                    Some(line)
+                                };
+                            }
+                            term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
+                        }
+                        self.render(term)?;
+                    }
+                    self.flag_mode = false;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('-'),
+                    modifiers: Modifiers::NONE,
+                }) => {
+                    self.flag_mode = true;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char(c),
+                    ..
+                }) => {
+                    if let Some(positional_arg) = self
+                        .arguments
+                        .iter()
+                        .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
+                    {
+                        let name = self.name.clone();
+                        let window = self.window.clone();
+                        let pane = self.pane;
+                        let edit_command = EditedCommand {
+                            switches: self
+                                .switches
+                                .iter()
+                                .map(|switch| EditedCommandSwitch {
+                                    key: switch.key.clone(),
+                                    value: switch.value,
+                                })
+                                .collect(),
+                            options: self
+                                .options
+                                .iter()
+                                .map(|option| EditedCommandOption {
+                                    key: option.key.clone(),
+                                    value: option.value.clone(),
+                                })
+                                .collect(),
+                            argument: positional_arg.key.to_string(),
+                        };
+                        promise::spawn::spawn_into_main_thread(async move {
+                            trampoline(name, window, pane, edit_command);
+                            anyhow::Result::<()>::Ok(())
+                        })
+                        .detach();
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(FromDynamic, ToDynamic)]
@@ -264,120 +378,16 @@ pub fn show_edit_command_overlay(
     pane: MuxPane,
 ) -> anyhow::Result<()> {
     let name = match *args.action {
-        KeyAssignment::EmitEvent(ref id) => id,
+        KeyAssignment::EmitEvent(ref id) => id.to_string(),
         _ => anyhow::bail!("EditCommand requires action to be defined by wezterm.action_callback"),
     };
 
     term.no_grab_mouse_in_raw_mode();
-
     term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
 
-    let mut state = EditingCommandState::new(&args);
-
+    let mut state = EditingCommandState::new(&args, name, window, pane);
     state.render(&mut term)?;
-
-    while let Ok(Some(event)) = term.poll_input(None) {
-        match event {
-            InputEvent::Key(KeyEvent {
-                key: KeyCode::Char('G' | 'C' | 'D' | '['),
-                modifiers: Modifiers::CTRL,
-            })
-            | InputEvent::Key(KeyEvent {
-                key: KeyCode::Escape,
-                ..
-            }) => {
-                break;
-            }
-            InputEvent::Key(KeyEvent {
-                key: KeyCode::Char(c),
-                ..
-            }) if state.flag_mode => {
-                if let Some(switch) = state
-                    .switches
-                    .iter_mut()
-                    .find(|switch| switch.key.chars().next() == Some(c))
-                {
-                    switch.value = !switch.value;
-                    state.render(&mut term)?;
-                } else if let Some(option) = state
-                    .options
-                    .iter_mut()
-                    .find(|option| option.key.chars().next() == Some(c))
-                {
-                    let val = option.value.take();
-                    if val.is_none() {
-                        term.render(&[Change::CursorVisibility(CursorVisibility::Visible)])?;
-
-                        let mut host = PromptHost::new();
-                        let mut editor = LineEditor::new(&mut term);
-                        let mut prompt = option.description.clone();
-                        if let Some(default) = option.default.clone() {
-                            prompt.push_str(&format!(" (default {})", default));
-                        }
-                        prompt.push_str(": ");
-                        editor.set_prompt(&prompt);
-                        let line = editor.read_line_with_optional_initial_value(&mut host, None)?;
-                        if let Some(line) = line {
-                            option.value = if line.len() == 0 {
-                                option.default.clone()
-                            } else {
-                                Some(line)
-                            };
-                        }
-                        term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
-                    }
-                    state.render(&mut term)?;
-                }
-                state.flag_mode = false;
-            }
-            InputEvent::Key(KeyEvent {
-                key: KeyCode::Char('-'),
-                modifiers: Modifiers::NONE,
-            }) => {
-                state.flag_mode = true;
-            }
-            InputEvent::Key(KeyEvent {
-                key: KeyCode::Char(c),
-                ..
-            }) => {
-                if let Some(positional_arg) = state
-                    .arguments
-                    .iter()
-                    .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
-                {
-                    let edit_command = EditedCommand {
-                        switches: state
-                            .switches
-                            .iter()
-                            .map(|switch| EditedCommandSwitch {
-                                key: switch.key.clone(),
-                                value: switch.value,
-                            })
-                            .collect(),
-                        options: state
-                            .options
-                            .iter()
-                            .map(|option| EditedCommandOption {
-                                key: option.key.clone(),
-                                value: option.value.clone(),
-                            })
-                            .collect(),
-                        argument: positional_arg.key.to_string(),
-                    };
-                    let name = name.to_string();
-                    promise::spawn::spawn_into_main_thread(async move {
-                        trampoline(name, window, pane, edit_command);
-                        anyhow::Result::<()>::Ok(())
-                    })
-                    .detach();
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
+    state.run_loop(&mut term)
 }
 
 fn trampoline(name: String, window: GuiWin, pane: MuxPane, edited_command: EditedCommand) {
