@@ -73,6 +73,7 @@ struct EditingCommandArgument {
 }
 
 struct EditingCommandState<'a> {
+    flag_mode: bool,
     description: &'a str,
     switches: Vec<EditingCommandSwitch>,
     options: Vec<EditingCommandOption>,
@@ -82,6 +83,7 @@ struct EditingCommandState<'a> {
 impl<'a> EditingCommandState<'a> {
     fn new(args: &'a EditCommand) -> Self {
         Self {
+            flag_mode: false,
             description: &args.description,
             switches: args
                 .switches
@@ -274,8 +276,6 @@ pub fn show_edit_command_overlay(
 
     state.render(&mut term)?;
 
-    let mut flag_mode = false;
-
     while let Ok(Some(event)) = term.poll_input(None) {
         match event {
             InputEvent::Key(KeyEvent {
@@ -291,7 +291,7 @@ pub fn show_edit_command_overlay(
             InputEvent::Key(KeyEvent {
                 key: KeyCode::Char(c),
                 ..
-            }) if flag_mode => {
+            }) if state.flag_mode => {
                 if let Some(switch) = state
                     .switches
                     .iter_mut()
@@ -328,13 +328,13 @@ pub fn show_edit_command_overlay(
                     }
                     state.render(&mut term)?;
                 }
-                flag_mode = false;
+                state.flag_mode = false;
             }
             InputEvent::Key(KeyEvent {
                 key: KeyCode::Char('-'),
                 modifiers: Modifiers::NONE,
             }) => {
-                flag_mode = true;
+                state.flag_mode = true;
             }
             InputEvent::Key(KeyEvent {
                 key: KeyCode::Char(c),
