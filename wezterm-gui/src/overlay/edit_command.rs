@@ -110,7 +110,7 @@ struct EditingCommandArgument {
 struct EditingCommandState<'a> {
     window: GuiWin,
     pane: MuxPane,
-    flag_mode: bool,
+    accumulated_input: String,
     description: &'a str,
     switches: Vec<EditingCommandSwitch>,
     options: Vec<EditingCommandOption>,
@@ -123,7 +123,7 @@ impl<'a> EditingCommandState<'a> {
         Self {
             window,
             pane,
-            flag_mode: false,
+            accumulated_input: String::with_capacity(2),
             description: &args.description,
             switches: args
                 .switches
@@ -189,7 +189,7 @@ impl<'a> EditingCommandState<'a> {
             changes.push(Change::Attribute(AttributeChange::Foreground(
                 self.colors.key_fg,
             )));
-            changes.push(Change::Text(format!("-{}", switch.key)));
+            changes.push(Change::Text(format!("{}", switch.key)));
             changes.push(Change::Attribute(AttributeChange::Foreground(
                 ColorAttribute::Default,
             )));
@@ -226,7 +226,7 @@ impl<'a> EditingCommandState<'a> {
             changes.push(Change::Attribute(AttributeChange::Foreground(
                 self.colors.key_fg,
             )));
-            changes.push(Change::Text(format!("-{}", option.key)));
+            changes.push(Change::Text(format!("{}", option.key)));
             changes.push(Change::Attribute(AttributeChange::Foreground(
                 ColorAttribute::Default,
             )));
@@ -305,19 +305,28 @@ impl<'a> EditingCommandState<'a> {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
                     ..
-                }) if self.flag_mode => {
-                    if let Some(switch) = self
-                        .switches
-                        .iter_mut()
-                        .find(|switch| switch.key.chars().next() == Some(c))
-                    {
-                        switch.value = !switch.value;
-                        self.render(term)?;
-                    } else if let Some(option) = self
-                        .options
-                        .iter_mut()
-                        .find(|option| option.key.chars().next() == Some(c))
-                    {
+                }) => {
+                    self.accumulated_input.push(c);
+                    let accumulated_input = &self.accumulated_input;
+                    let accumulated_input_len = accumulated_input.len();
+
+                    if let Some(switch) = self.switches.iter_mut().find(|switch| {
+                        &switch.key[..accumulated_input_len.min((&switch.key).len())]
+                            == accumulated_input
+                    }) {
+                        if accumulated_input_len == (&switch.key).len() {
+                            switch.value = !switch.value;
+                            self.accumulated_input.clear();
+                            self.render(term)?;
+                        }
+                    } else if let Some(option) = self.options.iter_mut().find(|option| {
+                        &option.key[..accumulated_input_len.min((&option.key).len())]
+                            == accumulated_input
+                    }) {
+                        if accumulated_input_len != (&option.key).len() {
+                            continue;
+                        }
+
                         let val = option.value.take();
                         if val.is_none() {
                             term.render(&[Change::CursorVisibility(CursorVisibility::Visible)])?;
@@ -341,31 +350,27 @@ impl<'a> EditingCommandState<'a> {
                             }
                             term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
                         }
+                        self.accumulated_input.clear();
                         self.render(term)?;
-                    }
-                    self.flag_mode = false;
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('-'),
-                    modifiers: Modifiers::NONE,
-                }) => {
-                    self.flag_mode = true;
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char(c),
-                    ..
-                }) => {
-                    if let Some(positional_arg) = self
-                        .arguments
-                        .iter()
-                        .find(|positional_arg| positional_arg.key.chars().next() == Some(c))
+                    } else if let Some(positional_arg) =
+                        self.arguments.iter().find(|positional_arg| {
+                            &positional_arg.key
+                                [..accumulated_input_len.min((&positional_arg.key).len())]
+                                == accumulated_input
+                        })
                     {
+                        if accumulated_input_len != (&positional_arg.key).len() {
+                            continue;
+                        }
+
                         let name = match *positional_arg.action {
                             KeyAssignment::EmitEvent(ref id) => id,
                             _ => anyhow::bail!("EditCommand requires action to be defined by wezterm.action_callback")
                         };
                         self.trigger_event(name);
                         break;
+                    } else {
+                        self.accumulated_input.clear();
                     }
                 }
                 _ => {}
