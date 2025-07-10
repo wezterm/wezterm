@@ -82,12 +82,7 @@ impl<'a> TrieNode<'a> {
     fn add_word(&mut self, word: &str, entity: EditingCommandEntity<'a>) {
         match word.chars().next() {
             Some(c) => {
-                match self
-                    .children
-                    .iter_mut()
-                    .find(|v| v.0 == c)
-                    .map(|v| &mut v.1)
-                {
+                match self.children.iter().find(|v| v.0 == c).map(|v| &v.1) {
                     Some(child_node) => {
                         child_node.borrow_mut().add_word(&word[1..], entity);
                     }
