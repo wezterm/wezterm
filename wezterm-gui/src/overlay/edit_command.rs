@@ -404,10 +404,10 @@ impl<'a> EditingCommandState<'a> {
                     let cur_node = Rc::clone(&self.cur_node.borrow());
                     let cur_node = cur_node.borrow();
                     match cur_node.find_char(c) {
-                        Some(v) => {
-                            let v_borrow_mut = v.borrow_mut();
-                            if v_borrow_mut.is_end_of_word {
-                                match v_borrow_mut.entity.as_ref().unwrap() {
+                        Some(cur_node) => {
+                            let cur_node = cur_node.borrow_mut();
+                            if cur_node.is_end_of_word {
+                                match cur_node.entity.as_ref().unwrap() {
                                     EditingCommandEntity::EditingCommandSwitch(switch) => {
                                         {
                                             let mut switch = switch.borrow_mut();
@@ -470,7 +470,7 @@ impl<'a> EditingCommandState<'a> {
                                     }
                                 }
                             } else {
-                                self.cur_node.replace(Rc::clone(&v));
+                                self.cur_node.replace(Rc::clone(&cur_node));
                             }
                         }
                         None => {
