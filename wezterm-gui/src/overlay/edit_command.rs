@@ -1,12 +1,15 @@
 use crate::scripting::guiwin::GuiWin;
 use config::configuration;
-use config::keyassignment::{EditCommand, KeyAssignment};
+use config::keyassignment::{
+    EditCommand, EditCommandArgument, EditCommandOption, EditCommandSection, EditCommandSwitch,
+    KeyAssignment,
+};
 use config::{AnsiColor, ColorAttribute};
 use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
 use std::cell::RefCell;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::lineedit::{Action, BasicHistory, History, LineEditor, LineEditorHost};
@@ -160,6 +163,17 @@ struct EditingCommandSwitch {
     flag: String,
 }
 
+impl EditingCommandSwitch {
+    fn new(switch: &EditCommandSwitch) -> Self {
+        Self {
+            key: switch.key.clone(),
+            value: switch.default,
+            description: switch.description.clone(),
+            flag: switch.flag.clone(),
+        }
+    }
+}
+
 struct EditingCommandOption {
     key: String,
     value: Option<String>,
@@ -168,19 +182,69 @@ struct EditingCommandOption {
     flag: String,
 }
 
+impl EditingCommandOption {
+    fn new(option: &EditCommandOption) -> Self {
+        Self {
+            key: option.key.clone(),
+            value: option.default.clone(),
+            default: option.default.clone(),
+            description: option.description.clone(),
+            flag: option.flag.clone(),
+        }
+    }
+}
+
 struct EditingCommandArgument {
     key: String,
     description: String,
     action: Box<KeyAssignment>,
 }
 
+impl EditingCommandArgument {
+    fn new(argument: &EditCommandArgument) -> Self {
+        Self {
+            key: argument.key.clone(),
+            description: argument.description.clone(),
+            action: argument.action.clone(),
+        }
+    }
+}
+
+struct EditingCommandSection<'a> {
+    header: &'a str,
+    switches: Vec<RefCell<EditingCommandSwitch>>,
+    options: Vec<RefCell<EditingCommandOption>>,
+    arguments: Vec<RefCell<EditingCommandArgument>>,
+}
+
+impl<'a> EditingCommandSection<'a> {
+    fn new(section: &'a EditCommandSection) -> Self {
+        Self {
+            header: &section.header,
+            switches: section
+                .switches
+                .iter()
+                .map(|switch| RefCell::new(EditingCommandSwitch::new(switch)))
+                .collect(),
+            options: section
+                .options
+                .iter()
+                .map(|option| RefCell::new(EditingCommandOption::new(option)))
+                .collect(),
+            arguments: section
+                .arguments
+                .iter()
+                .map(|argument| RefCell::new(EditingCommandArgument::new(argument)))
+                .collect(),
+        }
+    }
+}
+
 struct EditingCommandState<'a> {
     window: GuiWin,
     pane: MuxPane,
     description: &'a str,
-    switches: Vec<RefCell<EditingCommandSwitch>>,
-    options: Vec<RefCell<EditingCommandOption>>,
-    arguments: Vec<RefCell<EditingCommandArgument>>,
+    sections: Vec<EditingCommandSection<'a>>,
     colors: EditingCommandColors,
     trie: Trie<'a>,
     cur_node: RefCell<Rc<RefCell<TrieNode<'a>>>>,
@@ -194,41 +258,10 @@ impl<'a> EditingCommandState<'a> {
             window,
             pane,
             description: &args.description,
-            switches: args
-                .switches
+            sections: args
+                .sections
                 .iter()
-                .map(|switch| {
-                    RefCell::new(EditingCommandSwitch {
-                        key: switch.key.clone(),
-                        value: switch.default,
-                        description: switch.description.clone(),
-                        flag: switch.flag.clone(),
-                    })
-                })
-                .collect(),
-            options: args
-                .options
-                .iter()
-                .map(|option| {
-                    RefCell::new(EditingCommandOption {
-                        key: option.key.clone(),
-                        value: option.default.clone(),
-                        default: option.default.clone(),
-                        description: option.description.clone(),
-                        flag: option.flag.clone(),
-                    })
-                })
-                .collect(),
-            arguments: args
-                .arguments
-                .iter()
-                .map(|argument| {
-                    RefCell::new(EditingCommandArgument {
-                        key: argument.key.clone(),
-                        description: argument.description.clone(),
-                        action: argument.action.clone(),
-                    })
-                })
+                .map(|section| EditingCommandSection::new(section))
                 .collect(),
             colors: EditingCommandColors::new(),
             trie,
@@ -245,111 +278,92 @@ impl<'a> EditingCommandState<'a> {
             },
             Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
             Change::Attribute(AttributeChange::Foreground(self.colors.description_fg)),
-            Change::Text("Command".to_string()),
+            Change::Text(self.description.to_string()),
             Change::AllAttributes(CellAttributes::default()),
-            Change::Text(format!(": {}\r\n", self.description)),
-            Change::Text("-".repeat(9 + self.description.len())),
-            Change::Text("\r\n\r\n".to_string()),
+            Change::Text("\r\n".to_string()),
+            Change::Text("-".repeat(self.description.len())),
         ];
 
-        changes.push(Change::Attribute(AttributeChange::Intensity(
-            Intensity::Bold,
-        )));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            self.colors.section_header_fg,
-        )));
-        changes.push(Change::Text("Switches".to_string()));
-        changes.push(Change::AllAttributes(CellAttributes::default()));
-
-        for switch in self.switches.iter().map(|switch| switch.borrow()) {
-            changes.push(Change::Text("\r\n\t".to_string()));
-            changes.push(Change::Attribute(AttributeChange::Foreground(
-                self.colors.key_fg,
+        for section in &self.sections {
+            changes.push(Change::Text("\r\n\r\n".to_string()));
+            changes.push(Change::Attribute(AttributeChange::Intensity(
+                Intensity::Bold,
             )));
-            changes.push(Change::Text(format!("{}", switch.key)));
             changes.push(Change::Attribute(AttributeChange::Foreground(
-                ColorAttribute::Default,
+                self.colors.section_header_fg,
             )));
+            changes.push(Change::Text(section.header.to_string()));
+            changes.push(Change::AllAttributes(CellAttributes::default()));
 
-            changes.push(Change::Text(format!(" {} (", switch.description)));
-            if switch.value {
-                changes.push(Change::Attribute(AttributeChange::Intensity(
-                    Intensity::Bold,
-                )));
+            for switch in section.switches.iter().map(|switch| switch.borrow()) {
+                changes.push(Change::Text("\r\n\t".to_string()));
                 changes.push(Change::Attribute(AttributeChange::Foreground(
-                    self.colors.flag_fg,
+                    self.colors.key_fg,
                 )));
-                changes.push(Change::Text(switch.flag.to_string()));
-                changes.push(Change::AllAttributes(CellAttributes::default()));
-            } else {
-                changes.push(Change::Text(switch.flag.to_string()));
-            }
-            changes.push(Change::Text(")".to_string()));
-        }
-
-        changes.push(Change::Text("\r\n\r\n".to_string()));
-
-        changes.push(Change::Attribute(AttributeChange::Intensity(
-            Intensity::Bold,
-        )));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            self.colors.section_header_fg,
-        )));
-        changes.push(Change::Text("Options".to_string()));
-        changes.push(Change::AllAttributes(CellAttributes::default()));
-
-        for option in self.options.iter().map(|option| option.borrow()) {
-            changes.push(Change::Text("\r\n\t".to_string()));
-            changes.push(Change::Attribute(AttributeChange::Foreground(
-                self.colors.key_fg,
-            )));
-            changes.push(Change::Text(format!("{}", option.key)));
-            changes.push(Change::Attribute(AttributeChange::Foreground(
-                ColorAttribute::Default,
-            )));
-
-            changes.push(Change::Text(format!(" {} (", option.description)));
-
-            if let Some(val) = &option.value {
-                changes.push(Change::Attribute(AttributeChange::Intensity(
-                    Intensity::Bold,
-                )));
+                changes.push(Change::Text(format!("{}", switch.key)));
                 changes.push(Change::Attribute(AttributeChange::Foreground(
-                    self.colors.flag_fg,
+                    ColorAttribute::Default,
                 )));
-                changes.push(Change::Text(format!("{}={}", option.flag, val)));
-                changes.push(Change::AllAttributes(CellAttributes::default()));
-            } else {
-                changes.push(Change::Text(format!("{}=", option.flag)));
+
+                changes.push(Change::Text(format!(" {} (", switch.description)));
+                if switch.value {
+                    changes.push(Change::Attribute(AttributeChange::Intensity(
+                        Intensity::Bold,
+                    )));
+                    changes.push(Change::Attribute(AttributeChange::Foreground(
+                        self.colors.flag_fg,
+                    )));
+                    changes.push(Change::Text(switch.flag.to_string()));
+                    changes.push(Change::AllAttributes(CellAttributes::default()));
+                } else {
+                    changes.push(Change::Text(switch.flag.to_string()));
+                }
+                changes.push(Change::Text(")".to_string()));
             }
 
-            changes.push(Change::Text(")".to_string()));
-        }
+            for option in section.options.iter().map(|option| option.borrow()) {
+                changes.push(Change::Text("\r\n\t".to_string()));
+                changes.push(Change::Attribute(AttributeChange::Foreground(
+                    self.colors.key_fg,
+                )));
+                changes.push(Change::Text(format!("{}", option.key)));
+                changes.push(Change::Attribute(AttributeChange::Foreground(
+                    ColorAttribute::Default,
+                )));
 
-        changes.push(Change::Text("\r\n\r\n".to_string()));
-        changes.push(Change::Attribute(AttributeChange::Intensity(
-            Intensity::Bold,
-        )));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            self.colors.section_header_fg,
-        )));
-        changes.push(Change::Text("Arguments".to_string()));
-        changes.push(Change::AllAttributes(CellAttributes::default()));
+                changes.push(Change::Text(format!(" {} (", option.description)));
 
-        for positional_arg in self
-            .arguments
-            .iter()
-            .map(|positional_arg| positional_arg.borrow())
-        {
-            changes.push(Change::Text("\r\n\t".to_string()));
-            changes.push(Change::Attribute(AttributeChange::Foreground(
-                self.colors.key_fg,
-            )));
-            changes.push(Change::Text(positional_arg.key.clone()));
-            changes.push(Change::Attribute(AttributeChange::Foreground(
-                ColorAttribute::Default,
-            )));
-            changes.push(Change::Text(format!(" {}", positional_arg.description)));
+                if let Some(val) = &option.value {
+                    changes.push(Change::Attribute(AttributeChange::Intensity(
+                        Intensity::Bold,
+                    )));
+                    changes.push(Change::Attribute(AttributeChange::Foreground(
+                        self.colors.flag_fg,
+                    )));
+                    changes.push(Change::Text(format!("{}={}", option.flag, val)));
+                    changes.push(Change::AllAttributes(CellAttributes::default()));
+                } else {
+                    changes.push(Change::Text(format!("{}=", option.flag)));
+                }
+
+                changes.push(Change::Text(")".to_string()));
+            }
+
+            for positional_arg in section
+                .arguments
+                .iter()
+                .map(|positional_arg| positional_arg.borrow())
+            {
+                changes.push(Change::Text("\r\n\t".to_string()));
+                changes.push(Change::Attribute(AttributeChange::Foreground(
+                    self.colors.key_fg,
+                )));
+                changes.push(Change::Text(positional_arg.key.clone()));
+                changes.push(Change::Attribute(AttributeChange::Foreground(
+                    ColorAttribute::Default,
+                )));
+                changes.push(Change::Text(format!(" {}", positional_arg.description)));
+            }
         }
 
         changes.push(Change::Text("\r\n\r\n\r\n".to_string()));
@@ -492,30 +506,27 @@ struct EditedCommand {
 
 impl EditedCommand {
     fn new(state: &EditingCommandState) -> Self {
-        Self {
-            switches: state
-                .switches
-                .iter()
-                .map(|switch| {
-                    let switch = switch.borrow();
-                    EditedCommandSwitch {
-                        flag: switch.flag.clone(),
-                        value: switch.value,
-                    }
-                })
-                .collect(),
-            options: state
-                .options
-                .iter()
-                .map(|option| {
-                    let option = option.borrow();
-                    EditedCommandOption {
-                        flag: option.flag.clone(),
-                        value: option.value.clone(),
-                    }
-                })
-                .collect(),
+        let mut switches: Vec<EditedCommandSwitch> = vec![];
+        let mut options: Vec<EditedCommandOption> = vec![];
+
+        for section in &state.sections {
+            for switch in section.switches.iter().map(|v| v.borrow()) {
+                let switch = switch.deref();
+                switches.push(EditedCommandSwitch {
+                    flag: switch.flag.clone(),
+                    value: switch.value,
+                });
+            }
+            for option in section.options.iter().map(|v| v.borrow()) {
+                let option = option.deref();
+                options.push(EditedCommandOption {
+                    flag: option.flag.clone(),
+                    value: option.value.clone(),
+                });
+            }
         }
+
+        Self { switches, options }
     }
 }
 
@@ -559,24 +570,28 @@ pub fn show_edit_command_overlay(
     term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
 
     let state = EditingCommandState::new(&args, window, pane);
-    for switch in &state.switches {
-        state.trie.root.borrow_mut().add_word(
-            &switch.borrow().key,
-            EditingCommandEntity::EditingCommandSwitch(switch),
-        )
+
+    for section in &state.sections {
+        for switch in &section.switches {
+            state.trie.root.borrow_mut().add_word(
+                &switch.borrow().key,
+                EditingCommandEntity::EditingCommandSwitch(switch),
+            )
+        }
+        for option in &section.options {
+            state.trie.root.borrow_mut().add_word(
+                &option.borrow().key,
+                EditingCommandEntity::EditingCommandOption(option),
+            )
+        }
+        for positional_arg in &section.arguments {
+            state.trie.root.borrow_mut().add_word(
+                &positional_arg.borrow().key,
+                EditingCommandEntity::EditingCommandArgument(positional_arg),
+            )
+        }
     }
-    for option in &state.options {
-        state.trie.root.borrow_mut().add_word(
-            &option.borrow().key,
-            EditingCommandEntity::EditingCommandOption(option),
-        )
-    }
-    for positional_arg in &state.arguments {
-        state.trie.root.borrow_mut().add_word(
-            &positional_arg.borrow().key,
-            EditingCommandEntity::EditingCommandArgument(positional_arg),
-        )
-    }
+
     state.render(&mut term)?;
     state.run_loop(&mut term)
 }
