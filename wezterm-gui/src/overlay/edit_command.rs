@@ -5,6 +5,8 @@ use config::{AnsiColor, ColorAttribute};
 use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
+use std::cell::RefCell;
+use std::ops::DerefMut;
 use std::rc::Rc;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::lineedit::{Action, BasicHistory, History, LineEditor, LineEditorHost};
@@ -49,6 +51,71 @@ impl LineEditorHost for PromptHost {
             Some(Action::Cancel)
         } else {
             None
+        }
+    }
+}
+
+enum EditingCommandEntity<'a> {
+    EditingCommandOption(&'a RefCell<EditingCommandOption>),
+    EditingCommandSwitch(&'a RefCell<EditingCommandSwitch>),
+    EditingCommandArgument(&'a RefCell<EditingCommandArgument>),
+}
+
+struct TrieNode<'a> {
+    children: Vec<(char, Rc<RefCell<TrieNode<'a>>>)>,
+    is_end_of_word: bool,
+    entity: Option<EditingCommandEntity<'a>>,
+}
+
+impl<'a> TrieNode<'a> {
+    fn new() -> Self {
+        Self {
+            children: vec![],
+            is_end_of_word: true,
+            entity: None,
+        }
+    }
+
+    fn add_word(&mut self, word: &str, entity: EditingCommandEntity<'a>) {
+        match word.chars().next() {
+            Some(c) => {
+                match self
+                    .children
+                    .iter_mut()
+                    .find(|v| v.0 == c)
+                    .map(|v| &mut v.1)
+                {
+                    Some(child_node) => {
+                        child_node.borrow_mut().add_word(&word[1..], entity);
+                    }
+                    None => {
+                        let mut new_node = TrieNode::new();
+                        new_node.add_word(&word[1..], entity);
+                        self.children.push((c, Rc::new(RefCell::new(new_node))));
+                    }
+                }
+                self.is_end_of_word = false;
+            }
+            None => self.entity = Some(entity),
+        }
+    }
+
+    fn find_char(&self, c: char) -> Option<Rc<RefCell<TrieNode<'a>>>> {
+        self.children
+            .iter()
+            .find(|v| v.0 == c)
+            .map(|v| Rc::clone(&v.1))
+    }
+}
+
+struct Trie<'a> {
+    root: Rc<RefCell<TrieNode<'a>>>,
+}
+
+impl Trie<'_> {
+    fn new() -> Self {
+        Self {
+            root: Rc::new(RefCell::new(TrieNode::new())),
         }
     }
 }
@@ -110,56 +177,66 @@ struct EditingCommandArgument {
 struct EditingCommandState<'a> {
     window: GuiWin,
     pane: MuxPane,
-    accumulated_input: String,
     description: &'a str,
-    switches: Vec<EditingCommandSwitch>,
-    options: Vec<EditingCommandOption>,
-    arguments: Vec<EditingCommandArgument>,
+    switches: Vec<RefCell<EditingCommandSwitch>>,
+    options: Vec<RefCell<EditingCommandOption>>,
+    arguments: Vec<RefCell<EditingCommandArgument>>,
     colors: EditingCommandColors,
+    trie: Trie<'a>,
+    cur_node: RefCell<Rc<RefCell<TrieNode<'a>>>>,
 }
 
 impl<'a> EditingCommandState<'a> {
     fn new(args: &'a EditCommand, window: GuiWin, pane: MuxPane) -> Self {
+        let trie = Trie::new();
+        let cur_node = RefCell::new(Rc::clone(&trie.root));
         Self {
             window,
             pane,
-            accumulated_input: String::with_capacity(2),
             description: &args.description,
             switches: args
                 .switches
                 .iter()
-                .map(|switch| EditingCommandSwitch {
-                    key: switch.key.clone(),
-                    value: switch.default,
-                    description: switch.description.clone(),
-                    flag: switch.flag.clone(),
+                .map(|switch| {
+                    RefCell::new(EditingCommandSwitch {
+                        key: switch.key.clone(),
+                        value: switch.default,
+                        description: switch.description.clone(),
+                        flag: switch.flag.clone(),
+                    })
                 })
                 .collect(),
             options: args
                 .options
                 .iter()
-                .map(|option| EditingCommandOption {
-                    key: option.key.clone(),
-                    value: option.default.clone(),
-                    default: option.default.clone(),
-                    description: option.description.clone(),
-                    flag: option.flag.clone(),
+                .map(|option| {
+                    RefCell::new(EditingCommandOption {
+                        key: option.key.clone(),
+                        value: option.default.clone(),
+                        default: option.default.clone(),
+                        description: option.description.clone(),
+                        flag: option.flag.clone(),
+                    })
                 })
                 .collect(),
             arguments: args
                 .arguments
                 .iter()
-                .map(|argument| EditingCommandArgument {
-                    key: argument.key.clone(),
-                    description: argument.description.clone(),
-                    action: argument.action.clone(),
+                .map(|argument| {
+                    RefCell::new(EditingCommandArgument {
+                        key: argument.key.clone(),
+                        description: argument.description.clone(),
+                        action: argument.action.clone(),
+                    })
                 })
                 .collect(),
             colors: EditingCommandColors::new(),
+            trie,
+            cur_node,
         }
     }
 
-    fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
+    fn render(&self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
@@ -184,7 +261,7 @@ impl<'a> EditingCommandState<'a> {
         changes.push(Change::Text("Switches".to_string()));
         changes.push(Change::AllAttributes(CellAttributes::default()));
 
-        for switch in &self.switches {
+        for switch in self.switches.iter().map(|switch| switch.borrow()) {
             changes.push(Change::Text("\r\n\t".to_string()));
             changes.push(Change::Attribute(AttributeChange::Foreground(
                 self.colors.key_fg,
@@ -221,7 +298,7 @@ impl<'a> EditingCommandState<'a> {
         changes.push(Change::Text("Options".to_string()));
         changes.push(Change::AllAttributes(CellAttributes::default()));
 
-        for option in &self.options {
+        for option in self.options.iter().map(|option| option.borrow()) {
             changes.push(Change::Text("\r\n\t".to_string()));
             changes.push(Change::Attribute(AttributeChange::Foreground(
                 self.colors.key_fg,
@@ -259,7 +336,11 @@ impl<'a> EditingCommandState<'a> {
         changes.push(Change::Text("Arguments".to_string()));
         changes.push(Change::AllAttributes(CellAttributes::default()));
 
-        for positional_arg in &self.arguments {
+        for positional_arg in self
+            .arguments
+            .iter()
+            .map(|positional_arg| positional_arg.borrow())
+        {
             changes.push(Change::Text("\r\n\t".to_string()));
             changes.push(Change::Attribute(AttributeChange::Foreground(
                 self.colors.key_fg,
@@ -289,7 +370,7 @@ impl<'a> EditingCommandState<'a> {
         .detach();
     }
 
-    fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
+    fn run_loop(&self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         while let Ok(Some(event)) = term.poll_input(None) {
             match event {
                 InputEvent::Key(KeyEvent {
@@ -306,71 +387,81 @@ impl<'a> EditingCommandState<'a> {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
-                    self.accumulated_input.push(c);
-                    let accumulated_input = &self.accumulated_input;
-                    let accumulated_input_len = accumulated_input.len();
+                    let cur_node = Rc::clone(&self.cur_node.borrow());
+                    let cur_node = cur_node.borrow();
+                    match cur_node.find_char(c) {
+                        Some(v) => {
+                            let v_borrow_mut = v.borrow_mut();
+                            if v_borrow_mut.is_end_of_word {
+                                match v_borrow_mut.entity.as_ref().unwrap() {
+                                    EditingCommandEntity::EditingCommandSwitch(switch) => {
+                                        {
+                                            let mut switch = switch.borrow_mut();
+                                            let switch = switch.deref_mut();
+                                            switch.value = !switch.value;
+                                        }
+                                        self.cur_node.replace(Rc::clone(&self.trie.root));
+                                        self.render(term)?;
+                                    }
+                                    EditingCommandEntity::EditingCommandOption(option) => {
+                                        {
+                                            let mut option = option.borrow_mut();
+                                            let option = option.deref_mut();
+                                            let val = option.value.take();
+                                            if val.is_none() {
+                                                term.render(&[Change::CursorVisibility(
+                                                    CursorVisibility::Visible,
+                                                )])?;
 
-                    if let Some(switch) = self.switches.iter_mut().find(|switch| {
-                        &switch.key[..accumulated_input_len.min((&switch.key).len())]
-                            == accumulated_input
-                    }) {
-                        if accumulated_input_len == (&switch.key).len() {
-                            switch.value = !switch.value;
-                            self.accumulated_input.clear();
-                            self.render(term)?;
-                        }
-                    } else if let Some(option) = self.options.iter_mut().find(|option| {
-                        &option.key[..accumulated_input_len.min((&option.key).len())]
-                            == accumulated_input
-                    }) {
-                        if accumulated_input_len != (&option.key).len() {
-                            continue;
-                        }
-
-                        let val = option.value.take();
-                        if val.is_none() {
-                            term.render(&[Change::CursorVisibility(CursorVisibility::Visible)])?;
-
-                            let mut host = PromptHost::new();
-                            let mut editor = LineEditor::new(term);
-                            let mut prompt = option.description.clone();
-                            if let Some(default) = option.default.clone() {
-                                prompt.push_str(&format!(" (default {})", default));
+                                                let mut host = PromptHost::new();
+                                                let mut editor = LineEditor::new(term);
+                                                let mut prompt = option.description.clone();
+                                                if let Some(default) = option.default.clone() {
+                                                    prompt.push_str(&format!(
+                                                        " (default {})",
+                                                        default
+                                                    ));
+                                                }
+                                                prompt.push_str(": ");
+                                                editor.set_prompt(&prompt);
+                                                let line = editor
+                                                    .read_line_with_optional_initial_value(
+                                                        &mut host, None,
+                                                    )?;
+                                                if let Some(line) = line {
+                                                    option.value = if line.len() == 0 {
+                                                        option.default.clone()
+                                                    } else {
+                                                        Some(line)
+                                                    };
+                                                }
+                                                term.render(&[Change::CursorVisibility(
+                                                    CursorVisibility::Hidden,
+                                                )])?;
+                                            }
+                                        }
+                                        self.cur_node.replace(Rc::clone(&self.trie.root));
+                                        self.render(term)?;
+                                    }
+                                    EditingCommandEntity::EditingCommandArgument(
+                                        positional_arg,
+                                    ) => {
+                                        let positional_arg = positional_arg.borrow();
+                                        let name = match *positional_arg.action {
+                                            KeyAssignment::EmitEvent(ref id) => id,
+                                            _ => anyhow::bail!("EditCommand requires action to be defined by wezterm.action_callback")
+                                        };
+                                        self.trigger_event(name);
+                                        break;
+                                    }
+                                }
+                            } else {
+                                self.cur_node.replace(Rc::clone(&v));
                             }
-                            prompt.push_str(": ");
-                            editor.set_prompt(&prompt);
-                            let line =
-                                editor.read_line_with_optional_initial_value(&mut host, None)?;
-                            if let Some(line) = line {
-                                option.value = if line.len() == 0 {
-                                    option.default.clone()
-                                } else {
-                                    Some(line)
-                                };
-                            }
-                            term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
                         }
-                        self.accumulated_input.clear();
-                        self.render(term)?;
-                    } else if let Some(positional_arg) =
-                        self.arguments.iter().find(|positional_arg| {
-                            &positional_arg.key
-                                [..accumulated_input_len.min((&positional_arg.key).len())]
-                                == accumulated_input
-                        })
-                    {
-                        if accumulated_input_len != (&positional_arg.key).len() {
-                            continue;
+                        None => {
+                            self.cur_node.replace(Rc::clone(&self.trie.root));
                         }
-
-                        let name = match *positional_arg.action {
-                            KeyAssignment::EmitEvent(ref id) => id,
-                            _ => anyhow::bail!("EditCommand requires action to be defined by wezterm.action_callback")
-                        };
-                        self.trigger_event(name);
-                        break;
-                    } else {
-                        self.accumulated_input.clear();
                     }
                 }
                 _ => {}
@@ -405,17 +496,23 @@ impl EditedCommand {
             switches: state
                 .switches
                 .iter()
-                .map(|switch| EditedCommandSwitch {
-                    key: switch.key.clone(),
-                    value: switch.value,
+                .map(|switch| {
+                    let switch = switch.borrow();
+                    EditedCommandSwitch {
+                        key: switch.key.clone(),
+                        value: switch.value,
+                    }
                 })
                 .collect(),
             options: state
                 .options
                 .iter()
-                .map(|option| EditedCommandOption {
-                    key: option.key.clone(),
-                    value: option.value.clone(),
+                .map(|option| {
+                    let option = option.borrow();
+                    EditedCommandOption {
+                        key: option.key.clone(),
+                        value: option.value.clone(),
+                    }
                 })
                 .collect(),
         }
@@ -461,7 +558,25 @@ pub fn show_edit_command_overlay(
     term.no_grab_mouse_in_raw_mode();
     term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
 
-    let mut state = EditingCommandState::new(&args, window, pane);
+    let state = EditingCommandState::new(&args, window, pane);
+    for switch in &state.switches {
+        state.trie.root.borrow_mut().add_word(
+            &switch.borrow().key,
+            EditingCommandEntity::EditingCommandSwitch(switch),
+        )
+    }
+    for option in &state.options {
+        state.trie.root.borrow_mut().add_word(
+            &option.borrow().key,
+            EditingCommandEntity::EditingCommandOption(option),
+        )
+    }
+    for positional_arg in &state.arguments {
+        state.trie.root.borrow_mut().add_word(
+            &positional_arg.borrow().key,
+            EditingCommandEntity::EditingCommandArgument(positional_arg),
+        )
+    }
     state.render(&mut term)?;
     state.run_loop(&mut term)
 }
