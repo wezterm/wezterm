@@ -474,13 +474,13 @@ impl<'a> EditingCommandState<'a> {
 
 #[derive(FromDynamic, ToDynamic)]
 struct EditedCommandSwitch {
-    key: String,
+    flag: String,
     value: bool,
 }
 
 #[derive(FromDynamic, ToDynamic)]
 struct EditedCommandOption {
-    key: String,
+    flag: String,
     value: Option<String>,
 }
 
@@ -499,7 +499,7 @@ impl EditedCommand {
                 .map(|switch| {
                     let switch = switch.borrow();
                     EditedCommandSwitch {
-                        key: switch.key.clone(),
+                        flag: switch.flag.clone(),
                         value: switch.value,
                     }
                 })
@@ -510,7 +510,7 @@ impl EditedCommand {
                 .map(|option| {
                     let option = option.borrow();
                     EditedCommandOption {
-                        key: option.key.clone(),
+                        flag: option.flag.clone(),
                         value: option.value.clone(),
                     }
                 })
