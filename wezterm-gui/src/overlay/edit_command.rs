@@ -82,7 +82,12 @@ impl<'a> TrieNode<'a> {
     fn add_word(&mut self, word: &str, entity: EditingCommandEntity<'a>) {
         match word.chars().next() {
             Some(c) => {
-                match self.children.iter().find(|v| v.0 == c).map(|v| &v.1) {
+                match self
+                    .children
+                    .iter()
+                    .find(|child| child.0 == c)
+                    .map(|child| &child.1)
+                {
                     Some(child_node) => {
                         child_node.borrow_mut().add_word(&word[1..], entity);
                     }
@@ -101,8 +106,8 @@ impl<'a> TrieNode<'a> {
     fn find_char(&self, c: char) -> Option<Rc<RefCell<TrieNode<'a>>>> {
         self.children
             .iter()
-            .find(|v| v.0 == c)
-            .map(|v| Rc::clone(&v.1))
+            .find(|child| child.0 == c)
+            .map(|child| Rc::clone(&child.1))
     }
 }
 
@@ -505,14 +510,14 @@ impl EditedCommand {
         let mut options: Vec<EditedCommandOption> = vec![];
 
         for section in &state.sections {
-            for switch in section.switches.iter().map(|v| v.borrow()) {
+            for switch in section.switches.iter().map(|switch| switch.borrow()) {
                 let switch = switch.deref();
                 switches.push(EditedCommandSwitch {
                     flag: switch.flag.clone(),
                     value: switch.value,
                 });
             }
-            for option in section.options.iter().map(|v| v.borrow()) {
+            for option in section.options.iter().map(|option| option.borrow()) {
                 let option = option.deref();
                 options.push(EditedCommandOption {
                     flag: option.flag.clone(),
