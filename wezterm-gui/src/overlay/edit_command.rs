@@ -405,7 +405,7 @@ impl<'a> EditingCommandState<'a> {
                     let cur_node = cur_node.borrow();
                     match cur_node.find_char(c) {
                         Some(cur_node) => {
-                            let cur_node_borrowed = cur_node.borrow_mut();
+                            let cur_node_borrowed = cur_node.borrow();
                             if cur_node_borrowed.is_end_of_word {
                                 match cur_node_borrowed.entity.as_ref().unwrap() {
                                     EditingCommandEntity::EditingCommandSwitch(switch) => {
