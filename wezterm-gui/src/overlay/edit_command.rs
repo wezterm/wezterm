@@ -262,7 +262,7 @@ impl<'a> EditingCommandState<'a> {
             Change::Text(self.description.to_string()),
             Change::AllAttributes(CellAttributes::default()),
             Change::Text("\r\n".to_string()),
-            Change::Text("-".repeat(self.description.len())),
+            Change::Text("─".repeat(self.description.len())),
         ];
 
         for section in &self.sections {
@@ -409,7 +409,7 @@ impl<'a> EditingCommandState<'a> {
                                                     Change::CursorVisibility(
                                                         CursorVisibility::Visible,
                                                     ),
-                                                    Change::Text("-".repeat(size.cols)),
+                                                    Change::Text("─".repeat(size.cols)),
                                                     Change::Text("\r\n".to_string()),
                                                 ])?;
 
