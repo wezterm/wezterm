@@ -340,10 +340,10 @@ impl<'a> EditingCommandState<'a> {
                     changes.push(Change::Attribute(AttributeChange::Foreground(
                         self.colors.flag_fg,
                     )));
-                    changes.push(Change::Text(format!("{}={}", option.flag, val)));
+                    changes.push(Change::Text(format!("{}{}", option.flag, val)));
                     changes.push(Change::AllAttributes(CellAttributes::default()));
                 } else {
-                    changes.push(Change::Text(format!("{}=", option.flag)));
+                    changes.push(Change::Text(format!("{}", option.flag)));
                 }
 
                 changes.push(Change::Text(")".to_string()));
