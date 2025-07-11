@@ -423,9 +423,14 @@ impl<'a> EditingCommandState<'a> {
                                             let option = option.deref_mut();
                                             let val = option.value.take();
                                             if val.is_none() {
-                                                term.render(&[Change::CursorVisibility(
-                                                    CursorVisibility::Visible,
-                                                )])?;
+                                                let size = term.get_screen_size()?;
+                                                term.render(&[
+                                                    Change::CursorVisibility(
+                                                        CursorVisibility::Visible,
+                                                    ),
+                                                    Change::Text("-".repeat(size.cols)),
+                                                    Change::Text("\r\n".to_string()),
+                                                ])?;
 
                                                 let mut host = PromptHost::new();
                                                 let mut editor = LineEditor::new(term);
