@@ -9,6 +9,7 @@ use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
@@ -65,7 +66,7 @@ enum EditingCommandEntity<'a> {
 }
 
 struct TrieNode<'a> {
-    children: Vec<(char, Rc<RefCell<TrieNode<'a>>>)>,
+    children: HashMap<char, Rc<RefCell<TrieNode<'a>>>>,
     is_end_of_word: bool,
     entity: Option<EditingCommandEntity<'a>>,
 }
@@ -73,7 +74,7 @@ struct TrieNode<'a> {
 impl<'a> TrieNode<'a> {
     fn new() -> Self {
         Self {
-            children: vec![],
+            children: HashMap::new(),
             is_end_of_word: true,
             entity: None,
         }
@@ -82,19 +83,14 @@ impl<'a> TrieNode<'a> {
     fn add_word(&mut self, word: &str, entity: EditingCommandEntity<'a>) {
         match word.chars().next() {
             Some(c) => {
-                match self
-                    .children
-                    .iter()
-                    .find(|child| child.0 == c)
-                    .map(|child| &child.1)
-                {
+                match self.children.get(&c) {
                     Some(child_node) => {
                         child_node.borrow_mut().add_word(&word[1..], entity);
                     }
                     None => {
                         let mut new_node = TrieNode::new();
                         new_node.add_word(&word[1..], entity);
-                        self.children.push((c, Rc::new(RefCell::new(new_node))));
+                        self.children.insert(c, Rc::new(RefCell::new(new_node)));
                     }
                 }
                 self.is_end_of_word = false;
@@ -104,10 +100,7 @@ impl<'a> TrieNode<'a> {
     }
 
     fn find_char(&self, c: char) -> Option<Rc<RefCell<TrieNode<'a>>>> {
-        self.children
-            .iter()
-            .find(|child| child.0 == c)
-            .map(|child| Rc::clone(&child.1))
+        self.children.get(&c).map(|child| Rc::clone(child))
     }
 }
 
