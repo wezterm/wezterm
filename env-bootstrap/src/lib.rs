@@ -116,11 +116,7 @@ pub fn fixup_appimage() {
 /// it to a UTF-8 version of the current locale known to NSLocale.
 #[cfg(target_os = "macos")]
 pub fn set_lang_from_locale() {
-    #![allow(unexpected_cfgs)] // <https://github.com/SSheldon/rust-objc/issues/125>
-    use cocoa::base::id;
-    use cocoa::foundation::NSString;
-    use objc::runtime::Object;
-    use objc::*;
+    use objc2_foundation::{NSLocale, NSString};
 
     fn lang_is_set() -> bool {
         match std::env::var_os("LANG") {
@@ -130,41 +126,39 @@ pub fn set_lang_from_locale() {
     }
 
     if !lang_is_set() {
-        unsafe fn nsstring_to_str<'a>(ns: *mut Object) -> &'a str {
-            let data = NSString::UTF8String(ns as id) as *const u8;
-            let len = NSString::len(ns as id);
+        unsafe fn nsstring_to_str<'a>(ns: &NSString) -> &'a str {
+            let data = ns.UTF8String() as *const u8;
+            let len = ns.len();
             let bytes = std::slice::from_raw_parts(data, len);
             std::str::from_utf8_unchecked(bytes)
         }
 
         unsafe {
-            let locale: *mut Object = msg_send![class!(NSLocale), autoupdatingCurrentLocale];
-            let lang_code_obj: *mut Object = msg_send![locale, languageCode];
-            let country_code_obj: *mut Object = msg_send![locale, countryCode];
+            let locale = NSLocale::autoupdatingCurrentLocale();
+            let lang_code_obj = locale.languageCode();
+            let lang_code = nsstring_to_str(&lang_code_obj);
 
-            {
-                let lang_code = nsstring_to_str(lang_code_obj);
-                let country_code = nsstring_to_str(country_code_obj);
+            #[allow(deprecated)]
+            let candidate = if let Some(country_code_obj) = locale.countryCode() {
+                let country_code = nsstring_to_str(&country_code_obj);
+                format!("{}_{}.UTF-8", lang_code, country_code)
+            } else {
+                format!("{}.UTF-8", lang_code)
+            };
 
-                let candidate = format!("{}_{}.UTF-8", lang_code, country_code);
-                let candidate_cstr =
-                    std::ffi::CString::new(candidate.as_bytes()).expect("make cstr from str");
+            let candidate_cstr =
+                std::ffi::CString::new(candidate.as_bytes()).expect("make cstr from str");
 
-                // If this looks like a working locale then export it to
-                // the environment so that our child processes inherit it.
-                let old = libc::setlocale(libc::LC_CTYPE, std::ptr::null());
-                if !libc::setlocale(libc::LC_CTYPE, candidate_cstr.as_ptr()).is_null() {
-                    std::env::set_var("LANG", &candidate);
-                } else {
-                    log::debug!("setlocale({}) failed, fall back to en_US.UTF-8", candidate);
-                    std::env::set_var("LANG", "en_US.UTF-8");
-                }
-                libc::setlocale(libc::LC_CTYPE, old);
+            // If this looks like a working locale then export it to
+            // the environment so that our child processes inherit it.
+            let old = libc::setlocale(libc::LC_CTYPE, std::ptr::null());
+            if !libc::setlocale(libc::LC_CTYPE, candidate_cstr.as_ptr()).is_null() {
+                std::env::set_var("LANG", &candidate);
+            } else {
+                log::debug!("setlocale({}) failed, fall back to en_US.UTF-8", candidate);
+                std::env::set_var("LANG", "en_US.UTF-8");
             }
-
-            let _: () = msg_send![lang_code_obj, release];
-            let _: () = msg_send![country_code_obj, release];
-            let _: () = msg_send![locale, release];
+            libc::setlocale(libc::LC_CTYPE, old);
         }
     }
 }

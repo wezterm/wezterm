@@ -288,18 +288,20 @@ impl WebGpuState {
         }
 
         if adapter.is_none() {
-            adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: match config.webgpu_power_preference {
-                        WebGpuPowerPreference::HighPerformance => {
-                            wgpu::PowerPreference::HighPerformance
-                        }
-                        WebGpuPowerPreference::LowPower => wgpu::PowerPreference::LowPower,
-                    },
-                    compatible_surface: Some(&surface),
-                    force_fallback_adapter: config.webgpu_force_fallback_adapter,
-                })
-                .await;
+            adapter = Some(
+                instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: match config.webgpu_power_preference {
+                            WebGpuPowerPreference::HighPerformance => {
+                                wgpu::PowerPreference::HighPerformance
+                            }
+                            WebGpuPowerPreference::LowPower => wgpu::PowerPreference::LowPower,
+                        },
+                        compatible_surface: Some(&surface),
+                        force_fallback_adapter: config.webgpu_force_fallback_adapter,
+                    })
+                    .await?,
+            );
         }
 
         let adapter = adapter.ok_or_else(|| {
@@ -318,22 +320,20 @@ impl WebGpuState {
         log::trace!("downlevel_caps: {downlevel_caps:?}");
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
-                    // WebGL doesn't support all of wgpu's features, so if
-                    // we're building for the web we'll have to disable some.
-                    required_limits: if cfg!(target_arch = "wasm32") {
-                        wgpu::Limits::downlevel_webgl2_defaults()
-                    } else {
-                        wgpu::Limits::downlevel_defaults()
-                    }
-                    .using_resolution(adapter.limits()),
-                    label: None,
-                    memory_hints: Default::default(),
-                },
-                None, // Trace path
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::empty(),
+                // WebGL doesn't support all of wgpu's features, so if
+                // we're building for the web we'll have to disable some.
+                required_limits: if cfg!(target_arch = "wasm32") {
+                    wgpu::Limits::downlevel_webgl2_defaults()
+                } else {
+                    wgpu::Limits::downlevel_defaults()
+                }
+                .using_resolution(adapter.limits()),
+                label: None,
+                memory_hints: Default::default(),
+                trace: wgpu::Trace::Off,
+            })
             .await?;
 
         let queue = Arc::new(queue);

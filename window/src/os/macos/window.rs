@@ -37,7 +37,6 @@ use objc::declare::ClassDecl;
 use objc::rc::{StrongPtr, WeakPtr};
 use objc::runtime::{Class, Object, Protocol, Sel};
 use objc::*;
-use objc2_core_graphics::CGColorCreateSRGB;
 use promise::Future;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle,
@@ -1138,7 +1137,7 @@ impl WindowInner {
                 }
 
                 // We need to make sure to convert the config color into an sRGB CGColor or the color will be slightly off
-                let srgb_cgcolor = CGColorCreateSRGB(
+                let srgb_cgcolor = objc2_core_graphics::CGColor::new_srgb(
                     color.0.into(),
                     color.1.into(),
                     color.2.into(),

@@ -37,6 +37,5 @@ wezterm-version.workspace = true
 winapi.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa.workspace = true
-objc.workspace = true
-
+objc2.workspace = true
+objc2-foundation.workspace = true

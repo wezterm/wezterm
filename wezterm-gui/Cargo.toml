@@ -107,7 +107,7 @@ wgpu.workspace = true
 window-funcs.workspace = true
 window.workspace = true
 
-[target."cfg(windows)".dependencies]
+[target.'cfg(windows)'.dependencies]
 shared_library.workspace = true
 winapi = { workspace=true, features = [
     "winuser",
