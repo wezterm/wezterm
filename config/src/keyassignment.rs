@@ -558,9 +558,12 @@ pub struct EditCommandArgument {
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct EditCommandSection {
     pub header: String,
-    pub switches: Vec<EditCommandSwitch>,
-    pub options: Vec<EditCommandOption>,
-    pub arguments: Vec<EditCommandArgument>,
+    #[dynamic(default)]
+    pub switches: Option<Vec<EditCommandSwitch>>,
+    #[dynamic(default)]
+    pub options: Option<Vec<EditCommandOption>>,
+    #[dynamic(default)]
+    pub arguments: Option<Vec<EditCommandArgument>>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]

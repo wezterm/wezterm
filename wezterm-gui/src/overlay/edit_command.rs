@@ -200,23 +200,39 @@ struct EditingCommandSection<'a> {
 
 impl<'a> EditingCommandSection<'a> {
     fn new(section: &'a EditCommandSection) -> Self {
+        let switches = section.switches.as_ref().map_or_else(
+            || vec![],
+            |switches| {
+                switches
+                    .iter()
+                    .map(|switch| RefCell::new(EditingCommandSwitch::new(switch)))
+                    .collect()
+            },
+        );
+        let options = section.options.as_ref().map_or_else(
+            || vec![],
+            |options| {
+                options
+                    .iter()
+                    .map(|option| RefCell::new(EditingCommandOption::new(option)))
+                    .collect()
+            },
+        );
+        let arguments = section.arguments.as_ref().map_or_else(
+            || vec![],
+            |arguments| {
+                arguments
+                    .iter()
+                    .map(|argument| RefCell::new(EditingCommandArgument::new(argument)))
+                    .collect()
+            },
+        );
+
         Self {
             header: &section.header,
-            switches: section
-                .switches
-                .iter()
-                .map(|switch| RefCell::new(EditingCommandSwitch::new(switch)))
-                .collect(),
-            options: section
-                .options
-                .iter()
-                .map(|option| RefCell::new(EditingCommandOption::new(option)))
-                .collect(),
-            arguments: section
-                .arguments
-                .iter()
-                .map(|argument| RefCell::new(EditingCommandArgument::new(argument)))
-                .collect(),
+            switches,
+            options,
+            arguments,
         }
     }
 }
