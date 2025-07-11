@@ -104,18 +104,6 @@ impl<'a> TrieNode<'a> {
     }
 }
 
-struct Trie<'a> {
-    root: Rc<RefCell<TrieNode<'a>>>,
-}
-
-impl Trie<'_> {
-    fn new() -> Self {
-        Self {
-            root: Rc::new(RefCell::new(TrieNode::new())),
-        }
-    }
-}
-
 struct EditingCommandColors {
     description_fg: ColorAttribute,
     section_header_fg: ColorAttribute,
@@ -239,14 +227,14 @@ struct EditingCommandState<'a> {
     description: &'a str,
     sections: Vec<EditingCommandSection<'a>>,
     colors: EditingCommandColors,
-    trie: Trie<'a>,
+    root_node: Rc<RefCell<TrieNode<'a>>>,
     cur_node: RefCell<Rc<RefCell<TrieNode<'a>>>>,
 }
 
 impl<'a> EditingCommandState<'a> {
     fn new(args: &'a EditCommand, window: GuiWin, pane: MuxPane) -> Self {
-        let trie = Trie::new();
-        let cur_node = RefCell::new(Rc::clone(&trie.root));
+        let root_node = Rc::new(RefCell::new(TrieNode::new()));
+        let cur_node = RefCell::new(Rc::clone(&root_node));
         Self {
             window,
             pane,
@@ -257,7 +245,7 @@ impl<'a> EditingCommandState<'a> {
                 .map(|section| EditingCommandSection::new(section))
                 .collect(),
             colors: EditingCommandColors::new(),
-            trie,
+            root_node,
             cur_node,
         }
     }
@@ -407,7 +395,7 @@ impl<'a> EditingCommandState<'a> {
                                             let switch = switch.deref_mut();
                                             switch.value = !switch.value;
                                         }
-                                        self.cur_node.replace(Rc::clone(&self.trie.root));
+                                        self.cur_node.replace(Rc::clone(&self.root_node));
                                         self.render(term)?;
                                     }
                                     EditingCommandEntity::EditingCommandOption(option) => {
@@ -452,7 +440,7 @@ impl<'a> EditingCommandState<'a> {
                                                 )])?;
                                             }
                                         }
-                                        self.cur_node.replace(Rc::clone(&self.trie.root));
+                                        self.cur_node.replace(Rc::clone(&self.root_node));
                                         self.render(term)?;
                                     }
                                     EditingCommandEntity::EditingCommandArgument(
@@ -472,7 +460,7 @@ impl<'a> EditingCommandState<'a> {
                             }
                         }
                         None => {
-                            self.cur_node.replace(Rc::clone(&self.trie.root));
+                            self.cur_node.replace(Rc::clone(&self.root_node));
                         }
                     }
                 }
@@ -571,19 +559,19 @@ pub fn show_edit_command_overlay(
 
     for section in &state.sections {
         for switch in &section.switches {
-            state.trie.root.borrow_mut().add_word(
+            state.root_node.borrow_mut().add_word(
                 &switch.borrow().key,
                 EditingCommandEntity::EditingCommandSwitch(switch),
             )
         }
         for option in &section.options {
-            state.trie.root.borrow_mut().add_word(
+            state.root_node.borrow_mut().add_word(
                 &option.borrow().key,
                 EditingCommandEntity::EditingCommandOption(option),
             )
         }
         for positional_arg in &section.arguments {
-            state.trie.root.borrow_mut().add_word(
+            state.root_node.borrow_mut().add_word(
                 &positional_arg.borrow().key,
                 EditingCommandEntity::EditingCommandArgument(positional_arg),
             )
