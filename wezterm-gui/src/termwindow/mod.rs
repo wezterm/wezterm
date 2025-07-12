@@ -3630,6 +3630,22 @@ impl TermWindow {
             }
         }
     }
+
+    pub fn tab_overlay_layer(&self, layer: TabOverlayLayer) -> usize {
+        match layer {
+            TabOverlayLayer::DisplayText => 0,
+            TabOverlayLayer::EditCommand => 1,
+            TabOverlayLayer::InputSelector
+            | TabOverlayLayer::PromptInputLine
+            | TabOverlayLayer::Confirmation
+            | TabOverlayLayer::DebugOverlay
+            | TabOverlayLayer::Launcher => 2,
+            TabOverlayLayer::DisplayKeys => 3,
+            TabOverlayLayer::CloseTab
+            | TabOverlayLayer::CloseWindow
+            | TabOverlayLayer::QuitApplication => 3,
+        }
+    }
 }
 
 impl Drop for TermWindow {

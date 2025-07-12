@@ -1,4 +1,4 @@
-use crate::termwindow::InputMap;
+use crate::termwindow::{InputMap, TabOverlayLayer};
 use ::window::{
     DeadKeyStatus, KeyCode, KeyEvent, KeyboardLedStatus, Modifiers, RawKeyEvent, WindowOps,
 };
