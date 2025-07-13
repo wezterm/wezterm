@@ -59,16 +59,16 @@ impl LineEditorHost for PromptHost {
     }
 }
 
-enum EditingCommandEntity<'a> {
-    EditingCommandOption(&'a RefCell<EditingCommandOption>),
-    EditingCommandSwitch(&'a RefCell<EditingCommandSwitch>),
-    EditingCommandArgument(&'a RefCell<EditingCommandArgument>),
+enum EditingCommandEntity {
+    EditingCommandOption(Rc<RefCell<EditingCommandOption>>),
+    EditingCommandSwitch(Rc<RefCell<EditingCommandSwitch>>),
+    EditingCommandArgument(Rc<RefCell<EditingCommandArgument>>),
 }
 
 struct TrieNode<'a> {
     children: HashMap<char, Rc<RefCell<TrieNode<'a>>>>,
     is_end_of_word: bool,
-    entity: Option<EditingCommandEntity<'a>>,
+    entity: Option<EditingCommandEntity>,
 }
 
 impl<'a> TrieNode<'a> {
@@ -80,7 +80,7 @@ impl<'a> TrieNode<'a> {
         }
     }
 
-    fn add_word(&mut self, word: &str, entity: EditingCommandEntity<'a>) {
+    fn add_word(&mut self, word: &str, entity: EditingCommandEntity) {
         match word.chars().next() {
             Some(c) => {
                 match self.children.get(&c) {
@@ -195,9 +195,9 @@ impl EditingCommandArgument {
 
 struct EditingCommandSection<'a> {
     header: &'a str,
-    switches: Vec<RefCell<EditingCommandSwitch>>,
-    options: Vec<RefCell<EditingCommandOption>>,
-    arguments: Vec<RefCell<EditingCommandArgument>>,
+    switches: Vec<Rc<RefCell<EditingCommandSwitch>>>,
+    options: Vec<Rc<RefCell<EditingCommandOption>>>,
+    arguments: Vec<Rc<RefCell<EditingCommandArgument>>>,
 }
 
 impl<'a> EditingCommandSection<'a> {
@@ -207,7 +207,7 @@ impl<'a> EditingCommandSection<'a> {
             |switches| {
                 switches
                     .iter()
-                    .map(|switch| RefCell::new(EditingCommandSwitch::new(switch)))
+                    .map(|switch| Rc::new(RefCell::new(EditingCommandSwitch::new(switch))))
                     .collect()
             },
         );
@@ -216,7 +216,7 @@ impl<'a> EditingCommandSection<'a> {
             |options| {
                 options
                     .iter()
-                    .map(|option| RefCell::new(EditingCommandOption::new(option)))
+                    .map(|option| Rc::new(RefCell::new(EditingCommandOption::new(option))))
                     .collect()
             },
         );
@@ -225,7 +225,7 @@ impl<'a> EditingCommandSection<'a> {
             |arguments| {
                 arguments
                     .iter()
-                    .map(|argument| RefCell::new(EditingCommandArgument::new(argument)))
+                    .map(|argument| Rc::new(RefCell::new(EditingCommandArgument::new(argument))))
                     .collect()
             },
         );
@@ -246,13 +246,13 @@ struct EditingCommandState<'a> {
     sections: Vec<EditingCommandSection<'a>>,
     colors: EditingCommandColors,
     root_node: Rc<RefCell<TrieNode<'a>>>,
-    cur_node: RefCell<Rc<RefCell<TrieNode<'a>>>>,
+    cur_node: Rc<RefCell<TrieNode<'a>>>,
 }
 
 impl<'a> EditingCommandState<'a> {
     fn new(args: &'a EditCommand, window: GuiWin, pane: MuxPane) -> Self {
         let root_node = Rc::new(RefCell::new(TrieNode::new()));
-        let cur_node = RefCell::new(Rc::clone(&root_node));
+        let cur_node = Rc::clone(&root_node);
         Self {
             window,
             pane,
@@ -383,7 +383,7 @@ impl<'a> EditingCommandState<'a> {
         .detach();
     }
 
-    fn run_loop(&self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
+    fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         while let Ok(Some(event)) = term.poll_input(None) {
             match event {
                 InputEvent::Key(KeyEvent {
@@ -400,7 +400,7 @@ impl<'a> EditingCommandState<'a> {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
-                    let cur_node = Rc::clone(&self.cur_node.borrow());
+                    let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
                     match cur_node.find_char(c) {
                         Some(cur_node) => {
@@ -413,7 +413,7 @@ impl<'a> EditingCommandState<'a> {
                                             let switch = switch.deref_mut();
                                             switch.value = !switch.value;
                                         }
-                                        self.cur_node.replace(Rc::clone(&self.root_node));
+                                        self.cur_node = Rc::clone(&self.root_node);
                                         self.render(term)?;
                                     }
                                     EditingCommandEntity::EditingCommandOption(option) => {
@@ -462,7 +462,7 @@ impl<'a> EditingCommandState<'a> {
                                                 )])?;
                                             }
                                         }
-                                        self.cur_node.replace(Rc::clone(&self.root_node));
+                                        self.cur_node = Rc::clone(&self.root_node);
                                         self.render(term)?;
                                     }
                                     EditingCommandEntity::EditingCommandArgument(
@@ -478,11 +478,11 @@ impl<'a> EditingCommandState<'a> {
                                     }
                                 }
                             } else {
-                                self.cur_node.replace(Rc::clone(&cur_node));
+                                self.cur_node = Rc::clone(&cur_node);
                             }
                         }
                         None => {
-                            self.cur_node.replace(Rc::clone(&self.root_node));
+                            self.cur_node = Rc::clone(&self.root_node);
                         }
                     }
                 }
@@ -577,25 +577,25 @@ pub fn show_edit_command_overlay(
     term.no_grab_mouse_in_raw_mode();
     term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
 
-    let state = EditingCommandState::new(&args, window, pane);
+    let mut state = EditingCommandState::new(&args, window, pane);
 
     for section in &state.sections {
         for switch in &section.switches {
             state.root_node.borrow_mut().add_word(
                 &switch.borrow().key,
-                EditingCommandEntity::EditingCommandSwitch(switch),
+                EditingCommandEntity::EditingCommandSwitch(Rc::clone(switch)),
             )
         }
         for option in &section.options {
             state.root_node.borrow_mut().add_word(
                 &option.borrow().key,
-                EditingCommandEntity::EditingCommandOption(option),
+                EditingCommandEntity::EditingCommandOption(Rc::clone(option)),
             )
         }
         for positional_arg in &section.arguments {
             state.root_node.borrow_mut().add_word(
                 &positional_arg.borrow().key,
-                EditingCommandEntity::EditingCommandArgument(positional_arg),
+                EditingCommandEntity::EditingCommandArgument(Rc::clone(positional_arg)),
             )
         }
     }
