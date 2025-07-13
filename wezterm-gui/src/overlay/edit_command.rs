@@ -422,11 +422,15 @@ impl<'a> EditingCommandState<'a> {
                                             if val.is_none() {
                                                 let size = term.get_screen_size()?;
                                                 term.render(&[
+                                                    Change::CursorPosition {
+                                                        x: Position::Absolute(0),
+                                                        y: Position::EndRelative(1),
+                                                    },
+                                                    Change::Text("─".repeat(size.cols)),
+                                                    Change::Text("\r\n".to_string()),
                                                     Change::CursorVisibility(
                                                         CursorVisibility::Visible,
                                                     ),
-                                                    Change::Text("─".repeat(size.cols)),
-                                                    Change::Text("\r\n".to_string()),
                                                 ])?;
 
                                                 let mut host = PromptHost::new();
