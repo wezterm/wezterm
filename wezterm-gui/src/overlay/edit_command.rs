@@ -161,6 +161,7 @@ struct EditingCommandOption {
     default: Option<String>,
     description: String,
     flag: String,
+    allow_nil: bool,
 }
 
 impl EditingCommandOption {
@@ -171,6 +172,7 @@ impl EditingCommandOption {
             default: option.default.clone(),
             description: option.description.clone(),
             flag: option.flag.clone(),
+            allow_nil: option.allow_nil,
         }
     }
 }
@@ -419,7 +421,7 @@ impl<'a> EditingCommandState<'a> {
                                             let mut option = option.borrow_mut();
                                             let option = option.deref_mut();
                                             let val = option.value.take();
-                                            if val.is_none() {
+                                            if val.is_none() || !option.allow_nil {
                                                 let size = term.get_screen_size()?;
                                                 term.render(&[
                                                     Change::CursorPosition {

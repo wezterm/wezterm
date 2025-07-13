@@ -546,6 +546,8 @@ pub struct EditCommandOption {
     pub default: Option<String>,
     pub description: String,
     pub flag: String,
+    #[dynamic(default = "crate::default_true")]
+    pub allow_nil: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
