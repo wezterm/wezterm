@@ -23,6 +23,7 @@ on:
 jobs:
   build:
     runs-on: "macos-latest"
+    if: github.repository == 'wezterm/wezterm'
     
     env:
       BUILD_REASON: "Schedule"

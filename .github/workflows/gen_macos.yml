@@ -21,6 +21,7 @@ on:
 jobs:
   build:
     runs-on: "macos-latest"
+    if: github.repository == 'wezterm/wezterm'
     
     env:
       CARGO_INCREMENTAL: "0"

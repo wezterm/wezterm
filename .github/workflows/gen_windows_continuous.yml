@@ -21,6 +21,7 @@ on:
 jobs:
   build:
     runs-on: "windows-latest"
+    if: github.repository == 'wezterm/wezterm'
     
     env:
       BUILD_REASON: "Schedule"

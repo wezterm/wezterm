@@ -28,6 +28,7 @@ on:
 jobs:
   build:
     runs-on: "ubuntu-latest"
+    if: github.repository == 'wezterm/wezterm'
     container: "ubuntu:24.04"
     env:
       BUILD_REASON: "Schedule"
