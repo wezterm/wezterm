@@ -506,12 +506,8 @@ impl<'a> EditingCommandState<'a> {
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
                 x: Position::Absolute(0),
-                y: Position::Absolute(0),
+                y: Position::Absolute(1),
             },
-            Change::Text(format!(
-                "{}\r\n",
-                truncate_right(&option.description, max_width)
-            )),
             Change::AllAttributes(CellAttributes::default()),
         ];
 
