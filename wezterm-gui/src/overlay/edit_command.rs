@@ -80,6 +80,17 @@ struct SelectorState {
 }
 
 impl SelectorState {
+    fn new(choices: Vec<String>) -> Self {
+        Self {
+            active_idx: 0,
+            max_items: 0,
+            top_row: 0,
+            filter_term: String::new(),
+            filtered_entries: choices.clone(),
+            choices,
+        }
+    }
+
     fn update_filter(&mut self) {
         if self.filter_term.is_empty() {
             self.filtered_entries = self.choices.clone();
@@ -709,14 +720,8 @@ impl<'a> EditingCommandState<'a> {
                                             if option.value.is_none() || !option.allow_nil {
                                                 if let Some(choices) = option.choices.clone() {
                                                     self.cur_node = Rc::clone(&cur_node);
-                                                    self.selector_state = Some(SelectorState {
-                                                        active_idx: 0,
-                                                        max_items: 0,
-                                                        top_row: 0,
-                                                        filter_term: String::new(),
-                                                        filtered_entries: choices.clone(),
-                                                        choices,
-                                                    });
+                                                    self.selector_state =
+                                                        Some(SelectorState::new(choices));
                                                     self.selector(term, option)?;
                                                     continue;
                                                 } else {
