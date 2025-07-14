@@ -371,6 +371,44 @@ impl<'a> EditingCommandState<'a> {
         Ok(())
     }
 
+    fn line_prompt(
+        &self,
+        term: &mut TermWizTerminal,
+        option: &mut EditingCommandOption,
+    ) -> anyhow::Result<()> {
+        let size = term.get_screen_size()?;
+        term.render(&[
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::EndRelative(1),
+            },
+            Change::Text("─".repeat(size.cols)),
+            Change::Text("\r\n".to_string()),
+            Change::CursorVisibility(CursorVisibility::Visible),
+        ])?;
+
+        let mut host = PromptHost::new();
+        let mut editor = LineEditor::new(term);
+        let mut prompt = option.description.clone();
+        if let Some(default) = option.default.clone() {
+            prompt.push_str(&format!(" (default {})", default));
+        }
+        prompt.push_str(": ");
+        editor.set_prompt(&prompt);
+
+        let line = editor.read_line_with_optional_initial_value(&mut host, None)?;
+        if let Some(line) = line {
+            option.value = if line.len() == 0 {
+                option.default.clone()
+            } else {
+                Some(line)
+            };
+        }
+        term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
+
+        Ok(())
+    }
+
     fn trigger_event(&self, name: &str) {
         let name = name.to_string();
         let window = self.window.clone();
@@ -422,44 +460,7 @@ impl<'a> EditingCommandState<'a> {
                                             let option = option.deref_mut();
                                             let val = option.value.take();
                                             if val.is_none() || !option.allow_nil {
-                                                let size = term.get_screen_size()?;
-                                                term.render(&[
-                                                    Change::CursorPosition {
-                                                        x: Position::Absolute(0),
-                                                        y: Position::EndRelative(1),
-                                                    },
-                                                    Change::Text("─".repeat(size.cols)),
-                                                    Change::Text("\r\n".to_string()),
-                                                    Change::CursorVisibility(
-                                                        CursorVisibility::Visible,
-                                                    ),
-                                                ])?;
-
-                                                let mut host = PromptHost::new();
-                                                let mut editor = LineEditor::new(term);
-                                                let mut prompt = option.description.clone();
-                                                if let Some(default) = option.default.clone() {
-                                                    prompt.push_str(&format!(
-                                                        " (default {})",
-                                                        default
-                                                    ));
-                                                }
-                                                prompt.push_str(": ");
-                                                editor.set_prompt(&prompt);
-                                                let line = editor
-                                                    .read_line_with_optional_initial_value(
-                                                        &mut host, None,
-                                                    )?;
-                                                if let Some(line) = line {
-                                                    option.value = if line.len() == 0 {
-                                                        option.default.clone()
-                                                    } else {
-                                                        Some(line)
-                                                    };
-                                                }
-                                                term.render(&[Change::CursorVisibility(
-                                                    CursorVisibility::Hidden,
-                                                )])?;
+                                                self.line_prompt(term, option)?;
                                             }
                                         }
                                         self.cur_node = Rc::clone(&self.root_node);
