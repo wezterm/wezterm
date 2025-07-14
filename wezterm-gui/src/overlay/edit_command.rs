@@ -1,3 +1,4 @@
+use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
 use config::configuration;
 use config::keyassignment::{
@@ -8,6 +9,7 @@ use config::{AnsiColor, ColorAttribute};
 use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
+use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
@@ -16,9 +18,12 @@ use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::lineedit::{Action, BasicHistory, History, LineEditor, LineEditorHost};
 use termwiz::surface::{Change, CursorVisibility, Position};
 use termwiz::terminal::Terminal;
+use termwiz_funcs::truncate_right;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_term::{AttributeChange, CellAttributes, Intensity};
 use window::Modifiers;
+
+const ROW_OVERHEAD: usize = 3;
 
 struct PromptHost {
     history: BasicHistory,
@@ -63,6 +68,67 @@ enum EditingCommandEntity {
     EditingCommandOption(Rc<RefCell<EditingCommandOption>>),
     EditingCommandSwitch(Rc<RefCell<EditingCommandSwitch>>),
     EditingCommandArgument(Rc<RefCell<EditingCommandArgument>>),
+}
+
+struct SelectorState {
+    active_idx: usize,
+    max_items: usize,
+    top_row: usize,
+    filter_term: String,
+    filtered_entries: Vec<String>,
+    choices: Vec<String>,
+}
+
+impl SelectorState {
+    fn update_filter(&mut self) {
+        if self.filter_term.is_empty() {
+            self.filtered_entries = self.choices.clone();
+            return;
+        }
+
+        self.filtered_entries.clear();
+
+        struct MatchResult {
+            row_idx: usize,
+            score: u32,
+        }
+
+        let pattern = matcher_pattern(&self.filter_term);
+
+        let mut scores: Vec<MatchResult> = self
+            .choices
+            .par_iter()
+            .enumerate()
+            .filter_map(|(row_idx, entry)| {
+                let score = matcher_score(&pattern, &entry)?;
+                Some(MatchResult { row_idx, score })
+            })
+            .collect();
+
+        scores.sort_by(|a, b| a.score.cmp(&b.score).reverse());
+
+        for result in scores {
+            self.filtered_entries
+                .push(self.choices[result.row_idx].clone());
+        }
+
+        self.active_idx = 0;
+        self.top_row = 0;
+    }
+
+    fn move_up(&mut self) {
+        self.active_idx = self.active_idx.saturating_sub(1);
+        if self.active_idx < self.top_row {
+            self.top_row = self.active_idx;
+        }
+    }
+
+    fn move_down(&mut self) {
+        self.active_idx = (self.active_idx + 1).min(self.filtered_entries.len() - 1);
+        if self.active_idx > self.top_row + self.max_items {
+            self.top_row = self.active_idx.saturating_sub(self.max_items);
+        }
+    }
 }
 
 struct TrieNode<'a> {
@@ -162,6 +228,7 @@ struct EditingCommandOption {
     description: String,
     flag: String,
     allow_nil: bool,
+    choices: Option<Vec<String>>,
 }
 
 impl EditingCommandOption {
@@ -173,6 +240,7 @@ impl EditingCommandOption {
             description: option.description.clone(),
             flag: option.flag.clone(),
             allow_nil: option.allow_nil,
+            choices: option.choices.clone(),
         }
     }
 }
@@ -247,6 +315,7 @@ struct EditingCommandState<'a> {
     colors: EditingCommandColors,
     root_node: Rc<RefCell<TrieNode<'a>>>,
     cur_node: Rc<RefCell<TrieNode<'a>>>,
+    selector_state: Option<SelectorState>,
 }
 
 impl<'a> EditingCommandState<'a> {
@@ -265,6 +334,7 @@ impl<'a> EditingCommandState<'a> {
             colors: EditingCommandColors::new(),
             root_node,
             cur_node,
+            selector_state: None,
         }
     }
 
@@ -409,6 +479,80 @@ impl<'a> EditingCommandState<'a> {
         Ok(())
     }
 
+    fn selector(
+        &mut self,
+        term: &mut TermWizTerminal,
+        option: &mut EditingCommandOption,
+    ) -> anyhow::Result<()> {
+        let size = term.get_screen_size()?;
+        let max_width = size.cols.saturating_sub(6);
+        let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
+        let selector_state = self.selector_state.as_mut().unwrap();
+        if max_items != selector_state.max_items {
+            selector_state.max_items = max_items;
+        }
+        let mut changes = vec![
+            Change::ClearScreen(ColorAttribute::Default),
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(0),
+            },
+            Change::Text(format!(
+                "{}\r\n",
+                truncate_right(&option.description, max_width)
+            )),
+            Change::AllAttributes(CellAttributes::default()),
+        ];
+
+        for (row_num, (entry_idx, entry)) in selector_state
+            .filtered_entries
+            .iter()
+            .enumerate()
+            .skip(selector_state.top_row)
+            .enumerate()
+        {
+            if row_num > max_items {
+                break;
+            }
+
+            let mut attr = CellAttributes::blank();
+
+            if entry_idx == selector_state.active_idx {
+                changes.push(AttributeChange::Reverse(true).into());
+                attr.set_reverse(true);
+            }
+
+            changes.push(Change::Text("    ".to_string()));
+            let mut line = crate::tabbar::parse_status_text(entry, attr.clone());
+            if line.len() > max_width {
+                line.resize(max_width, termwiz::surface::SEQ_ZERO);
+            }
+            changes.append(&mut line.changes(&attr));
+            changes.push(Change::Text(" ".to_string()));
+            if entry_idx == selector_state.active_idx {
+                changes.push(AttributeChange::Reverse(false).into());
+            }
+            changes.push(Change::AllAttributes(CellAttributes::default()));
+            changes.push(Change::Text("\r\n".to_string()));
+        }
+
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(0),
+            },
+            Change::ClearToEndOfLine(ColorAttribute::Default),
+            Change::Text(truncate_right(
+                &format!("{}{}", option.description, selector_state.filter_term),
+                max_width,
+            )),
+        ]);
+
+        term.render(&changes)?;
+
+        Ok(())
+    }
+
     fn trigger_event(&self, name: &str) {
         let name = name.to_string();
         let window = self.window.clone();
@@ -423,12 +567,116 @@ impl<'a> EditingCommandState<'a> {
 
     fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         while let Ok(Some(event)) = term.poll_input(None) {
+            let selector_state = self.selector_state.is_some();
             match event {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('G' | 'C' | 'D' | '['),
                     modifiers: Modifiers::CTRL,
-                })
-                | InputEvent::Key(KeyEvent {
+                }) => {
+                    break;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('P' | 'K'),
+                    modifiers: Modifiers::CTRL,
+                }) if selector_state => {
+                    let cur_node = Rc::clone(&self.cur_node);
+                    let cur_node = cur_node.borrow();
+                    match cur_node.entity.as_ref() {
+                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                            self.selector_state.as_mut().unwrap().move_up();
+                            self.render(term)?;
+                            let mut option = option.borrow_mut();
+                            let option = option.deref_mut();
+                            self.selector(term, option)?;
+                        }
+                        _ => {}
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('N' | 'J'),
+                    modifiers: Modifiers::CTRL,
+                }) if selector_state => {
+                    let cur_node = Rc::clone(&self.cur_node);
+                    let cur_node = cur_node.borrow();
+                    match cur_node.entity.as_ref() {
+                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                            self.selector_state.as_mut().unwrap().move_down();
+                            self.render(term)?;
+                            let mut option = option.borrow_mut();
+                            let option = option.deref_mut();
+                            self.selector(term, option)?;
+                        }
+                        _ => {}
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Escape,
+                    ..
+                }) if selector_state => {
+                    self.selector_state = None;
+                    self.cur_node = Rc::clone(&self.root_node);
+                    self.render(term)?;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Enter,
+                    ..
+                }) if selector_state => {
+                    let selector_state = self.selector_state.as_ref().unwrap();
+                    let active_idx = selector_state.active_idx;
+                    if let Some(entry) = selector_state.filtered_entries.get(active_idx).cloned() {
+                        let cur_node = Rc::clone(&self.cur_node);
+                        let cur_node = cur_node.borrow();
+                        match cur_node.entity.as_ref().unwrap() {
+                            EditingCommandEntity::EditingCommandOption(option) => {
+                                option.borrow_mut().value = Some(entry);
+                                self.selector_state = None;
+                                self.cur_node = Rc::clone(&self.root_node);
+                                self.render(term)?;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Backspace,
+                    ..
+                }) if selector_state => {
+                    let cur_node = Rc::clone(&self.cur_node);
+                    let cur_node = cur_node.borrow();
+                    match cur_node.entity.as_ref() {
+                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                            let selector_state = self.selector_state.as_mut().unwrap();
+                            if selector_state.filter_term.pop().is_some() {
+                                selector_state.update_filter();
+                                self.render(term)?;
+                                let mut option = option.borrow_mut();
+                                let option = option.deref_mut();
+                                self.selector(term, option)?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char(c),
+                    ..
+                }) if selector_state => {
+                    let cur_node = Rc::clone(&self.cur_node);
+                    let cur_node = cur_node.borrow();
+                    match cur_node.entity.as_ref() {
+                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                            let selector_state = self.selector_state.as_mut().unwrap();
+                            selector_state.filter_term.push(c);
+                            selector_state.update_filter();
+                            self.render(term)?;
+                            let mut option = option.borrow_mut();
+                            let option = option.deref_mut();
+                            self.selector(term, option)?;
+                        }
+                        _ => {}
+                    }
+                }
+                InputEvent::Key(KeyEvent {
                     key: KeyCode::Escape,
                     ..
                 }) => {
@@ -458,9 +706,24 @@ impl<'a> EditingCommandState<'a> {
                                         {
                                             let mut option = option.borrow_mut();
                                             let option = option.deref_mut();
-                                            let val = option.value.take();
-                                            if val.is_none() || !option.allow_nil {
-                                                self.line_prompt(term, option)?;
+                                            if option.value.is_none() || !option.allow_nil {
+                                                if let Some(choices) = option.choices.clone() {
+                                                    self.cur_node = Rc::clone(&cur_node);
+                                                    self.selector_state = Some(SelectorState {
+                                                        active_idx: 0,
+                                                        max_items: 0,
+                                                        top_row: 0,
+                                                        filter_term: String::new(),
+                                                        filtered_entries: choices.clone(),
+                                                        choices,
+                                                    });
+                                                    self.selector(term, option)?;
+                                                    continue;
+                                                } else {
+                                                    self.line_prompt(term, option)?;
+                                                }
+                                            } else {
+                                                option.value = None;
                                             }
                                         }
                                         self.cur_node = Rc::clone(&self.root_node);

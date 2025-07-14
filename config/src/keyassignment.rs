@@ -548,6 +548,8 @@ pub struct EditCommandOption {
     pub flag: String,
     #[dynamic(default = "crate::default_true")]
     pub allow_nil: bool,
+    #[dynamic(default)]
+    pub choices: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
