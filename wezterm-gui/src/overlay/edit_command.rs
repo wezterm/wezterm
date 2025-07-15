@@ -496,19 +496,26 @@ impl<'a> EditingCommandState<'a> {
         option: &mut EditingCommandOption,
     ) -> anyhow::Result<()> {
         let size = term.get_screen_size()?;
-        let max_width = size.cols.saturating_sub(6);
+        let cols = size.cols;
+        let max_width = cols.saturating_sub(6);
         let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
         let selector_state = self.selector_state.as_mut().unwrap();
         if max_items != selector_state.max_items {
             selector_state.max_items = max_items;
         }
+        let input_selector_size = 1 + selector_state.choices.len().min(max_items);
         let mut changes = vec![
-            Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
                 x: Position::Absolute(0),
-                y: Position::Absolute(1),
+                y: Position::EndRelative(input_selector_size),
             },
-            Change::AllAttributes(CellAttributes::default()),
+            Change::ClearToEndOfScreen(ColorAttribute::Default),
+            Change::Text("─".repeat(cols)),
+            Change::Text("\r\n".to_string()),
+            Change::Text(truncate_right(
+                &format!("{}{}", option.description, selector_state.filter_term),
+                max_width,
+            )),
         ];
 
         for (row_num, (entry_idx, entry)) in selector_state
@@ -521,6 +528,8 @@ impl<'a> EditingCommandState<'a> {
             if row_num > max_items {
                 break;
             }
+
+            changes.push(Change::Text("\r\n".to_string()));
 
             let mut attr = CellAttributes::blank();
 
@@ -540,20 +549,7 @@ impl<'a> EditingCommandState<'a> {
                 changes.push(AttributeChange::Reverse(false).into());
             }
             changes.push(Change::AllAttributes(CellAttributes::default()));
-            changes.push(Change::Text("\r\n".to_string()));
         }
-
-        changes.append(&mut vec![
-            Change::CursorPosition {
-                x: Position::Absolute(0),
-                y: Position::Absolute(0),
-            },
-            Change::ClearToEndOfLine(ColorAttribute::Default),
-            Change::Text(truncate_right(
-                &format!("{}{}", option.description, selector_state.filter_term),
-                max_width,
-            )),
-        ]);
 
         term.render(&changes)?;
 
