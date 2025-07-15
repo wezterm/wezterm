@@ -231,6 +231,32 @@ impl EditingCommandSwitch {
             flag: switch.flag.clone(),
         }
     }
+
+    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+        changes.push(Change::Text("\r\n\t".to_string()));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            colors.key_fg,
+        )));
+        changes.push(Change::Text(format!("{}", self.key)));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            ColorAttribute::Default,
+        )));
+
+        changes.push(Change::Text(format!(" {} (", self.description)));
+        if self.value {
+            changes.push(Change::Attribute(AttributeChange::Intensity(
+                Intensity::Bold,
+            )));
+            changes.push(Change::Attribute(AttributeChange::Foreground(
+                colors.flag_fg,
+            )));
+            changes.push(Change::Text(self.flag.to_string()));
+            changes.push(Change::AllAttributes(CellAttributes::default()));
+        } else {
+            changes.push(Change::Text(self.flag.to_string()));
+        }
+        changes.push(Change::Text(")".to_string()));
+    }
 }
 
 struct EditingCommandOption {
@@ -254,6 +280,34 @@ impl EditingCommandOption {
             allow_nil: option.allow_nil,
             choices: option.choices.clone(),
         }
+    }
+
+    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+        changes.push(Change::Text("\r\n\t".to_string()));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            colors.key_fg,
+        )));
+        changes.push(Change::Text(format!("{}", self.key)));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            ColorAttribute::Default,
+        )));
+
+        changes.push(Change::Text(format!(" {} (", self.description)));
+
+        if let Some(val) = &self.value {
+            changes.push(Change::Attribute(AttributeChange::Intensity(
+                Intensity::Bold,
+            )));
+            changes.push(Change::Attribute(AttributeChange::Foreground(
+                colors.flag_fg,
+            )));
+            changes.push(Change::Text(format!("{}{}", self.flag, val)));
+            changes.push(Change::AllAttributes(CellAttributes::default()));
+        } else {
+            changes.push(Change::Text(format!("{}", self.flag)));
+        }
+
+        changes.push(Change::Text(")".to_string()));
     }
 }
 
@@ -281,6 +335,60 @@ impl EditingCommandCyclicSwitch {
             allow_nil: cycle.allow_nil,
         }
     }
+
+    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+        changes.push(Change::Text("\r\n\t".to_string()));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            colors.key_fg,
+        )));
+        changes.push(Change::Text(format!("{}", self.key)));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            ColorAttribute::Default,
+        )));
+
+        changes.push(Change::Text(format!(" {} (", self.description)));
+        if let Some(idx) = self.active_idx {
+            changes.append(&mut vec![
+                Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
+                Change::Attribute(AttributeChange::Foreground(colors.flag_fg)),
+                Change::Text(self.flag.to_string()),
+                Change::AllAttributes(CellAttributes::default()),
+            ]);
+            if self.choices.first().is_some() {
+                let mut prefix = " [";
+                for (cur_idx, choice) in self.choices.iter().enumerate() {
+                    if cur_idx == idx {
+                        changes.append(&mut vec![
+                            Change::Text(prefix.to_string()),
+                            Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
+                            Change::Attribute(AttributeChange::Foreground(colors.flag_fg)),
+                            Change::Text(choice.to_string()),
+                            Change::AllAttributes(CellAttributes::default()),
+                        ]);
+                    } else {
+                        changes.push(Change::Text(format!("{}{}", prefix, choice)));
+                    }
+                    if cur_idx == 0 {
+                        prefix = "|";
+                    }
+                }
+                changes.push(Change::Text("]".to_string()));
+            }
+        } else {
+            changes.push(Change::Text(self.flag.to_string()));
+            if self.choices.first().is_some() {
+                let mut prefix = " [";
+                for (cur_idx, choice) in self.choices.iter().enumerate() {
+                    changes.push(Change::Text(format!("{}{}", prefix, choice)));
+                    if cur_idx == 0 {
+                        prefix = "|";
+                    }
+                }
+                changes.push(Change::Text("]".to_string()));
+            }
+        }
+        changes.push(Change::Text(")".to_string()));
+    }
 }
 
 struct EditingCommandArgument {
@@ -296,6 +404,18 @@ impl EditingCommandArgument {
             description: argument.description.clone(),
             action: argument.action.clone(),
         }
+    }
+
+    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+        changes.push(Change::Text("\r\n\t".to_string()));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            colors.key_fg,
+        )));
+        changes.push(Change::Text(self.key.clone()));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            ColorAttribute::Default,
+        )));
+        changes.push(Change::Text(format!(" {}", self.description)));
     }
 }
 
@@ -356,6 +476,42 @@ impl<'a> EditingCommandSection<'a> {
             arguments,
         }
     }
+
+    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+        changes.push(Change::Text("\r\n\r\n".to_string()));
+        changes.push(Change::Attribute(AttributeChange::Intensity(
+            Intensity::Bold,
+        )));
+        changes.push(Change::Attribute(AttributeChange::Foreground(
+            colors.section_header_fg,
+        )));
+        changes.push(Change::Text(self.header.to_string()));
+        changes.push(Change::AllAttributes(CellAttributes::default()));
+
+        for switch in self.switches.iter().map(|switch| switch.borrow()) {
+            switch.render(colors, changes);
+        }
+
+        for cyclic_switch in self
+            .cyclic_switches
+            .iter()
+            .map(|cyclic_switch| cyclic_switch.borrow())
+        {
+            cyclic_switch.render(colors, changes);
+        }
+
+        for option in self.options.iter().map(|option| option.borrow()) {
+            option.render(colors, changes);
+        }
+
+        for positional_arg in self
+            .arguments
+            .iter()
+            .map(|positional_arg| positional_arg.borrow())
+        {
+            positional_arg.render(colors, changes);
+        }
+    }
 }
 
 struct EditingCommandState<'a> {
@@ -392,8 +548,7 @@ impl<'a> EditingCommandState<'a> {
     }
 
     fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
-        let changes = &mut self.changes;
-        changes.append(&mut vec![
+        self.changes.append(&mut vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
                 x: Position::Absolute(0),
@@ -408,151 +563,13 @@ impl<'a> EditingCommandState<'a> {
         ]);
 
         for section in &self.sections {
-            changes.push(Change::Text("\r\n\r\n".to_string()));
-            changes.push(Change::Attribute(AttributeChange::Intensity(
-                Intensity::Bold,
-            )));
-            changes.push(Change::Attribute(AttributeChange::Foreground(
-                self.colors.section_header_fg,
-            )));
-            changes.push(Change::Text(section.header.to_string()));
-            changes.push(Change::AllAttributes(CellAttributes::default()));
-
-            for switch in section.switches.iter().map(|switch| switch.borrow()) {
-                changes.push(Change::Text("\r\n\t".to_string()));
-                changes.push(Change::Attribute(AttributeChange::Foreground(
-                    self.colors.key_fg,
-                )));
-                changes.push(Change::Text(format!("{}", switch.key)));
-                changes.push(Change::Attribute(AttributeChange::Foreground(
-                    ColorAttribute::Default,
-                )));
-
-                changes.push(Change::Text(format!(" {} (", switch.description)));
-                if switch.value {
-                    changes.push(Change::Attribute(AttributeChange::Intensity(
-                        Intensity::Bold,
-                    )));
-                    changes.push(Change::Attribute(AttributeChange::Foreground(
-                        self.colors.flag_fg,
-                    )));
-                    changes.push(Change::Text(switch.flag.to_string()));
-                    changes.push(Change::AllAttributes(CellAttributes::default()));
-                } else {
-                    changes.push(Change::Text(switch.flag.to_string()));
-                }
-                changes.push(Change::Text(")".to_string()));
-            }
-
-            for cyclic_switch in section
-                .cyclic_switches
-                .iter()
-                .map(|cyclic_switch| cyclic_switch.borrow())
-            {
-                changes.push(Change::Text("\r\n\t".to_string()));
-                changes.push(Change::Attribute(AttributeChange::Foreground(
-                    self.colors.key_fg,
-                )));
-                changes.push(Change::Text(format!("{}", cyclic_switch.key)));
-                changes.push(Change::Attribute(AttributeChange::Foreground(
-                    ColorAttribute::Default,
-                )));
-
-                changes.push(Change::Text(format!(" {} (", cyclic_switch.description)));
-                if let Some(idx) = cyclic_switch.active_idx {
-                    changes.append(&mut vec![
-                        Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
-                        Change::Attribute(AttributeChange::Foreground(self.colors.flag_fg)),
-                        Change::Text(cyclic_switch.flag.to_string()),
-                        Change::AllAttributes(CellAttributes::default()),
-                    ]);
-                    if cyclic_switch.choices.first().is_some() {
-                        let mut prefix = " [";
-                        for (cur_idx, choice) in cyclic_switch.choices.iter().enumerate() {
-                            if cur_idx == idx {
-                                changes.append(&mut vec![
-                                    Change::Text(prefix.to_string()),
-                                    Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
-                                    Change::Attribute(AttributeChange::Foreground(
-                                        self.colors.flag_fg,
-                                    )),
-                                    Change::Text(choice.to_string()),
-                                    Change::AllAttributes(CellAttributes::default()),
-                                ]);
-                            } else {
-                                changes.push(Change::Text(format!("{}{}", prefix, choice)));
-                            }
-                            if cur_idx == 0 {
-                                prefix = "|";
-                            }
-                        }
-                        changes.push(Change::Text("]".to_string()));
-                    }
-                } else {
-                    changes.push(Change::Text(cyclic_switch.flag.to_string()));
-                    if cyclic_switch.choices.first().is_some() {
-                        let mut prefix = " [";
-                        for (cur_idx, choice) in cyclic_switch.choices.iter().enumerate() {
-                            changes.push(Change::Text(format!("{}{}", prefix, choice)));
-                            if cur_idx == 0 {
-                                prefix = "|";
-                            }
-                        }
-                        changes.push(Change::Text("]".to_string()));
-                    }
-                }
-                changes.push(Change::Text(")".to_string()));
-            }
-
-            for option in section.options.iter().map(|option| option.borrow()) {
-                changes.push(Change::Text("\r\n\t".to_string()));
-                changes.push(Change::Attribute(AttributeChange::Foreground(
-                    self.colors.key_fg,
-                )));
-                changes.push(Change::Text(format!("{}", option.key)));
-                changes.push(Change::Attribute(AttributeChange::Foreground(
-                    ColorAttribute::Default,
-                )));
-
-                changes.push(Change::Text(format!(" {} (", option.description)));
-
-                if let Some(val) = &option.value {
-                    changes.push(Change::Attribute(AttributeChange::Intensity(
-                        Intensity::Bold,
-                    )));
-                    changes.push(Change::Attribute(AttributeChange::Foreground(
-                        self.colors.flag_fg,
-                    )));
-                    changes.push(Change::Text(format!("{}{}", option.flag, val)));
-                    changes.push(Change::AllAttributes(CellAttributes::default()));
-                } else {
-                    changes.push(Change::Text(format!("{}", option.flag)));
-                }
-
-                changes.push(Change::Text(")".to_string()));
-            }
-
-            for positional_arg in section
-                .arguments
-                .iter()
-                .map(|positional_arg| positional_arg.borrow())
-            {
-                changes.push(Change::Text("\r\n\t".to_string()));
-                changes.push(Change::Attribute(AttributeChange::Foreground(
-                    self.colors.key_fg,
-                )));
-                changes.push(Change::Text(positional_arg.key.clone()));
-                changes.push(Change::Attribute(AttributeChange::Foreground(
-                    ColorAttribute::Default,
-                )));
-                changes.push(Change::Text(format!(" {}", positional_arg.description)));
-            }
+            section.render(&self.colors, &mut self.changes);
         }
 
-        changes.push(Change::Text("\r\n\r\n\r\n".to_string()));
+        self.changes.push(Change::Text("\r\n\r\n\r\n".to_string()));
 
-        term.render(changes)?;
-        changes.clear();
+        term.render(&self.changes)?;
+        self.changes.clear();
 
         Ok(())
     }
