@@ -327,6 +327,7 @@ struct EditingCommandState<'a> {
     root_node: Rc<RefCell<TrieNode<'a>>>,
     cur_node: Rc<RefCell<TrieNode<'a>>>,
     selector_state: Option<SelectorState>,
+    changes: Vec<Change>,
 }
 
 impl<'a> EditingCommandState<'a> {
@@ -346,11 +347,13 @@ impl<'a> EditingCommandState<'a> {
             root_node,
             cur_node,
             selector_state: None,
+            changes: vec![],
         }
     }
 
-    fn render(&self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
-        let mut changes = vec![
+    fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
+        let changes = &mut self.changes;
+        changes.append(&mut vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
                 x: Position::Absolute(0),
@@ -362,7 +365,7 @@ impl<'a> EditingCommandState<'a> {
             Change::AllAttributes(CellAttributes::default()),
             Change::Text("\r\n".to_string()),
             Change::Text("─".repeat(self.description.len())),
-        ];
+        ]);
 
         for section in &self.sections {
             changes.push(Change::Text("\r\n\r\n".to_string()));
@@ -447,18 +450,20 @@ impl<'a> EditingCommandState<'a> {
         }
 
         changes.push(Change::Text("\r\n\r\n\r\n".to_string()));
-        term.render(&changes)?;
+
+        term.render(changes)?;
+        changes.clear();
 
         Ok(())
     }
 
     fn line_prompt(
-        &self,
+        &mut self,
         term: &mut TermWizTerminal,
         option: &mut EditingCommandOption,
     ) -> anyhow::Result<()> {
         let size = term.get_screen_size()?;
-        term.render(&[
+        self.changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
                 y: Position::EndRelative(1),
@@ -466,7 +471,9 @@ impl<'a> EditingCommandState<'a> {
             Change::Text("─".repeat(size.cols)),
             Change::Text("\r\n".to_string()),
             Change::CursorVisibility(CursorVisibility::Visible),
-        ])?;
+        ]);
+        term.render(&self.changes)?;
+        self.changes.clear();
 
         let mut host = PromptHost::new();
         let mut editor = LineEditor::new(term);
@@ -485,7 +492,8 @@ impl<'a> EditingCommandState<'a> {
                 Some(line)
             };
         }
-        term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
+        self.changes
+            .push(Change::CursorVisibility(CursorVisibility::Hidden));
 
         Ok(())
     }
@@ -504,7 +512,8 @@ impl<'a> EditingCommandState<'a> {
             selector_state.max_items = max_items;
         }
         let input_selector_size = selector_state.choices.len().min(max_items);
-        let mut changes = vec![
+        let changes = &mut self.changes;
+        changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
                 y: Position::EndRelative(1 + input_selector_size),
@@ -516,7 +525,7 @@ impl<'a> EditingCommandState<'a> {
                 &format!("{}: {}", option.description, selector_state.filter_term),
                 max_width,
             )),
-        ];
+        ]);
 
         for (row_num, (entry_idx, entry)) in selector_state
             .filtered_entries
@@ -560,7 +569,8 @@ impl<'a> EditingCommandState<'a> {
             Change::CursorVisibility(CursorVisibility::Visible),
         ]);
 
-        term.render(&changes)?;
+        term.render(changes)?;
+        changes.clear();
 
         Ok(())
     }
@@ -627,7 +637,8 @@ impl<'a> EditingCommandState<'a> {
                 }) if selector_state => {
                     self.selector_state = None;
                     self.cur_node = Rc::clone(&self.root_node);
-                    term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
+                    self.changes
+                        .push(Change::CursorVisibility(CursorVisibility::Hidden));
                     self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
@@ -644,7 +655,8 @@ impl<'a> EditingCommandState<'a> {
                                 option.borrow_mut().value = Some(entry);
                                 self.selector_state = None;
                                 self.cur_node = Rc::clone(&self.root_node);
-                                term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
+                                self.changes
+                                    .push(Change::CursorVisibility(CursorVisibility::Hidden));
                                 self.render(term)?;
                             }
                             _ => {}
@@ -847,9 +859,10 @@ pub fn show_edit_command_overlay(
     pane: MuxPane,
 ) -> anyhow::Result<()> {
     term.no_grab_mouse_in_raw_mode();
-    term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
-
     let mut state = EditingCommandState::new(&args, window, pane);
+    state
+        .changes
+        .push(Change::CursorVisibility(CursorVisibility::Hidden));
 
     for section in &state.sections {
         for switch in &section.switches {
