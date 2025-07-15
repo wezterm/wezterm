@@ -598,120 +598,15 @@ impl<'a> EditingCommandState<'a> {
                     break;
                 }
                 InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('P' | 'K'),
-                    modifiers: Modifiers::CTRL,
-                }) if selector_state => {
-                    let cur_node = Rc::clone(&self.cur_node);
-                    let cur_node = cur_node.borrow();
-                    match cur_node.entity.as_ref() {
-                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
-                            self.selector_state.as_mut().unwrap().move_up();
-                            self.render(term)?;
-                            let mut option = option.borrow_mut();
-                            let option = option.deref_mut();
-                            self.selector(term, option)?;
-                        }
-                        _ => {}
-                    }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('N' | 'J'),
-                    modifiers: Modifiers::CTRL,
-                }) if selector_state => {
-                    let cur_node = Rc::clone(&self.cur_node);
-                    let cur_node = cur_node.borrow();
-                    match cur_node.entity.as_ref() {
-                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
-                            self.selector_state.as_mut().unwrap().move_down();
-                            self.render(term)?;
-                            let mut option = option.borrow_mut();
-                            let option = option.deref_mut();
-                            self.selector(term, option)?;
-                        }
-                        _ => {}
-                    }
-                }
-                InputEvent::Key(KeyEvent {
                     key: KeyCode::Escape,
                     ..
-                }) if selector_state => {
-                    self.selector_state = None;
-                    self.cur_node = Rc::clone(&self.root_node);
-                    self.changes
-                        .push(Change::CursorVisibility(CursorVisibility::Hidden));
-                    self.render(term)?;
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Enter,
-                    ..
-                }) if selector_state => {
-                    let selector_state = self.selector_state.as_ref().unwrap();
-                    let active_idx = selector_state.active_idx;
-                    if let Some(entry) = selector_state.filtered_entries.get(active_idx).cloned() {
-                        let cur_node = Rc::clone(&self.cur_node);
-                        let cur_node = cur_node.borrow();
-                        match cur_node.entity.as_ref().unwrap() {
-                            EditingCommandEntity::EditingCommandOption(option) => {
-                                option.borrow_mut().value = Some(entry);
-                                self.selector_state = None;
-                                self.cur_node = Rc::clone(&self.root_node);
-                                self.changes
-                                    .push(Change::CursorVisibility(CursorVisibility::Hidden));
-                                self.render(term)?;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Backspace,
-                    ..
-                }) if selector_state => {
-                    let cur_node = Rc::clone(&self.cur_node);
-                    let cur_node = cur_node.borrow();
-                    match cur_node.entity.as_ref() {
-                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
-                            let selector_state = self.selector_state.as_mut().unwrap();
-                            if selector_state.filter_term.pop().is_some() {
-                                selector_state.update_filter();
-                                self.render(term)?;
-                                let mut option = option.borrow_mut();
-                                let option = option.deref_mut();
-                                self.selector(term, option)?;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char(c),
-                    ..
-                }) if selector_state => {
-                    let cur_node = Rc::clone(&self.cur_node);
-                    let cur_node = cur_node.borrow();
-                    match cur_node.entity.as_ref() {
-                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
-                            let selector_state = self.selector_state.as_mut().unwrap();
-                            selector_state.filter_term.push(c);
-                            selector_state.update_filter();
-                            self.render(term)?;
-                            let mut option = option.borrow_mut();
-                            let option = option.deref_mut();
-                            self.selector(term, option)?;
-                        }
-                        _ => {}
-                    }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Escape,
-                    ..
-                }) => {
+                }) if !selector_state => {
                     break;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
                     ..
-                }) => {
+                }) if !selector_state => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
                     match cur_node.find_char(c) {
@@ -768,6 +663,111 @@ impl<'a> EditingCommandState<'a> {
                         None => {
                             self.cur_node = Rc::clone(&self.root_node);
                         }
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('P' | 'K'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    let cur_node = Rc::clone(&self.cur_node);
+                    let cur_node = cur_node.borrow();
+                    match cur_node.entity.as_ref() {
+                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                            self.selector_state.as_mut().unwrap().move_up();
+                            self.render(term)?;
+                            let mut option = option.borrow_mut();
+                            let option = option.deref_mut();
+                            self.selector(term, option)?;
+                        }
+                        _ => {}
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('N' | 'J'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    let cur_node = Rc::clone(&self.cur_node);
+                    let cur_node = cur_node.borrow();
+                    match cur_node.entity.as_ref() {
+                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                            self.selector_state.as_mut().unwrap().move_down();
+                            self.render(term)?;
+                            let mut option = option.borrow_mut();
+                            let option = option.deref_mut();
+                            self.selector(term, option)?;
+                        }
+                        _ => {}
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Escape,
+                    ..
+                }) => {
+                    self.selector_state = None;
+                    self.cur_node = Rc::clone(&self.root_node);
+                    self.changes
+                        .push(Change::CursorVisibility(CursorVisibility::Hidden));
+                    self.render(term)?;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Enter,
+                    ..
+                }) => {
+                    let selector_state = self.selector_state.as_ref().unwrap();
+                    let active_idx = selector_state.active_idx;
+                    if let Some(entry) = selector_state.filtered_entries.get(active_idx).cloned() {
+                        let cur_node = Rc::clone(&self.cur_node);
+                        let cur_node = cur_node.borrow();
+                        match cur_node.entity.as_ref().unwrap() {
+                            EditingCommandEntity::EditingCommandOption(option) => {
+                                option.borrow_mut().value = Some(entry);
+                                self.selector_state = None;
+                                self.cur_node = Rc::clone(&self.root_node);
+                                self.changes
+                                    .push(Change::CursorVisibility(CursorVisibility::Hidden));
+                                self.render(term)?;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Backspace,
+                    ..
+                }) => {
+                    let cur_node = Rc::clone(&self.cur_node);
+                    let cur_node = cur_node.borrow();
+                    match cur_node.entity.as_ref() {
+                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                            let selector_state = self.selector_state.as_mut().unwrap();
+                            if selector_state.filter_term.pop().is_some() {
+                                selector_state.update_filter();
+                                self.render(term)?;
+                                let mut option = option.borrow_mut();
+                                let option = option.deref_mut();
+                                self.selector(term, option)?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char(c),
+                    ..
+                }) => {
+                    let cur_node = Rc::clone(&self.cur_node);
+                    let cur_node = cur_node.borrow();
+                    match cur_node.entity.as_ref() {
+                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                            let selector_state = self.selector_state.as_mut().unwrap();
+                            selector_state.filter_term.push(c);
+                            selector_state.update_filter();
+                            self.render(term)?;
+                            let mut option = option.borrow_mut();
+                            let option = option.deref_mut();
+                            self.selector(term, option)?;
+                        }
+                        _ => {}
                     }
                 }
                 _ => {}
