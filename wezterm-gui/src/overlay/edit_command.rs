@@ -513,7 +513,7 @@ impl<'a> EditingCommandState<'a> {
             Change::Text("─".repeat(cols)),
             Change::Text("\r\n".to_string()),
             Change::Text(truncate_right(
-                &format!("{}{}", option.description, selector_state.filter_term),
+                &format!("{}: {}", option.description, selector_state.filter_term),
                 max_width,
             )),
         ];
