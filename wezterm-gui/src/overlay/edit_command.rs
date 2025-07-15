@@ -321,18 +321,23 @@ struct EditingCommandCyclicSwitch {
 }
 
 impl EditingCommandCyclicSwitch {
-    fn new(cycle: &EditCommandCyclicSwitch) -> Self {
-        let active_idx = cycle.default.as_ref().map_or_else(
+    fn new(cyclic_switch: &EditCommandCyclicSwitch) -> Self {
+        let active_idx = cyclic_switch.default.as_ref().map_or_else(
             || None,
-            |default| cycle.choices.iter().position(|choice| choice == default),
+            |default| {
+                cyclic_switch
+                    .choices
+                    .iter()
+                    .position(|choice| choice == default)
+            },
         );
         Self {
-            key: cycle.key.clone(),
+            key: cyclic_switch.key.clone(),
             active_idx,
-            description: cycle.description.clone(),
-            flag: cycle.flag.clone(),
-            choices: cycle.choices.clone(),
-            allow_nil: cycle.allow_nil,
+            description: cyclic_switch.description.clone(),
+            flag: cyclic_switch.flag.clone(),
+            choices: cyclic_switch.choices.clone(),
+            allow_nil: cyclic_switch.allow_nil,
         }
     }
 
