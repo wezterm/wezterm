@@ -540,6 +540,18 @@ pub struct EditCommandSwitch {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct EditCommandCyclicSwitch {
+    pub key: String,
+    #[dynamic(default)]
+    pub default: Option<String>,
+    pub description: String,
+    pub flag: String,
+    pub choices: Vec<String>,
+    #[dynamic(default = "crate::default_true")]
+    pub allow_nil: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct EditCommandOption {
     pub key: String,
     #[dynamic(default)]
@@ -566,6 +578,8 @@ pub struct EditCommandSection {
     pub switches: Option<Vec<EditCommandSwitch>>,
     #[dynamic(default)]
     pub options: Option<Vec<EditCommandOption>>,
+    #[dynamic(default)]
+    pub cyclic_switches: Option<Vec<EditCommandCyclicSwitch>>,
     #[dynamic(default)]
     pub arguments: Option<Vec<EditCommandArgument>>,
 }

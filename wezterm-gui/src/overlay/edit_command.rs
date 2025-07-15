@@ -2,8 +2,8 @@ use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
 use config::configuration;
 use config::keyassignment::{
-    EditCommand, EditCommandArgument, EditCommandOption, EditCommandSection, EditCommandSwitch,
-    KeyAssignment,
+    EditCommand, EditCommandArgument, EditCommandCyclicSwitch, EditCommandOption,
+    EditCommandSection, EditCommandSwitch, KeyAssignment,
 };
 use config::{AnsiColor, ColorAttribute};
 use luahelper::impl_lua_conversion_dynamic;
@@ -68,6 +68,7 @@ enum EditingCommandEntity {
     EditingCommandOption(Rc<RefCell<EditingCommandOption>>),
     EditingCommandSwitch(Rc<RefCell<EditingCommandSwitch>>),
     EditingCommandArgument(Rc<RefCell<EditingCommandArgument>>),
+    EditingCommandCyclicSwitch(Rc<RefCell<EditingCommandCyclicSwitch>>),
 }
 
 struct SelectorState {
@@ -256,6 +257,32 @@ impl EditingCommandOption {
     }
 }
 
+struct EditingCommandCyclicSwitch {
+    pub key: String,
+    pub active_idx: Option<usize>,
+    pub description: String,
+    pub flag: String,
+    pub choices: Vec<String>,
+    pub allow_nil: bool,
+}
+
+impl EditingCommandCyclicSwitch {
+    fn new(cycle: &EditCommandCyclicSwitch) -> Self {
+        let active_idx = cycle.default.as_ref().map_or_else(
+            || None,
+            |default| cycle.choices.iter().position(|choice| choice == default),
+        );
+        Self {
+            key: cycle.key.clone(),
+            active_idx,
+            description: cycle.description.clone(),
+            flag: cycle.flag.clone(),
+            choices: cycle.choices.clone(),
+            allow_nil: cycle.allow_nil,
+        }
+    }
+}
+
 struct EditingCommandArgument {
     key: String,
     description: String,
@@ -276,6 +303,7 @@ struct EditingCommandSection<'a> {
     header: &'a str,
     switches: Vec<Rc<RefCell<EditingCommandSwitch>>>,
     options: Vec<Rc<RefCell<EditingCommandOption>>>,
+    cyclic_switches: Vec<Rc<RefCell<EditingCommandCyclicSwitch>>>,
     arguments: Vec<Rc<RefCell<EditingCommandArgument>>>,
 }
 
@@ -299,6 +327,17 @@ impl<'a> EditingCommandSection<'a> {
                     .collect()
             },
         );
+        let cyclic_switches = section.cyclic_switches.as_ref().map_or_else(
+            || vec![],
+            |cyclic_switches| {
+                cyclic_switches
+                    .iter()
+                    .map(|cyclic_switch| {
+                        Rc::new(RefCell::new(EditingCommandCyclicSwitch::new(cyclic_switch)))
+                    })
+                    .collect()
+            },
+        );
         let arguments = section.arguments.as_ref().map_or_else(
             || vec![],
             |arguments| {
@@ -313,6 +352,7 @@ impl<'a> EditingCommandSection<'a> {
             header: &section.header,
             switches,
             options,
+            cyclic_switches,
             arguments,
         }
     }
@@ -400,6 +440,66 @@ impl<'a> EditingCommandState<'a> {
                     changes.push(Change::AllAttributes(CellAttributes::default()));
                 } else {
                     changes.push(Change::Text(switch.flag.to_string()));
+                }
+                changes.push(Change::Text(")".to_string()));
+            }
+
+            for cyclic_switch in section
+                .cyclic_switches
+                .iter()
+                .map(|cyclic_switch| cyclic_switch.borrow())
+            {
+                changes.push(Change::Text("\r\n\t".to_string()));
+                changes.push(Change::Attribute(AttributeChange::Foreground(
+                    self.colors.key_fg,
+                )));
+                changes.push(Change::Text(format!("{}", cyclic_switch.key)));
+                changes.push(Change::Attribute(AttributeChange::Foreground(
+                    ColorAttribute::Default,
+                )));
+
+                changes.push(Change::Text(format!(" {} (", cyclic_switch.description)));
+                if let Some(idx) = cyclic_switch.active_idx {
+                    changes.append(&mut vec![
+                        Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
+                        Change::Attribute(AttributeChange::Foreground(self.colors.flag_fg)),
+                        Change::Text(cyclic_switch.flag.to_string()),
+                        Change::AllAttributes(CellAttributes::default()),
+                    ]);
+                    if cyclic_switch.choices.first().is_some() {
+                        let mut prefix = " [";
+                        for (cur_idx, choice) in cyclic_switch.choices.iter().enumerate() {
+                            if cur_idx == idx {
+                                changes.append(&mut vec![
+                                    Change::Text(prefix.to_string()),
+                                    Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
+                                    Change::Attribute(AttributeChange::Foreground(
+                                        self.colors.flag_fg,
+                                    )),
+                                    Change::Text(choice.to_string()),
+                                    Change::AllAttributes(CellAttributes::default()),
+                                ]);
+                            } else {
+                                changes.push(Change::Text(format!("{}{}", prefix, choice)));
+                            }
+                            if cur_idx == 0 {
+                                prefix = "|";
+                            }
+                        }
+                        changes.push(Change::Text("]".to_string()));
+                    }
+                } else {
+                    changes.push(Change::Text(cyclic_switch.flag.to_string()));
+                    if cyclic_switch.choices.first().is_some() {
+                        let mut prefix = " [";
+                        for (cur_idx, choice) in cyclic_switch.choices.iter().enumerate() {
+                            changes.push(Change::Text(format!("{}{}", prefix, choice)));
+                            if cur_idx == 0 {
+                                prefix = "|";
+                            }
+                        }
+                        changes.push(Change::Text("]".to_string()));
+                    }
                 }
                 changes.push(Change::Text(")".to_string()));
             }
@@ -644,6 +744,33 @@ impl<'a> EditingCommandState<'a> {
                                         self.cur_node = Rc::clone(&self.root_node);
                                         self.render(term)?;
                                     }
+                                    EditingCommandEntity::EditingCommandCyclicSwitch(
+                                        cyclic_switch,
+                                    ) => {
+                                        {
+                                            let mut cyclic_switch = cyclic_switch.borrow_mut();
+                                            let cyclic_switch = cyclic_switch.deref_mut();
+
+                                            if cyclic_switch.choices.first().is_some() {
+                                                if let Some(idx) = cyclic_switch.active_idx {
+                                                    if idx == cyclic_switch.choices.len() - 1 {
+                                                        cyclic_switch.active_idx =
+                                                            if cyclic_switch.allow_nil {
+                                                                None
+                                                            } else {
+                                                                Some(0)
+                                                            };
+                                                    } else {
+                                                        cyclic_switch.active_idx.replace(idx + 1);
+                                                    }
+                                                } else {
+                                                    cyclic_switch.active_idx = Some(0);
+                                                }
+                                            }
+                                        }
+                                        self.cur_node = Rc::clone(&self.root_node);
+                                        self.render(term)?;
+                                    }
                                     EditingCommandEntity::EditingCommandArgument(
                                         positional_arg,
                                     ) => {
@@ -791,15 +918,23 @@ struct EditedCommandOption {
 }
 
 #[derive(FromDynamic, ToDynamic)]
+struct EditedCommandCyclicSwitch {
+    flag: String,
+    value: Option<String>,
+}
+
+#[derive(FromDynamic, ToDynamic)]
 struct EditedCommand {
     switches: Vec<EditedCommandSwitch>,
     options: Vec<EditedCommandOption>,
+    cyclic_switches: Vec<EditedCommandCyclicSwitch>,
 }
 
 impl EditedCommand {
     fn new(state: &EditingCommandState) -> Self {
         let mut switches: Vec<EditedCommandSwitch> = vec![];
         let mut options: Vec<EditedCommandOption> = vec![];
+        let mut cyclic_switches: Vec<EditedCommandCyclicSwitch> = vec![];
 
         for section in &state.sections {
             for switch in section.switches.iter().map(|switch| switch.borrow()) {
@@ -816,9 +951,26 @@ impl EditedCommand {
                     value: option.value.clone(),
                 });
             }
+            for cyclic_switch in section
+                .cyclic_switches
+                .iter()
+                .map(|cyclic_switch| cyclic_switch.borrow())
+            {
+                let cyclic_switch = cyclic_switch.deref();
+                cyclic_switches.push(EditedCommandCyclicSwitch {
+                    flag: cyclic_switch.flag.clone(),
+                    value: cyclic_switch
+                        .active_idx
+                        .map_or_else(|| None, |idx| cyclic_switch.choices.get(idx).cloned()),
+                });
+            }
         }
 
-        Self { switches, options }
+        Self {
+            switches,
+            options,
+            cyclic_switches,
+        }
     }
 }
 
@@ -875,6 +1027,12 @@ pub fn show_edit_command_overlay(
             state.root_node.borrow_mut().add_word(
                 &option.borrow().key,
                 EditingCommandEntity::EditingCommandOption(Rc::clone(option)),
+            )
+        }
+        for cyclic_switch in &section.cyclic_switches {
+            state.root_node.borrow_mut().add_word(
+                &cyclic_switch.borrow().key,
+                EditingCommandEntity::EditingCommandCyclicSwitch(Rc::clone(cyclic_switch)),
             )
         }
         for positional_arg in &section.arguments {
