@@ -503,11 +503,11 @@ impl<'a> EditingCommandState<'a> {
         if max_items != selector_state.max_items {
             selector_state.max_items = max_items;
         }
-        let input_selector_size = 1 + selector_state.choices.len().min(max_items);
+        let input_selector_size = selector_state.choices.len().min(max_items);
         let mut changes = vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
-                y: Position::EndRelative(input_selector_size),
+                y: Position::EndRelative(1 + input_selector_size),
             },
             Change::ClearToEndOfScreen(ColorAttribute::Default),
             Change::Text("─".repeat(cols)),
@@ -550,6 +550,15 @@ impl<'a> EditingCommandState<'a> {
             }
             changes.push(Change::AllAttributes(CellAttributes::default()));
         }
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(
+                    2 + option.description.len() + selector_state.filter_term.len(),
+                ),
+                y: Position::EndRelative(input_selector_size),
+            },
+            Change::CursorVisibility(CursorVisibility::Visible),
+        ]);
 
         term.render(&changes)?;
 
@@ -618,6 +627,7 @@ impl<'a> EditingCommandState<'a> {
                 }) if selector_state => {
                     self.selector_state = None;
                     self.cur_node = Rc::clone(&self.root_node);
+                    term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
                     self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
@@ -634,6 +644,7 @@ impl<'a> EditingCommandState<'a> {
                                 option.borrow_mut().value = Some(entry);
                                 self.selector_state = None;
                                 self.cur_node = Rc::clone(&self.root_node);
+                                term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
                                 self.render(term)?;
                             }
                             _ => {}
