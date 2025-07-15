@@ -572,16 +572,17 @@ pub struct EditCommandArgument {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub enum EditCommandEntry {
+    EditCommandSwitch(EditCommandSwitch),
+    EditCommandOption(EditCommandOption),
+    EditCommandCyclicSwitch(EditCommandCyclicSwitch),
+    EditCommandArgument(EditCommandArgument),
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct EditCommandSection {
     pub header: String,
-    #[dynamic(default)]
-    pub switches: Option<Vec<EditCommandSwitch>>,
-    #[dynamic(default)]
-    pub options: Option<Vec<EditCommandOption>>,
-    #[dynamic(default)]
-    pub cyclic_switches: Option<Vec<EditCommandCyclicSwitch>>,
-    #[dynamic(default)]
-    pub arguments: Option<Vec<EditCommandArgument>>,
+    pub entries: Vec<EditCommandEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
