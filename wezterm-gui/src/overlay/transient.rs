@@ -281,7 +281,7 @@ struct TransientSwitch {
 
 impl Renderable for TransientSwitch {
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
-        changes.push(Change::Text("\r\n\t".to_string()));
+        changes.push(Change::Text("\r\n  ".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
         )));
@@ -330,7 +330,7 @@ struct TransientOption {
 
 impl Renderable for TransientOption {
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
-        changes.push(Change::Text("\r\n\t".to_string()));
+        changes.push(Change::Text("\r\n  ".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
         )));
@@ -383,7 +383,7 @@ struct TransientCyclicSwitch {
 
 impl Renderable for TransientCyclicSwitch {
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
-        changes.push(Change::Text("\r\n\t".to_string()));
+        changes.push(Change::Text("\r\n  ".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
         )));
@@ -462,7 +462,7 @@ struct TransientArgument {
 
 impl Renderable for TransientArgument {
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
-        changes.push(Change::Text("\r\n\t".to_string()));
+        changes.push(Change::Text("\r\n  ".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
         )));
