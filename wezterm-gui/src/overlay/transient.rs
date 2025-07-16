@@ -92,21 +92,38 @@ impl Renderable for TransientEntry {
     }
 }
 
-impl From<&KTransientEntry> for TransientEntry {
-    fn from(value: &KTransientEntry) -> Self {
-        match value {
+impl TransientEntry {
+    fn new(entry: &KTransientEntry, root: &mut TrieNode) -> Self {
+        match entry {
             KTransientEntry::TransientSwitch(switch) => {
-                Self::TransientSwitch(Rc::new(RefCell::new(TransientSwitch::from(switch))))
+                let new_switch = Rc::new(RefCell::new(TransientSwitch::from(switch)));
+                let cloned_switch = Rc::clone(&new_switch);
+                let entry = Self::TransientSwitch(cloned_switch);
+                root.add_word(&switch.key, entry);
+                Self::TransientSwitch(new_switch)
             }
             KTransientEntry::TransientOption(option) => {
-                Self::TransientOption(Rc::new(RefCell::new(TransientOption::from(option))))
+                let new_option = Rc::new(RefCell::new(TransientOption::from(option)));
+                let cloned_option = Rc::clone(&new_option);
+                let entry = Self::TransientOption(cloned_option);
+                root.add_word(&option.key, entry);
+                Self::TransientOption(new_option)
             }
-            KTransientEntry::TransientCyclicSwitch(cyclic_switch) => Self::TransientCyclicSwitch(
-                Rc::new(RefCell::new(TransientCyclicSwitch::from(cyclic_switch))),
-            ),
-            KTransientEntry::TransientArgument(positional_arg) => Self::TransientArgument(Rc::new(
-                RefCell::new(TransientArgument::from(positional_arg)),
-            )),
+            KTransientEntry::TransientCyclicSwitch(cyclic_switch) => {
+                let new_cyclic_switch =
+                    Rc::new(RefCell::new(TransientCyclicSwitch::from(cyclic_switch)));
+                let cloned_cyclic_switch = Rc::clone(&new_cyclic_switch);
+                let entry = Self::TransientCyclicSwitch(cloned_cyclic_switch);
+                root.add_word(&cyclic_switch.key, entry);
+                Self::TransientCyclicSwitch(new_cyclic_switch)
+            }
+            KTransientEntry::TransientArgument(positional_arg) => {
+                let new_argument = Rc::new(RefCell::new(TransientArgument::from(positional_arg)));
+                let cloned_argument = Rc::clone(&new_argument);
+                let entry = Self::TransientArgument(cloned_argument);
+                root.add_word(&positional_arg.key, entry);
+                Self::TransientArgument(new_argument)
+            }
         }
     }
 }
@@ -490,16 +507,15 @@ impl<'a> Renderable for TransientSection<'a> {
     }
 }
 
-impl<'a> From<&'a KTransientSection> for TransientSection<'a> {
-    fn from(value: &'a KTransientSection) -> Self {
-        let entries = value
-            .entries
-            .iter()
-            .map(|entry| TransientEntry::from(entry))
-            .collect();
+impl<'a> TransientSection<'a> {
+    fn new(section: &'a KTransientSection, root: &mut TrieNode) -> Self {
+        let mut entries = vec![];
+        for entry in &section.entries {
+            entries.push(TransientEntry::new(entry, root));
+        }
 
         Self {
-            header: &value.header,
+            header: &section.header,
             entries,
         }
     }
@@ -519,17 +535,19 @@ struct TransientState<'a> {
 
 impl<'a> TransientState<'a> {
     fn new(args: &'a KTransientMenu, window: GuiWin, pane: MuxPane) -> Self {
-        let root_node = Rc::new(RefCell::new(TrieNode::new()));
+        let mut trie_node = TrieNode::new();
+        let mut sections = vec![];
+        for section in &args.sections {
+            let transient_section = TransientSection::new(section, &mut trie_node);
+            sections.push(transient_section);
+        }
+        let root_node = Rc::new(RefCell::new(trie_node));
         let cur_node = Rc::clone(&root_node);
         Self {
             window,
             pane,
             description: &args.description,
-            sections: args
-                .sections
-                .iter()
-                .map(|section| TransientSection::from(section))
-                .collect(),
+            sections,
             colors: TransientColors::new(),
             root_node,
             cur_node,
@@ -1000,37 +1018,6 @@ pub fn show_transient_menu_overlay(
     state
         .changes
         .push(Change::CursorVisibility(CursorVisibility::Hidden));
-
-    for section in &state.sections {
-        for entry in &section.entries {
-            match entry {
-                TransientEntry::TransientSwitch(switch) => {
-                    state.root_node.borrow_mut().add_word(
-                        &switch.borrow().key,
-                        TransientEntry::TransientSwitch(Rc::clone(&switch)),
-                    );
-                }
-                TransientEntry::TransientOption(option) => {
-                    state.root_node.borrow_mut().add_word(
-                        &option.borrow().key,
-                        TransientEntry::TransientOption(Rc::clone(&option)),
-                    );
-                }
-                TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
-                    state.root_node.borrow_mut().add_word(
-                        &cyclic_switch.borrow().key,
-                        TransientEntry::TransientCyclicSwitch(Rc::clone(&cyclic_switch)),
-                    );
-                }
-                TransientEntry::TransientArgument(positional_arg) => {
-                    state.root_node.borrow_mut().add_word(
-                        &positional_arg.borrow().key,
-                        TransientEntry::TransientArgument(Rc::clone(&positional_arg)),
-                    );
-                }
-            }
-        }
-    }
 
     state.render(&mut term)?;
     state.run_loop(&mut term)
