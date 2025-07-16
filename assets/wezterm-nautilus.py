@@ -19,11 +19,18 @@ import os.path
 from gi import require_version
 from gi.repository import Nautilus, GObject, Gio, GLib
 
+GSETTINGS_PATH = "org.wezfurlong.wezterm"
+
+GSETTINGS_NEW_TAB = "new-tab"
 
 class OpenInWezTermAction(GObject.GObject, Nautilus.MenuProvider):
+
+    new_tab = GObject.Property(type=bool, default=False)
+
     def __init__(self):
         super().__init__()
         session = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
         self._systemd = None
         # Check if the this system runs under systemd, per sd_booted(3)
         if os.path.isdir('/run/systemd/system/'):
@@ -34,8 +41,15 @@ class OpenInWezTermAction(GObject.GObject, Nautilus.MenuProvider):
                     "/org/freedesktop/systemd1",
                     "org.freedesktop.systemd1.Manager", None)
 
+        source = Gio.SettingsSchemaSource.get_default()
+        if source is not None and source.lookup(GSETTINGS_PATH, True):
+            _gsettings = Gio.Settings.new(GSETTINGS_PATH)
+            _gsettings.bind(GSETTINGS_NEW_TAB, self, "new-tab", Gio.SettingsBindFlags.DEFAULT)
+
     def _open_terminal(self, path):
         cmd = ['wezterm', 'start', '--cwd', path]
+        if self.new_tab:
+            cmd.append('--new-tab')
         child = Gio.Subprocess.new(cmd, Gio.SubprocessFlags.NONE)
         if self._systemd:
             # Move new terminal into a dedicated systemd scope to make systemd
