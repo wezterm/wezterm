@@ -88,6 +88,25 @@ impl TransientEntry {
     }
 }
 
+impl From<&KTransientEntry> for TransientEntry {
+    fn from(value: &KTransientEntry) -> Self {
+        match value {
+            KTransientEntry::TransientSwitch(switch) => {
+                Self::TransientSwitch(Rc::new(RefCell::new(TransientSwitch::from(switch))))
+            }
+            KTransientEntry::TransientOption(option) => {
+                Self::TransientOption(Rc::new(RefCell::new(TransientOption::from(option))))
+            }
+            KTransientEntry::TransientCyclicSwitch(cyclic_switch) => Self::TransientCyclicSwitch(
+                Rc::new(RefCell::new(TransientCyclicSwitch::from(cyclic_switch))),
+            ),
+            KTransientEntry::TransientArgument(positional_arg) => Self::TransientArgument(Rc::new(
+                RefCell::new(TransientArgument::from(positional_arg)),
+            )),
+        }
+    }
+}
+
 struct SelectorState {
     active_idx: usize,
     max_items: usize,
@@ -240,15 +259,6 @@ struct TransientSwitch {
 }
 
 impl TransientSwitch {
-    fn new(switch: &KTransientSwitch) -> Self {
-        Self {
-            key: switch.key.clone(),
-            value: switch.default,
-            description: switch.description.clone(),
-            flag: switch.flag.clone(),
-        }
-    }
-
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -276,6 +286,17 @@ impl TransientSwitch {
     }
 }
 
+impl From<&KTransientSwitch> for TransientSwitch {
+    fn from(value: &KTransientSwitch) -> Self {
+        Self {
+            key: value.key.clone(),
+            value: value.default,
+            description: value.description.clone(),
+            flag: value.flag.clone(),
+        }
+    }
+}
+
 struct TransientOption {
     key: String,
     value: Option<String>,
@@ -287,18 +308,6 @@ struct TransientOption {
 }
 
 impl TransientOption {
-    fn new(option: &KTransientOption) -> Self {
-        Self {
-            key: option.key.clone(),
-            value: option.default.clone(),
-            default: option.default.clone(),
-            description: option.description.clone(),
-            flag: option.flag.clone(),
-            allow_nil: option.allow_nil,
-            choices: option.choices.clone(),
-        }
-    }
-
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -328,6 +337,20 @@ impl TransientOption {
     }
 }
 
+impl From<&KTransientOption> for TransientOption {
+    fn from(value: &KTransientOption) -> Self {
+        Self {
+            key: value.key.clone(),
+            value: value.default.clone(),
+            default: value.default.clone(),
+            description: value.description.clone(),
+            flag: value.flag.clone(),
+            allow_nil: value.allow_nil,
+            choices: value.choices.clone(),
+        }
+    }
+}
+
 struct TransientCyclicSwitch {
     pub key: String,
     pub active_idx: Option<usize>,
@@ -338,26 +361,6 @@ struct TransientCyclicSwitch {
 }
 
 impl TransientCyclicSwitch {
-    fn new(cyclic_switch: &KTransientCyclicSwitch) -> Self {
-        let active_idx = cyclic_switch.default.as_ref().map_or_else(
-            || None,
-            |default| {
-                cyclic_switch
-                    .choices
-                    .iter()
-                    .position(|choice| choice == default)
-            },
-        );
-        Self {
-            key: cyclic_switch.key.clone(),
-            active_idx,
-            description: cyclic_switch.description.clone(),
-            flag: cyclic_switch.flag.clone(),
-            choices: cyclic_switch.choices.clone(),
-            allow_nil: cyclic_switch.allow_nil,
-        }
-    }
-
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -413,6 +416,23 @@ impl TransientCyclicSwitch {
     }
 }
 
+impl From<&KTransientCyclicSwitch> for TransientCyclicSwitch {
+    fn from(value: &KTransientCyclicSwitch) -> Self {
+        let active_idx = value.default.as_ref().map_or_else(
+            || None,
+            |default| value.choices.iter().position(|choice| choice == default),
+        );
+        Self {
+            key: value.key.clone(),
+            active_idx,
+            description: value.description.clone(),
+            flag: value.flag.clone(),
+            choices: value.choices.clone(),
+            allow_nil: value.allow_nil,
+        }
+    }
+}
+
 struct TransientArgument {
     key: String,
     description: String,
@@ -420,14 +440,6 @@ struct TransientArgument {
 }
 
 impl TransientArgument {
-    fn new(argument: &KTransientArgument) -> Self {
-        Self {
-            key: argument.key.clone(),
-            description: argument.description.clone(),
-            action: argument.action.clone(),
-        }
-    }
-
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -441,42 +453,22 @@ impl TransientArgument {
     }
 }
 
+impl From<&KTransientArgument> for TransientArgument {
+    fn from(value: &KTransientArgument) -> Self {
+        Self {
+            key: value.key.clone(),
+            description: value.description.clone(),
+            action: value.action.clone(),
+        }
+    }
+}
+
 struct TransientSection<'a> {
     header: &'a str,
     entries: Vec<TransientEntry>,
 }
 
 impl<'a> TransientSection<'a> {
-    fn new(section: &'a KTransientSection) -> Self {
-        let entries = section
-            .entries
-            .iter()
-            .map(|entry| match entry {
-                KTransientEntry::TransientSwitch(switch) => TransientEntry::TransientSwitch(
-                    Rc::new(RefCell::new(TransientSwitch::new(switch))),
-                ),
-                KTransientEntry::TransientOption(option) => TransientEntry::TransientOption(
-                    Rc::new(RefCell::new(TransientOption::new(option))),
-                ),
-                KTransientEntry::TransientCyclicSwitch(cyclic_switch) => {
-                    TransientEntry::TransientCyclicSwitch(Rc::new(RefCell::new(
-                        TransientCyclicSwitch::new(cyclic_switch),
-                    )))
-                }
-                KTransientEntry::TransientArgument(positional_arg) => {
-                    TransientEntry::TransientArgument(Rc::new(RefCell::new(
-                        TransientArgument::new(positional_arg),
-                    )))
-                }
-            })
-            .collect();
-
-        Self {
-            header: &section.header,
-            entries,
-        }
-    }
-
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\r\n".to_string()));
         changes.push(Change::Attribute(AttributeChange::Intensity(
@@ -490,6 +482,21 @@ impl<'a> TransientSection<'a> {
 
         for entry in &self.entries {
             entry.render(colors, changes);
+        }
+    }
+}
+
+impl<'a> From<&'a KTransientSection> for TransientSection<'a> {
+    fn from(value: &'a KTransientSection) -> Self {
+        let entries = value
+            .entries
+            .iter()
+            .map(|entry| TransientEntry::from(entry))
+            .collect();
+
+        Self {
+            header: &value.header,
+            entries,
         }
     }
 }
@@ -517,7 +524,7 @@ impl<'a> TransientState<'a> {
             sections: args
                 .sections
                 .iter()
-                .map(|section| TransientSection::new(section))
+                .map(|section| TransientSection::from(section))
                 .collect(),
             colors: TransientColors::new(),
             root_node,
@@ -676,7 +683,7 @@ impl<'a> TransientState<'a> {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
-        let result = TransientResult::new(&self.sections);
+        let result = TransientResult::from(&self.sections);
         promise::spawn::spawn_into_main_thread(async move {
             trampoline(name, window, pane, result);
             anyhow::Result::<()>::Ok(())
@@ -910,11 +917,11 @@ struct TransientResult {
 }
 impl_lua_conversion_dynamic!(TransientResult);
 
-impl TransientResult {
-    fn new(sections: &Vec<TransientSection>) -> Self {
+impl<'a> From<&'a Vec<TransientSection<'a>>> for TransientResult {
+    fn from(value: &'a Vec<TransientSection>) -> Self {
         let mut entries: Vec<TransientResultEntry> = vec![];
 
-        for section in sections {
+        for section in value {
             for entry in &section.entries {
                 match entry {
                     TransientEntry::TransientOption(option) => {
