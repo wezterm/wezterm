@@ -66,6 +66,10 @@ impl LineEditorHost for PromptHost {
     }
 }
 
+trait Renderable {
+    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>);
+}
+
 enum TransientEntry {
     TransientOption(Rc<RefCell<TransientOption>>),
     TransientSwitch(Rc<RefCell<TransientSwitch>>),
@@ -73,7 +77,7 @@ enum TransientEntry {
     TransientCyclicSwitch(Rc<RefCell<TransientCyclicSwitch>>),
 }
 
-impl TransientEntry {
+impl Renderable for TransientEntry {
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         match self {
             Self::TransientOption(option) => option.borrow().render(colors, changes),
@@ -258,7 +262,7 @@ struct TransientSwitch {
     flag: String,
 }
 
-impl TransientSwitch {
+impl Renderable for TransientSwitch {
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -307,7 +311,7 @@ struct TransientOption {
     choices: Option<Vec<String>>,
 }
 
-impl TransientOption {
+impl Renderable for TransientOption {
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -360,7 +364,7 @@ struct TransientCyclicSwitch {
     pub allow_nil: bool,
 }
 
-impl TransientCyclicSwitch {
+impl Renderable for TransientCyclicSwitch {
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -439,7 +443,7 @@ struct TransientArgument {
     action: Box<KeyAssignment>,
 }
 
-impl TransientArgument {
+impl Renderable for TransientArgument {
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
@@ -468,7 +472,7 @@ struct TransientSection<'a> {
     entries: Vec<TransientEntry>,
 }
 
-impl<'a> TransientSection<'a> {
+impl<'a> Renderable for TransientSection<'a> {
     fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\r\n".to_string()));
         changes.push(Change::Attribute(AttributeChange::Intensity(
