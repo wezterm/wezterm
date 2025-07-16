@@ -30,8 +30,8 @@ use ::wezterm_term::input::{ClickPosition, MouseButton as TMB};
 use ::window::*;
 use anyhow::{anyhow, ensure, Context};
 use config::keyassignment::{
-    Confirmation, EditCommand, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern,
-    PromptInputLine, QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
+    Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
+    QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize, TransientMenu,
 };
 use config::window::WindowLevel;
 use config::{
@@ -2338,7 +2338,7 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
-    fn show_edit_command(&mut self, args: &EditCommand) {
+    fn show_transient_menu(&mut self, args: &TransientMenu) {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
             Some(tab) => tab,
@@ -2356,7 +2356,7 @@ impl TermWindow {
         let pane = MuxPane(pane.pane_id());
 
         let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
-            crate::overlay::edit_command::show_edit_command_overlay(term, args, gui_win, pane)
+            crate::overlay::transient::show_transient_menu_overlay(term, args, gui_win, pane)
         });
         self.assign_overlay(tab.tab_id(), overlay);
         promise::spawn::spawn(future).detach();
@@ -3176,7 +3176,7 @@ impl TermWindow {
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
-            EditCommand(args) => self.show_edit_command(args),
+            TransientMenu(args) => self.show_transient_menu(args),
         };
         Ok(PerformAssignmentResult::Handled)
     }
@@ -3628,22 +3628,6 @@ impl TermWindow {
                     .unwrap_or_default();
                 MuxPattern::CaseSensitiveString(first_line)
             }
-        }
-    }
-
-    pub fn tab_overlay_layer(&self, layer: TabOverlayLayer) -> usize {
-        match layer {
-            TabOverlayLayer::DisplayText => 0,
-            TabOverlayLayer::EditCommand => 1,
-            TabOverlayLayer::InputSelector
-            | TabOverlayLayer::PromptInputLine
-            | TabOverlayLayer::Confirmation
-            | TabOverlayLayer::DebugOverlay
-            | TabOverlayLayer::Launcher => 2,
-            TabOverlayLayer::DisplayKeys => 3,
-            TabOverlayLayer::CloseTab
-            | TabOverlayLayer::CloseWindow
-            | TabOverlayLayer::QuitApplication => 3,
         }
     }
 }

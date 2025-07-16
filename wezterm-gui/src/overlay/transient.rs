@@ -2,8 +2,10 @@ use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
 use config::configuration;
 use config::keyassignment::{
-    EditCommand, EditCommandArgument, EditCommandCyclicSwitch, EditCommandEntry, EditCommandOption,
-    EditCommandSection, EditCommandSwitch, KeyAssignment,
+    KeyAssignment, TransientArgument as KTransientArgument,
+    TransientCyclicSwitch as KTransientCyclicSwitch, TransientEntry as KTransientEntry,
+    TransientMenu as KTransientMenu, TransientOption as KTransientOption,
+    TransientSection as KTransientSection, TransientSwitch as KTransientSwitch,
 };
 use config::{AnsiColor, ColorAttribute};
 use luahelper::impl_lua_conversion_dynamic;
@@ -64,22 +66,22 @@ impl LineEditorHost for PromptHost {
     }
 }
 
-enum EditingCommandEntity {
-    EditingCommandOption(Rc<RefCell<EditingCommandOption>>),
-    EditingCommandSwitch(Rc<RefCell<EditingCommandSwitch>>),
-    EditingCommandArgument(Rc<RefCell<EditingCommandArgument>>),
-    EditingCommandCyclicSwitch(Rc<RefCell<EditingCommandCyclicSwitch>>),
+enum TransientEntry {
+    TransientOption(Rc<RefCell<TransientOption>>),
+    TransientSwitch(Rc<RefCell<TransientSwitch>>),
+    TransientArgument(Rc<RefCell<TransientArgument>>),
+    TransientCyclicSwitch(Rc<RefCell<TransientCyclicSwitch>>),
 }
 
-impl EditingCommandEntity {
-    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+impl TransientEntry {
+    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         match self {
-            Self::EditingCommandOption(option) => option.borrow().render(colors, changes),
-            Self::EditingCommandSwitch(switch) => switch.borrow().render(colors, changes),
-            Self::EditingCommandArgument(positional_arg) => {
+            Self::TransientOption(option) => option.borrow().render(colors, changes),
+            Self::TransientSwitch(switch) => switch.borrow().render(colors, changes),
+            Self::TransientArgument(positional_arg) => {
                 positional_arg.borrow().render(colors, changes)
             }
-            Self::EditingCommandCyclicSwitch(cyclic_switch) => {
+            Self::TransientCyclicSwitch(cyclic_switch) => {
                 cyclic_switch.borrow().render(colors, changes)
             }
         }
@@ -161,7 +163,7 @@ impl SelectorState {
 struct TrieNode<'a> {
     children: HashMap<char, Rc<RefCell<TrieNode<'a>>>>,
     is_end_of_word: bool,
-    entity: Option<EditingCommandEntity>,
+    entry: Option<TransientEntry>,
 }
 
 impl<'a> TrieNode<'a> {
@@ -169,26 +171,26 @@ impl<'a> TrieNode<'a> {
         Self {
             children: HashMap::new(),
             is_end_of_word: true,
-            entity: None,
+            entry: None,
         }
     }
 
-    fn add_word(&mut self, word: &str, entity: EditingCommandEntity) {
+    fn add_word(&mut self, word: &str, entry: TransientEntry) {
         match word.chars().next() {
             Some(c) => {
                 match self.children.get(&c) {
                     Some(child_node) => {
-                        child_node.borrow_mut().add_word(&word[1..], entity);
+                        child_node.borrow_mut().add_word(&word[1..], entry);
                     }
                     None => {
                         let mut new_node = TrieNode::new();
-                        new_node.add_word(&word[1..], entity);
+                        new_node.add_word(&word[1..], entry);
                         self.children.insert(c, Rc::new(RefCell::new(new_node)));
                     }
                 }
                 self.is_end_of_word = false;
             }
-            None => self.entity = Some(entity),
+            None => self.entry = Some(entry),
         }
     }
 
@@ -197,48 +199,48 @@ impl<'a> TrieNode<'a> {
     }
 }
 
-struct EditingCommandColors {
+struct TransientColors {
     description_fg: ColorAttribute,
     section_header_fg: ColorAttribute,
     key_fg: ColorAttribute,
     flag_fg: ColorAttribute,
 }
 
-impl EditingCommandColors {
+impl TransientColors {
     fn new() -> Self {
         let config = configuration();
         let colors = &config.resolved_palette;
 
         Self {
             description_fg: colors
-                .edit_command_description_fg
+                .transient_description_fg
                 .unwrap_or(AnsiColor::Teal.into())
                 .into(),
             section_header_fg: colors
-                .edit_command_section_header_fg
+                .transient_section_header_fg
                 .unwrap_or(AnsiColor::Navy.into())
                 .into(),
             key_fg: colors
-                .edit_command_key_fg
+                .transient_entry_key_fg
                 .unwrap_or(AnsiColor::Purple.into())
                 .into(),
             flag_fg: colors
-                .edit_command_flag_fg
+                .transient_entry_flag_fg
                 .unwrap_or(AnsiColor::Red.into())
                 .into(),
         }
     }
 }
 
-struct EditingCommandSwitch {
+struct TransientSwitch {
     key: String,
     value: bool,
     description: String,
     flag: String,
 }
 
-impl EditingCommandSwitch {
-    fn new(switch: &EditCommandSwitch) -> Self {
+impl TransientSwitch {
+    fn new(switch: &KTransientSwitch) -> Self {
         Self {
             key: switch.key.clone(),
             value: switch.default,
@@ -247,7 +249,7 @@ impl EditingCommandSwitch {
         }
     }
 
-    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
@@ -274,7 +276,7 @@ impl EditingCommandSwitch {
     }
 }
 
-struct EditingCommandOption {
+struct TransientOption {
     key: String,
     value: Option<String>,
     default: Option<String>,
@@ -284,8 +286,8 @@ struct EditingCommandOption {
     choices: Option<Vec<String>>,
 }
 
-impl EditingCommandOption {
-    fn new(option: &EditCommandOption) -> Self {
+impl TransientOption {
+    fn new(option: &KTransientOption) -> Self {
         Self {
             key: option.key.clone(),
             value: option.default.clone(),
@@ -297,7 +299,7 @@ impl EditingCommandOption {
         }
     }
 
-    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
@@ -326,7 +328,7 @@ impl EditingCommandOption {
     }
 }
 
-struct EditingCommandCyclicSwitch {
+struct TransientCyclicSwitch {
     pub key: String,
     pub active_idx: Option<usize>,
     pub description: String,
@@ -335,8 +337,8 @@ struct EditingCommandCyclicSwitch {
     pub allow_nil: bool,
 }
 
-impl EditingCommandCyclicSwitch {
-    fn new(cyclic_switch: &EditCommandCyclicSwitch) -> Self {
+impl TransientCyclicSwitch {
+    fn new(cyclic_switch: &KTransientCyclicSwitch) -> Self {
         let active_idx = cyclic_switch.default.as_ref().map_or_else(
             || None,
             |default| {
@@ -356,7 +358,7 @@ impl EditingCommandCyclicSwitch {
         }
     }
 
-    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
@@ -411,14 +413,14 @@ impl EditingCommandCyclicSwitch {
     }
 }
 
-struct EditingCommandArgument {
+struct TransientArgument {
     key: String,
     description: String,
     action: Box<KeyAssignment>,
 }
 
-impl EditingCommandArgument {
-    fn new(argument: &EditCommandArgument) -> Self {
+impl TransientArgument {
+    fn new(argument: &KTransientArgument) -> Self {
         Self {
             key: argument.key.clone(),
             description: argument.description.clone(),
@@ -426,7 +428,7 @@ impl EditingCommandArgument {
         }
     }
 
-    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\t".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
@@ -439,35 +441,31 @@ impl EditingCommandArgument {
     }
 }
 
-struct EditingCommandSection<'a> {
+struct TransientSection<'a> {
     header: &'a str,
-    entities: Vec<EditingCommandEntity>,
+    entries: Vec<TransientEntry>,
 }
 
-impl<'a> EditingCommandSection<'a> {
-    fn new(section: &'a EditCommandSection) -> Self {
+impl<'a> TransientSection<'a> {
+    fn new(section: &'a KTransientSection) -> Self {
         let entries = section
             .entries
             .iter()
             .map(|entry| match entry {
-                EditCommandEntry::EditCommandSwitch(switch) => {
-                    EditingCommandEntity::EditingCommandSwitch(Rc::new(RefCell::new(
-                        EditingCommandSwitch::new(switch),
+                KTransientEntry::TransientSwitch(switch) => TransientEntry::TransientSwitch(
+                    Rc::new(RefCell::new(TransientSwitch::new(switch))),
+                ),
+                KTransientEntry::TransientOption(option) => TransientEntry::TransientOption(
+                    Rc::new(RefCell::new(TransientOption::new(option))),
+                ),
+                KTransientEntry::TransientCyclicSwitch(cyclic_switch) => {
+                    TransientEntry::TransientCyclicSwitch(Rc::new(RefCell::new(
+                        TransientCyclicSwitch::new(cyclic_switch),
                     )))
                 }
-                EditCommandEntry::EditCommandOption(option) => {
-                    EditingCommandEntity::EditingCommandOption(Rc::new(RefCell::new(
-                        EditingCommandOption::new(option),
-                    )))
-                }
-                EditCommandEntry::EditCommandCyclicSwitch(cyclic_switch) => {
-                    EditingCommandEntity::EditingCommandCyclicSwitch(Rc::new(RefCell::new(
-                        EditingCommandCyclicSwitch::new(cyclic_switch),
-                    )))
-                }
-                EditCommandEntry::EditCommandArgument(positional_arg) => {
-                    EditingCommandEntity::EditingCommandArgument(Rc::new(RefCell::new(
-                        EditingCommandArgument::new(positional_arg),
+                KTransientEntry::TransientArgument(positional_arg) => {
+                    TransientEntry::TransientArgument(Rc::new(RefCell::new(
+                        TransientArgument::new(positional_arg),
                     )))
                 }
             })
@@ -475,11 +473,11 @@ impl<'a> EditingCommandSection<'a> {
 
         Self {
             header: &section.header,
-            entities: entries,
+            entries,
         }
     }
 
-    fn render(&self, colors: &EditingCommandColors, changes: &mut Vec<Change>) {
+    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
         changes.push(Change::Text("\r\n\r\n".to_string()));
         changes.push(Change::Attribute(AttributeChange::Intensity(
             Intensity::Bold,
@@ -490,26 +488,26 @@ impl<'a> EditingCommandSection<'a> {
         changes.push(Change::Text(self.header.to_string()));
         changes.push(Change::AllAttributes(CellAttributes::default()));
 
-        for entity in &self.entities {
-            entity.render(colors, changes);
+        for entry in &self.entries {
+            entry.render(colors, changes);
         }
     }
 }
 
-struct EditingCommandState<'a> {
+struct TransientState<'a> {
     window: GuiWin,
     pane: MuxPane,
     description: &'a str,
-    sections: Vec<EditingCommandSection<'a>>,
-    colors: EditingCommandColors,
+    sections: Vec<TransientSection<'a>>,
+    colors: TransientColors,
     root_node: Rc<RefCell<TrieNode<'a>>>,
     cur_node: Rc<RefCell<TrieNode<'a>>>,
     selector_state: Option<SelectorState>,
     changes: Vec<Change>,
 }
 
-impl<'a> EditingCommandState<'a> {
-    fn new(args: &'a EditCommand, window: GuiWin, pane: MuxPane) -> Self {
+impl<'a> TransientState<'a> {
+    fn new(args: &'a KTransientMenu, window: GuiWin, pane: MuxPane) -> Self {
         let root_node = Rc::new(RefCell::new(TrieNode::new()));
         let cur_node = Rc::clone(&root_node);
         Self {
@@ -519,9 +517,9 @@ impl<'a> EditingCommandState<'a> {
             sections: args
                 .sections
                 .iter()
-                .map(|section| EditingCommandSection::new(section))
+                .map(|section| TransientSection::new(section))
                 .collect(),
-            colors: EditingCommandColors::new(),
+            colors: TransientColors::new(),
             root_node,
             cur_node,
             selector_state: None,
@@ -559,7 +557,7 @@ impl<'a> EditingCommandState<'a> {
     fn line_prompt(
         &mut self,
         term: &mut TermWizTerminal,
-        option: &mut EditingCommandOption,
+        option: &mut TransientOption,
     ) -> anyhow::Result<()> {
         let size = term.get_screen_size()?;
         self.changes.append(&mut vec![
@@ -600,7 +598,7 @@ impl<'a> EditingCommandState<'a> {
     fn selector(
         &mut self,
         term: &mut TermWizTerminal,
-        option: &mut EditingCommandOption,
+        option: &mut TransientOption,
     ) -> anyhow::Result<()> {
         let size = term.get_screen_size()?;
         let cols = size.cols;
@@ -678,9 +676,9 @@ impl<'a> EditingCommandState<'a> {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
-        let edit_command = EditedCommand::new(&self);
+        let result = TransientResult::new(&self);
         promise::spawn::spawn_into_main_thread(async move {
-            trampoline(name, window, pane, edit_command);
+            trampoline(name, window, pane, result);
             anyhow::Result::<()>::Ok(())
         })
         .detach();
@@ -712,8 +710,8 @@ impl<'a> EditingCommandState<'a> {
                         Some(cur_node) => {
                             let cur_node_borrowed = cur_node.borrow();
                             if cur_node_borrowed.is_end_of_word {
-                                match cur_node_borrowed.entity.as_ref().unwrap() {
-                                    EditingCommandEntity::EditingCommandSwitch(switch) => {
+                                match cur_node_borrowed.entry.as_ref().unwrap() {
+                                    TransientEntry::TransientSwitch(switch) => {
                                         {
                                             let mut switch = switch.borrow_mut();
                                             let switch = switch.deref_mut();
@@ -722,7 +720,7 @@ impl<'a> EditingCommandState<'a> {
                                         self.cur_node = Rc::clone(&self.root_node);
                                         self.render(term)?;
                                     }
-                                    EditingCommandEntity::EditingCommandOption(option) => {
+                                    TransientEntry::TransientOption(option) => {
                                         {
                                             let mut option = option.borrow_mut();
                                             let option = option.deref_mut();
@@ -743,9 +741,7 @@ impl<'a> EditingCommandState<'a> {
                                         self.cur_node = Rc::clone(&self.root_node);
                                         self.render(term)?;
                                     }
-                                    EditingCommandEntity::EditingCommandCyclicSwitch(
-                                        cyclic_switch,
-                                    ) => {
+                                    TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
                                         {
                                             let mut cyclic_switch = cyclic_switch.borrow_mut();
                                             let cyclic_switch = cyclic_switch.deref_mut();
@@ -770,13 +766,11 @@ impl<'a> EditingCommandState<'a> {
                                         self.cur_node = Rc::clone(&self.root_node);
                                         self.render(term)?;
                                     }
-                                    EditingCommandEntity::EditingCommandArgument(
-                                        positional_arg,
-                                    ) => {
+                                    TransientEntry::TransientArgument(positional_arg) => {
                                         let positional_arg = positional_arg.borrow();
                                         let name = match *positional_arg.action {
                                             KeyAssignment::EmitEvent(ref id) => id,
-                                            _ => anyhow::bail!("EditCommand requires action to be defined by wezterm.action_callback")
+                                            _ => anyhow::bail!("TransientMenu requires action to be defined by wezterm.action_callback")
                                         };
                                         self.trigger_event(name);
                                         break;
@@ -797,8 +791,8 @@ impl<'a> EditingCommandState<'a> {
                 }) => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
-                    match cur_node.entity.as_ref() {
-                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                    match cur_node.entry.as_ref() {
+                        Some(TransientEntry::TransientOption(option)) => {
                             self.selector_state.as_mut().unwrap().move_up();
                             self.render(term)?;
                             let mut option = option.borrow_mut();
@@ -814,8 +808,8 @@ impl<'a> EditingCommandState<'a> {
                 }) => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
-                    match cur_node.entity.as_ref() {
-                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                    match cur_node.entry.as_ref() {
+                        Some(TransientEntry::TransientOption(option)) => {
                             self.selector_state.as_mut().unwrap().move_down();
                             self.render(term)?;
                             let mut option = option.borrow_mut();
@@ -844,8 +838,8 @@ impl<'a> EditingCommandState<'a> {
                     if let Some(entry) = selector_state.filtered_entries.get(active_idx).cloned() {
                         let cur_node = Rc::clone(&self.cur_node);
                         let cur_node = cur_node.borrow();
-                        match cur_node.entity.as_ref().unwrap() {
-                            EditingCommandEntity::EditingCommandOption(option) => {
+                        match cur_node.entry.as_ref().unwrap() {
+                            TransientEntry::TransientOption(option) => {
                                 option.borrow_mut().value = Some(entry);
                                 self.selector_state = None;
                                 self.cur_node = Rc::clone(&self.root_node);
@@ -863,8 +857,8 @@ impl<'a> EditingCommandState<'a> {
                 }) => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
-                    match cur_node.entity.as_ref() {
-                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                    match cur_node.entry.as_ref() {
+                        Some(TransientEntry::TransientOption(option)) => {
                             let selector_state = self.selector_state.as_mut().unwrap();
                             if selector_state.filter_term.pop().is_some() {
                                 selector_state.update_filter();
@@ -883,8 +877,8 @@ impl<'a> EditingCommandState<'a> {
                 }) => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
-                    match cur_node.entity.as_ref() {
-                        Some(EditingCommandEntity::EditingCommandOption(option)) => {
+                    match cur_node.entry.as_ref() {
+                        Some(TransientEntry::TransientOption(option)) => {
                             let selector_state = self.selector_state.as_mut().unwrap();
                             selector_state.filter_term.push(c);
                             selector_state.update_filter();
@@ -905,59 +899,59 @@ impl<'a> EditingCommandState<'a> {
 }
 
 #[derive(FromDynamic, ToDynamic)]
-struct EditedCommandSwitch {
+struct TransientResultSwitch {
     flag: String,
     value: bool,
 }
 
 #[derive(FromDynamic, ToDynamic)]
-struct EditedCommandOption {
+struct TransientResultOption {
     flag: String,
     value: Option<String>,
 }
 
 #[derive(FromDynamic, ToDynamic)]
-struct EditedCommandCyclicSwitch {
+struct TransientResultCyclicSwitch {
     flag: String,
     value: Option<String>,
 }
 
 #[derive(FromDynamic, ToDynamic)]
-struct EditedCommand {
-    switches: Vec<EditedCommandSwitch>,
-    options: Vec<EditedCommandOption>,
-    cyclic_switches: Vec<EditedCommandCyclicSwitch>,
+struct TransientResult {
+    switches: Vec<TransientResultSwitch>,
+    options: Vec<TransientResultOption>,
+    cyclic_switches: Vec<TransientResultCyclicSwitch>,
 }
 
-impl EditedCommand {
-    fn new(state: &EditingCommandState) -> Self {
-        let mut switches: Vec<EditedCommandSwitch> = vec![];
-        let mut options: Vec<EditedCommandOption> = vec![];
-        let mut cyclic_switches: Vec<EditedCommandCyclicSwitch> = vec![];
+impl TransientResult {
+    fn new(state: &TransientState) -> Self {
+        let mut switches: Vec<TransientResultSwitch> = vec![];
+        let mut options: Vec<TransientResultOption> = vec![];
+        let mut cyclic_switches: Vec<TransientResultCyclicSwitch> = vec![];
 
         for section in &state.sections {
-            for entity in &section.entities {
-                match entity {
-                    EditingCommandEntity::EditingCommandSwitch(switch) => {
+            for entry in &section.entries {
+                match entry {
+                    TransientEntry::TransientSwitch(switch) => {
                         let switch = switch.borrow();
                         let switch = switch.deref();
-                        switches.push(EditedCommandSwitch {
+                        switches.push(TransientResultSwitch {
                             flag: switch.flag.clone(),
                             value: switch.value,
                         });
                     }
-                    EditingCommandEntity::EditingCommandOption(option) => {
+                    TransientEntry::TransientOption(option) => {
                         let option = option.borrow();
                         let option = option.deref();
-                        options.push(EditedCommandOption {
+                        options.push(TransientResultOption {
                             flag: option.flag.clone(),
                             value: option.value.clone(),
                         });
                     }
-                    EditingCommandEntity::EditingCommandCyclicSwitch(cyclic_switch) => {
+                    TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
                         let cyclic_switch = cyclic_switch.borrow();
                         let cyclic_switch = cyclic_switch.deref();
-                        cyclic_switches.push(EditedCommandCyclicSwitch {
+                        cyclic_switches.push(TransientResultCyclicSwitch {
                             flag: cyclic_switch.flag.clone(),
                             value: cyclic_switch.active_idx.map_or_else(
                                 || None,
@@ -978,14 +972,12 @@ impl EditedCommand {
     }
 }
 
-impl_lua_conversion_dynamic!(EditedCommand);
+impl_lua_conversion_dynamic!(TransientResult);
 
-fn trampoline(name: String, window: GuiWin, pane: MuxPane, edited_command: EditedCommand) {
+fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: TransientResult) {
     promise::spawn::spawn(async move {
-        config::with_lua_config_on_main_thread(move |lua| {
-            do_event(lua, name, window, pane, edited_command)
-        })
-        .await
+        config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, result))
+            .await
     })
     .detach();
 }
@@ -995,10 +987,10 @@ async fn do_event(
     name: String,
     window: GuiWin,
     pane: MuxPane,
-    edited_command: EditedCommand,
+    result: TransientResult,
 ) -> anyhow::Result<()> {
     if let Some(lua) = lua {
-        let args = lua.pack_multi((window, pane, edited_command))?;
+        let args = lua.pack_multi((window, pane, result))?;
 
         if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
             log::error!("while processing {} event: {:#}", name, err);
@@ -1008,43 +1000,43 @@ async fn do_event(
     Ok(())
 }
 
-pub fn show_edit_command_overlay(
+pub fn show_transient_menu_overlay(
     mut term: TermWizTerminal,
-    args: EditCommand,
+    args: KTransientMenu,
     window: GuiWin,
     pane: MuxPane,
 ) -> anyhow::Result<()> {
     term.no_grab_mouse_in_raw_mode();
-    let mut state = EditingCommandState::new(&args, window, pane);
+    let mut state = TransientState::new(&args, window, pane);
     state
         .changes
         .push(Change::CursorVisibility(CursorVisibility::Hidden));
 
     for section in &state.sections {
-        for entity in &section.entities {
-            match entity {
-                EditingCommandEntity::EditingCommandSwitch(switch) => {
+        for entry in &section.entries {
+            match entry {
+                TransientEntry::TransientSwitch(switch) => {
                     state.root_node.borrow_mut().add_word(
                         &switch.borrow().key,
-                        EditingCommandEntity::EditingCommandSwitch(Rc::clone(&switch)),
+                        TransientEntry::TransientSwitch(Rc::clone(&switch)),
                     );
                 }
-                EditingCommandEntity::EditingCommandOption(option) => {
+                TransientEntry::TransientOption(option) => {
                     state.root_node.borrow_mut().add_word(
                         &option.borrow().key,
-                        EditingCommandEntity::EditingCommandOption(Rc::clone(&option)),
+                        TransientEntry::TransientOption(Rc::clone(&option)),
                     );
                 }
-                EditingCommandEntity::EditingCommandCyclicSwitch(cyclic_switch) => {
+                TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
                     state.root_node.borrow_mut().add_word(
                         &cyclic_switch.borrow().key,
-                        EditingCommandEntity::EditingCommandCyclicSwitch(Rc::clone(&cyclic_switch)),
+                        TransientEntry::TransientCyclicSwitch(Rc::clone(&cyclic_switch)),
                     );
                 }
-                EditingCommandEntity::EditingCommandArgument(positional_arg) => {
+                TransientEntry::TransientArgument(positional_arg) => {
                     state.root_node.borrow_mut().add_word(
                         &positional_arg.borrow().key,
-                        EditingCommandEntity::EditingCommandArgument(Rc::clone(&positional_arg)),
+                        TransientEntry::TransientArgument(Rc::clone(&positional_arg)),
                     );
                 }
             }

@@ -532,7 +532,7 @@ fn default_message() -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
-pub struct EditCommandSwitch {
+pub struct TransientSwitch {
     pub key: String,
     pub default: bool,
     pub description: String,
@@ -540,7 +540,7 @@ pub struct EditCommandSwitch {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
-pub struct EditCommandCyclicSwitch {
+pub struct TransientCyclicSwitch {
     pub key: String,
     #[dynamic(default)]
     pub default: Option<String>,
@@ -552,7 +552,7 @@ pub struct EditCommandCyclicSwitch {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
-pub struct EditCommandOption {
+pub struct TransientOption {
     pub key: String,
     #[dynamic(default)]
     pub default: Option<String>,
@@ -565,30 +565,30 @@ pub struct EditCommandOption {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
-pub struct EditCommandArgument {
+pub struct TransientArgument {
     pub key: String,
     pub description: String,
     pub action: Box<KeyAssignment>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
-pub enum EditCommandEntry {
-    EditCommandSwitch(EditCommandSwitch),
-    EditCommandOption(EditCommandOption),
-    EditCommandCyclicSwitch(EditCommandCyclicSwitch),
-    EditCommandArgument(EditCommandArgument),
+pub enum TransientEntry {
+    TransientSwitch(TransientSwitch),
+    TransientOption(TransientOption),
+    TransientCyclicSwitch(TransientCyclicSwitch),
+    TransientArgument(TransientArgument),
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
-pub struct EditCommandSection {
+pub struct TransientSection {
     pub header: String,
-    pub entries: Vec<EditCommandEntry>,
+    pub entries: Vec<TransientEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
-pub struct EditCommand {
+pub struct TransientMenu {
     pub description: String,
-    pub sections: Vec<EditCommandSection>,
+    pub sections: Vec<TransientSection>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
@@ -706,7 +706,7 @@ pub enum KeyAssignment {
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
     Confirmation(Confirmation),
-    EditCommand(EditCommand),
+    TransientMenu(TransientMenu),
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

@@ -798,7 +798,7 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Help"],
             icon: Some("cod_debug"),
         },
-        EditCommand(_) => CommandDef {
+        TransientMenu(_) => CommandDef {
             brief: "Edits provided command in a overlay".into(),
             doc: "Activates the edit command overlay and edits provided command".into(),
             keys: vec![],
