@@ -21,7 +21,7 @@ use termwiz::lineedit::{Action, BasicHistory, History, LineEditor, LineEditorHos
 use termwiz::surface::{Change, CursorVisibility, Position};
 use termwiz::terminal::Terminal;
 use termwiz_funcs::truncate_right;
-use wezterm_dynamic::{FromDynamic, ToDynamic};
+use wezterm_dynamic::{FromDynamic, ToDynamic, Value};
 use wezterm_term::{AttributeChange, CellAttributes, Intensity};
 use window::Modifiers;
 
@@ -676,7 +676,7 @@ impl<'a> TransientState<'a> {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
-        let result = TransientResult::new(&self);
+        let result = TransientResult::new(&self.sections);
         promise::spawn::spawn_into_main_thread(async move {
             trampoline(name, window, pane, result);
             anyhow::Result::<()>::Ok(())
@@ -899,80 +899,58 @@ impl<'a> TransientState<'a> {
 }
 
 #[derive(FromDynamic, ToDynamic)]
-struct TransientResultSwitch {
+struct TransientResultEntry {
     flag: String,
-    value: bool,
-}
-
-#[derive(FromDynamic, ToDynamic)]
-struct TransientResultOption {
-    flag: String,
-    value: Option<String>,
-}
-
-#[derive(FromDynamic, ToDynamic)]
-struct TransientResultCyclicSwitch {
-    flag: String,
-    value: Option<String>,
+    value: Value,
 }
 
 #[derive(FromDynamic, ToDynamic)]
 struct TransientResult {
-    switches: Vec<TransientResultSwitch>,
-    options: Vec<TransientResultOption>,
-    cyclic_switches: Vec<TransientResultCyclicSwitch>,
+    entries: Vec<TransientResultEntry>,
 }
+impl_lua_conversion_dynamic!(TransientResult);
 
 impl TransientResult {
-    fn new(state: &TransientState) -> Self {
-        let mut switches: Vec<TransientResultSwitch> = vec![];
-        let mut options: Vec<TransientResultOption> = vec![];
-        let mut cyclic_switches: Vec<TransientResultCyclicSwitch> = vec![];
+    fn new(sections: &Vec<TransientSection>) -> Self {
+        let mut entries: Vec<TransientResultEntry> = vec![];
 
-        for section in &state.sections {
+        for section in sections {
             for entry in &section.entries {
                 match entry {
-                    TransientEntry::TransientSwitch(switch) => {
-                        let switch = switch.borrow();
-                        let switch = switch.deref();
-                        switches.push(TransientResultSwitch {
-                            flag: switch.flag.clone(),
-                            value: switch.value,
-                        });
-                    }
                     TransientEntry::TransientOption(option) => {
                         let option = option.borrow();
                         let option = option.deref();
-                        options.push(TransientResultOption {
+                        entries.push(TransientResultEntry {
                             flag: option.flag.clone(),
-                            value: option.value.clone(),
+                            value: option.value.to_dynamic(),
+                        });
+                    }
+                    TransientEntry::TransientSwitch(switch) => {
+                        let switch = switch.borrow();
+                        let switch = switch.deref();
+                        entries.push(TransientResultEntry {
+                            flag: switch.flag.clone(),
+                            value: switch.value.to_dynamic(),
                         });
                     }
                     TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
                         let cyclic_switch = cyclic_switch.borrow();
                         let cyclic_switch = cyclic_switch.deref();
-                        cyclic_switches.push(TransientResultCyclicSwitch {
+                        entries.push(TransientResultEntry {
                             flag: cyclic_switch.flag.clone(),
-                            value: cyclic_switch.active_idx.map_or_else(
-                                || None,
-                                |idx| cyclic_switch.choices.get(idx).cloned(),
-                            ),
+                            value: cyclic_switch
+                                .active_idx
+                                .map_or_else(|| None, |idx| cyclic_switch.choices.get(idx).cloned())
+                                .to_dynamic(),
                         });
                     }
                     _ => {}
                 }
             }
         }
-
-        Self {
-            switches,
-            options,
-            cyclic_switches,
-        }
+        Self { entries }
     }
 }
-
-impl_lua_conversion_dynamic!(TransientResult);
 
 fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: TransientResult) {
     promise::spawn::spawn(async move {
