@@ -552,7 +552,7 @@ impl<'a> TransientState<'a> {
             root_node,
             cur_node,
             selector_state: None,
-            changes: vec![],
+            changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
         }
     }
 
@@ -1015,9 +1015,6 @@ pub fn show_transient_menu_overlay(
 ) -> anyhow::Result<()> {
     term.no_grab_mouse_in_raw_mode();
     let mut state = TransientState::new(&args, window, pane);
-    state
-        .changes
-        .push(Change::CursorVisibility(CursorVisibility::Hidden));
 
     state.render(&mut term)?;
     state.run_loop(&mut term)
