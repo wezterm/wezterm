@@ -25,6 +25,7 @@ TRIGGER_PATHS_UNIX = [
     "assets/shell-completion/**/*",
     "assets/shell-integration/**/*",
     "assets/wezterm-nautilus.py",
+    "assets/wezterm.gschema.xml",
     "assets/wezterm.appdata.xml",
     "assets/wezterm.desktop",
     "get-deps",
