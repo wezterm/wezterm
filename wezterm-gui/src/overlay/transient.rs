@@ -19,7 +19,7 @@ use std::rc::Rc;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::lineedit::{Action, BasicHistory, History, LineEditor, LineEditorHost};
 use termwiz::surface::{Change, CursorVisibility, Position};
-use termwiz::terminal::Terminal;
+use termwiz::terminal::{ScreenSize, Terminal};
 use termwiz_funcs::truncate_right;
 use wezterm_dynamic::{FromDynamic, ToDynamic, Value};
 use wezterm_term::{AttributeChange, CellAttributes, Intensity};
@@ -151,17 +151,26 @@ struct SelectorState {
     filter_term: String,
     filtered_entries: Vec<String>,
     choices: Vec<String>,
+    cols: usize,
+    selector_size: usize,
+    line_drawn: bool,
 }
 
 impl SelectorState {
-    fn new(choices: Vec<String>) -> Self {
+    fn new(choices: Vec<String>, size: &ScreenSize) -> Self {
+        let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
+        let selector_size = choices.len().min(max_items);
+
         Self {
             active_idx: 0,
-            max_items: 0,
+            max_items,
             top_row: 0,
             filter_term: String::new(),
             filtered_entries: choices.clone(),
             choices,
+            cols: size.cols,
+            selector_size,
+            line_drawn: false,
         }
     }
 
@@ -748,29 +757,40 @@ impl<'a> TransientState<'a> {
         term: &mut TermWizTerminal,
         option: &mut TransientOption,
     ) -> anyhow::Result<()> {
-        let size = term.get_screen_size()?;
-        let cols = size.cols;
-        let max_width = cols.saturating_sub(6);
-        let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
         let selector_state = self.selector_state.as_mut().unwrap();
-        if max_items != selector_state.max_items {
-            selector_state.max_items = max_items;
-        }
-        let input_selector_size = selector_state.choices.len().min(max_items);
+
+        let cols = selector_state.cols;
+        let max_width = cols.saturating_sub(6);
+
         let changes = &mut self.changes;
-        changes.append(&mut vec![
-            Change::CursorPosition {
+
+        let input_selector_size = selector_state.selector_size;
+
+        if !selector_state.line_drawn {
+            changes.append(&mut vec![
+                Change::CursorPosition {
+                    x: Position::Absolute(0),
+                    y: Position::EndRelative(1 + input_selector_size),
+                },
+                Change::ClearToEndOfScreen(ColorAttribute::Default),
+                Change::Text("─".repeat(cols)),
+                Change::Text("\r\n".to_string()),
+            ]);
+            selector_state.line_drawn = true;
+        } else {
+            changes.push(Change::CursorPosition {
                 x: Position::Absolute(0),
-                y: Position::EndRelative(1 + input_selector_size),
-            },
-            Change::ClearToEndOfScreen(ColorAttribute::Default),
-            Change::Text("─".repeat(cols)),
-            Change::Text("\r\n".to_string()),
-            Change::Text(truncate_right(
-                &format!("{}: {}", option.description, selector_state.filter_term),
-                max_width,
-            )),
-        ]);
+                y: Position::EndRelative(input_selector_size),
+            });
+            changes.push(Change::ClearToEndOfScreen(ColorAttribute::Default));
+        }
+
+        changes.push(Change::Text(truncate_right(
+            &format!("{}: {}", option.description, selector_state.filter_term),
+            max_width,
+        )));
+
+        let max_items = selector_state.max_items;
 
         for (row_num, (entry_idx, entry)) in selector_state
             .filtered_entries
@@ -881,8 +901,9 @@ impl<'a> TransientState<'a> {
                                             if option.value.is_none() || !option.allow_nil {
                                                 if let Some(choices) = option.choices.clone() {
                                                     self.cur_node = Rc::clone(&cur_node);
+                                                    let size = term.get_screen_size()?;
                                                     self.selector_state =
-                                                        Some(SelectorState::new(choices));
+                                                        Some(SelectorState::new(choices, &size));
                                                     self.selector(term, option)?;
                                                     continue;
                                                 } else {
@@ -965,7 +986,6 @@ impl<'a> TransientState<'a> {
                     match cur_node.entry.as_ref() {
                         Some(TransientEntry::TransientOption(option)) => {
                             self.selector_state.as_mut().unwrap().move_up();
-                            self.render(term)?;
                             let mut option = option.borrow_mut();
                             let option = option.deref_mut();
                             self.selector(term, option)?;
@@ -982,7 +1002,6 @@ impl<'a> TransientState<'a> {
                     match cur_node.entry.as_ref() {
                         Some(TransientEntry::TransientOption(option)) => {
                             self.selector_state.as_mut().unwrap().move_down();
-                            self.render(term)?;
                             let mut option = option.borrow_mut();
                             let option = option.deref_mut();
                             self.selector(term, option)?;
@@ -1033,7 +1052,6 @@ impl<'a> TransientState<'a> {
                             let selector_state = self.selector_state.as_mut().unwrap();
                             if selector_state.filter_term.pop().is_some() {
                                 selector_state.update_filter();
-                                self.render(term)?;
                                 let mut option = option.borrow_mut();
                                 let option = option.deref_mut();
                                 self.selector(term, option)?;
@@ -1053,7 +1071,6 @@ impl<'a> TransientState<'a> {
                             let selector_state = self.selector_state.as_mut().unwrap();
                             selector_state.filter_term.push(c);
                             selector_state.update_filter();
-                            self.render(term)?;
                             let mut option = option.borrow_mut();
                             let option = option.deref_mut();
                             self.selector(term, option)?;
