@@ -67,7 +67,13 @@ impl LineEditorHost for PromptHost {
 }
 
 trait Renderable {
-    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>);
+    fn render(
+        &self,
+        colors: &TransientColors,
+        changes: &mut Vec<Change>,
+        term: &mut TermWizTerminal,
+        render_now: bool,
+    ) -> termwiz::Result<()>;
 }
 
 enum TransientEntry {
@@ -78,47 +84,57 @@ enum TransientEntry {
 }
 
 impl Renderable for TransientEntry {
-    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
+    fn render(
+        &self,
+        colors: &TransientColors,
+        changes: &mut Vec<Change>,
+        term: &mut TermWizTerminal,
+        _render_now: bool,
+    ) -> termwiz::Result<()> {
         match self {
-            Self::TransientOption(option) => option.borrow().render(colors, changes),
-            Self::TransientSwitch(switch) => switch.borrow().render(colors, changes),
+            Self::TransientOption(option) => option.borrow().render(colors, changes, term, false),
+            Self::TransientSwitch(switch) => switch.borrow().render(colors, changes, term, false),
             Self::TransientArgument(positional_arg) => {
-                positional_arg.borrow().render(colors, changes)
+                positional_arg.borrow().render(colors, changes, term, false)
             }
             Self::TransientCyclicSwitch(cyclic_switch) => {
-                cyclic_switch.borrow().render(colors, changes)
+                cyclic_switch.borrow().render(colors, changes, term, false)
             }
         }
     }
 }
 
 impl TransientEntry {
-    fn new(entry: &KTransientEntry, root: &mut TrieNode) -> Self {
+    fn new(entry: &KTransientEntry, root: &mut TrieNode, row: &mut usize) -> Self {
+        *row += 1;
         match entry {
             KTransientEntry::TransientSwitch(switch) => {
-                let new_switch = Rc::new(RefCell::new(TransientSwitch::from(switch)));
+                let new_switch = Rc::new(RefCell::new(TransientSwitch::new(switch, *row)));
                 let cloned_switch = Rc::clone(&new_switch);
                 let entry = Self::TransientSwitch(cloned_switch);
                 root.add_word(&switch.key, entry);
                 Self::TransientSwitch(new_switch)
             }
             KTransientEntry::TransientOption(option) => {
-                let new_option = Rc::new(RefCell::new(TransientOption::from(option)));
+                let new_option = Rc::new(RefCell::new(TransientOption::new(option, *row)));
                 let cloned_option = Rc::clone(&new_option);
                 let entry = Self::TransientOption(cloned_option);
                 root.add_word(&option.key, entry);
                 Self::TransientOption(new_option)
             }
             KTransientEntry::TransientCyclicSwitch(cyclic_switch) => {
-                let new_cyclic_switch =
-                    Rc::new(RefCell::new(TransientCyclicSwitch::from(cyclic_switch)));
+                let new_cyclic_switch = Rc::new(RefCell::new(TransientCyclicSwitch::new(
+                    cyclic_switch,
+                    *row,
+                )));
                 let cloned_cyclic_switch = Rc::clone(&new_cyclic_switch);
                 let entry = Self::TransientCyclicSwitch(cloned_cyclic_switch);
                 root.add_word(&cyclic_switch.key, entry);
                 Self::TransientCyclicSwitch(new_cyclic_switch)
             }
             KTransientEntry::TransientArgument(positional_arg) => {
-                let new_argument = Rc::new(RefCell::new(TransientArgument::from(positional_arg)));
+                let new_argument =
+                    Rc::new(RefCell::new(TransientArgument::new(positional_arg, *row)));
                 let cloned_argument = Rc::clone(&new_argument);
                 let entry = Self::TransientArgument(cloned_argument);
                 root.add_word(&positional_arg.key, entry);
@@ -277,11 +293,23 @@ struct TransientSwitch {
     value: bool,
     description: String,
     flag: String,
+    row: usize,
 }
 
 impl Renderable for TransientSwitch {
-    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
-        changes.push(Change::Text("\r\n  ".to_string()));
+    fn render(
+        &self,
+        colors: &TransientColors,
+        changes: &mut Vec<Change>,
+        term: &mut TermWizTerminal,
+        render_now: bool,
+    ) -> termwiz::Result<()> {
+        changes.push(Change::CursorPosition {
+            x: Position::Absolute(0),
+            y: Position::Absolute(self.row),
+        });
+        changes.push(Change::ClearToEndOfLine(ColorAttribute::Default));
+        changes.push(Change::Text("  ".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
         )));
@@ -304,16 +332,24 @@ impl Renderable for TransientSwitch {
             changes.push(Change::Text(self.flag.to_string()));
         }
         changes.push(Change::Text(")".to_string()));
+
+        if render_now {
+            term.render(changes)?;
+            changes.clear();
+        }
+
+        Ok(())
     }
 }
 
-impl From<&KTransientSwitch> for TransientSwitch {
-    fn from(value: &KTransientSwitch) -> Self {
+impl TransientSwitch {
+    fn new(value: &KTransientSwitch, row: usize) -> Self {
         Self {
             key: value.key.clone(),
             value: value.default,
             description: value.description.clone(),
             flag: value.flag.clone(),
+            row,
         }
     }
 }
@@ -326,11 +362,23 @@ struct TransientOption {
     flag: String,
     allow_nil: bool,
     choices: Option<Vec<String>>,
+    row: usize,
 }
 
 impl Renderable for TransientOption {
-    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
-        changes.push(Change::Text("\r\n  ".to_string()));
+    fn render(
+        &self,
+        colors: &TransientColors,
+        changes: &mut Vec<Change>,
+        term: &mut TermWizTerminal,
+        render_now: bool,
+    ) -> termwiz::Result<()> {
+        changes.push(Change::CursorPosition {
+            x: Position::Absolute(0),
+            y: Position::Absolute(self.row),
+        });
+        changes.push(Change::ClearToEndOfLine(ColorAttribute::Default));
+        changes.push(Change::Text("  ".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
         )));
@@ -355,19 +403,27 @@ impl Renderable for TransientOption {
         }
 
         changes.push(Change::Text(")".to_string()));
+
+        if render_now {
+            term.render(changes)?;
+            changes.clear();
+        }
+
+        Ok(())
     }
 }
 
-impl From<&KTransientOption> for TransientOption {
-    fn from(value: &KTransientOption) -> Self {
+impl TransientOption {
+    fn new(option: &KTransientOption, row: usize) -> Self {
         Self {
-            key: value.key.clone(),
-            value: value.default.clone(),
-            default: value.default.clone(),
-            description: value.description.clone(),
-            flag: value.flag.clone(),
-            allow_nil: value.allow_nil,
-            choices: value.choices.clone(),
+            key: option.key.clone(),
+            value: option.default.clone(),
+            default: option.default.clone(),
+            description: option.description.clone(),
+            flag: option.flag.clone(),
+            allow_nil: option.allow_nil,
+            choices: option.choices.clone(),
+            row,
         }
     }
 }
@@ -379,11 +435,23 @@ struct TransientCyclicSwitch {
     pub flag: String,
     pub choices: Vec<String>,
     pub allow_nil: bool,
+    row: usize,
 }
 
 impl Renderable for TransientCyclicSwitch {
-    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
-        changes.push(Change::Text("\r\n  ".to_string()));
+    fn render(
+        &self,
+        colors: &TransientColors,
+        changes: &mut Vec<Change>,
+        term: &mut TermWizTerminal,
+        render_now: bool,
+    ) -> termwiz::Result<()> {
+        changes.push(Change::CursorPosition {
+            x: Position::Absolute(0),
+            y: Position::Absolute(self.row),
+        });
+        changes.push(Change::ClearToEndOfLine(ColorAttribute::Default));
+        changes.push(Change::Text("  ".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
         )));
@@ -434,22 +502,35 @@ impl Renderable for TransientCyclicSwitch {
             }
         }
         changes.push(Change::Text(")".to_string()));
+
+        if render_now {
+            term.render(changes)?;
+            changes.clear();
+        }
+
+        Ok(())
     }
 }
 
-impl From<&KTransientCyclicSwitch> for TransientCyclicSwitch {
-    fn from(value: &KTransientCyclicSwitch) -> Self {
-        let active_idx = value.default.as_ref().map_or_else(
+impl TransientCyclicSwitch {
+    fn new(cyclic_switch: &KTransientCyclicSwitch, row: usize) -> Self {
+        let active_idx = cyclic_switch.default.as_ref().map_or_else(
             || None,
-            |default| value.choices.iter().position(|choice| choice == default),
+            |default| {
+                cyclic_switch
+                    .choices
+                    .iter()
+                    .position(|choice| choice == default)
+            },
         );
         Self {
-            key: value.key.clone(),
+            key: cyclic_switch.key.clone(),
             active_idx,
-            description: value.description.clone(),
-            flag: value.flag.clone(),
-            choices: value.choices.clone(),
-            allow_nil: value.allow_nil,
+            description: cyclic_switch.description.clone(),
+            flag: cyclic_switch.flag.clone(),
+            choices: cyclic_switch.choices.clone(),
+            allow_nil: cyclic_switch.allow_nil,
+            row,
         }
     }
 }
@@ -458,11 +539,23 @@ struct TransientArgument {
     key: String,
     description: String,
     action: Box<KeyAssignment>,
+    row: usize,
 }
 
 impl Renderable for TransientArgument {
-    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
-        changes.push(Change::Text("\r\n  ".to_string()));
+    fn render(
+        &self,
+        colors: &TransientColors,
+        changes: &mut Vec<Change>,
+        _term: &mut TermWizTerminal,
+        _render_now: bool,
+    ) -> termwiz::Result<()> {
+        changes.push(Change::CursorPosition {
+            x: Position::Absolute(0),
+            y: Position::Absolute(self.row),
+        });
+        changes.push(Change::ClearToEndOfLine(ColorAttribute::Default));
+        changes.push(Change::Text("  ".to_string()));
         changes.push(Change::Attribute(AttributeChange::Foreground(
             colors.key_fg,
         )));
@@ -471,15 +564,18 @@ impl Renderable for TransientArgument {
             ColorAttribute::Default,
         )));
         changes.push(Change::Text(format!(" {}", self.description)));
+
+        Ok(())
     }
 }
 
-impl From<&KTransientArgument> for TransientArgument {
-    fn from(value: &KTransientArgument) -> Self {
+impl TransientArgument {
+    fn new(positional_arg: &KTransientArgument, row: usize) -> Self {
         Self {
-            key: value.key.clone(),
-            description: value.description.clone(),
-            action: value.action.clone(),
+            key: positional_arg.key.clone(),
+            description: positional_arg.description.clone(),
+            action: positional_arg.action.clone(),
+            row,
         }
     }
 }
@@ -487,11 +583,21 @@ impl From<&KTransientArgument> for TransientArgument {
 struct TransientSection<'a> {
     header: &'a str,
     entries: Vec<TransientEntry>,
+    row: usize,
 }
 
 impl<'a> Renderable for TransientSection<'a> {
-    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) {
-        changes.push(Change::Text("\r\n\r\n".to_string()));
+    fn render(
+        &self,
+        colors: &TransientColors,
+        changes: &mut Vec<Change>,
+        term: &mut TermWizTerminal,
+        _render_now: bool,
+    ) -> termwiz::Result<()> {
+        changes.push(Change::CursorPosition {
+            x: Position::Absolute(0),
+            y: Position::Absolute(self.row),
+        });
         changes.push(Change::Attribute(AttributeChange::Intensity(
             Intensity::Bold,
         )));
@@ -502,21 +608,27 @@ impl<'a> Renderable for TransientSection<'a> {
         changes.push(Change::AllAttributes(CellAttributes::default()));
 
         for entry in &self.entries {
-            entry.render(colors, changes);
+            entry.render(colors, changes, term, false)?;
         }
+
+        Ok(())
     }
 }
 
 impl<'a> TransientSection<'a> {
-    fn new(section: &'a KTransientSection, root: &mut TrieNode) -> Self {
+    fn new(section: &'a KTransientSection, root: &mut TrieNode, row: &mut usize) -> Self {
         let mut entries = vec![];
+        let section_row = *row;
         for entry in &section.entries {
-            entries.push(TransientEntry::new(entry, root));
+            entries.push(TransientEntry::new(entry, root, row));
         }
+
+        *row += 2;
 
         Self {
             header: &section.header,
             entries,
+            row: section_row,
         }
     }
 }
@@ -537,8 +649,9 @@ impl<'a> TransientState<'a> {
     fn new(args: &'a KTransientMenu, window: GuiWin, pane: MuxPane) -> Self {
         let mut trie_node = TrieNode::new();
         let mut sections = vec![];
+        let mut row = 3;
         for section in &args.sections {
-            let transient_section = TransientSection::new(section, &mut trie_node);
+            let transient_section = TransientSection::new(section, &mut trie_node, &mut row);
             sections.push(transient_section);
         }
         let root_node = Rc::new(RefCell::new(trie_node));
@@ -572,7 +685,7 @@ impl<'a> TransientState<'a> {
         ]);
 
         for section in &self.sections {
-            section.render(&self.colors, &mut self.changes);
+            section.render(&self.colors, &mut self.changes, term, false)?;
         }
 
         self.changes.push(Change::Text("\r\n\r\n\r\n".to_string()));
@@ -618,8 +731,14 @@ impl<'a> TransientState<'a> {
                 Some(line)
             };
         }
-        self.changes
-            .push(Change::CursorVisibility(CursorVisibility::Hidden));
+        self.changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::EndRelative(1),
+            },
+            Change::ClearToEndOfScreen(ColorAttribute::Default),
+            Change::CursorVisibility(CursorVisibility::Hidden),
+        ]);
 
         Ok(())
     }
@@ -745,9 +864,15 @@ impl<'a> TransientState<'a> {
                                             let mut switch = switch.borrow_mut();
                                             let switch = switch.deref_mut();
                                             switch.value = !switch.value;
+
+                                            switch.render(
+                                                &self.colors,
+                                                &mut self.changes,
+                                                term,
+                                                true,
+                                            )?;
                                         }
                                         self.cur_node = Rc::clone(&self.root_node);
-                                        self.render(term)?;
                                     }
                                     TransientEntry::TransientOption(option) => {
                                         {
@@ -762,13 +887,24 @@ impl<'a> TransientState<'a> {
                                                     continue;
                                                 } else {
                                                     self.line_prompt(term, option)?;
+                                                    option.render(
+                                                        &self.colors,
+                                                        &mut self.changes,
+                                                        term,
+                                                        true,
+                                                    )?;
                                                 }
                                             } else {
                                                 option.value = None;
+                                                option.render(
+                                                    &self.colors,
+                                                    &mut self.changes,
+                                                    term,
+                                                    true,
+                                                )?;
                                             }
                                         }
                                         self.cur_node = Rc::clone(&self.root_node);
-                                        self.render(term)?;
                                     }
                                     TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
                                         {
@@ -790,10 +926,16 @@ impl<'a> TransientState<'a> {
                                                 } else {
                                                     cyclic_switch.active_idx = Some(0);
                                                 }
+
+                                                cyclic_switch.render(
+                                                    &self.colors,
+                                                    &mut self.changes,
+                                                    term,
+                                                    true,
+                                                )?;
                                             }
                                         }
                                         self.cur_node = Rc::clone(&self.root_node);
-                                        self.render(term)?;
                                     }
                                     TransientEntry::TransientArgument(positional_arg) => {
                                         let positional_arg = positional_arg.borrow();
