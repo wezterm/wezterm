@@ -25,7 +25,7 @@ use wezterm_dynamic::{FromDynamic, ToDynamic, Value};
 use wezterm_term::{AttributeChange, CellAttributes, Intensity};
 use window::Modifiers;
 
-const ROW_OVERHEAD: usize = 3;
+const ROW_OVERHEAD: usize = 4;
 
 struct PromptHost {
     history: BasicHistory,
