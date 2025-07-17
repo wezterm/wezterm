@@ -734,7 +734,7 @@ impl<'a> TransientState<'a> {
 
         let line = editor.read_line_with_optional_initial_value(&mut host, None)?;
         if let Some(line) = line {
-            option.value = if line.len() == 0 {
+            option.value = if line.is_empty() {
                 option.default.clone()
             } else {
                 Some(line)
