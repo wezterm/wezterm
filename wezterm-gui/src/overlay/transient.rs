@@ -769,7 +769,7 @@ impl<'a> TransientState<'a> {
             changes.append(&mut vec![
                 Change::CursorPosition {
                     x: Position::Absolute(0),
-                    y: Position::EndRelative(1 + input_selector_size),
+                    y: Position::EndRelative(2 + input_selector_size),
                 },
                 Change::ClearToEndOfScreen(ColorAttribute::Default),
                 Change::Text("─".repeat(cols)),
@@ -779,7 +779,7 @@ impl<'a> TransientState<'a> {
         } else {
             changes.push(Change::CursorPosition {
                 x: Position::Absolute(0),
-                y: Position::EndRelative(input_selector_size),
+                y: Position::EndRelative(1 + input_selector_size),
             });
             changes.push(Change::ClearToEndOfScreen(ColorAttribute::Default));
         }
@@ -828,7 +828,7 @@ impl<'a> TransientState<'a> {
                 x: Position::Absolute(
                     2 + option.description.len() + selector_state.filter_term.len(),
                 ),
-                y: Position::EndRelative(input_selector_size),
+                y: Position::EndRelative(1 + input_selector_size),
             },
             Change::CursorVisibility(CursorVisibility::Visible),
         ]);
