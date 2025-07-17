@@ -1079,7 +1079,10 @@ impl<'a> TransientState<'a> {
                     ..
                 }) => {
                     let selector_state = self.selector_state.take();
-                    let start_row = selector_state.as_ref().unwrap().selector_size + 2;
+                    let selector_state = selector_state.as_ref().unwrap();
+                    let cols = selector_state.cols;
+                    let start_row = selector_state.selector_size + 2;
+                    let skip_rows = cols - start_row;
 
                     self.cur_node = Rc::clone(&self.root_node);
 
@@ -1091,7 +1094,7 @@ impl<'a> TransientState<'a> {
                         },
                         Change::ClearToEndOfScreen(ColorAttribute::Default),
                     ]);
-                    for renderable_entity in self.row_entities.iter().rev().take(start_row) {
+                    for renderable_entity in self.row_entities.iter().skip(skip_rows) {
                         if let Some(renderable_entity) = renderable_entity {
                             renderable_entity.render(&self.colors, &mut self.changes, term)?;
                         }
@@ -1112,7 +1115,10 @@ impl<'a> TransientState<'a> {
                             TransientEntry::TransientOption(option) => {
                                 option.borrow_mut().value = Some(entry);
 
+                                let cols = selector_state.cols;
                                 let start_row = selector_state.selector_size + 2;
+                                let skip_rows = cols - start_row;
+
                                 self.selector_state = None;
                                 self.cur_node = Rc::clone(&self.root_node);
                                 self.changes.append(&mut vec![
@@ -1123,9 +1129,7 @@ impl<'a> TransientState<'a> {
                                     },
                                     Change::ClearToEndOfScreen(ColorAttribute::Default),
                                 ]);
-                                for renderable_entity in
-                                    self.row_entities.iter().rev().take(start_row)
-                                {
+                                for renderable_entity in self.row_entities.iter().skip(skip_rows) {
                                     if let Some(renderable_entity) = renderable_entity {
                                         renderable_entity.render(
                                             &self.colors,
