@@ -1080,9 +1080,9 @@ impl<'a> TransientState<'a> {
                 }) => {
                     let selector_state = self.selector_state.take();
                     let selector_state = selector_state.as_ref().unwrap();
-                    let cols = selector_state.cols;
+                    let rows = selector_state.max_items.saturating_add(ROW_OVERHEAD);
                     let start_row = selector_state.selector_size + 2;
-                    let skip_rows = cols - start_row;
+                    let skip_rows = rows - start_row - 1;
 
                     self.cur_node = Rc::clone(&self.root_node);
 
@@ -1115,9 +1115,9 @@ impl<'a> TransientState<'a> {
                             TransientEntry::TransientOption(option) => {
                                 option.borrow_mut().value = Some(entry);
 
-                                let cols = selector_state.cols;
+                                let rows = selector_state.max_items.saturating_add(ROW_OVERHEAD);
                                 let start_row = selector_state.selector_size + 2;
-                                let skip_rows = cols - start_row;
+                                let skip_rows = rows - start_row - 1;
 
                                 self.selector_state = None;
                                 self.cur_node = Rc::clone(&self.root_node);
