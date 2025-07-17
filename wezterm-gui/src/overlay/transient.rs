@@ -105,13 +105,20 @@ impl Renderable for TransientEntry {
 }
 
 impl TransientEntry {
-    fn new(entry: &KTransientEntry, root: &mut TrieNode, row: &mut usize) -> Self {
+    fn new(
+        entry: &KTransientEntry,
+        root: &mut TrieNode,
+        row: &mut usize,
+        row_entities: &mut Vec<Option<RenderableEntity>>,
+    ) -> Self {
         *row += 1;
         match entry {
             KTransientEntry::TransientSwitch(switch) => {
                 let new_switch = Rc::new(RefCell::new(TransientSwitch::new(switch, *row)));
                 let cloned_switch = Rc::clone(&new_switch);
                 let entry = Self::TransientSwitch(cloned_switch);
+                let cloned_switch = Rc::clone(&new_switch);
+                row_entities.push(Some(RenderableEntity::TransientSwitch(cloned_switch)));
                 root.add_word(&switch.key, entry);
                 Self::TransientSwitch(new_switch)
             }
@@ -119,6 +126,8 @@ impl TransientEntry {
                 let new_option = Rc::new(RefCell::new(TransientOption::new(option, *row)));
                 let cloned_option = Rc::clone(&new_option);
                 let entry = Self::TransientOption(cloned_option);
+                let cloned_option = Rc::clone(&new_option);
+                row_entities.push(Some(RenderableEntity::TransientOption(cloned_option)));
                 root.add_word(&option.key, entry);
                 Self::TransientOption(new_option)
             }
@@ -129,6 +138,10 @@ impl TransientEntry {
                 )));
                 let cloned_cyclic_switch = Rc::clone(&new_cyclic_switch);
                 let entry = Self::TransientCyclicSwitch(cloned_cyclic_switch);
+                let cloned_cyclic_switch = Rc::clone(&new_cyclic_switch);
+                row_entities.push(Some(RenderableEntity::TransientCyclicSwitch(
+                    cloned_cyclic_switch,
+                )));
                 root.add_word(&cyclic_switch.key, entry);
                 Self::TransientCyclicSwitch(new_cyclic_switch)
             }
@@ -137,6 +150,8 @@ impl TransientEntry {
                     Rc::new(RefCell::new(TransientArgument::new(positional_arg, *row)));
                 let cloned_argument = Rc::clone(&new_argument);
                 let entry = Self::TransientArgument(cloned_argument);
+                let cloned_argument = Rc::clone(&new_argument);
+                row_entities.push(Some(RenderableEntity::TransientArgument(cloned_argument)));
                 root.add_word(&positional_arg.key, entry);
                 Self::TransientArgument(new_argument)
             }
@@ -595,13 +610,36 @@ struct TransientSection<'a> {
     row: usize,
 }
 
-impl<'a> Renderable for TransientSection<'a> {
+impl<'a> TransientSection<'a> {
+    fn new(
+        section: &'a KTransientSection,
+        root: &mut TrieNode,
+        row: &mut usize,
+        row_entities: &mut Vec<Option<RenderableEntity>>,
+    ) -> Self {
+        let mut entries = vec![];
+        row_entities.push(None);
+        let section_row = *row;
+        for entry in &section.entries {
+            entries.push(TransientEntry::new(entry, root, row, row_entities));
+        }
+
+        row_entities.append(&mut vec![None, None]);
+        *row += 2;
+
+        Self {
+            header: &section.header,
+            entries,
+            row: section_row,
+        }
+    }
+
     fn render(
         &self,
         colors: &TransientColors,
         changes: &mut Vec<Change>,
         term: &mut TermWizTerminal,
-        _render_now: bool,
+        render_entries: bool,
     ) -> termwiz::Result<()> {
         changes.push(Change::CursorPosition {
             x: Position::Absolute(0),
@@ -616,28 +654,47 @@ impl<'a> Renderable for TransientSection<'a> {
         changes.push(Change::Text(self.header.to_string()));
         changes.push(Change::AllAttributes(CellAttributes::default()));
 
-        for entry in &self.entries {
-            entry.render(colors, changes, term, false)?;
+        if render_entries {
+            for entry in &self.entries {
+                entry.render(colors, changes, term, false)?;
+            }
         }
 
         Ok(())
     }
 }
 
-impl<'a> TransientSection<'a> {
-    fn new(section: &'a KTransientSection, root: &mut TrieNode, row: &mut usize) -> Self {
-        let mut entries = vec![];
-        let section_row = *row;
-        for entry in &section.entries {
-            entries.push(TransientEntry::new(entry, root, row));
-        }
+enum RenderableEntity<'a> {
+    TransientSection(Rc<TransientSection<'a>>),
+    TransientOption(Rc<RefCell<TransientOption>>),
+    TransientSwitch(Rc<RefCell<TransientSwitch>>),
+    TransientArgument(Rc<RefCell<TransientArgument>>),
+    TransientCyclicSwitch(Rc<RefCell<TransientCyclicSwitch>>),
+}
 
-        *row += 2;
-
-        Self {
-            header: &section.header,
-            entries,
-            row: section_row,
+impl<'a> RenderableEntity<'a> {
+    fn render(
+        &self,
+        colors: &TransientColors,
+        changes: &mut Vec<Change>,
+        term: &mut TermWizTerminal,
+    ) -> termwiz::Result<()> {
+        match self {
+            RenderableEntity::TransientSection(section) => {
+                section.render(colors, changes, term, false)
+            }
+            RenderableEntity::TransientSwitch(switch) => {
+                switch.borrow().render(colors, changes, term, false)
+            }
+            RenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
+                cyclic_switch.borrow().render(colors, changes, term, false)
+            }
+            RenderableEntity::TransientOption(option) => {
+                option.borrow().render(colors, changes, term, false)
+            }
+            RenderableEntity::TransientArgument(positional_arg) => {
+                positional_arg.borrow().render(colors, changes, term, false)
+            }
         }
     }
 }
@@ -646,12 +703,13 @@ struct TransientState<'a> {
     window: GuiWin,
     pane: MuxPane,
     description: &'a str,
-    sections: Vec<TransientSection<'a>>,
+    sections: Vec<Rc<TransientSection<'a>>>,
     colors: TransientColors,
     root_node: Rc<RefCell<TrieNode<'a>>>,
     cur_node: Rc<RefCell<TrieNode<'a>>>,
     selector_state: Option<SelectorState>,
     changes: Vec<Change>,
+    row_entities: Vec<Option<RenderableEntity<'a>>>,
 }
 
 impl<'a> TransientState<'a> {
@@ -659,9 +717,16 @@ impl<'a> TransientState<'a> {
         let mut trie_node = TrieNode::new();
         let mut sections = vec![];
         let mut row = 3;
+        let mut row_entities: Vec<Option<RenderableEntity>> = vec![None, None, None];
         for section in &args.sections {
-            let transient_section = TransientSection::new(section, &mut trie_node, &mut row);
-            sections.push(transient_section);
+            let transient_section =
+                TransientSection::new(section, &mut trie_node, &mut row, &mut row_entities);
+            let transient_section_row = transient_section.row;
+            let new_transient_section = Rc::new(transient_section);
+            row_entities[transient_section_row] = Some(RenderableEntity::TransientSection(
+                Rc::clone(&new_transient_section),
+            ));
+            sections.push(new_transient_section);
         }
         let root_node = Rc::new(RefCell::new(trie_node));
         let cur_node = Rc::clone(&root_node);
@@ -675,6 +740,7 @@ impl<'a> TransientState<'a> {
             cur_node,
             selector_state: None,
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
+            row_entities,
         }
     }
 
@@ -694,7 +760,7 @@ impl<'a> TransientState<'a> {
         ]);
 
         for section in &self.sections {
-            section.render(&self.colors, &mut self.changes, term, false)?;
+            section.render(&self.colors, &mut self.changes, term, true)?;
         }
 
         self.changes.push(Change::Text("\r\n\r\n\r\n".to_string()));
@@ -1012,11 +1078,26 @@ impl<'a> TransientState<'a> {
                     key: KeyCode::Escape,
                     ..
                 }) => {
-                    self.selector_state = None;
+                    let selector_state = self.selector_state.take();
+                    let start_row = selector_state.as_ref().unwrap().selector_size + 2;
+
                     self.cur_node = Rc::clone(&self.root_node);
-                    self.changes
-                        .push(Change::CursorVisibility(CursorVisibility::Hidden));
-                    self.render(term)?;
+
+                    self.changes.append(&mut vec![
+                        Change::CursorVisibility(CursorVisibility::Hidden),
+                        Change::CursorPosition {
+                            x: Position::Absolute(0),
+                            y: Position::EndRelative(start_row),
+                        },
+                        Change::ClearToEndOfScreen(ColorAttribute::Default),
+                    ]);
+                    for renderable_entity in self.row_entities.iter().rev().take(start_row) {
+                        if let Some(renderable_entity) = renderable_entity {
+                            renderable_entity.render(&self.colors, &mut self.changes, term)?;
+                        }
+                    }
+                    term.render(&self.changes)?;
+                    self.changes.clear();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Enter,
@@ -1030,11 +1111,31 @@ impl<'a> TransientState<'a> {
                         match cur_node.entry.as_ref().unwrap() {
                             TransientEntry::TransientOption(option) => {
                                 option.borrow_mut().value = Some(entry);
+
+                                let start_row = selector_state.selector_size + 2;
                                 self.selector_state = None;
                                 self.cur_node = Rc::clone(&self.root_node);
-                                self.changes
-                                    .push(Change::CursorVisibility(CursorVisibility::Hidden));
-                                self.render(term)?;
+                                self.changes.append(&mut vec![
+                                    Change::CursorVisibility(CursorVisibility::Hidden),
+                                    Change::CursorPosition {
+                                        x: Position::Absolute(0),
+                                        y: Position::EndRelative(start_row),
+                                    },
+                                    Change::ClearToEndOfScreen(ColorAttribute::Default),
+                                ]);
+                                for renderable_entity in
+                                    self.row_entities.iter().rev().take(start_row)
+                                {
+                                    if let Some(renderable_entity) = renderable_entity {
+                                        renderable_entity.render(
+                                            &self.colors,
+                                            &mut self.changes,
+                                            term,
+                                        )?;
+                                    }
+                                }
+                                term.render(&self.changes)?;
+                                self.changes.clear();
                             }
                             _ => {}
                         }
@@ -1097,8 +1198,8 @@ struct TransientResult {
 }
 impl_lua_conversion_dynamic!(TransientResult);
 
-impl<'a> From<&'a Vec<TransientSection<'a>>> for TransientResult {
-    fn from(value: &'a Vec<TransientSection>) -> Self {
+impl<'a> From<&'a Vec<Rc<TransientSection<'a>>>> for TransientResult {
+    fn from(value: &'a Vec<Rc<TransientSection>>) -> Self {
         let mut entries: Vec<TransientResultEntry> = vec![];
 
         for section in value {
