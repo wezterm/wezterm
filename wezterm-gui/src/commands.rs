@@ -459,19 +459,13 @@ impl CommandDef {
                         menu.add_item(&about_item);
                         menu.add_item(&MenuItem::new_separator());
 
-                        // FIXME: when we set this as the services menu,
-                        // both Help and trying to open Services cause
-                        // the process to spin forever in some internal
-                        // menu validation phase.
-                        if false {
-                            let services_menu = Menu::new_with_title("Services");
-                            services_menu.assign_as_services_menu();
-                            let services_item = MenuItem::new_with("Services", None, "");
-                            menu.add_item(&services_item);
-                            services_item.set_sub_menu(&services_menu);
+                        let services_menu = Menu::new_with_title("Services");
+                        services_menu.assign_as_services_menu();
+                        let services_item = MenuItem::new_with("Services", None, "");
+                        menu.add_item(&services_item);
+                        services_item.set_sub_menu(&services_menu);
 
-                            menu.add_item(&MenuItem::new_separator());
-                        }
+                        menu.add_item(&MenuItem::new_separator());
                     } else if cmd.menubar[0] == "Help" {
                         menu.assign_as_help_menu();
                     }
