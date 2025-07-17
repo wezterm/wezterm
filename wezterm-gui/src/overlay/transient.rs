@@ -705,7 +705,7 @@ impl<'a> TransientState<'a> {
         self.changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
-                y: Position::EndRelative(1),
+                y: Position::EndRelative(2),
             },
             Change::Text("─".repeat(size.cols)),
             Change::Text("\r\n".to_string()),
@@ -734,7 +734,7 @@ impl<'a> TransientState<'a> {
         self.changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
-                y: Position::EndRelative(1),
+                y: Position::EndRelative(2),
             },
             Change::ClearToEndOfScreen(ColorAttribute::Default),
             Change::CursorVisibility(CursorVisibility::Hidden),
