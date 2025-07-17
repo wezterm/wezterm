@@ -732,8 +732,7 @@ impl<'a> TransientState<'a> {
         prompt.push_str(": ");
         editor.set_prompt(&prompt);
 
-        let line = editor.read_line_with_optional_initial_value(&mut host, None)?;
-        if let Some(line) = line {
+        if let Some(line) = editor.read_line(&mut host)? {
             option.value = if line.is_empty() {
                 option.default.clone()
             } else {
