@@ -1048,14 +1048,12 @@ impl<'a> TransientState<'a> {
                 }) => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
-                    match cur_node.entry.as_ref() {
-                        Some(TransientEntry::TransientOption(option)) => {
-                            self.selector_state.as_mut().unwrap().move_up();
-                            let mut option = option.borrow_mut();
-                            let option = option.deref_mut();
-                            self.selector(term, option)?;
-                        }
-                        _ => {}
+
+                    if let Some(TransientEntry::TransientOption(option)) = cur_node.entry.as_ref() {
+                        self.selector_state.as_mut().unwrap().move_up();
+                        let mut option = option.borrow_mut();
+                        let option = option.deref_mut();
+                        self.selector(term, option)?;
                     }
                 }
                 InputEvent::Key(KeyEvent {
@@ -1064,14 +1062,12 @@ impl<'a> TransientState<'a> {
                 }) => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
-                    match cur_node.entry.as_ref() {
-                        Some(TransientEntry::TransientOption(option)) => {
-                            self.selector_state.as_mut().unwrap().move_down();
-                            let mut option = option.borrow_mut();
-                            let option = option.deref_mut();
-                            self.selector(term, option)?;
-                        }
-                        _ => {}
+
+                    if let Some(TransientEntry::TransientOption(option)) = cur_node.entry.as_ref() {
+                        self.selector_state.as_mut().unwrap().move_down();
+                        let mut option = option.borrow_mut();
+                        let option = option.deref_mut();
+                        self.selector(term, option)?;
                     }
                 }
                 InputEvent::Key(KeyEvent {
@@ -1111,37 +1107,37 @@ impl<'a> TransientState<'a> {
                     if let Some(entry) = selector_state.filtered_entries.get(active_idx).cloned() {
                         let cur_node = Rc::clone(&self.cur_node);
                         let cur_node = cur_node.borrow();
-                        match cur_node.entry.as_ref().unwrap() {
-                            TransientEntry::TransientOption(option) => {
-                                option.borrow_mut().value = Some(entry);
 
-                                let rows = selector_state.max_items.saturating_add(ROW_OVERHEAD);
-                                let start_row = selector_state.selector_size + 2;
-                                let skip_rows = rows - start_row - 1;
+                        if let Some(TransientEntry::TransientOption(option)) =
+                            cur_node.entry.as_ref()
+                        {
+                            option.borrow_mut().value = Some(entry);
 
-                                self.selector_state = None;
-                                self.cur_node = Rc::clone(&self.root_node);
-                                self.changes.append(&mut vec![
-                                    Change::CursorVisibility(CursorVisibility::Hidden),
-                                    Change::CursorPosition {
-                                        x: Position::Absolute(0),
-                                        y: Position::EndRelative(start_row),
-                                    },
-                                    Change::ClearToEndOfScreen(ColorAttribute::Default),
-                                ]);
-                                for renderable_entity in self.row_entities.iter().skip(skip_rows) {
-                                    if let Some(renderable_entity) = renderable_entity {
-                                        renderable_entity.render(
-                                            &self.colors,
-                                            &mut self.changes,
-                                            term,
-                                        )?;
-                                    }
+                            let rows = selector_state.max_items.saturating_add(ROW_OVERHEAD);
+                            let start_row = selector_state.selector_size + 2;
+                            let skip_rows = rows - start_row - 1;
+
+                            self.selector_state = None;
+                            self.cur_node = Rc::clone(&self.root_node);
+                            self.changes.append(&mut vec![
+                                Change::CursorVisibility(CursorVisibility::Hidden),
+                                Change::CursorPosition {
+                                    x: Position::Absolute(0),
+                                    y: Position::EndRelative(start_row),
+                                },
+                                Change::ClearToEndOfScreen(ColorAttribute::Default),
+                            ]);
+                            for renderable_entity in self.row_entities.iter().skip(skip_rows) {
+                                if let Some(renderable_entity) = renderable_entity {
+                                    renderable_entity.render(
+                                        &self.colors,
+                                        &mut self.changes,
+                                        term,
+                                    )?;
                                 }
-                                term.render(&self.changes)?;
-                                self.changes.clear();
                             }
-                            _ => {}
+                            term.render(&self.changes)?;
+                            self.changes.clear();
                         }
                     }
                 }
@@ -1151,17 +1147,15 @@ impl<'a> TransientState<'a> {
                 }) => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
-                    match cur_node.entry.as_ref() {
-                        Some(TransientEntry::TransientOption(option)) => {
-                            let selector_state = self.selector_state.as_mut().unwrap();
-                            if selector_state.filter_term.pop().is_some() {
-                                selector_state.update_filter();
-                                let mut option = option.borrow_mut();
-                                let option = option.deref_mut();
-                                self.selector(term, option)?;
-                            }
+
+                    if let Some(TransientEntry::TransientOption(option)) = cur_node.entry.as_ref() {
+                        let selector_state = self.selector_state.as_mut().unwrap();
+                        if selector_state.filter_term.pop().is_some() {
+                            selector_state.update_filter();
+                            let mut option = option.borrow_mut();
+                            let option = option.deref_mut();
+                            self.selector(term, option)?;
                         }
-                        _ => {}
                     }
                 }
                 InputEvent::Key(KeyEvent {
@@ -1170,16 +1164,14 @@ impl<'a> TransientState<'a> {
                 }) => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
-                    match cur_node.entry.as_ref() {
-                        Some(TransientEntry::TransientOption(option)) => {
-                            let selector_state = self.selector_state.as_mut().unwrap();
-                            selector_state.filter_term.push(c);
-                            selector_state.update_filter();
-                            let mut option = option.borrow_mut();
-                            let option = option.deref_mut();
-                            self.selector(term, option)?;
-                        }
-                        _ => {}
+
+                    if let Some(TransientEntry::TransientOption(option)) = cur_node.entry.as_ref() {
+                        let selector_state = self.selector_state.as_mut().unwrap();
+                        selector_state.filter_term.push(c);
+                        selector_state.update_filter();
+                        let mut option = option.borrow_mut();
+                        let option = option.deref_mut();
+                        self.selector(term, option)?;
                     }
                 }
                 _ => {}
