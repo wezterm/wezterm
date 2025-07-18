@@ -1196,7 +1196,6 @@ impl<'a> From<&'a Vec<Rc<TransientSection<'a>>>> for TransientResult {
                 match entry {
                     TransientEntry::TransientOption(option) => {
                         let option = option.borrow();
-                        let option = option.deref();
                         entries.push(TransientResultEntry {
                             flag: option.flag.clone(),
                             value: option.value.to_dynamic(),
@@ -1204,7 +1203,6 @@ impl<'a> From<&'a Vec<Rc<TransientSection<'a>>>> for TransientResult {
                     }
                     TransientEntry::TransientSwitch(switch) => {
                         let switch = switch.borrow();
-                        let switch = switch.deref();
                         entries.push(TransientResultEntry {
                             flag: switch.flag.clone(),
                             value: switch.value.to_dynamic(),
@@ -1212,7 +1210,6 @@ impl<'a> From<&'a Vec<Rc<TransientSection<'a>>>> for TransientResult {
                     }
                     TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
                         let cyclic_switch = cyclic_switch.borrow();
-                        let cyclic_switch = cyclic_switch.deref();
                         entries.push(TransientResultEntry {
                             flag: cyclic_switch.flag.clone(),
                             value: cyclic_switch
