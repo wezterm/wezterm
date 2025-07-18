@@ -961,17 +961,16 @@ impl<'a> TransientState<'a> {
                                     TransientEntry::TransientOption(option) => {
                                         {
                                             let mut option = option.borrow_mut();
-                                            let option = option.deref_mut();
                                             if option.value.is_none() || !option.allow_nil {
                                                 if let Some(choices) = option.choices.clone() {
                                                     self.cur_node = Rc::clone(&cur_node);
                                                     let size = term.get_screen_size()?;
                                                     self.selector_state =
                                                         Some(SelectorState::new(choices, &size));
-                                                    self.selector(term, option)?;
+                                                    self.selector(term, &mut *option)?;
                                                     continue;
                                                 } else {
-                                                    self.line_prompt(term, option)?;
+                                                    self.line_prompt(term, &mut *option)?;
                                                     option.render(
                                                         &self.colors,
                                                         &mut self.changes,
@@ -1050,8 +1049,7 @@ impl<'a> TransientState<'a> {
                     if let Some(TransientEntry::TransientOption(option)) = cur_node.entry.as_ref() {
                         self.selector_state.as_mut().unwrap().move_up();
                         let mut option = option.borrow_mut();
-                        let option = option.deref_mut();
-                        self.selector(term, option)?;
+                        self.selector(term, &mut *option)?;
                     }
                 }
                 InputEvent::Key(KeyEvent {
@@ -1064,8 +1062,7 @@ impl<'a> TransientState<'a> {
                     if let Some(TransientEntry::TransientOption(option)) = cur_node.entry.as_ref() {
                         self.selector_state.as_mut().unwrap().move_down();
                         let mut option = option.borrow_mut();
-                        let option = option.deref_mut();
-                        self.selector(term, option)?;
+                        self.selector(term, &mut *option)?;
                     }
                 }
                 InputEvent::Key(KeyEvent {
@@ -1151,8 +1148,7 @@ impl<'a> TransientState<'a> {
                         if selector_state.filter_term.pop().is_some() {
                             selector_state.update_filter();
                             let mut option = option.borrow_mut();
-                            let option = option.deref_mut();
-                            self.selector(term, option)?;
+                            self.selector(term, &mut *option)?;
                         }
                     }
                 }
@@ -1168,8 +1164,7 @@ impl<'a> TransientState<'a> {
                         selector_state.filter_term.push(c);
                         selector_state.update_filter();
                         let mut option = option.borrow_mut();
-                        let option = option.deref_mut();
-                        self.selector(term, option)?;
+                        self.selector(term, &mut *option)?;
                     }
                 }
                 _ => {}
