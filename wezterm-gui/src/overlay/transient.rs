@@ -671,7 +671,7 @@ enum RenderableEntity<'a> {
     TransientCyclicSwitch(Rc<RefCell<TransientCyclicSwitch>>),
 }
 
-impl<'a> RenderableEntity<'a> {
+impl RenderableEntity<'_> {
     fn render(
         &self,
         colors: &TransientColors,
