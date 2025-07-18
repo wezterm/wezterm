@@ -1105,8 +1105,6 @@ impl<'a> TransientState<'a> {
                         if let Some(TransientEntry::TransientOption(option)) =
                             cur_node.entry.as_ref()
                         {
-                            option.borrow_mut().value = Some(entry);
-
                             let rows = selector_state.max_items.saturating_add(ROW_OVERHEAD);
                             let start_row = selector_state.selector_size + 2;
                             let skip_rows = rows - start_row - 1;
@@ -1130,6 +1128,11 @@ impl<'a> TransientState<'a> {
                                     )?;
                                 }
                             }
+
+                            let mut option = option.borrow_mut();
+                            option.value = Some(entry);
+                            option.render(&self.colors, &mut self.changes, term, false)?;
+
                             term.render(&self.changes)?;
                             self.changes.clear();
                         }
