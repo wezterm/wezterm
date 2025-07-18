@@ -239,13 +239,13 @@ impl SelectorState {
     }
 }
 
-struct TrieNode<'a> {
-    children: HashMap<char, Rc<RefCell<TrieNode<'a>>>>,
+struct TrieNode {
+    children: HashMap<char, Rc<RefCell<TrieNode>>>,
     is_end_of_word: bool,
     entry: Option<TransientEntry>,
 }
 
-impl<'a> TrieNode<'a> {
+impl TrieNode {
     fn new() -> Self {
         Self {
             children: HashMap::new(),
@@ -273,7 +273,7 @@ impl<'a> TrieNode<'a> {
         }
     }
 
-    fn find_char(&self, c: char) -> Option<Rc<RefCell<TrieNode<'a>>>> {
+    fn find_char(&self, c: char) -> Option<Rc<RefCell<TrieNode>>> {
         self.children.get(&c).map(|child| Rc::clone(child))
     }
 }
@@ -704,8 +704,8 @@ struct TransientState<'a> {
     description: &'a str,
     sections: Vec<Rc<TransientSection<'a>>>,
     colors: TransientColors,
-    root_node: Rc<RefCell<TrieNode<'a>>>,
-    cur_node: Rc<RefCell<TrieNode<'a>>>,
+    root_node: Rc<RefCell<TrieNode>>,
+    cur_node: Rc<RefCell<TrieNode>>,
     selector_state: Option<SelectorState>,
     changes: Vec<Change>,
     row_entities: Vec<Option<RenderableEntity<'a>>>,
