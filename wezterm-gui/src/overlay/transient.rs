@@ -947,7 +947,6 @@ impl<'a> TransientState<'a> {
                                     TransientEntry::TransientSwitch(switch) => {
                                         {
                                             let mut switch = switch.borrow_mut();
-                                            let switch = switch.deref_mut();
                                             switch.value = !switch.value;
 
                                             switch.render(
@@ -995,7 +994,6 @@ impl<'a> TransientState<'a> {
                                     TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
                                         {
                                             let mut cyclic_switch = cyclic_switch.borrow_mut();
-                                            let cyclic_switch = cyclic_switch.deref_mut();
 
                                             if cyclic_switch.choices.first().is_some() {
                                                 if let Some(idx) = cyclic_switch.active_idx {
