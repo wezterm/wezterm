@@ -443,12 +443,12 @@ impl TransientOption {
 }
 
 struct TransientCyclicSwitch {
-    pub key: String,
-    pub active_idx: Option<usize>,
-    pub description: String,
-    pub flag: String,
-    pub choices: Vec<String>,
-    pub allow_nil: bool,
+    key: String,
+    active_idx: Option<usize>,
+    description: String,
+    flag: String,
+    choices: Vec<String>,
+    allow_nil: bool,
     row: usize,
 }
 
