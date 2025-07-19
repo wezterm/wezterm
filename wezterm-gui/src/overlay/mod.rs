@@ -14,6 +14,7 @@ pub mod launcher;
 pub mod prompt;
 pub mod quickselect;
 pub mod selector;
+pub mod tabulated_list;
 pub mod transient;
 
 pub use confirm_close_pane::{

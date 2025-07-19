@@ -606,6 +606,15 @@ pub struct TransientMenu {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct TabulatedList {
+    pub description: String,
+    #[dynamic(default)]
+    pub context: Option<TransientContext>,
+    pub choices: Vec<String>,
+    pub actions: Vec<TransientArgument>,
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub enum KeyAssignment {
     SpawnTab(SpawnTabDomain),
     SpawnWindow,
@@ -721,6 +730,7 @@ pub enum KeyAssignment {
     InputSelector(InputSelector),
     Confirmation(Confirmation),
     TransientMenu(TransientMenu),
+    TabulatedList(TabulatedList),
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

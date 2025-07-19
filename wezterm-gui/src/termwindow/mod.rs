@@ -30,8 +30,9 @@ use ::wezterm_term::input::{ClickPosition, MouseButton as TMB};
 use ::window::*;
 use anyhow::{anyhow, ensure, Context};
 use config::keyassignment::{
-    Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
-    QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize, TransientMenu,
+    Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern,
+    PromptInputLine, QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
+    TabulatedList, TransientMenu,
 };
 use config::window::WindowLevel;
 use config::{
@@ -2362,6 +2363,7 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
+
     fn show_debug_overlay(&mut self) {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
@@ -3177,6 +3179,7 @@ impl TermWindow {
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
             TransientMenu(args) => self.show_transient_menu(args),
+            TabulatedList(args) => self.show_tabulated_list(args),
         };
         Ok(PerformAssignmentResult::Handled)
     }
