@@ -1,5 +1,6 @@
 use crate::scripting::guiwin::GuiWin;
 use config::keyassignment::{KeyAssignment, TabulatedList, TransientArgument, TransientContext};
+use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
 use std::cell::RefCell;
@@ -10,6 +11,7 @@ use termwiz::{
     surface::{Change, CursorVisibility, Position},
     terminal::{ScreenSize, Terminal},
 };
+use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_term::{AttributeChange, CellAttributes};
 use window::Modifiers;
 
@@ -289,7 +291,9 @@ impl TabulatedListState {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
-        let result = self.navigator_state.choices[self.navigator_state.active_idx].clone();
+        let result = TabulatedListResult {
+            choices: vec![self.navigator_state.choices[self.navigator_state.active_idx].clone()],
+        };
         promise::spawn::spawn_into_main_thread(async move {
             trampoline(name, window, pane, result);
             anyhow::Result::<()>::Ok(())
@@ -298,7 +302,13 @@ impl TabulatedListState {
     }
 }
 
-fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: String) {
+#[derive(FromDynamic, ToDynamic)]
+struct TabulatedListResult {
+    choices: Vec<String>,
+}
+impl_lua_conversion_dynamic!(TabulatedListResult);
+
+fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: TabulatedListResult) {
     promise::spawn::spawn(async move {
         config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, result))
             .await
@@ -311,7 +321,7 @@ async fn do_event(
     name: String,
     window: GuiWin,
     pane: MuxPane,
-    result: String,
+    result: TabulatedListResult,
 ) -> anyhow::Result<()> {
     if let Some(lua) = lua {
         let args = lua.pack_multi((window, pane, result))?;
