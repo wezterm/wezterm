@@ -612,6 +612,8 @@ pub struct TabulatedList {
     pub context: Option<TransientContext>,
     pub choices: Vec<String>,
     pub actions: Vec<TransientArgument>,
+    #[dynamic(default)]
+    pub multiple: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]

@@ -1,5 +1,8 @@
 use crate::scripting::guiwin::GuiWin;
-use config::keyassignment::{KeyAssignment, TabulatedList, TransientArgument, TransientContext};
+use config::{
+    keyassignment::{KeyAssignment, TabulatedList, TransientArgument, TransientContext},
+    AnsiColor, ColorAttribute,
+};
 use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
@@ -61,12 +64,14 @@ struct NavigatorState {
     choices: Vec<String>,
     cols: usize,
     navigator_size: usize,
+    multiple_idx: Option<Vec<bool>>,
 }
 
 impl NavigatorState {
-    fn new(choices: Vec<String>, size: &ScreenSize, overhead: usize) -> Self {
+    fn new(choices: Vec<String>, size: &ScreenSize, overhead: usize, multiple: bool) -> Self {
         let max_items = size.rows.saturating_sub(overhead);
         let navigator_size = choices.len().min(max_items);
+        let multiple_idx = multiple.then(|| choices.iter().map(|_| false).collect());
 
         Self {
             active_idx: 0,
@@ -75,6 +80,7 @@ impl NavigatorState {
             choices,
             cols: size.cols,
             navigator_size,
+            multiple_idx,
         }
     }
 
@@ -89,6 +95,12 @@ impl NavigatorState {
         self.active_idx = (self.active_idx + 1).min(self.choices.len() - 1);
         if self.active_idx > self.top_row + self.max_items {
             self.top_row = self.active_idx.saturating_sub(self.max_items);
+        }
+    }
+
+    fn toggle_multiple_idx(&mut self) {
+        if let Some(multiple_idx) = self.multiple_idx.as_mut() {
+            multiple_idx[self.active_idx] ^= true;
         }
     }
 }
@@ -117,7 +129,8 @@ impl TabulatedListState {
 
         let overhead = context_size + positional_args_size + 2;
 
-        let navigator_state = NavigatorState::new(args.choices.clone(), size, overhead);
+        let navigator_state =
+            NavigatorState::new(args.choices.clone(), size, overhead, args.multiple);
 
         let mut arguments = vec![];
 
@@ -184,6 +197,8 @@ impl TabulatedListState {
             y: Position::Absolute(0),
         });
 
+        let multiple_idx = &navigator_state.multiple_idx;
+
         let max_items = self.navigator_state.max_items;
 
         for (row_num, (entry_idx, entry)) in navigator_state
@@ -202,6 +217,20 @@ impl TabulatedListState {
             }
 
             let mut attr = CellAttributes::blank();
+
+            if let Some(multiple_idx) = multiple_idx {
+                if multiple_idx[entry_idx] {
+                    changes.push(Change::Attribute(AttributeChange::Background(
+                        AnsiColor::Purple.into(),
+                    )));
+                    changes.push(Change::Text(" ".to_string()));
+                    changes.push(Change::Attribute(AttributeChange::Background(
+                        ColorAttribute::Default,
+                    )));
+                } else {
+                    changes.push(Change::Text(" ".to_string()));
+                }
+            }
 
             if entry_idx == navigator_state.active_idx {
                 changes.push(AttributeChange::Reverse(true).into());
@@ -254,6 +283,13 @@ impl TabulatedListState {
                     self.navigator(term)?;
                 }
                 InputEvent::Key(KeyEvent {
+                    key: KeyCode::Tab,
+                    modifiers: _,
+                }) => {
+                    self.navigator_state.toggle_multiple_idx();
+                    self.navigator(term)?;
+                }
+                InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
@@ -291,9 +327,19 @@ impl TabulatedListState {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
-        let result = TabulatedListResult {
-            choices: vec![self.navigator_state.choices[self.navigator_state.active_idx].clone()],
+        let navigator_state = &self.navigator_state;
+
+        let choices = if let Some(multiple_idx) = navigator_state.multiple_idx.as_ref() {
+            multiple_idx
+                .iter()
+                .enumerate()
+                .filter(|(_, val)| **val)
+                .map(|(idx, _)| navigator_state.choices[idx].clone())
+                .collect()
+        } else {
+            vec![navigator_state.choices[navigator_state.active_idx].clone()]
         };
+        let result = TabulatedListResult { choices };
         promise::spawn::spawn_into_main_thread(async move {
             trampoline(name, window, pane, result);
             anyhow::Result::<()>::Ok(())
