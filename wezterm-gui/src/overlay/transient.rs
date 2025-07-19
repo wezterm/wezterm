@@ -2,7 +2,8 @@ use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
 use config::configuration;
 use config::keyassignment::{
-    KeyAssignment, TransientArgument as KTransientArgument,
+    KeyAssignment, TransientArgument as KTransientArgument, TransientContext as KTransientContext,
+    TransientContextEntry as KTransientContextEntry,
     TransientCyclicSwitch as KTransientCyclicSwitch, TransientEntry as KTransientEntry,
     TransientMenu as KTransientMenu, TransientOption as KTransientOption,
     TransientSection as KTransientSection, TransientSwitch as KTransientSwitch,
@@ -327,30 +328,26 @@ impl Renderable for TransientSwitch {
         term: &mut TermWizTerminal,
         render_now: bool,
     ) -> termwiz::Result<()> {
-        changes.push(Change::CursorPosition {
-            x: Position::Absolute(0),
-            y: Position::Absolute(self.row),
-        });
-        changes.push(Change::ClearToEndOfLine(ColorAttribute::Default));
-        changes.push(Change::Text("  ".to_string()));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            colors.key_fg,
-        )));
-        changes.push(Change::Text(format!("{}", self.key)));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            ColorAttribute::Default,
-        )));
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(self.row),
+            },
+            Change::ClearToEndOfLine(ColorAttribute::Default),
+            Change::Text("  ".to_string()),
+            Change::Attribute(AttributeChange::Foreground(colors.key_fg)),
+            Change::Text(format!("{}", self.key)),
+            Change::Attribute(AttributeChange::Foreground(ColorAttribute::Default)),
+            Change::Text(format!(" {} (", self.description)),
+        ]);
 
-        changes.push(Change::Text(format!(" {} (", self.description)));
         if self.value {
-            changes.push(Change::Attribute(AttributeChange::Intensity(
-                Intensity::Bold,
-            )));
-            changes.push(Change::Attribute(AttributeChange::Foreground(
-                colors.flag_fg,
-            )));
-            changes.push(Change::Text(self.flag.to_string()));
-            changes.push(Change::AllAttributes(CellAttributes::default()));
+            changes.append(&mut vec![
+                Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
+                Change::Attribute(AttributeChange::Foreground(colors.flag_fg)),
+                Change::Text(self.flag.to_string()),
+                Change::AllAttributes(CellAttributes::default()),
+            ]);
         } else {
             changes.push(Change::Text(self.flag.to_string()));
         }
@@ -396,31 +393,26 @@ impl Renderable for TransientOption {
         term: &mut TermWizTerminal,
         render_now: bool,
     ) -> termwiz::Result<()> {
-        changes.push(Change::CursorPosition {
-            x: Position::Absolute(0),
-            y: Position::Absolute(self.row),
-        });
-        changes.push(Change::ClearToEndOfLine(ColorAttribute::Default));
-        changes.push(Change::Text("  ".to_string()));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            colors.key_fg,
-        )));
-        changes.push(Change::Text(format!("{}", self.key)));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            ColorAttribute::Default,
-        )));
-
-        changes.push(Change::Text(format!(" {} (", self.description)));
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(self.row),
+            },
+            Change::ClearToEndOfLine(ColorAttribute::Default),
+            Change::Text("  ".to_string()),
+            Change::Attribute(AttributeChange::Foreground(colors.key_fg)),
+            Change::Text(format!("{}", self.key)),
+            Change::Attribute(AttributeChange::Foreground(ColorAttribute::Default)),
+            Change::Text(format!(" {} (", self.description)),
+        ]);
 
         if let Some(val) = &self.value {
-            changes.push(Change::Attribute(AttributeChange::Intensity(
-                Intensity::Bold,
-            )));
-            changes.push(Change::Attribute(AttributeChange::Foreground(
-                colors.flag_fg,
-            )));
-            changes.push(Change::Text(format!("{}{}", self.flag, val)));
-            changes.push(Change::AllAttributes(CellAttributes::default()));
+            changes.append(&mut vec![
+                Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
+                Change::Attribute(AttributeChange::Foreground(colors.flag_fg)),
+                Change::Text(format!("{}{}", self.flag, val)),
+                Change::AllAttributes(CellAttributes::default()),
+            ]);
         } else {
             changes.push(Change::Text(format!("{}", self.flag)));
         }
@@ -469,21 +461,19 @@ impl Renderable for TransientCyclicSwitch {
         term: &mut TermWizTerminal,
         render_now: bool,
     ) -> termwiz::Result<()> {
-        changes.push(Change::CursorPosition {
-            x: Position::Absolute(0),
-            y: Position::Absolute(self.row),
-        });
-        changes.push(Change::ClearToEndOfLine(ColorAttribute::Default));
-        changes.push(Change::Text("  ".to_string()));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            colors.key_fg,
-        )));
-        changes.push(Change::Text(format!("{}", self.key)));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            ColorAttribute::Default,
-        )));
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(self.row),
+            },
+            Change::ClearToEndOfLine(ColorAttribute::Default),
+            Change::Text("  ".to_string()),
+            Change::Attribute(AttributeChange::Foreground(colors.key_fg)),
+            Change::Text(format!("{}", self.key)),
+            Change::Attribute(AttributeChange::Foreground(ColorAttribute::Default)),
+            Change::Text(format!(" {} (", self.description)),
+        ]);
 
-        changes.push(Change::Text(format!(" {} (", self.description)));
         if let Some(idx) = self.active_idx {
             changes.append(&mut vec![
                 Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
@@ -573,20 +563,18 @@ impl Renderable for TransientArgument {
         _term: &mut TermWizTerminal,
         _render_now: bool,
     ) -> termwiz::Result<()> {
-        changes.push(Change::CursorPosition {
-            x: Position::Absolute(0),
-            y: Position::Absolute(self.row),
-        });
-        changes.push(Change::ClearToEndOfLine(ColorAttribute::Default));
-        changes.push(Change::Text("  ".to_string()));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            colors.key_fg,
-        )));
-        changes.push(Change::Text(self.key.clone()));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            ColorAttribute::Default,
-        )));
-        changes.push(Change::Text(format!(" {}", self.description)));
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(self.row),
+            },
+            Change::ClearToEndOfLine(ColorAttribute::Default),
+            Change::Text("  ".to_string()),
+            Change::Attribute(AttributeChange::Foreground(colors.key_fg)),
+            Change::Text(self.key.clone()),
+            Change::Attribute(AttributeChange::Foreground(ColorAttribute::Default)),
+            Change::Text(format!(" {}", self.description)),
+        ]);
 
         Ok(())
     }
@@ -640,18 +628,16 @@ impl<'a> TransientSection<'a> {
         term: &mut TermWizTerminal,
         render_entries: bool,
     ) -> termwiz::Result<()> {
-        changes.push(Change::CursorPosition {
-            x: Position::Absolute(0),
-            y: Position::Absolute(self.row),
-        });
-        changes.push(Change::Attribute(AttributeChange::Intensity(
-            Intensity::Bold,
-        )));
-        changes.push(Change::Attribute(AttributeChange::Foreground(
-            colors.section_header_fg,
-        )));
-        changes.push(Change::Text(self.header.to_string()));
-        changes.push(Change::AllAttributes(CellAttributes::default()));
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(self.row),
+            },
+            Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
+            Change::Attribute(AttributeChange::Foreground(colors.section_header_fg)),
+            Change::Text(self.header.to_string()),
+            Change::AllAttributes(CellAttributes::default()),
+        ]);
 
         if render_entries {
             for entry in &self.entries {
@@ -664,6 +650,8 @@ impl<'a> TransientSection<'a> {
 }
 
 enum RenderableEntity<'a> {
+    TransientContext(TransientContext),
+    TransientContextEntry(TransientContextEntry),
     TransientSection(Rc<TransientSection<'a>>),
     TransientOption(Rc<RefCell<TransientOption>>),
     TransientSwitch(Rc<RefCell<TransientSwitch>>),
@@ -679,6 +667,12 @@ impl RenderableEntity<'_> {
         term: &mut TermWizTerminal,
     ) -> termwiz::Result<()> {
         match self {
+            RenderableEntity::TransientContext(context) => {
+                context.render(colors, changes, term, false)
+            }
+            RenderableEntity::TransientContextEntry(entry) => {
+                entry.render(colors, changes, term, false)
+            }
             RenderableEntity::TransientSection(section) => {
                 section.render(colors, changes, term, false)
             }
@@ -698,6 +692,107 @@ impl RenderableEntity<'_> {
     }
 }
 
+#[derive(Clone)]
+struct TransientContextEntry {
+    label: String,
+    id: String,
+    row: usize,
+}
+
+impl TransientContextEntry {
+    fn new(entry: &KTransientContextEntry, row: &mut usize) -> Self {
+        *row += 1;
+
+        Self {
+            label: entry.label.clone(),
+            id: entry.id.clone(),
+            row: *row,
+        }
+    }
+}
+
+impl Renderable for TransientContextEntry {
+    fn render(
+        &self,
+        _colors: &TransientColors,
+        changes: &mut Vec<Change>,
+        _term: &mut TermWizTerminal,
+        _render_now: bool,
+    ) -> termwiz::Result<()> {
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(self.row),
+            },
+            Change::ClearToEndOfLine(ColorAttribute::Default),
+            Change::Text(self.label.to_string()),
+            Change::Text(": ".to_string()),
+            Change::Text(self.id.to_string()),
+        ]);
+
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct TransientContext {
+    header: String,
+    entries: Vec<TransientContextEntry>,
+    row: usize,
+}
+
+impl TransientContext {
+    fn new(
+        context: &KTransientContext,
+        row: &mut usize,
+        row_entities: &mut Vec<Option<RenderableEntity>>,
+    ) -> Self {
+        let context_row = *row;
+
+        row_entities.push(None);
+        let mut entries: Vec<TransientContextEntry> = vec![];
+
+        for context_entry in &context.entries {
+            let entry = TransientContextEntry::new(context_entry, row);
+            row_entities.push(Some(RenderableEntity::TransientContextEntry(entry.clone())));
+            entries.push(entry);
+        }
+        *row += 1;
+
+        Self {
+            header: context.header.clone(),
+            entries,
+            row: context_row,
+        }
+    }
+}
+
+impl Renderable for TransientContext {
+    fn render(
+        &self,
+        colors: &TransientColors,
+        changes: &mut Vec<Change>,
+        term: &mut TermWizTerminal,
+        render_entries: bool,
+    ) -> termwiz::Result<()> {
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(self.row),
+            },
+            Change::Text(self.header.clone()),
+        ]);
+
+        if render_entries {
+            for entry in &self.entries {
+                entry.render(colors, changes, term, false)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 struct TransientState<'a> {
     window: GuiWin,
     pane: MuxPane,
@@ -709,6 +804,7 @@ struct TransientState<'a> {
     selector_state: Option<SelectorState>,
     changes: Vec<Change>,
     row_entities: Vec<Option<RenderableEntity<'a>>>,
+    context: Option<TransientContext>,
 }
 
 impl<'a> TransientState<'a> {
@@ -717,6 +813,20 @@ impl<'a> TransientState<'a> {
         let mut sections = vec![];
         let mut row = 3;
         let mut row_entities: Vec<Option<RenderableEntity>> = vec![None, None, None];
+        let mut context: Option<TransientContext> = None;
+
+        if let Some(k_context) = args.context.as_ref() {
+            let transient_context = TransientContext::new(&k_context, &mut row, &mut row_entities);
+            row_entities[transient_context.row] = Some(RenderableEntity::TransientContext(
+                transient_context.clone(),
+            ));
+
+            context = Some(transient_context);
+
+            row_entities.push(None);
+            row += 1;
+        }
+
         for section in &args.sections {
             let transient_section =
                 TransientSection::new(section, &mut trie_node, &mut row, &mut row_entities);
@@ -729,6 +839,7 @@ impl<'a> TransientState<'a> {
         }
         let root_node = Rc::new(RefCell::new(trie_node));
         let cur_node = Rc::clone(&root_node);
+
         Self {
             window,
             pane,
@@ -740,6 +851,7 @@ impl<'a> TransientState<'a> {
             selector_state: None,
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
             row_entities,
+            context,
         }
     }
 
@@ -757,6 +869,10 @@ impl<'a> TransientState<'a> {
             Change::Text("\r\n".to_string()),
             Change::Text("─".repeat(self.description.len())),
         ]);
+
+        if let Some(context) = self.context.as_ref() {
+            context.render(&self.colors, &mut self.changes, term, true)?;
+        }
 
         for section in &self.sections {
             section.render(&self.colors, &mut self.changes, term, true)?;
@@ -842,11 +958,13 @@ impl<'a> TransientState<'a> {
             ]);
             selector_state.line_drawn = true;
         } else {
-            changes.push(Change::CursorPosition {
-                x: Position::Absolute(0),
-                y: Position::EndRelative(1 + input_selector_size),
-            });
-            changes.push(Change::ClearToEndOfScreen(ColorAttribute::Default));
+            changes.append(&mut vec![
+                Change::CursorPosition {
+                    x: Position::Absolute(0),
+                    y: Position::EndRelative(1 + input_selector_size),
+                },
+                Change::ClearToEndOfScreen(ColorAttribute::Default),
+            ]);
         }
 
         changes.push(Change::Text(truncate_right(

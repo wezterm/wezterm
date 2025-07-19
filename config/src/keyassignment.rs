@@ -586,8 +586,22 @@ pub struct TransientSection {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct TransientContextEntry {
+    pub label: String,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct TransientContext {
+    pub header: String,
+    pub entries: Vec<TransientContextEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct TransientMenu {
     pub description: String,
+    #[dynamic(default)]
+    pub context: Option<TransientContext>,
     pub sections: Vec<TransientSection>,
 }
 
