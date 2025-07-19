@@ -1,7 +1,5 @@
 use crate::scripting::guiwin::GuiWin;
-use config::keyassignment::{
-    KeyAssignment, TabulatedList, TransientArgument as KTransientArgument, TransientContext,
-};
+use config::keyassignment::{KeyAssignment, TabulatedList, TransientArgument, TransientContext};
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
 use std::cell::RefCell;
@@ -93,23 +91,6 @@ impl NavigatorState {
     }
 }
 
-#[derive(Clone)]
-struct TransientArgument {
-    key: String,
-    description: String,
-    action: Box<KeyAssignment>,
-}
-
-impl From<&KTransientArgument> for TransientArgument {
-    fn from(value: &KTransientArgument) -> Self {
-        Self {
-            key: value.key.clone(),
-            description: value.description.clone(),
-            action: value.action.clone(),
-        }
-    }
-}
-
 struct TabulatedListState {
     window: GuiWin,
     pane: MuxPane,
@@ -139,9 +120,8 @@ impl TabulatedListState {
         let mut arguments = vec![];
 
         for positional_arg in &args.actions {
-            let new_arg = TransientArgument::from(positional_arg);
-            trie_node.add_word(&positional_arg.key, new_arg.clone());
-            arguments.push(new_arg);
+            trie_node.add_word(&positional_arg.key, positional_arg.clone());
+            arguments.push(positional_arg.clone());
         }
 
         let root_node = Rc::new(RefCell::new(trie_node));
