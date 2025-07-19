@@ -79,7 +79,7 @@ trait Renderable {
 enum TransientEntry {
     TransientOption(Rc<RefCell<TransientOption>>),
     TransientSwitch(Rc<RefCell<TransientSwitch>>),
-    TransientArgument(Rc<RefCell<TransientArgument>>),
+    TransientArgument(TransientArgument),
     TransientCyclicSwitch(Rc<RefCell<TransientCyclicSwitch>>),
 }
 
@@ -95,7 +95,7 @@ impl Renderable for TransientEntry {
             Self::TransientOption(option) => option.borrow().render(colors, changes, term, false),
             Self::TransientSwitch(switch) => switch.borrow().render(colors, changes, term, false),
             Self::TransientArgument(positional_arg) => {
-                positional_arg.borrow().render(colors, changes, term, false)
+                positional_arg.render(colors, changes, term, false)
             }
             Self::TransientCyclicSwitch(cyclic_switch) => {
                 cyclic_switch.borrow().render(colors, changes, term, false)
@@ -146,12 +146,11 @@ impl TransientEntry {
                 Self::TransientCyclicSwitch(new_cyclic_switch)
             }
             KTransientEntry::TransientArgument(positional_arg) => {
-                let new_argument =
-                    Rc::new(RefCell::new(TransientArgument::new(positional_arg, *row)));
-                let cloned_argument = Rc::clone(&new_argument);
-                let entry = Self::TransientArgument(cloned_argument);
-                let cloned_argument = Rc::clone(&new_argument);
-                row_entities.push(Some(RenderableEntity::TransientArgument(cloned_argument)));
+                let new_argument = TransientArgument::new(positional_arg, *row);
+                let entry = Self::TransientArgument(new_argument.clone());
+                row_entities.push(Some(RenderableEntity::TransientArgument(
+                    new_argument.clone(),
+                )));
                 root.add_word(&positional_arg.key, entry);
                 Self::TransientArgument(new_argument)
             }
@@ -548,6 +547,7 @@ impl TransientCyclicSwitch {
     }
 }
 
+#[derive(Clone)]
 struct TransientArgument {
     key: String,
     description: String,
@@ -655,7 +655,7 @@ enum RenderableEntity<'a> {
     TransientSection(Rc<TransientSection<'a>>),
     TransientOption(Rc<RefCell<TransientOption>>),
     TransientSwitch(Rc<RefCell<TransientSwitch>>),
-    TransientArgument(Rc<RefCell<TransientArgument>>),
+    TransientArgument(TransientArgument),
     TransientCyclicSwitch(Rc<RefCell<TransientCyclicSwitch>>),
 }
 
@@ -686,7 +686,7 @@ impl RenderableEntity<'_> {
                 option.borrow().render(colors, changes, term, false)
             }
             RenderableEntity::TransientArgument(positional_arg) => {
-                positional_arg.borrow().render(colors, changes, term, false)
+                positional_arg.render(colors, changes, term, false)
             }
         }
     }
@@ -1138,7 +1138,6 @@ impl<'a> TransientState<'a> {
                                         self.cur_node = Rc::clone(&self.root_node);
                                     }
                                     TransientEntry::TransientArgument(positional_arg) => {
-                                        let positional_arg = positional_arg.borrow();
                                         let name = match *positional_arg.action {
                                             KeyAssignment::EmitEvent(ref id) => id,
                                             _ => anyhow::bail!("TransientMenu requires action to be defined by wezterm.action_callback")
