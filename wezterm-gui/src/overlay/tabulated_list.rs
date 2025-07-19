@@ -18,7 +18,7 @@ use window::Modifiers;
 struct TrieNode {
     children: HashMap<char, Rc<RefCell<TrieNode>>>,
     is_end_of_word: bool,
-    entry: Option<Rc<TransientArgument>>,
+    entry: Option<TransientArgument>,
 }
 
 impl TrieNode {
@@ -30,7 +30,7 @@ impl TrieNode {
         }
     }
 
-    fn add_word(&mut self, word: &str, entry: Rc<TransientArgument>) {
+    fn add_word(&mut self, word: &str, entry: TransientArgument) {
         match word.chars().next() {
             Some(c) => {
                 match self.children.get(&c) {
@@ -93,6 +93,7 @@ impl NavigatorState {
     }
 }
 
+#[derive(Clone)]
 struct TransientArgument {
     key: String,
     description: String,
@@ -116,7 +117,7 @@ struct TabulatedListState {
     root_node: Rc<RefCell<TrieNode>>,
     cur_node: Rc<RefCell<TrieNode>>,
     context: Option<TransientContext>,
-    arguments: Vec<Rc<TransientArgument>>,
+    arguments: Vec<TransientArgument>,
     changes: Vec<Change>,
 }
 
@@ -138,9 +139,8 @@ impl TabulatedListState {
         let mut arguments = vec![];
 
         for positional_arg in &args.actions {
-            let new_arg = Rc::new(TransientArgument::from(positional_arg));
-            let cloned_arg = Rc::clone(&new_arg);
-            trie_node.add_word(&positional_arg.key, cloned_arg);
+            let new_arg = TransientArgument::from(positional_arg);
+            trie_node.add_word(&positional_arg.key, new_arg.clone());
             arguments.push(new_arg);
         }
 
