@@ -79,23 +79,57 @@ struct SelectorState {
     filter_term: String,
     description: String,
     fuzzy_description: Option<String>,
+    window: GuiWin,
+    pane: MuxPane,
+    root_node: Rc<RefCell<TrieNode>>,
+    cur_node: Rc<RefCell<TrieNode>>,
+    context: Option<TransientContext>,
+    arguments: Vec<TransientArgument>,
+    changes: Vec<Change>,
 }
 
 impl SelectorState {
-    fn new(
-        choices: Vec<SelectorEntry>,
-        size: &ScreenSize,
-        overhead: usize,
-        multiple: bool,
-        description: String,
-        fuzzy_description: Option<String>,
-    ) -> Self {
+    fn new(args: &TabulatedList, window: GuiWin, pane: MuxPane, size: &ScreenSize) -> Self {
+        let context_size = args
+            .context
+            .as_ref()
+            .map_or_else(|| 0, |v| v.entries.len() + 2);
+
+        let positional_args_size = args.actions.len() + 1;
+
+        let overhead = context_size + positional_args_size + 3;
+
+        let choices: Vec<SelectorEntry> = args
+            .choices
+            .iter()
+            .enumerate()
+            .map(|(idx, label)| SelectorEntry {
+                idx,
+                label: label.clone(),
+            })
+            .collect();
+
         let max_items = size.rows.saturating_sub(overhead);
         let selector_size = choices.len().min(max_items);
-        let multiple_idx = multiple.then(|| choices.iter().map(|_| false).collect());
+
+        let multiple_idx: Option<Vec<bool>> = args
+            .multiple
+            .then(|| choices.iter().map(|_| false).collect());
+
         let filtered_entries = choices.clone();
 
-        Self {
+        let mut arguments = vec![];
+        let mut trie_node = TrieNode::new();
+
+        for positional_arg in &args.actions {
+            trie_node.add_word(&positional_arg.key, positional_arg.clone());
+            arguments.push(positional_arg.clone());
+        }
+
+        let root_node = Rc::new(RefCell::new(trie_node));
+        let cur_node = Rc::clone(&root_node);
+
+        SelectorState {
             active_idx: 0,
             max_items,
             top_row: 0,
@@ -106,9 +140,42 @@ impl SelectorState {
             filtered_entries,
             filtering: false,
             filter_term: String::new(),
-            description,
-            fuzzy_description,
+            description: args.description.clone(),
+            fuzzy_description: args.fuzzy_description.clone(),
+            window,
+            pane,
+            root_node,
+            cur_node,
+            context: args.context.clone(),
+            arguments,
+            changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
         }
+    }
+
+    fn render_constants(&mut self) -> termwiz::Result<()> {
+        if let Some(context) = self.context.as_ref() {
+            self.changes
+                .push(Change::Text(format!("{}\r\n", context.header)));
+            for entry in &context.entries {
+                self.changes
+                    .push(Change::Text(format!("{}: {}\r\n", entry.label, entry.id)));
+            }
+            self.changes.push(Change::Text("\r\n".to_string()));
+        }
+
+        self.changes.push(Change::Text(format!("Arguments")));
+        for positional_arg in &self.arguments {
+            self.changes.push(Change::Text(format!(
+                "\r\n{} {}",
+                positional_arg.key, positional_arg.description
+            )));
+        }
+
+        self.changes.push(Change::Text("\r\n".to_string()));
+        self.changes.push(Change::Text("─".repeat(self.cols)));
+        self.changes.push(Change::Text("\r\n".to_string()));
+
+        Ok(())
     }
 
     fn move_up(&mut self) {
@@ -173,11 +240,9 @@ impl SelectorState {
         self.top_row = 0;
     }
 
-    fn render(
-        &mut self,
-        term: &mut TermWizTerminal,
-        changes: &mut Vec<Change>,
-    ) -> anyhow::Result<()> {
+    fn render(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
+        let changes = &mut self.changes;
+
         let cols = self.cols;
         let max_width = cols.saturating_sub(6);
         changes.push(Change::CursorPosition {
@@ -193,10 +258,7 @@ impl SelectorState {
                 truncate_right(&self.description, max_width)
             )));
         } else {
-            let description = self
-                .fuzzy_description
-                .as_ref()
-                .unwrap_or_else(|| &self.description);
+            let description = self.fuzzy_description.as_ref().unwrap_or(&self.description);
             changes.push(Change::Text(truncate_right(
                 &format!("{}{}\r\n", description, self.filter_term),
                 max_width,
@@ -256,101 +318,6 @@ impl SelectorState {
 
         Ok(())
     }
-}
-
-struct TabulatedListState {
-    window: GuiWin,
-    pane: MuxPane,
-    selector_state: SelectorState,
-    root_node: Rc<RefCell<TrieNode>>,
-    cur_node: Rc<RefCell<TrieNode>>,
-    context: Option<TransientContext>,
-    arguments: Vec<TransientArgument>,
-    changes: Vec<Change>,
-}
-
-impl TabulatedListState {
-    fn new(args: &TabulatedList, window: GuiWin, pane: MuxPane, size: &ScreenSize) -> Self {
-        let mut trie_node = TrieNode::new();
-
-        let context_size = args
-            .context
-            .as_ref()
-            .map_or_else(|| 0, |v| v.entries.len() + 2);
-
-        let positional_args_size = args.actions.len() + 1;
-
-        let overhead = context_size + positional_args_size + 3;
-
-        let choices: Vec<SelectorEntry> = args
-            .choices
-            .iter()
-            .enumerate()
-            .map(|(idx, label)| SelectorEntry {
-                idx,
-                label: label.clone(),
-            })
-            .collect();
-
-        let selector_state = SelectorState::new(
-            choices,
-            size,
-            overhead,
-            args.multiple,
-            args.description.clone(),
-            args.fuzzy_description.clone(),
-        );
-
-        let mut arguments = vec![];
-
-        for positional_arg in &args.actions {
-            trie_node.add_word(&positional_arg.key, positional_arg.clone());
-            arguments.push(positional_arg.clone());
-        }
-
-        let root_node = Rc::new(RefCell::new(trie_node));
-        let cur_node = Rc::clone(&root_node);
-
-        Self {
-            window,
-            pane,
-            selector_state,
-            root_node,
-            cur_node,
-            context: args.context.clone(),
-            arguments,
-            changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
-        }
-    }
-
-    fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
-        if let Some(context) = self.context.as_ref() {
-            self.changes
-                .push(Change::Text(format!("{}\r\n", context.header)));
-            for entry in &context.entries {
-                self.changes
-                    .push(Change::Text(format!("{}: {}\r\n", entry.label, entry.id)));
-            }
-            self.changes.push(Change::Text("\r\n".to_string()));
-        }
-
-        self.changes.push(Change::Text(format!("Arguments")));
-        for positional_arg in &self.arguments {
-            self.changes.push(Change::Text(format!(
-                "\r\n{} {}",
-                positional_arg.key, positional_arg.description
-            )));
-        }
-
-        self.changes.push(Change::Text("\r\n".to_string()));
-        self.changes
-            .push(Change::Text("─".repeat(self.selector_state.cols)));
-        self.changes.push(Change::Text("\r\n".to_string()));
-
-        self.selector_state.render(term, &mut self.changes)?;
-
-        Ok(())
-    }
 
     fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         while let Ok(Some(event)) = term.poll_input(None) {
@@ -369,46 +336,46 @@ impl TabulatedListState {
                     key: KeyCode::Char('P' | 'K'),
                     modifiers: Modifiers::CTRL,
                 }) => {
-                    self.selector_state.move_up();
-                    self.selector_state.render(term, &mut self.changes)?;
+                    self.move_up();
+                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('N' | 'J'),
                     modifiers: Modifiers::CTRL,
                 }) => {
-                    self.selector_state.move_down();
-                    self.selector_state.render(term, &mut self.changes)?;
+                    self.move_down();
+                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('/'),
                     modifiers: Modifiers::CTRL,
                 }) => {
-                    self.selector_state.toggle_search();
-                    self.selector_state.render(term, &mut self.changes)?;
+                    self.toggle_search();
+                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,
                     modifiers: _,
                 }) => {
-                    self.selector_state.toggle_multiple_idx();
-                    self.selector_state.render(term, &mut self.changes)?;
+                    self.toggle_multiple_idx();
+                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Backspace,
                     modifiers: _,
-                }) if self.selector_state.filtering => {
-                    if self.selector_state.filter_term.pop().is_some() {
-                        self.selector_state.update_filter();
-                        self.selector_state.render(term, &mut self.changes)?;
+                }) if self.filtering => {
+                    if self.filter_term.pop().is_some() {
+                        self.update_filter();
+                        self.render(term)?;
                     }
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
                     modifiers: _,
-                }) if self.selector_state.filtering => {
-                    self.selector_state.filter_term.push(c);
-                    self.selector_state.update_filter();
-                    self.selector_state.render(term, &mut self.changes)?;
+                }) if self.filtering => {
+                    self.filter_term.push(c);
+                    self.update_filter();
+                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
@@ -448,20 +415,17 @@ impl TabulatedListState {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
-        let selector_state = &self.selector_state;
 
-        let choices: Vec<String> = if let Some(multiple_idx) = selector_state.multiple_idx.as_ref()
-        {
+        let choices: Vec<String> = if let Some(multiple_idx) = self.multiple_idx.as_ref() {
             multiple_idx
                 .iter()
                 .enumerate()
                 .filter(|(_, val)| **val)
-                .map(|(idx, _)| selector_state.choices[idx].label.clone())
+                .map(|(idx, _)| self.choices[idx].label.clone())
                 .collect()
         } else {
-            if !selector_state.filtered_entries.is_empty() {
-                vec![selector_state.choices
-                    [selector_state.filtered_entries[selector_state.active_idx].idx]
+            if !self.filtered_entries.is_empty() {
+                vec![self.choices[self.filtered_entries[self.active_idx].idx]
                     .label
                     .clone()]
             } else {
@@ -520,8 +484,9 @@ pub fn show_tabulated_list_overlay(
 ) -> anyhow::Result<()> {
     term.no_grab_mouse_in_raw_mode();
     let size = term.get_screen_size()?;
-    let mut state = TabulatedListState::new(&args, window, pane, &size);
+    let mut state = SelectorState::new(&args, window, pane, &size);
 
+    state.render_constants()?;
     state.render(&mut term)?;
     state.run_loop(&mut term)?;
     Ok(())
