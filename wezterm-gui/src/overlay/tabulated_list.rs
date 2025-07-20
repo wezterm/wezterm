@@ -78,6 +78,7 @@ struct SelectorState {
     filtering: bool,
     filter_term: String,
     description: String,
+    fuzzy_description: Option<String>,
 }
 
 impl SelectorState {
@@ -87,6 +88,7 @@ impl SelectorState {
         overhead: usize,
         multiple: bool,
         description: String,
+        fuzzy_description: Option<String>,
     ) -> Self {
         let max_items = size.rows.saturating_sub(overhead);
         let selector_size = choices.len().min(max_items);
@@ -105,6 +107,7 @@ impl SelectorState {
             filtering: false,
             filter_term: String::new(),
             description,
+            fuzzy_description,
         }
     }
 
@@ -190,8 +193,12 @@ impl SelectorState {
                 truncate_right(&self.description, max_width)
             )));
         } else {
+            let description = self
+                .fuzzy_description
+                .as_ref()
+                .unwrap_or_else(|| &self.description);
             changes.push(Change::Text(truncate_right(
-                &format!("{}: {}\r\n", self.description, self.filter_term),
+                &format!("{}{}\r\n", description, self.filter_term),
                 max_width,
             )));
         }
@@ -291,6 +298,7 @@ impl TabulatedListState {
             overhead,
             args.multiple,
             args.description.clone(),
+            args.fuzzy_description.clone(),
         );
 
         let mut arguments = vec![];

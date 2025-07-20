@@ -614,6 +614,8 @@ pub struct TabulatedList {
     pub actions: Vec<TransientArgument>,
     #[dynamic(default)]
     pub multiple: bool,
+    #[dynamic(default)]
+    pub fuzzy_description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
