@@ -155,15 +155,6 @@ impl TabulatedListState {
     }
 
     fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
-        self.changes.append(&mut vec![
-            Change::CursorPosition {
-                x: Position::Absolute(0),
-                y: Position::Absolute(self.selector_state.selector_size + 1),
-            },
-            Change::Text("─".repeat(self.selector_state.cols)),
-            Change::Text("\r\n".to_string()),
-        ]);
-
         if let Some(context) = self.context.as_ref() {
             self.changes
                 .push(Change::Text(format!("{}\r\n", context.header)));
@@ -182,6 +173,11 @@ impl TabulatedListState {
             )));
         }
 
+        self.changes.push(Change::Text("\r\n".to_string()));
+        self.changes
+            .push(Change::Text("─".repeat(self.selector_state.cols)));
+        self.changes.push(Change::Text("\r\n".to_string()));
+
         self.selector(term)?;
 
         Ok(())
@@ -194,8 +190,10 @@ impl TabulatedListState {
         let selector_state = &self.selector_state;
         changes.push(Change::CursorPosition {
             x: Position::Absolute(0),
-            y: Position::Absolute(0),
+            y: Position::EndRelative(self.selector_state.selector_size),
         });
+
+        changes.push(Change::ClearToEndOfScreen(ColorAttribute::Default));
 
         let multiple_idx = &selector_state.multiple_idx;
 
