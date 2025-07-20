@@ -77,6 +77,7 @@ struct SelectorState {
     filtered_entries: Vec<SelectorEntry>,
     filtering: bool,
     filter_term: String,
+    description: String,
 }
 
 impl SelectorState {
@@ -85,6 +86,7 @@ impl SelectorState {
         size: &ScreenSize,
         overhead: usize,
         multiple: bool,
+        description: String,
     ) -> Self {
         let max_items = size.rows.saturating_sub(overhead);
         let selector_size = choices.len().min(max_items);
@@ -102,6 +104,7 @@ impl SelectorState {
             filtered_entries,
             filtering: false,
             filter_term: String::new(),
+            description,
         }
     }
 
@@ -166,6 +169,86 @@ impl SelectorState {
         self.active_idx = 0;
         self.top_row = 0;
     }
+
+    fn render(
+        &mut self,
+        term: &mut TermWizTerminal,
+        changes: &mut Vec<Change>,
+    ) -> anyhow::Result<()> {
+        let cols = self.cols;
+        let max_width = cols.saturating_sub(6);
+        changes.push(Change::CursorPosition {
+            x: Position::Absolute(0),
+            y: Position::EndRelative(self.selector_size + 1),
+        });
+
+        changes.push(Change::ClearToEndOfScreen(ColorAttribute::Default));
+
+        if !self.filtering {
+            changes.push(Change::Text(format!(
+                "{}\r\n",
+                truncate_right(&self.description, max_width)
+            )));
+        } else {
+            changes.push(Change::Text(truncate_right(
+                &format!("{}: {}\r\n", self.description, self.filter_term),
+                max_width,
+            )));
+        }
+
+        let max_items = self.max_items;
+
+        for (row_num, (entry_idx, entry)) in self
+            .filtered_entries
+            .iter()
+            .enumerate()
+            .skip(self.top_row)
+            .enumerate()
+        {
+            if row_num > max_items {
+                break;
+            }
+
+            if row_num != 0 {
+                changes.push(Change::Text("\r\n".to_string()));
+            }
+
+            let mut attr = CellAttributes::blank();
+
+            if let Some(multiple_idx) = self.multiple_idx.as_ref() {
+                if multiple_idx[self.filtered_entries[entry_idx].idx] {
+                    changes.append(&mut vec![
+                        Change::Attribute(AttributeChange::Background(AnsiColor::Purple.into())),
+                        Change::Text(" ".to_string()),
+                        Change::Attribute(AttributeChange::Background(ColorAttribute::Default)),
+                    ]);
+                } else {
+                    changes.push(Change::Text(" ".to_string()));
+                }
+            }
+
+            if entry_idx == self.active_idx {
+                changes.push(AttributeChange::Reverse(true).into());
+                attr.set_reverse(true);
+            }
+
+            changes.push(Change::Text("    ".to_string()));
+            let mut line = crate::tabbar::parse_status_text(&entry.label, attr.clone());
+            if line.len() > max_width {
+                line.resize(max_width, termwiz::surface::SEQ_ZERO);
+            }
+            changes.append(&mut line.changes(&attr));
+            changes.push(Change::Text(" ".to_string()));
+            if entry_idx == self.active_idx {
+                changes.push(AttributeChange::Reverse(false).into());
+            }
+            changes.push(Change::AllAttributes(CellAttributes::default()));
+        }
+        term.render(changes)?;
+        changes.clear();
+
+        Ok(())
+    }
 }
 
 struct TabulatedListState {
@@ -177,7 +260,6 @@ struct TabulatedListState {
     context: Option<TransientContext>,
     arguments: Vec<TransientArgument>,
     changes: Vec<Change>,
-    description: String,
 }
 
 impl TabulatedListState {
@@ -203,7 +285,13 @@ impl TabulatedListState {
             })
             .collect();
 
-        let selector_state = SelectorState::new(choices, size, overhead, args.multiple);
+        let selector_state = SelectorState::new(
+            choices,
+            size,
+            overhead,
+            args.multiple,
+            args.description.clone(),
+        );
 
         let mut arguments = vec![];
 
@@ -224,7 +312,6 @@ impl TabulatedListState {
             context: args.context.clone(),
             arguments,
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
-            description: args.description.clone(),
         }
     }
 
@@ -252,90 +339,7 @@ impl TabulatedListState {
             .push(Change::Text("─".repeat(self.selector_state.cols)));
         self.changes.push(Change::Text("\r\n".to_string()));
 
-        self.selector(term)?;
-
-        Ok(())
-    }
-
-    fn selector(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
-        let cols = self.selector_state.cols;
-        let max_width = cols.saturating_sub(6);
-        let changes = &mut self.changes;
-        let selector_state = &self.selector_state;
-        changes.push(Change::CursorPosition {
-            x: Position::Absolute(0),
-            y: Position::EndRelative(self.selector_state.selector_size + 1),
-        });
-
-        changes.push(Change::ClearToEndOfScreen(ColorAttribute::Default));
-
-        if !self.selector_state.filtering {
-            changes.push(Change::Text(format!(
-                "{}\r\n",
-                truncate_right(&self.description, max_width)
-            )));
-        } else {
-            changes.push(Change::Text(truncate_right(
-                &format!(
-                    "{}: {}\r\n",
-                    self.description, self.selector_state.filter_term
-                ),
-                max_width,
-            )));
-        }
-
-        let multiple_idx = &selector_state.multiple_idx;
-
-        let max_items = self.selector_state.max_items;
-
-        for (row_num, (entry_idx, entry)) in selector_state
-            .filtered_entries
-            .iter()
-            .enumerate()
-            .skip(self.selector_state.top_row)
-            .enumerate()
-        {
-            if row_num > max_items {
-                break;
-            }
-
-            if row_num != 0 {
-                changes.push(Change::Text("\r\n".to_string()));
-            }
-
-            let mut attr = CellAttributes::blank();
-
-            if let Some(multiple_idx) = multiple_idx {
-                if multiple_idx[self.selector_state.filtered_entries[entry_idx].idx] {
-                    changes.append(&mut vec![
-                        Change::Attribute(AttributeChange::Background(AnsiColor::Purple.into())),
-                        Change::Text(" ".to_string()),
-                        Change::Attribute(AttributeChange::Background(ColorAttribute::Default)),
-                    ]);
-                } else {
-                    changes.push(Change::Text(" ".to_string()));
-                }
-            }
-
-            if entry_idx == selector_state.active_idx {
-                changes.push(AttributeChange::Reverse(true).into());
-                attr.set_reverse(true);
-            }
-
-            changes.push(Change::Text("    ".to_string()));
-            let mut line = crate::tabbar::parse_status_text(&entry.label, attr.clone());
-            if line.len() > max_width {
-                line.resize(max_width, termwiz::surface::SEQ_ZERO);
-            }
-            changes.append(&mut line.changes(&attr));
-            changes.push(Change::Text(" ".to_string()));
-            if entry_idx == selector_state.active_idx {
-                changes.push(AttributeChange::Reverse(false).into());
-            }
-            changes.push(Change::AllAttributes(CellAttributes::default()));
-        }
-        term.render(changes)?;
-        changes.clear();
+        self.selector_state.render(term, &mut self.changes)?;
 
         Ok(())
     }
@@ -358,28 +362,28 @@ impl TabulatedListState {
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.selector_state.move_up();
-                    self.selector(term)?;
+                    self.selector_state.render(term, &mut self.changes)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('N' | 'J'),
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.selector_state.move_down();
-                    self.selector(term)?;
+                    self.selector_state.render(term, &mut self.changes)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('/'),
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.selector_state.toggle_search();
-                    self.selector(term)?;
+                    self.selector_state.render(term, &mut self.changes)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,
                     modifiers: _,
                 }) => {
                     self.selector_state.toggle_multiple_idx();
-                    self.selector(term)?;
+                    self.selector_state.render(term, &mut self.changes)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Backspace,
@@ -387,7 +391,7 @@ impl TabulatedListState {
                 }) if self.selector_state.filtering => {
                     if self.selector_state.filter_term.pop().is_some() {
                         self.selector_state.update_filter();
-                        self.selector(term)?;
+                        self.selector_state.render(term, &mut self.changes)?;
                     }
                 }
                 InputEvent::Key(KeyEvent {
@@ -396,7 +400,7 @@ impl TabulatedListState {
                 }) if self.selector_state.filtering => {
                     self.selector_state.filter_term.push(c);
                     self.selector_state.update_filter();
-                    self.selector(term)?;
+                    self.selector_state.render(term, &mut self.changes)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
