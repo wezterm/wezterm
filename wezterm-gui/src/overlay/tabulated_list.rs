@@ -155,14 +155,14 @@ impl TabulatedListState {
     }
 
     fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
-        self.changes.push(Change::CursorPosition {
-            x: Position::Absolute(0),
-            y: Position::Absolute(self.navigator_state.navigator_size + 1),
-        });
-
-        self.changes
-            .push(Change::Text("─".repeat(self.navigator_state.cols)));
-        self.changes.push(Change::Text("\r\n".to_string()));
+        self.changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::Absolute(self.navigator_state.navigator_size + 1),
+            },
+            Change::Text("─".repeat(self.navigator_state.cols)),
+            Change::Text("\r\n".to_string()),
+        ]);
 
         if let Some(context) = self.context.as_ref() {
             self.changes
@@ -220,13 +220,11 @@ impl TabulatedListState {
 
             if let Some(multiple_idx) = multiple_idx {
                 if multiple_idx[entry_idx] {
-                    changes.push(Change::Attribute(AttributeChange::Background(
-                        AnsiColor::Purple.into(),
-                    )));
-                    changes.push(Change::Text(" ".to_string()));
-                    changes.push(Change::Attribute(AttributeChange::Background(
-                        ColorAttribute::Default,
-                    )));
+                    changes.append(&mut vec![
+                        Change::Attribute(AttributeChange::Background(AnsiColor::Purple.into())),
+                        Change::Text(" ".to_string()),
+                        Change::Attribute(AttributeChange::Background(ColorAttribute::Default)),
+                    ]);
                 } else {
                     changes.push(Change::Text(" ".to_string()));
                 }
