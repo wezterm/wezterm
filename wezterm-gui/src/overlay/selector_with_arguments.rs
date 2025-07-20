@@ -392,8 +392,28 @@ impl SelectorState {
                                             KeyAssignment::EmitEvent(ref id) => id,
                                             _ => anyhow::bail!("SelectorWithArguments requires action to be defined by wezterm.action_callback")
                                         };
-                                    self.trigger_event(name);
-                                    break;
+
+                                    let choices: Vec<String> =
+                                        if let Some(multiple_idx) = self.multiple_idx.as_ref() {
+                                            multiple_idx
+                                                .iter()
+                                                .enumerate()
+                                                .filter(|(_, val)| **val)
+                                                .map(|(idx, _)| self.choices[idx].label.clone())
+                                                .collect()
+                                        } else {
+                                            if !self.filtered_entries.is_empty() {
+                                                vec![self.choices
+                                                    [self.filtered_entries[self.active_idx].idx]
+                                                    .label
+                                                    .clone()]
+                                            } else {
+                                                vec![]
+                                            }
+                                        };
+                                    if self.launch(name, choices) {
+                                        break;
+                                    }
                                 }
                             } else {
                                 self.cur_node = Rc::clone(&cur_node);
@@ -411,35 +431,25 @@ impl SelectorState {
         Ok(())
     }
 
-    fn trigger_event(&self, name: &str) {
+    fn trigger_event(&self, name: &str, result: SelectorWithArgumentsResult) {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
 
-        let choices: Vec<String> = if let Some(multiple_idx) = self.multiple_idx.as_ref() {
-            multiple_idx
-                .iter()
-                .enumerate()
-                .filter(|(_, val)| **val)
-                .map(|(idx, _)| self.choices[idx].label.clone())
-                .collect()
-        } else {
-            if !self.filtered_entries.is_empty() {
-                vec![self.choices[self.filtered_entries[self.active_idx].idx]
-                    .label
-                    .clone()]
-            } else {
-                vec![]
-            }
-        };
+        promise::spawn::spawn_into_main_thread(async move {
+            trampoline(name, window, pane, result);
+            anyhow::Result::<()>::Ok(())
+        })
+        .detach();
+    }
 
+    fn launch(&self, name: &str, choices: Vec<String>) -> bool {
         if !choices.is_empty() {
             let result = SelectorWithArgumentsResult { choices };
-            promise::spawn::spawn_into_main_thread(async move {
-                trampoline(name, window, pane, result);
-                anyhow::Result::<()>::Ok(())
-            })
-            .detach();
+            self.trigger_event(name, result);
+            true
+        } else {
+            false
         }
     }
 }
