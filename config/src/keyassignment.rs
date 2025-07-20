@@ -606,7 +606,7 @@ pub struct TransientMenu {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
-pub struct TabulatedList {
+pub struct SelectorWithArguments {
     pub description: String,
     #[dynamic(default)]
     pub context: Option<TransientContext>,
@@ -734,7 +734,7 @@ pub enum KeyAssignment {
     InputSelector(InputSelector),
     Confirmation(Confirmation),
     TransientMenu(TransientMenu),
-    TabulatedList(TabulatedList),
+    SelectorWithArguments(SelectorWithArguments),
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

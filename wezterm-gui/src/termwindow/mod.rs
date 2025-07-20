@@ -30,9 +30,9 @@ use ::wezterm_term::input::{ClickPosition, MouseButton as TMB};
 use ::window::*;
 use anyhow::{anyhow, ensure, Context};
 use config::keyassignment::{
-    Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern,
-    PromptInputLine, QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
-    TabulatedList, TransientMenu,
+    Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
+    QuickSelectArguments, RotationDirection, SelectorWithArguments, SpawnCommand, SplitSize,
+    TransientMenu,
 };
 use config::window::WindowLevel;
 use config::{
@@ -2363,6 +2363,31 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
+    fn show_selector_with_arguments(&mut self, args: &SelectorWithArguments) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+
+        let pane = match self.get_active_pane_or_overlay() {
+            Some(pane) => pane,
+            None => return,
+        };
+
+        let args = args.clone();
+
+        let gui_win = GuiWin::new(self);
+        let pane = MuxPane(pane.pane_id());
+
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            crate::overlay::selector_with_arguments::show_selector_with_arguments_overlay(
+                term, args, gui_win, pane,
+            )
+        });
+        self.assign_overlay(tab.tab_id(), overlay);
+        promise::spawn::spawn(future).detach();
+    }
 
     fn show_debug_overlay(&mut self) {
         let mux = Mux::get();
@@ -3179,7 +3204,7 @@ impl TermWindow {
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
             TransientMenu(args) => self.show_transient_menu(args),
-            TabulatedList(args) => self.show_tabulated_list(args),
+            SelectorWithArguments(args) => self.show_selector_with_arguments(args),
         };
         Ok(PerformAssignmentResult::Handled)
     }

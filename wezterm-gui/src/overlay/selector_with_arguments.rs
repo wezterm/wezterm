@@ -1,7 +1,7 @@
 use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
 use config::{
-    keyassignment::{KeyAssignment, TabulatedList, TransientArgument, TransientContext},
+    keyassignment::{KeyAssignment, SelectorWithArguments, TransientArgument, TransientContext},
     AnsiColor, ColorAttribute,
 };
 use luahelper::impl_lua_conversion_dynamic;
@@ -89,7 +89,7 @@ struct SelectorState {
 }
 
 impl SelectorState {
-    fn new(args: &TabulatedList, window: GuiWin, pane: MuxPane, size: &ScreenSize) -> Self {
+    fn new(args: &SelectorWithArguments, window: GuiWin, pane: MuxPane, size: &ScreenSize) -> Self {
         let context_size = args
             .context
             .as_ref()
@@ -390,7 +390,7 @@ impl SelectorState {
                                 if let Some(positional_arg) = cur_node_borrowed.entry.as_ref() {
                                     let name = match *positional_arg.action {
                                             KeyAssignment::EmitEvent(ref id) => id,
-                                            _ => anyhow::bail!("TabulatedList requires action to be defined by wezterm.action_callback")
+                                            _ => anyhow::bail!("SelectorWithArguments requires action to be defined by wezterm.action_callback")
                                         };
                                     self.trigger_event(name);
                                     break;
@@ -434,7 +434,7 @@ impl SelectorState {
         };
 
         if !choices.is_empty() {
-            let result = TabulatedListResult { choices };
+            let result = SelectorWithArgumentsResult { choices };
             promise::spawn::spawn_into_main_thread(async move {
                 trampoline(name, window, pane, result);
                 anyhow::Result::<()>::Ok(())
@@ -445,12 +445,12 @@ impl SelectorState {
 }
 
 #[derive(FromDynamic, ToDynamic)]
-struct TabulatedListResult {
+struct SelectorWithArgumentsResult {
     choices: Vec<String>,
 }
-impl_lua_conversion_dynamic!(TabulatedListResult);
+impl_lua_conversion_dynamic!(SelectorWithArgumentsResult);
 
-fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: TabulatedListResult) {
+fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: SelectorWithArgumentsResult) {
     promise::spawn::spawn(async move {
         config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, result))
             .await
@@ -463,7 +463,7 @@ async fn do_event(
     name: String,
     window: GuiWin,
     pane: MuxPane,
-    result: TabulatedListResult,
+    result: SelectorWithArgumentsResult,
 ) -> anyhow::Result<()> {
     if let Some(lua) = lua {
         let args = lua.pack_multi((window, pane, result))?;
@@ -476,9 +476,9 @@ async fn do_event(
     Ok(())
 }
 
-pub fn show_tabulated_list_overlay(
+pub fn show_selector_with_arguments_overlay(
     mut term: TermWizTerminal,
-    args: TabulatedList,
+    args: SelectorWithArguments,
     window: GuiWin,
     pane: MuxPane,
 ) -> anyhow::Result<()> {
