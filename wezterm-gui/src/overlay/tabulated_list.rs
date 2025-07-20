@@ -60,21 +60,32 @@ impl TrieNode {
     }
 }
 
+#[derive(Clone)]
+struct SelectorEntry {
+    idx: usize,
+    label: String,
+}
+
 struct SelectorState {
     active_idx: usize,
     max_items: usize,
     top_row: usize,
-    choices: Vec<String>,
+    choices: Vec<SelectorEntry>,
     cols: usize,
     selector_size: usize,
     multiple_idx: Option<Vec<bool>>,
-    filtered_entries: Vec<String>,
+    filtered_entries: Vec<SelectorEntry>,
     filtering: bool,
     filter_term: String,
 }
 
 impl SelectorState {
-    fn new(choices: Vec<String>, size: &ScreenSize, overhead: usize, multiple: bool) -> Self {
+    fn new(
+        choices: Vec<SelectorEntry>,
+        size: &ScreenSize,
+        overhead: usize,
+        multiple: bool,
+    ) -> Self {
         let max_items = size.rows.saturating_sub(overhead);
         let selector_size = choices.len().min(max_items);
         let multiple_idx = multiple.then(|| choices.iter().map(|_| false).collect());
@@ -138,7 +149,7 @@ impl SelectorState {
             .par_iter()
             .enumerate()
             .filter_map(|(row_idx, entry)| {
-                let score = matcher_score(&pattern, &entry)?;
+                let score = matcher_score(&pattern, &entry.label)?;
                 Some(MatchResult { row_idx, score })
             })
             .collect();
@@ -180,8 +191,17 @@ impl TabulatedListState {
 
         let overhead = context_size + positional_args_size + 3;
 
-        let selector_state =
-            SelectorState::new(args.choices.clone(), size, overhead, args.multiple);
+        let choices: Vec<SelectorEntry> = args
+            .choices
+            .iter()
+            .enumerate()
+            .map(|(idx, label)| SelectorEntry {
+                idx,
+                label: label.clone(),
+            })
+            .collect();
+
+        let selector_state = SelectorState::new(choices, size, overhead, args.multiple);
 
         let mut arguments = vec![];
 
@@ -284,7 +304,7 @@ impl TabulatedListState {
             let mut attr = CellAttributes::blank();
 
             if let Some(multiple_idx) = multiple_idx {
-                if multiple_idx[entry_idx] {
+                if multiple_idx[self.selector_state.filtered_entries[entry_idx].idx] {
                     changes.append(&mut vec![
                         Change::Attribute(AttributeChange::Background(AnsiColor::Purple.into())),
                         Change::Text(" ".to_string()),
@@ -301,7 +321,7 @@ impl TabulatedListState {
             }
 
             changes.push(Change::Text("    ".to_string()));
-            let mut line = crate::tabbar::parse_status_text(entry, attr.clone());
+            let mut line = crate::tabbar::parse_status_text(&entry.label, attr.clone());
             if line.len() > max_width {
                 line.resize(max_width, termwiz::surface::SEQ_ZERO);
             }
@@ -416,15 +436,23 @@ impl TabulatedListState {
         let pane = self.pane;
         let selector_state = &self.selector_state;
 
-        let choices = if let Some(multiple_idx) = selector_state.multiple_idx.as_ref() {
+        let choices: Vec<String> = if let Some(multiple_idx) = selector_state.multiple_idx.as_ref()
+        {
             multiple_idx
                 .iter()
                 .enumerate()
                 .filter(|(_, val)| **val)
-                .map(|(idx, _)| selector_state.choices[idx].clone())
+                .map(|(idx, _)| selector_state.choices[idx].label.clone())
                 .collect()
         } else {
-            vec![selector_state.choices[selector_state.active_idx].clone()]
+            if let Some(_) = selector_state.filtered_entries.get(0) {
+                vec![selector_state.choices
+                    [selector_state.filtered_entries[selector_state.active_idx].idx]
+                    .label
+                    .clone()]
+            } else {
+                vec![]
+            }
         };
         let result = TabulatedListResult { choices };
         promise::spawn::spawn_into_main_thread(async move {
