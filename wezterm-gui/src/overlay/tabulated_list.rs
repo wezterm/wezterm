@@ -121,7 +121,9 @@ impl SelectorState {
 
     fn toggle_multiple_idx(&mut self) {
         if let Some(multiple_idx) = self.multiple_idx.as_mut() {
-            multiple_idx[self.filtered_entries[self.active_idx].idx] ^= true;
+            if let Some(entry) = self.filtered_entries.get(self.active_idx) {
+                multiple_idx[entry.idx] ^= true;
+            }
         }
     }
 
