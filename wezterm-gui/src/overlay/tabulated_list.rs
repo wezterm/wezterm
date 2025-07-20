@@ -447,7 +447,7 @@ impl TabulatedListState {
                 .map(|(idx, _)| selector_state.choices[idx].label.clone())
                 .collect()
         } else {
-            if let Some(_) = selector_state.filtered_entries.get(0) {
+            if !selector_state.filtered_entries.is_empty() {
                 vec![selector_state.choices
                     [selector_state.filtered_entries[selector_state.active_idx].idx]
                     .label
@@ -456,12 +456,15 @@ impl TabulatedListState {
                 vec![]
             }
         };
-        let result = TabulatedListResult { choices };
-        promise::spawn::spawn_into_main_thread(async move {
-            trampoline(name, window, pane, result);
-            anyhow::Result::<()>::Ok(())
-        })
-        .detach();
+
+        if !choices.is_empty() {
+            let result = TabulatedListResult { choices };
+            promise::spawn::spawn_into_main_thread(async move {
+                trampoline(name, window, pane, result);
+                anyhow::Result::<()>::Ok(())
+            })
+            .detach();
+        }
     }
 }
 
