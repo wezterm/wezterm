@@ -57,20 +57,20 @@ impl TrieNode {
     }
 }
 
-struct NavigatorState {
+struct SelectorState {
     active_idx: usize,
     max_items: usize,
     top_row: usize,
     choices: Vec<String>,
     cols: usize,
-    navigator_size: usize,
+    selector_size: usize,
     multiple_idx: Option<Vec<bool>>,
 }
 
-impl NavigatorState {
+impl SelectorState {
     fn new(choices: Vec<String>, size: &ScreenSize, overhead: usize, multiple: bool) -> Self {
         let max_items = size.rows.saturating_sub(overhead);
-        let navigator_size = choices.len().min(max_items);
+        let selector_size = choices.len().min(max_items);
         let multiple_idx = multiple.then(|| choices.iter().map(|_| false).collect());
 
         Self {
@@ -79,7 +79,7 @@ impl NavigatorState {
             top_row: 0,
             choices,
             cols: size.cols,
-            navigator_size,
+            selector_size,
             multiple_idx,
         }
     }
@@ -108,7 +108,7 @@ impl NavigatorState {
 struct TabulatedListState {
     window: GuiWin,
     pane: MuxPane,
-    navigator_state: NavigatorState,
+    selector_state: SelectorState,
     root_node: Rc<RefCell<TrieNode>>,
     cur_node: Rc<RefCell<TrieNode>>,
     context: Option<TransientContext>,
@@ -129,8 +129,8 @@ impl TabulatedListState {
 
         let overhead = context_size + positional_args_size + 2;
 
-        let navigator_state =
-            NavigatorState::new(args.choices.clone(), size, overhead, args.multiple);
+        let selector_state =
+            SelectorState::new(args.choices.clone(), size, overhead, args.multiple);
 
         let mut arguments = vec![];
 
@@ -145,7 +145,7 @@ impl TabulatedListState {
         Self {
             window,
             pane,
-            navigator_state,
+            selector_state,
             root_node,
             cur_node,
             context: args.context.clone(),
@@ -158,9 +158,9 @@ impl TabulatedListState {
         self.changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
-                y: Position::Absolute(self.navigator_state.navigator_size + 1),
+                y: Position::Absolute(self.selector_state.selector_size + 1),
             },
-            Change::Text("─".repeat(self.navigator_state.cols)),
+            Change::Text("─".repeat(self.selector_state.cols)),
             Change::Text("\r\n".to_string()),
         ]);
 
@@ -182,30 +182,30 @@ impl TabulatedListState {
             )));
         }
 
-        self.navigator(term)?;
+        self.selector(term)?;
 
         Ok(())
     }
 
-    fn navigator(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
-        let cols = self.navigator_state.cols;
+    fn selector(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
+        let cols = self.selector_state.cols;
         let max_width = cols.saturating_sub(6);
         let changes = &mut self.changes;
-        let navigator_state = &self.navigator_state;
+        let selector_state = &self.selector_state;
         changes.push(Change::CursorPosition {
             x: Position::Absolute(0),
             y: Position::Absolute(0),
         });
 
-        let multiple_idx = &navigator_state.multiple_idx;
+        let multiple_idx = &selector_state.multiple_idx;
 
-        let max_items = self.navigator_state.max_items;
+        let max_items = self.selector_state.max_items;
 
-        for (row_num, (entry_idx, entry)) in navigator_state
+        for (row_num, (entry_idx, entry)) in selector_state
             .choices
             .iter()
             .enumerate()
-            .skip(self.navigator_state.top_row)
+            .skip(self.selector_state.top_row)
             .enumerate()
         {
             if row_num > max_items {
@@ -230,7 +230,7 @@ impl TabulatedListState {
                 }
             }
 
-            if entry_idx == navigator_state.active_idx {
+            if entry_idx == selector_state.active_idx {
                 changes.push(AttributeChange::Reverse(true).into());
                 attr.set_reverse(true);
             }
@@ -242,7 +242,7 @@ impl TabulatedListState {
             }
             changes.append(&mut line.changes(&attr));
             changes.push(Change::Text(" ".to_string()));
-            if entry_idx == navigator_state.active_idx {
+            if entry_idx == selector_state.active_idx {
                 changes.push(AttributeChange::Reverse(false).into());
             }
             changes.push(Change::AllAttributes(CellAttributes::default()));
@@ -270,22 +270,22 @@ impl TabulatedListState {
                     key: KeyCode::Char('P' | 'K'),
                     modifiers: Modifiers::CTRL,
                 }) => {
-                    self.navigator_state.move_up();
-                    self.navigator(term)?;
+                    self.selector_state.move_up();
+                    self.selector(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('N' | 'J'),
                     modifiers: Modifiers::CTRL,
                 }) => {
-                    self.navigator_state.move_down();
-                    self.navigator(term)?;
+                    self.selector_state.move_down();
+                    self.selector(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,
                     modifiers: _,
                 }) => {
-                    self.navigator_state.toggle_multiple_idx();
-                    self.navigator(term)?;
+                    self.selector_state.toggle_multiple_idx();
+                    self.selector(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
@@ -325,17 +325,17 @@ impl TabulatedListState {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
-        let navigator_state = &self.navigator_state;
+        let selector_state = &self.selector_state;
 
-        let choices = if let Some(multiple_idx) = navigator_state.multiple_idx.as_ref() {
+        let choices = if let Some(multiple_idx) = selector_state.multiple_idx.as_ref() {
             multiple_idx
                 .iter()
                 .enumerate()
                 .filter(|(_, val)| **val)
-                .map(|(idx, _)| navigator_state.choices[idx].clone())
+                .map(|(idx, _)| selector_state.choices[idx].clone())
                 .collect()
         } else {
-            vec![navigator_state.choices[navigator_state.active_idx].clone()]
+            vec![selector_state.choices[selector_state.active_idx].clone()]
         };
         let result = TabulatedListResult { choices };
         promise::spawn::spawn_into_main_thread(async move {
