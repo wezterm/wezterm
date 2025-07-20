@@ -114,6 +114,7 @@ struct TabulatedListState {
     context: Option<TransientContext>,
     arguments: Vec<TransientArgument>,
     changes: Vec<Change>,
+    description: String,
 }
 
 impl TabulatedListState {
@@ -127,7 +128,7 @@ impl TabulatedListState {
 
         let positional_args_size = args.actions.len() + 1;
 
-        let overhead = context_size + positional_args_size + 2;
+        let overhead = context_size + positional_args_size + 3;
 
         let selector_state =
             SelectorState::new(args.choices.clone(), size, overhead, args.multiple);
@@ -151,6 +152,7 @@ impl TabulatedListState {
             context: args.context.clone(),
             arguments,
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
+            description: args.description.clone(),
         }
     }
 
@@ -190,10 +192,12 @@ impl TabulatedListState {
         let selector_state = &self.selector_state;
         changes.push(Change::CursorPosition {
             x: Position::Absolute(0),
-            y: Position::EndRelative(self.selector_state.selector_size),
+            y: Position::EndRelative(self.selector_state.selector_size + 1),
         });
 
         changes.push(Change::ClearToEndOfScreen(ColorAttribute::Default));
+
+        changes.push(Change::Text(format!("{}\r\n", self.description)));
 
         let multiple_idx = &selector_state.multiple_idx;
 
