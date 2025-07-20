@@ -1,3 +1,4 @@
+use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
 use config::{
     keyassignment::{KeyAssignment, TabulatedList, TransientArgument, TransientContext},
@@ -6,6 +7,7 @@ use config::{
 use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
+use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -14,6 +16,7 @@ use termwiz::{
     surface::{Change, CursorVisibility, Position},
     terminal::{ScreenSize, Terminal},
 };
+use termwiz_funcs::truncate_right;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_term::{AttributeChange, CellAttributes};
 use window::Modifiers;
@@ -65,6 +68,9 @@ struct SelectorState {
     cols: usize,
     selector_size: usize,
     multiple_idx: Option<Vec<bool>>,
+    filtered_entries: Vec<String>,
+    filtering: bool,
+    filter_term: String,
 }
 
 impl SelectorState {
@@ -72,6 +78,7 @@ impl SelectorState {
         let max_items = size.rows.saturating_sub(overhead);
         let selector_size = choices.len().min(max_items);
         let multiple_idx = multiple.then(|| choices.iter().map(|_| false).collect());
+        let filtered_entries = choices.clone();
 
         Self {
             active_idx: 0,
@@ -81,6 +88,9 @@ impl SelectorState {
             cols: size.cols,
             selector_size,
             multiple_idx,
+            filtered_entries,
+            filtering: false,
+            filter_term: String::new(),
         }
     }
 
@@ -102,6 +112,46 @@ impl SelectorState {
         if let Some(multiple_idx) = self.multiple_idx.as_mut() {
             multiple_idx[self.active_idx] ^= true;
         }
+    }
+
+    fn toggle_search(&mut self) {
+        self.filtering ^= true;
+    }
+
+    fn update_filter(&mut self) {
+        if self.filter_term.is_empty() {
+            self.filtered_entries = self.choices.clone();
+            return;
+        }
+
+        self.filtered_entries.clear();
+
+        struct MatchResult {
+            row_idx: usize,
+            score: u32,
+        }
+
+        let pattern = matcher_pattern(&self.filter_term);
+
+        let mut scores: Vec<MatchResult> = self
+            .choices
+            .par_iter()
+            .enumerate()
+            .filter_map(|(row_idx, entry)| {
+                let score = matcher_score(&pattern, &entry)?;
+                Some(MatchResult { row_idx, score })
+            })
+            .collect();
+
+        scores.sort_by(|a, b| a.score.cmp(&b.score).reverse());
+
+        for result in scores {
+            self.filtered_entries
+                .push(self.choices[result.row_idx].clone());
+        }
+
+        self.active_idx = 0;
+        self.top_row = 0;
     }
 }
 
@@ -197,14 +247,27 @@ impl TabulatedListState {
 
         changes.push(Change::ClearToEndOfScreen(ColorAttribute::Default));
 
-        changes.push(Change::Text(format!("{}\r\n", self.description)));
+        if !self.selector_state.filtering {
+            changes.push(Change::Text(format!(
+                "{}\r\n",
+                truncate_right(&self.description, max_width)
+            )));
+        } else {
+            changes.push(Change::Text(truncate_right(
+                &format!(
+                    "{}: {}\r\n",
+                    self.description, self.selector_state.filter_term
+                ),
+                max_width,
+            )));
+        }
 
         let multiple_idx = &selector_state.multiple_idx;
 
         let max_items = self.selector_state.max_items;
 
         for (row_num, (entry_idx, entry)) in selector_state
-            .choices
+            .filtered_entries
             .iter()
             .enumerate()
             .skip(self.selector_state.top_row)
@@ -283,10 +346,34 @@ impl TabulatedListState {
                     self.selector(term)?;
                 }
                 InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('/'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    self.selector_state.toggle_search();
+                    self.selector(term)?;
+                }
+                InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,
                     modifiers: _,
                 }) => {
                     self.selector_state.toggle_multiple_idx();
+                    self.selector(term)?;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Backspace,
+                    modifiers: _,
+                }) if self.selector_state.filtering => {
+                    if self.selector_state.filter_term.pop().is_some() {
+                        self.selector_state.update_filter();
+                        self.selector(term)?;
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char(c),
+                    modifiers: _,
+                }) if self.selector_state.filtering => {
+                    self.selector_state.filter_term.push(c);
+                    self.selector_state.update_filter();
                     self.selector(term)?;
                 }
                 InputEvent::Key(KeyEvent {
