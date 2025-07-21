@@ -1,5 +1,6 @@
 use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
+use config::configuration;
 use config::{
     keyassignment::{KeyAssignment, SelectorWithArguments, TransientArgument, TransientContext},
     AnsiColor, ColorAttribute,
@@ -60,6 +61,24 @@ impl TrieNode {
     }
 }
 
+struct SelectorWithArgumentsColors {
+    action_key_fg: ColorAttribute,
+}
+
+impl SelectorWithArgumentsColors {
+    fn new() -> Self {
+        let config = configuration();
+        let colors = &config.resolved_palette;
+
+        Self {
+            action_key_fg: colors
+                .transient_entry_key_fg
+                .unwrap_or(AnsiColor::Purple.into())
+                .into(),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct SelectorEntry {
     idx: usize,
@@ -86,6 +105,7 @@ struct SelectorState {
     context: Option<TransientContext>,
     arguments: Vec<TransientArgument>,
     changes: Vec<Change>,
+    colors: SelectorWithArgumentsColors,
 }
 
 impl SelectorState {
@@ -149,6 +169,7 @@ impl SelectorState {
             context: args.context.clone(),
             arguments,
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
+            colors: SelectorWithArgumentsColors::new(),
         }
     }
 
@@ -165,10 +186,13 @@ impl SelectorState {
 
         self.changes.push(Change::Text(format!("Arguments")));
         for positional_arg in &self.arguments {
-            self.changes.push(Change::Text(format!(
-                "\r\n{} {}",
-                positional_arg.key, positional_arg.description
-            )));
+            self.changes.append(&mut vec![
+                Change::Text("\r\n".to_string()),
+                Change::Attribute(AttributeChange::Foreground(self.colors.action_key_fg)),
+                Change::Text(positional_arg.key.to_string()),
+                Change::Attribute(AttributeChange::Foreground(ColorAttribute::Default)),
+                Change::Text(format!(" {}", positional_arg.description)),
+            ]);
         }
 
         self.changes.push(Change::Text("\r\n".to_string()));
