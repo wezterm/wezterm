@@ -19,7 +19,7 @@ use std::rc::Rc;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::lineedit::{Action, BasicHistory, History, LineEditor, LineEditorHost};
 use termwiz::surface::{Change, CursorVisibility, Position};
-use termwiz::terminal::{ScreenSize, Terminal};
+use termwiz::terminal::Terminal;
 use termwiz_funcs::truncate_right;
 use wezterm_dynamic::{FromDynamic, ToDynamic, Value};
 use wezterm_term::{AttributeChange, CellAttributes, Intensity};
@@ -158,7 +158,7 @@ impl TransientEntry {
     }
 }
 
-struct SelectorState {
+struct SelectorState<'a> {
     active_idx: usize,
     max_items: usize,
     top_row: usize,
@@ -168,24 +168,197 @@ struct SelectorState {
     cols: usize,
     selector_size: usize,
     line_drawn: bool,
+    changes: &'a mut Vec<Change>,
+    colors: &'a TransientColors,
+    option: &'a mut TransientOption,
+    row_entities: &'a Vec<Option<RenderableEntity<'a>>>,
 }
 
-impl SelectorState {
-    fn new(choices: Vec<String>, size: &ScreenSize) -> Self {
-        let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
-        let selector_size = choices.len().min(max_items);
+impl<'a> SelectorState<'a> {
+    fn render(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
+        let cols = self.cols;
+        let max_width = cols.saturating_sub(6);
 
-        Self {
-            active_idx: 0,
-            max_items,
-            top_row: 0,
-            filter_term: String::new(),
-            filtered_entries: choices.clone(),
-            choices,
-            cols: size.cols,
-            selector_size,
-            line_drawn: false,
+        let changes = &mut self.changes;
+
+        let input_selector_size = self.selector_size;
+
+        if !self.line_drawn {
+            changes.append(&mut vec![
+                Change::CursorPosition {
+                    x: Position::Absolute(0),
+                    y: Position::EndRelative(2 + input_selector_size),
+                },
+                Change::ClearToEndOfScreen(ColorAttribute::Default),
+                Change::Text("─".repeat(cols)),
+                Change::Text("\r\n".to_string()),
+            ]);
+            self.line_drawn = true;
+        } else {
+            changes.append(&mut vec![
+                Change::CursorPosition {
+                    x: Position::Absolute(0),
+                    y: Position::EndRelative(1 + input_selector_size),
+                },
+                Change::ClearToEndOfScreen(ColorAttribute::Default),
+            ]);
         }
+
+        changes.push(Change::Text(truncate_right(
+            &format!("{}: {}", self.option.description, self.filter_term),
+            max_width,
+        )));
+
+        let max_items = self.max_items;
+
+        for (row_num, (entry_idx, entry)) in self
+            .filtered_entries
+            .iter()
+            .enumerate()
+            .skip(self.top_row)
+            .enumerate()
+        {
+            if row_num > max_items {
+                break;
+            }
+
+            changes.push(Change::Text("\r\n".to_string()));
+
+            let mut attr = CellAttributes::blank();
+
+            if entry_idx == self.active_idx {
+                changes.push(AttributeChange::Reverse(true).into());
+                attr.set_reverse(true);
+            }
+
+            changes.push(Change::Text("    ".to_string()));
+            let mut line = crate::tabbar::parse_status_text(entry, attr.clone());
+            if line.len() > max_width {
+                line.resize(max_width, termwiz::surface::SEQ_ZERO);
+            }
+            changes.append(&mut line.changes(&attr));
+            changes.push(Change::Text(" ".to_string()));
+            if entry_idx == self.active_idx {
+                changes.push(AttributeChange::Reverse(false).into());
+            }
+            changes.push(Change::AllAttributes(CellAttributes::default()));
+        }
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(2 + self.option.description.len() + self.filter_term.len()),
+                y: Position::EndRelative(1 + input_selector_size),
+            },
+            Change::CursorVisibility(CursorVisibility::Visible),
+        ]);
+
+        term.render(changes)?;
+        changes.clear();
+
+        Ok(())
+    }
+
+    fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
+        while let Ok(Some(event)) = term.poll_input(None) {
+            match event {
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('P' | 'K'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    self.move_up();
+                    self.render(term)?;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('N' | 'J'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    self.move_down();
+                    self.render(term)?;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('G' | 'C'),
+                    modifiers: Modifiers::CTRL,
+                })
+                | InputEvent::Key(KeyEvent {
+                    key: KeyCode::Escape,
+                    ..
+                }) => {
+                    let rows = self.max_items.saturating_add(ROW_OVERHEAD);
+                    let start_row = self.selector_size + 2;
+                    let skip_rows = rows - start_row - 1;
+
+                    self.changes.append(&mut vec![
+                        Change::CursorVisibility(CursorVisibility::Hidden),
+                        Change::CursorPosition {
+                            x: Position::Absolute(0),
+                            y: Position::EndRelative(start_row),
+                        },
+                        Change::ClearToEndOfScreen(ColorAttribute::Default),
+                    ]);
+                    for renderable_entity in self.row_entities.iter().skip(skip_rows) {
+                        if let Some(renderable_entity) = renderable_entity {
+                            renderable_entity.render(&self.colors, &mut self.changes, term)?;
+                        }
+                    }
+                    term.render(&self.changes)?;
+                    self.changes.clear();
+
+                    break;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Enter,
+                    ..
+                }) => {
+                    if let Some(entry) = self.filtered_entries.get(self.active_idx).cloned() {
+                        let rows = self.max_items.saturating_add(ROW_OVERHEAD);
+                        let start_row = self.selector_size + 2;
+                        let skip_rows = rows - start_row - 1;
+
+                        self.changes.append(&mut vec![
+                            Change::CursorVisibility(CursorVisibility::Hidden),
+                            Change::CursorPosition {
+                                x: Position::Absolute(0),
+                                y: Position::EndRelative(start_row),
+                            },
+                            Change::ClearToEndOfScreen(ColorAttribute::Default),
+                        ]);
+                        for renderable_entity in self.row_entities.iter().skip(skip_rows) {
+                            if let Some(renderable_entity) = renderable_entity {
+                                renderable_entity.render(&self.colors, &mut self.changes, term)?;
+                            }
+                        }
+
+                        self.option.value = Some(entry);
+                        self.option
+                            .render(&self.colors, &mut self.changes, term, false)?;
+
+                        term.render(&self.changes)?;
+                        self.changes.clear();
+
+                        break;
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Backspace,
+                    ..
+                }) => {
+                    if self.filter_term.pop().is_some() {
+                        self.update_filter();
+                        self.render(term)?;
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char(c),
+                    ..
+                }) => {
+                    self.filter_term.push(c);
+                    self.update_filter();
+                    self.render(term)?;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
     }
 
     fn update_filter(&mut self) {
@@ -801,7 +974,6 @@ struct TransientState<'a> {
     colors: TransientColors,
     root_node: Rc<RefCell<TrieNode>>,
     cur_node: Rc<RefCell<TrieNode>>,
-    selector_state: Option<SelectorState>,
     changes: Vec<Change>,
     row_entities: Vec<Option<RenderableEntity<'a>>>,
     context: Option<TransientContext>,
@@ -848,7 +1020,6 @@ impl<'a> TransientState<'a> {
             colors: TransientColors::new(),
             root_node,
             cur_node,
-            selector_state: None,
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
             row_entities,
             context,
@@ -932,96 +1103,6 @@ impl<'a> TransientState<'a> {
         Ok(())
     }
 
-    fn selector(
-        &mut self,
-        term: &mut TermWizTerminal,
-        option: &mut TransientOption,
-    ) -> anyhow::Result<()> {
-        let selector_state = self.selector_state.as_mut().unwrap();
-
-        let cols = selector_state.cols;
-        let max_width = cols.saturating_sub(6);
-
-        let changes = &mut self.changes;
-
-        let input_selector_size = selector_state.selector_size;
-
-        if !selector_state.line_drawn {
-            changes.append(&mut vec![
-                Change::CursorPosition {
-                    x: Position::Absolute(0),
-                    y: Position::EndRelative(2 + input_selector_size),
-                },
-                Change::ClearToEndOfScreen(ColorAttribute::Default),
-                Change::Text("─".repeat(cols)),
-                Change::Text("\r\n".to_string()),
-            ]);
-            selector_state.line_drawn = true;
-        } else {
-            changes.append(&mut vec![
-                Change::CursorPosition {
-                    x: Position::Absolute(0),
-                    y: Position::EndRelative(1 + input_selector_size),
-                },
-                Change::ClearToEndOfScreen(ColorAttribute::Default),
-            ]);
-        }
-
-        changes.push(Change::Text(truncate_right(
-            &format!("{}: {}", option.description, selector_state.filter_term),
-            max_width,
-        )));
-
-        let max_items = selector_state.max_items;
-
-        for (row_num, (entry_idx, entry)) in selector_state
-            .filtered_entries
-            .iter()
-            .enumerate()
-            .skip(selector_state.top_row)
-            .enumerate()
-        {
-            if row_num > max_items {
-                break;
-            }
-
-            changes.push(Change::Text("\r\n".to_string()));
-
-            let mut attr = CellAttributes::blank();
-
-            if entry_idx == selector_state.active_idx {
-                changes.push(AttributeChange::Reverse(true).into());
-                attr.set_reverse(true);
-            }
-
-            changes.push(Change::Text("    ".to_string()));
-            let mut line = crate::tabbar::parse_status_text(entry, attr.clone());
-            if line.len() > max_width {
-                line.resize(max_width, termwiz::surface::SEQ_ZERO);
-            }
-            changes.append(&mut line.changes(&attr));
-            changes.push(Change::Text(" ".to_string()));
-            if entry_idx == selector_state.active_idx {
-                changes.push(AttributeChange::Reverse(false).into());
-            }
-            changes.push(Change::AllAttributes(CellAttributes::default()));
-        }
-        changes.append(&mut vec![
-            Change::CursorPosition {
-                x: Position::Absolute(
-                    2 + option.description.len() + selector_state.filter_term.len(),
-                ),
-                y: Position::EndRelative(1 + input_selector_size),
-            },
-            Change::CursorVisibility(CursorVisibility::Visible),
-        ]);
-
-        term.render(changes)?;
-        changes.clear();
-
-        Ok(())
-    }
-
     fn trigger_event(&self, name: &str) {
         let name = name.to_string();
         let window = self.window.clone();
@@ -1036,24 +1117,21 @@ impl<'a> TransientState<'a> {
 
     fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         while let Ok(Some(event)) = term.poll_input(None) {
-            let selector_state = self.selector_state.is_some();
             match event {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('G' | 'C' | 'D' | '['),
                     modifiers: Modifiers::CTRL,
-                }) => {
-                    break;
-                }
-                InputEvent::Key(KeyEvent {
+                })
+                | InputEvent::Key(KeyEvent {
                     key: KeyCode::Escape,
                     ..
-                }) if !selector_state => {
+                }) => {
                     break;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
                     ..
-                }) if !selector_state => {
+                }) => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
                     match cur_node.find_char(c) {
@@ -1082,10 +1160,30 @@ impl<'a> TransientState<'a> {
                                                 if let Some(choices) = option.choices.clone() {
                                                     self.cur_node = Rc::clone(&cur_node);
                                                     let size = term.get_screen_size()?;
-                                                    self.selector_state =
-                                                        Some(SelectorState::new(choices, &size));
-                                                    self.selector(term, &mut *option)?;
-                                                    continue;
+
+                                                    let max_items =
+                                                        size.rows.saturating_sub(ROW_OVERHEAD);
+                                                    let selector_size =
+                                                        choices.len().min(max_items);
+
+                                                    let mut selector_state = SelectorState {
+                                                        active_idx: 0,
+                                                        max_items,
+                                                        top_row: 0,
+                                                        filter_term: String::new(),
+                                                        filtered_entries: choices.clone(),
+                                                        choices,
+                                                        cols: size.cols,
+                                                        selector_size,
+                                                        line_drawn: false,
+                                                        changes: &mut self.changes,
+                                                        colors: &self.colors,
+                                                        option: &mut *option,
+                                                        row_entities: &self.row_entities,
+                                                    };
+
+                                                    selector_state.render(term)?;
+                                                    selector_state.run_loop(term)?;
                                                 } else {
                                                     self.line_prompt(term, &mut *option)?;
                                                     option.render(
@@ -1153,137 +1251,6 @@ impl<'a> TransientState<'a> {
                         None => {
                             self.cur_node = Rc::clone(&self.root_node);
                         }
-                    }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('P' | 'K'),
-                    modifiers: Modifiers::CTRL,
-                }) => {
-                    let cur_node = Rc::clone(&self.cur_node);
-                    let cur_node = cur_node.borrow();
-
-                    if let Some(TransientEntry::TransientOption(option)) = cur_node.entry.as_ref() {
-                        self.selector_state.as_mut().unwrap().move_up();
-                        let mut option = option.borrow_mut();
-                        self.selector(term, &mut *option)?;
-                    }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('N' | 'J'),
-                    modifiers: Modifiers::CTRL,
-                }) => {
-                    let cur_node = Rc::clone(&self.cur_node);
-                    let cur_node = cur_node.borrow();
-
-                    if let Some(TransientEntry::TransientOption(option)) = cur_node.entry.as_ref() {
-                        self.selector_state.as_mut().unwrap().move_down();
-                        let mut option = option.borrow_mut();
-                        self.selector(term, &mut *option)?;
-                    }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Escape,
-                    ..
-                }) => {
-                    let selector_state = self.selector_state.take();
-                    let selector_state = selector_state.as_ref().unwrap();
-                    let rows = selector_state.max_items.saturating_add(ROW_OVERHEAD);
-                    let start_row = selector_state.selector_size + 2;
-                    let skip_rows = rows - start_row - 1;
-
-                    self.cur_node = Rc::clone(&self.root_node);
-
-                    self.changes.append(&mut vec![
-                        Change::CursorVisibility(CursorVisibility::Hidden),
-                        Change::CursorPosition {
-                            x: Position::Absolute(0),
-                            y: Position::EndRelative(start_row),
-                        },
-                        Change::ClearToEndOfScreen(ColorAttribute::Default),
-                    ]);
-                    for renderable_entity in self.row_entities.iter().skip(skip_rows) {
-                        if let Some(renderable_entity) = renderable_entity {
-                            renderable_entity.render(&self.colors, &mut self.changes, term)?;
-                        }
-                    }
-                    term.render(&self.changes)?;
-                    self.changes.clear();
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Enter,
-                    ..
-                }) => {
-                    let selector_state = self.selector_state.as_ref().unwrap();
-                    let active_idx = selector_state.active_idx;
-                    if let Some(entry) = selector_state.filtered_entries.get(active_idx).cloned() {
-                        let cur_node = Rc::clone(&self.cur_node);
-                        let cur_node = cur_node.borrow();
-
-                        if let Some(TransientEntry::TransientOption(option)) =
-                            cur_node.entry.as_ref()
-                        {
-                            let rows = selector_state.max_items.saturating_add(ROW_OVERHEAD);
-                            let start_row = selector_state.selector_size + 2;
-                            let skip_rows = rows - start_row - 1;
-
-                            self.selector_state = None;
-                            self.cur_node = Rc::clone(&self.root_node);
-                            self.changes.append(&mut vec![
-                                Change::CursorVisibility(CursorVisibility::Hidden),
-                                Change::CursorPosition {
-                                    x: Position::Absolute(0),
-                                    y: Position::EndRelative(start_row),
-                                },
-                                Change::ClearToEndOfScreen(ColorAttribute::Default),
-                            ]);
-                            for renderable_entity in self.row_entities.iter().skip(skip_rows) {
-                                if let Some(renderable_entity) = renderable_entity {
-                                    renderable_entity.render(
-                                        &self.colors,
-                                        &mut self.changes,
-                                        term,
-                                    )?;
-                                }
-                            }
-
-                            let mut option = option.borrow_mut();
-                            option.value = Some(entry);
-                            option.render(&self.colors, &mut self.changes, term, false)?;
-
-                            term.render(&self.changes)?;
-                            self.changes.clear();
-                        }
-                    }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Backspace,
-                    ..
-                }) => {
-                    let cur_node = Rc::clone(&self.cur_node);
-                    let cur_node = cur_node.borrow();
-
-                    if let Some(TransientEntry::TransientOption(option)) = cur_node.entry.as_ref() {
-                        let selector_state = self.selector_state.as_mut().unwrap();
-                        if selector_state.filter_term.pop().is_some() {
-                            selector_state.update_filter();
-                            let mut option = option.borrow_mut();
-                            self.selector(term, &mut *option)?;
-                        }
-                    }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char(c),
-                    ..
-                }) => {
-                    let cur_node = Rc::clone(&self.cur_node);
-                    let cur_node = cur_node.borrow();
-
-                    if let Some(TransientEntry::TransientOption(option)) = cur_node.entry.as_ref() {
-                        let selector_state = self.selector_state.as_mut().unwrap();
-                        selector_state.filter_term.push(c);
-                        selector_state.update_filter();
-                        let mut option = option.borrow_mut();
-                        self.selector(term, &mut *option)?;
                     }
                 }
                 _ => {}
