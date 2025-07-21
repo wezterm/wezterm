@@ -611,6 +611,8 @@ pub struct SelectorWithArguments {
     #[dynamic(default)]
     pub context: Option<TransientContext>,
     pub choices: Vec<String>,
+    #[dynamic(default)]
+    pub action_header: Option<String>,
     pub actions: Vec<TransientArgument>,
     #[dynamic(default)]
     pub multiple: bool,

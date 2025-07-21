@@ -111,6 +111,7 @@ struct SelectorState {
     arguments: Vec<TransientArgument>,
     changes: Vec<Change>,
     colors: SelectorWithArgumentsColors,
+    argument_header: String,
 }
 
 impl SelectorState {
@@ -175,6 +176,10 @@ impl SelectorState {
             arguments,
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
             colors: SelectorWithArgumentsColors::new(),
+            argument_header: args
+                .action_header
+                .clone()
+                .unwrap_or("Arguments".to_string()),
         }
     }
 
@@ -195,7 +200,10 @@ impl SelectorState {
             self.changes.push(Change::Text("\r\n\r\n".to_string()));
         }
 
-        self.changes.push(Change::Text(format!("Arguments")));
+        self.changes
+            .push(Change::Text(self.argument_header.clone()));
+        self.changes
+            .push(Change::AllAttributes(CellAttributes::default()));
         for positional_arg in &self.arguments {
             self.changes.append(&mut vec![
                 Change::Text("\r\n".to_string()),
