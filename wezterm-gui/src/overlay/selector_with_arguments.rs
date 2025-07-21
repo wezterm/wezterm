@@ -429,7 +429,10 @@ impl SelectorState {
                                     vec![]
                                 }
                             };
-                            if self.launch(name, choices) {
+
+                            if !choices.is_empty() {
+                                let result = SelectorWithArgumentsResult { choices };
+                                self.trigger_event(name, result);
                                 break;
                             }
                         }
@@ -455,16 +458,6 @@ impl SelectorState {
             anyhow::Result::<()>::Ok(())
         })
         .detach();
-    }
-
-    fn launch(&self, name: &str, choices: Vec<String>) -> bool {
-        if !choices.is_empty() {
-            let result = SelectorWithArgumentsResult { choices };
-            self.trigger_event(name, result);
-            true
-        } else {
-            false
-        }
     }
 }
 
