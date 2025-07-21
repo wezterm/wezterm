@@ -37,7 +37,7 @@ use smithay_client_toolkit::shell::xdg::XdgSurface;
 use smithay_client_toolkit::shell::WaylandSurface;
 use wayland_client::protocol::wl_callback::WlCallback;
 use wayland_client::protocol::wl_keyboard::{Event as WlKeyboardEvent, KeyState};
-use wayland_client::protocol::wl_pointer::{ButtonState, WlPointer};
+use wayland_client::protocol::wl_pointer::ButtonState;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection as WConnection, Dispatch, Proxy, QueueHandle};
@@ -775,10 +775,6 @@ impl WaylandWindowInner {
                     self.frame_action(PendingMouse::last_serial(&pending_mouse), action);
                 }
             }
-            // if !PendingMouse::in_window(&pending_mouse) {
-            //     self.window_frame.click_point_left();
-            // }
-            return;
         }
 
         if let Some((x, y)) = PendingMouse::coords(&pending_mouse) {
