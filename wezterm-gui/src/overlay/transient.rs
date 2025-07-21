@@ -1158,7 +1158,6 @@ impl<'a> TransientState<'a> {
                                             let mut option = option.borrow_mut();
                                             if option.value.is_none() || !option.allow_nil {
                                                 if let Some(choices) = option.choices.clone() {
-                                                    self.cur_node = Rc::clone(&cur_node);
                                                     let size = term.get_screen_size()?;
 
                                                     let max_items =
