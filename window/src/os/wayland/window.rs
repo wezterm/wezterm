@@ -465,14 +465,6 @@ impl WindowOps for WaylandWindow {
         });
     }
 
-    fn config_did_change(&self, config: &config::ConfigHandle) {
-        let config = config.to_owned();
-        WaylandConnection::with_window_inner(self.0, move |inner| {
-            inner.config_did_change(&config);
-            Ok(())
-        });
-    }
-
     fn get_clipboard(&self, clipboard: Clipboard) -> Future<String> {
         let mut promise = Promise::new();
         let future = promise.get_future().unwrap();
@@ -1136,16 +1128,6 @@ impl WaylandWindowInner {
     fn set_resize_increments(&mut self, incr: ResizeIncrement) -> anyhow::Result<()> {
         self.resize_increments.replace(incr);
         Ok(())
-    }
-
-    fn config_did_change(&mut self, config: &config::ConfigHandle) {
-        let decorations = config.window_decorations;
-        self.window_frame
-            .set_resizable(decorations.contains(WindowDecorations::RESIZE));
-        self.window_frame.set_config(
-            FrameConfig::auto().hide_titlebar(!decorations.contains(WindowDecorations::TITLE)),
-        );
-        self.refresh_frame();
     }
 
     fn set_inner_size(&mut self, width: usize, height: usize) {
