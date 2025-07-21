@@ -395,37 +395,42 @@ impl SelectorState {
                     match cur_node.find_char(c) {
                         Some(cur_node) => {
                             let cur_node_borrowed = cur_node.borrow();
-                            if cur_node_borrowed.is_end_of_word {
-                                if let Some(positional_arg) = cur_node_borrowed.entry.as_ref() {
-                                    let name = match *positional_arg.action {
-                                            KeyAssignment::EmitEvent(ref id) => id,
-                                            _ => anyhow::bail!("SelectorWithArguments requires action to be defined by wezterm.action_callback")
-                                        };
 
-                                    let choices: Vec<String> =
-                                        if let Some(multiple_idx) = self.multiple_idx.as_ref() {
-                                            multiple_idx
-                                                .iter()
-                                                .enumerate()
-                                                .filter(|(_, val)| **val)
-                                                .map(|(idx, _)| self.choices[idx].label.clone())
-                                                .collect()
-                                        } else {
-                                            if !self.filtered_entries.is_empty() {
-                                                vec![self.choices
-                                                    [self.filtered_entries[self.active_idx].idx]
-                                                    .label
-                                                    .clone()]
-                                            } else {
-                                                vec![]
-                                            }
-                                        };
-                                    if self.launch(name, choices) {
-                                        break;
-                                    }
-                                }
-                            } else {
+                            if !cur_node_borrowed.is_end_of_word {
                                 self.cur_node = Rc::clone(&cur_node);
+                                continue;
+                            }
+
+                            let positional_arg = match cur_node_borrowed.entry.as_ref() {
+                                Some(positional_arg) => positional_arg,
+                                None => continue,
+                            };
+
+                            let name = match *positional_arg.action {
+                                KeyAssignment::EmitEvent(ref id) => id,
+                                _ => anyhow::bail!("SelectorWithArguments requires action to be defined by wezterm.action_callback")
+                            };
+
+                            let choices: Vec<String> = if let Some(multiple_idx) =
+                                self.multiple_idx.as_ref()
+                            {
+                                multiple_idx
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, val)| **val)
+                                    .map(|(idx, _)| self.choices[idx].label.clone())
+                                    .collect()
+                            } else {
+                                if !self.filtered_entries.is_empty() {
+                                    vec![self.choices[self.filtered_entries[self.active_idx].idx]
+                                        .label
+                                        .clone()]
+                                } else {
+                                    vec![]
+                                }
+                            };
+                            if self.launch(name, choices) {
+                                break;
                             }
                         }
                         None => {
