@@ -436,8 +436,6 @@ impl TrieNode {
 }
 
 struct TransientColors {
-    description_fg: ColorAttribute,
-    section_header_fg: ColorAttribute,
     key_fg: ColorAttribute,
     flag_fg: ColorAttribute,
 }
@@ -448,14 +446,6 @@ impl TransientColors {
         let colors = &config.resolved_palette;
 
         Self {
-            description_fg: colors
-                .transient_description_fg
-                .unwrap_or(AnsiColor::Teal.into())
-                .into(),
-            section_header_fg: colors
-                .transient_section_header_fg
-                .unwrap_or(AnsiColor::Navy.into())
-                .into(),
             key_fg: colors
                 .transient_entry_key_fg
                 .unwrap_or(AnsiColor::Purple.into())
@@ -790,8 +780,6 @@ impl<'a> TransientSection<'a> {
                 x: Position::Absolute(0),
                 y: Position::Absolute(self.row),
             },
-            Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
-            Change::Attribute(AttributeChange::Foreground(colors.section_header_fg)),
             Change::Text(self.header.to_string()),
             Change::AllAttributes(CellAttributes::default()),
         ]);
@@ -1017,8 +1005,6 @@ impl<'a> TransientState<'a> {
                 x: Position::Absolute(0),
                 y: Position::Absolute(0),
             },
-            Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
-            Change::Attribute(AttributeChange::Foreground(self.colors.description_fg)),
             Change::Text(self.description.to_string()),
             Change::AllAttributes(CellAttributes::default()),
             Change::Text("\r\n".to_string()),

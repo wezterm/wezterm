@@ -177,8 +177,6 @@ pub struct Palette {
     pub launcher_label_fg: Option<ColorSpec>,
     pub launcher_label_bg: Option<ColorSpec>,
 
-    pub transient_description_fg: Option<ColorSpec>,
-    pub transient_section_header_fg: Option<ColorSpec>,
     pub transient_entry_key_fg: Option<ColorSpec>,
     pub transient_entry_flag_fg: Option<ColorSpec>,
 }
@@ -234,8 +232,6 @@ impl Palette {
             input_selector_label_bg: overlay!(input_selector_label_bg),
             launcher_label_fg: overlay!(launcher_label_fg),
             launcher_label_bg: overlay!(launcher_label_bg),
-            transient_description_fg: overlay!(transient_description_fg),
-            transient_section_header_fg: overlay!(transient_section_header_fg),
             transient_entry_key_fg: overlay!(transient_entry_key_fg),
             transient_entry_flag_fg: overlay!(transient_entry_flag_fg),
         }
