@@ -355,9 +355,18 @@ impl SelectorState {
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,
-                    modifiers: _,
+                    modifiers: Modifiers::NONE,
                 }) => {
                     self.toggle_multiple_idx();
+                    self.move_down();
+                    self.render(term)?;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Tab,
+                    modifiers: Modifiers::SHIFT,
+                }) => {
+                    self.toggle_multiple_idx();
+                    self.move_up();
                     self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
