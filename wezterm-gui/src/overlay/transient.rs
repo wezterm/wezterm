@@ -167,7 +167,6 @@ struct SelectorState<'a> {
     choices: Vec<String>,
     cols: usize,
     selector_size: usize,
-    line_drawn: bool,
     changes: &'a mut Vec<Change>,
     colors: &'a TransientColors,
     option: &'a mut TransientOption,
@@ -203,6 +202,19 @@ impl<'a> SelectorState<'a> {
         Ok(())
     }
 
+    fn draw_separator(&mut self) {
+        let cols = self.cols;
+        self.changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::EndRelative(2 + self.selector_size),
+            },
+            Change::ClearToEndOfScreen(ColorAttribute::Default),
+            Change::Text("─".repeat(cols)),
+            Change::Text("\r\n".to_string()),
+        ]);
+    }
+
     fn render(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         let cols = self.cols;
         let max_width = cols.saturating_sub(6);
@@ -211,31 +223,17 @@ impl<'a> SelectorState<'a> {
 
         let input_selector_size = self.selector_size;
 
-        if !self.line_drawn {
-            changes.append(&mut vec![
-                Change::CursorPosition {
-                    x: Position::Absolute(0),
-                    y: Position::EndRelative(2 + input_selector_size),
-                },
-                Change::ClearToEndOfScreen(ColorAttribute::Default),
-                Change::Text("─".repeat(cols)),
-                Change::Text("\r\n".to_string()),
-            ]);
-            self.line_drawn = true;
-        } else {
-            changes.append(&mut vec![
-                Change::CursorPosition {
-                    x: Position::Absolute(0),
-                    y: Position::EndRelative(1 + input_selector_size),
-                },
-                Change::ClearToEndOfScreen(ColorAttribute::Default),
-            ]);
-        }
-
-        changes.push(Change::Text(truncate_right(
-            &format!("{}: {}", self.option.description, self.filter_term),
-            max_width,
-        )));
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::EndRelative(1 + input_selector_size),
+            },
+            Change::ClearToEndOfScreen(ColorAttribute::Default),
+            Change::Text(truncate_right(
+                &format!("{}: {}", self.option.description, self.filter_term),
+                max_width,
+            )),
+        ]);
 
         let max_items = self.max_items;
 
@@ -1160,13 +1158,13 @@ impl<'a> TransientState<'a> {
                                                         choices,
                                                         cols: size.cols,
                                                         selector_size,
-                                                        line_drawn: false,
                                                         changes: &mut self.changes,
                                                         colors: &self.colors,
                                                         option: &mut *option,
                                                         row_entities: &self.row_entities,
                                                     };
 
+                                                    selector_state.draw_separator();
                                                     selector_state.render(term)?;
                                                     selector_state.run_loop(term)?;
                                                 } else {
