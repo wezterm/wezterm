@@ -137,10 +137,8 @@ config.colors = {
   launcher_label_bg = { AnsiColor = 'Black' }, -- {{since('nightly', inline=True)}}
   launcher_label_fg = { Color = '#ffffff' }, -- {{since('nightly', inline=True)}}
 
-  edit_command_description_fg = { Color = '#ffffff' }, -- {{since('nightly', inline=True)}}
-  edit_command_section_header_fg = { AnsiColor = 'White' }, -- {{since('nightly', inline=True)}}
-  edit_command_key_fg = { Color = '#ffffff' }, -- {{since('nightly', inline=True)}}
-  edit_command_flag_fg = { AnsiColor = 'White' }, -- {{since('nightly', inline=True)}}
+  transient_entry_key_fg = { Color = '#ffffff' }, -- {{since('nightly', inline=True)}}
+  transient_entry_flag_fg = { AnsiColor = 'White' }, -- {{since('nightly', inline=True)}}
 }
 
 return config
