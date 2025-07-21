@@ -179,6 +179,8 @@ pub struct Palette {
 
     pub transient_entry_key_fg: Option<ColorSpec>,
     pub transient_entry_flag_fg: Option<ColorSpec>,
+
+    pub selector_multiple_marker_bg: Option<ColorSpec>,
 }
 impl_lua_conversion_dynamic!(Palette);
 
@@ -234,6 +236,7 @@ impl Palette {
             launcher_label_bg: overlay!(launcher_label_bg),
             transient_entry_key_fg: overlay!(transient_entry_key_fg),
             transient_entry_flag_fg: overlay!(transient_entry_flag_fg),
+            selector_multiple_marker_bg: overlay!(selector_multiple_marker_bg),
         }
     }
 }

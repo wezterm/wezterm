@@ -63,6 +63,7 @@ impl TrieNode {
 
 struct SelectorWithArgumentsColors {
     action_key_fg: ColorAttribute,
+    multiple_marker_bg: ColorAttribute,
 }
 
 impl SelectorWithArgumentsColors {
@@ -73,6 +74,10 @@ impl SelectorWithArgumentsColors {
         Self {
             action_key_fg: colors
                 .transient_entry_key_fg
+                .unwrap_or(AnsiColor::Purple.into())
+                .into(),
+            multiple_marker_bg: colors
+                .selector_multiple_marker_bg
                 .unwrap_or(AnsiColor::Purple.into())
                 .into(),
         }
@@ -311,7 +316,9 @@ impl SelectorState {
             if let Some(multiple_idx) = self.multiple_idx.as_ref() {
                 if multiple_idx[self.filtered_entries[entry_idx].idx] {
                     changes.append(&mut vec![
-                        Change::Attribute(AttributeChange::Background(AnsiColor::Purple.into())),
+                        Change::Attribute(AttributeChange::Background(
+                            self.colors.multiple_marker_bg,
+                        )),
                         Change::Text(" ".to_string()),
                         Change::Attribute(AttributeChange::Background(ColorAttribute::Default)),
                     ]);
