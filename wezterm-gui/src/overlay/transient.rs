@@ -175,6 +175,34 @@ struct SelectorState<'a> {
 }
 
 impl<'a> SelectorState<'a> {
+    fn clear_selector(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
+        let rows = self.max_items.saturating_add(ROW_OVERHEAD);
+        let start_row = self.selector_size + 2;
+        let skip_rows = rows - start_row - 1;
+
+        self.changes.append(&mut vec![
+            Change::CursorVisibility(CursorVisibility::Hidden),
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::EndRelative(start_row),
+            },
+            Change::ClearToEndOfScreen(ColorAttribute::Default),
+        ]);
+        for renderable_entity in self.row_entities.iter().skip(skip_rows) {
+            if let Some(renderable_entity) = renderable_entity {
+                renderable_entity.render(&self.colors, &mut self.changes, term)?;
+            }
+        }
+
+        self.option
+            .render(&self.colors, &mut self.changes, term, false)?;
+
+        term.render(&self.changes)?;
+        self.changes.clear();
+
+        Ok(())
+    }
+
     fn render(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         let cols = self.cols;
         let max_width = cols.saturating_sub(6);
@@ -282,26 +310,7 @@ impl<'a> SelectorState<'a> {
                     key: KeyCode::Escape,
                     ..
                 }) => {
-                    let rows = self.max_items.saturating_add(ROW_OVERHEAD);
-                    let start_row = self.selector_size + 2;
-                    let skip_rows = rows - start_row - 1;
-
-                    self.changes.append(&mut vec![
-                        Change::CursorVisibility(CursorVisibility::Hidden),
-                        Change::CursorPosition {
-                            x: Position::Absolute(0),
-                            y: Position::EndRelative(start_row),
-                        },
-                        Change::ClearToEndOfScreen(ColorAttribute::Default),
-                    ]);
-                    for renderable_entity in self.row_entities.iter().skip(skip_rows) {
-                        if let Some(renderable_entity) = renderable_entity {
-                            renderable_entity.render(&self.colors, &mut self.changes, term)?;
-                        }
-                    }
-                    term.render(&self.changes)?;
-                    self.changes.clear();
-
+                    self.clear_selector(term)?;
                     break;
                 }
                 InputEvent::Key(KeyEvent {
@@ -309,31 +318,8 @@ impl<'a> SelectorState<'a> {
                     ..
                 }) => {
                     if let Some(entry) = self.filtered_entries.get(self.active_idx).cloned() {
-                        let rows = self.max_items.saturating_add(ROW_OVERHEAD);
-                        let start_row = self.selector_size + 2;
-                        let skip_rows = rows - start_row - 1;
-
-                        self.changes.append(&mut vec![
-                            Change::CursorVisibility(CursorVisibility::Hidden),
-                            Change::CursorPosition {
-                                x: Position::Absolute(0),
-                                y: Position::EndRelative(start_row),
-                            },
-                            Change::ClearToEndOfScreen(ColorAttribute::Default),
-                        ]);
-                        for renderable_entity in self.row_entities.iter().skip(skip_rows) {
-                            if let Some(renderable_entity) = renderable_entity {
-                                renderable_entity.render(&self.colors, &mut self.changes, term)?;
-                            }
-                        }
-
                         self.option.value = Some(entry);
-                        self.option
-                            .render(&self.colors, &mut self.changes, term, false)?;
-
-                        term.render(&self.changes)?;
-                        self.changes.clear();
-
+                        self.clear_selector(term)?;
                         break;
                     }
                 }
