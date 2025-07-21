@@ -180,13 +180,19 @@ impl SelectorState {
 
     fn render_constants(&mut self) -> termwiz::Result<()> {
         if let Some(context) = self.context.as_ref() {
-            self.changes
-                .push(Change::Text(format!("{}\r\n", context.header)));
+            self.changes.append(&mut vec![
+                Change::Text(context.header.to_string()),
+                Change::AllAttributes(CellAttributes::default()),
+            ]);
             for entry in &context.entries {
-                self.changes
-                    .push(Change::Text(format!("{}: {}\r\n", entry.label, entry.id)));
+                self.changes.append(&mut vec![
+                    Change::Text(format!("\r\n{}", entry.label)),
+                    Change::AllAttributes(CellAttributes::default()),
+                    Change::Text(format!(": {}", entry.id)),
+                    Change::AllAttributes(CellAttributes::default()),
+                ]);
             }
-            self.changes.push(Change::Text("\r\n".to_string()));
+            self.changes.push(Change::Text("\r\n\r\n".to_string()));
         }
 
         self.changes.push(Change::Text(format!("Arguments")));
@@ -197,12 +203,12 @@ impl SelectorState {
                 Change::Text(positional_arg.key.to_string()),
                 Change::Attribute(AttributeChange::Foreground(ColorAttribute::Default)),
                 Change::Text(format!(" {}", positional_arg.description)),
+                Change::AllAttributes(CellAttributes::default()),
             ]);
         }
 
-        self.changes.push(Change::Text("\r\n".to_string()));
-        self.changes.push(Change::Text("─".repeat(self.cols)));
-        self.changes.push(Change::Text("\r\n".to_string()));
+        self.changes
+            .push(Change::Text(format!("\r\n{}\r\n", "─".repeat(self.cols))));
 
         Ok(())
     }
@@ -274,12 +280,13 @@ impl SelectorState {
 
         let cols = self.cols;
         let max_width = cols.saturating_sub(6);
-        changes.push(Change::CursorPosition {
-            x: Position::Absolute(0),
-            y: Position::EndRelative(self.selector_size + 1),
-        });
-
-        changes.push(Change::ClearToEndOfScreen(ColorAttribute::Default));
+        changes.append(&mut vec![
+            Change::CursorPosition {
+                x: Position::Absolute(0),
+                y: Position::EndRelative(self.selector_size + 1),
+            },
+            Change::ClearToEndOfScreen(ColorAttribute::Default),
+        ]);
 
         if !self.filtering {
             changes.push(Change::Text(format!(
