@@ -1249,47 +1249,35 @@ impl<'a> TransientState<'a> {
 }
 
 #[derive(FromDynamic, ToDynamic)]
-struct TransientResultEntry {
-    flag: String,
-    value: Value,
-}
-
-#[derive(FromDynamic, ToDynamic)]
 struct TransientResult {
-    entries: Vec<TransientResultEntry>,
+    entries: HashMap<String, Value>,
 }
 impl_lua_conversion_dynamic!(TransientResult);
 
 impl<'a> From<&'a Vec<Rc<TransientSection<'a>>>> for TransientResult {
     fn from(value: &'a Vec<Rc<TransientSection>>) -> Self {
-        let mut entries: Vec<TransientResultEntry> = vec![];
+        let mut entries: HashMap<String, Value> = HashMap::new();
 
         for section in value {
             for entry in &section.entries {
                 match entry {
                     TransientEntry::TransientOption(option) => {
                         let option = option.borrow();
-                        entries.push(TransientResultEntry {
-                            flag: option.flag.clone(),
-                            value: option.value.to_dynamic(),
-                        });
+                        entries.insert(option.flag.clone(), option.value.to_dynamic());
                     }
                     TransientEntry::TransientSwitch(switch) => {
                         let switch = switch.borrow();
-                        entries.push(TransientResultEntry {
-                            flag: switch.flag.clone(),
-                            value: switch.value.to_dynamic(),
-                        });
+                        entries.insert(switch.flag.clone(), switch.value.to_dynamic());
                     }
                     TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
                         let cyclic_switch = cyclic_switch.borrow();
-                        entries.push(TransientResultEntry {
-                            flag: cyclic_switch.flag.clone(),
-                            value: cyclic_switch
+                        entries.insert(
+                            cyclic_switch.flag.clone(),
+                            cyclic_switch
                                 .active_idx
                                 .map_or_else(|| None, |idx| cyclic_switch.choices.get(idx).cloned())
                                 .to_dynamic(),
-                        });
+                        );
                     }
                     _ => {}
                 }
