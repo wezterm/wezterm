@@ -92,7 +92,7 @@ struct SelectorEntry {
 
 struct ArgumentSection {
     header: String,
-    entries: Vec<TransientArgument>,
+    arguments: Vec<TransientArgument>,
 }
 
 struct SelectorState {
@@ -125,7 +125,7 @@ impl SelectorState {
             .as_ref()
             .map_or_else(|| 0, |v| v.entries.len() + 2);
 
-        let positional_args_size = args.section.entries.len() + 1;
+        let positional_args_size = args.section.arguments.len() + 1;
 
         let overhead = context_size + positional_args_size + 3;
 
@@ -154,12 +154,12 @@ impl SelectorState {
                 .header
                 .clone()
                 .unwrap_or_else(|| "Default".to_string()),
-            entries: args.section.entries.clone(),
+            arguments: args.section.arguments.clone(),
         };
 
         let mut trie_node = TrieNode::new();
 
-        for positional_arg in &section.entries {
+        for positional_arg in &section.arguments {
             trie_node.add_word(&positional_arg.key, positional_arg.clone());
         }
 
@@ -210,7 +210,7 @@ impl SelectorState {
         self.changes.push(Change::Text(self.section.header.clone()));
         self.changes
             .push(Change::AllAttributes(CellAttributes::default()));
-        for positional_arg in &self.section.entries {
+        for positional_arg in &self.section.arguments {
             self.changes.append(&mut vec![
                 Change::Text("\r\n".to_string()),
                 Change::Attribute(AttributeChange::Foreground(self.colors.action_key_fg)),

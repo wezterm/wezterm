@@ -609,7 +609,7 @@ pub struct TransientMenu {
 pub struct ArgumentSection {
     #[dynamic(default)]
     pub header: Option<String>,
-    pub entries: Vec<TransientArgument>,
+    pub arguments: Vec<TransientArgument>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
