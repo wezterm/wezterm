@@ -125,7 +125,7 @@ impl SelectorState {
             .as_ref()
             .map_or_else(|| 0, |v| v.entries.len() + 2);
 
-        let positional_args_size = args.argument_section.entries.len() + 1;
+        let positional_args_size = args.section.entries.len() + 1;
 
         let overhead = context_size + positional_args_size + 3;
 
@@ -150,11 +150,11 @@ impl SelectorState {
 
         let section = ArgumentSection {
             header: args
-                .argument_section
+                .section
                 .header
                 .clone()
                 .unwrap_or_else(|| "Default".to_string()),
-            entries: args.argument_section.entries.clone(),
+            entries: args.section.entries.clone(),
         };
 
         let mut trie_node = TrieNode::new();
