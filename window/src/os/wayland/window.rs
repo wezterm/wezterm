@@ -248,51 +248,73 @@ impl WaylandWindow {
         let decorations = config.window_decorations;
 
         // NOTE: `None` means we don't care, not "no decorations"!
-        let decor_mode = if decorations == WindowDecorations::default() {
+        let decor_mode = if decorations == WindowDecorations::NONE {
             Some(DecorationMode::Server)
         } else {
             Some(DecorationMode::Client)
         };
-        window.request_decoration_mode(decor_mode);
+        // window.request_decoration_mode(decor_mode);
+        window.request_decoration_mode(None);
 
-        let mut window_frame = {
-            let wayland_state = &conn.wayland_state.borrow();
-            let shm = &wayland_state.shm;
-            let compositor = wayland_state.compositor.clone();
-            let subcompositor = wayland_state.subcompositor.clone();
-            AdwaitaFrame::new(
+        // let mut window_frame = {
+        //     let wayland_state = &conn.wayland_state.borrow();
+        //     let shm = &wayland_state.shm;
+        //     let compositor = wayland_state.compositor.clone();
+        //     let subcompositor = wayland_state.subcompositor.clone();
+        //     AdwaitaFrame::new(
+        //         &window,
+        //         shm,
+        //         compositor.into(),
+        //         subcompositor,
+        //         qh.clone(),
+        //         FrameConfig::auto().hide_titlebar(!decorations.contains(WindowDecorations::TITLE)),
+        //     )
+        //     .expect("failed to create csd frame")
+        // };
+        let mut window_frame: Option<AdwaitaFrame<WaylandState>> = if decorations
+            == WindowDecorations::NONE
+        {
+            None
+        } else {
+            let wayland_state = conn.wayland_state.borrow();
+            let frame = AdwaitaFrame::new(
                 &window,
-                shm,
-                compositor.into(),
-                subcompositor,
+                &wayland_state.shm,
+                wayland_state.compositor.clone().into(),
+                wayland_state.subcompositor.clone(),
                 qh.clone(),
                 FrameConfig::auto().hide_titlebar(!decorations.contains(WindowDecorations::TITLE)),
             )
-            .expect("failed to create csd frame")
+            .expect("failed to create csd frame");
+            Some(frame)
         };
-        window_frame.set_resizable(decorations.contains(WindowDecorations::RESIZE));
-        // At this point we can't be sure about SSD support, wait for configure
-        // Also: at this point scale is 1, we haven't received a configure yet, so we can use pixel_*
-        let hidden = decorations == WindowDecorations::NONE;
-        window_frame.set_hidden(hidden);
-        if !hidden {
-            window_frame.resize(
+        if let Some(frame) = &mut window_frame {
+            frame.set_resizable(decorations.contains(WindowDecorations::RESIZE));
+            frame.set_hidden(false);
+            frame.resize(
                 NonZeroU32::new(dimensions.pixel_width as u32)
                     .ok_or_else(|| anyhow!("dimensions {dimensions:?} are invalid"))?,
                 NonZeroU32::new(dimensions.pixel_height as u32)
                     .ok_or_else(|| anyhow!("dimensions {dimensions:?} are invalid"))?,
             );
-        }
 
-        window.set_min_size(Some((32, 32)));
-        let (x, y) = window_frame.location();
-        let (full_w, full_h) = window_frame.add_borders(
-            dimensions.pixel_width as u32,
-            dimensions.pixel_height as u32,
-        );
-        window
-            .xdg_surface()
-            .set_window_geometry(x, y, full_w as i32, full_h as i32);
+            window.set_min_size(Some((32, 32)));
+            let (x, y) = frame.location();
+            let (full_w, full_h) = frame.add_borders(
+                dimensions.pixel_width as u32,
+                dimensions.pixel_height as u32,
+            );
+            window
+                .xdg_surface()
+                .set_window_geometry(x, y, full_w as i32, full_h as i32);
+        } else {
+            // window.xdg_surface().set_window_geometry(
+            //     0,
+            //     0,
+            //     dimensions.pixel_width as i32,
+            //     dimensions.pixel_height as i32,
+            // );
+        }
         window.commit();
 
         let copy_and_paste = CopyAndPaste::create();
@@ -591,7 +613,7 @@ pub struct WaylandWindowInner {
     surface_factor: f64,
     copy_and_paste: Arc<Mutex<CopyAndPaste>>,
     window: Option<XdgWindow>,
-    pub(super) window_frame: AdwaitaFrame<WaylandState>,
+    pub(super) window_frame: Option<AdwaitaFrame<WaylandState>>,
     dimensions: Dimensions,
     resize_increments: Option<ResizeIncrement>,
     window_state: WindowState,
@@ -648,9 +670,14 @@ impl WaylandWindowInner {
     }
 
     fn refresh_frame(&mut self) {
-        if self.window_frame.is_dirty() && !self.window_frame.is_hidden() {
-            self.window_frame.draw();
+        if let Some(frame) = &mut self.window_frame {
+            if frame.is_dirty() && !frame.is_hidden() {
+                frame.draw();
+            }
         }
+        // if self.window_frame.is_dirty() && !self.window_frame.is_hidden() {
+        //     self.window_frame.draw();
+        // }
     }
 
     fn request_drag_move(&mut self) -> anyhow::Result<()> {
@@ -754,12 +781,11 @@ impl WaylandWindowInner {
 
         if let Some(subsurface_id) = PendingMouse::active_subsurface(&pending_mouse) {
             if let Some((x, y)) = PendingMouse::coords(&pending_mouse) {
-                if let Some(c) =
-                    self.window_frame
-                        .click_point_moved(Duration::ZERO, &subsurface_id, x, y)
-                {
-                    self.set_cursor_icon(Some(c))
-                };
+                if let Some(frame) = &mut self.window_frame {
+                    if let Some(c) = frame.click_point_moved(Duration::ZERO, &subsurface_id, x, y) {
+                        self.set_cursor_icon(Some(c))
+                    };
+                }
             }
             while let Some((button, state)) = PendingMouse::next_button(&pending_mouse) {
                 let pressed = state == ButtonState::Pressed;
@@ -770,9 +796,10 @@ impl WaylandWindowInner {
                 };
 
                 let timestamp = Instant::now().duration_since(self.start_time);
-
-                if let Some(action) = self.window_frame.on_click(timestamp, click, pressed) {
-                    self.frame_action(PendingMouse::last_serial(&pending_mouse), action);
+                if let Some(frame) = &mut self.window_frame {
+                    if let Some(action) = frame.on_click(timestamp, click, pressed) {
+                        self.frame_action(PendingMouse::last_serial(&pending_mouse), action);
+                    }
                 }
             }
         }
@@ -911,11 +938,11 @@ impl WaylandWindowInner {
         }
 
         if let Some(ref window_config) = pending.window_configure {
-            self.window_frame.update_state(window_config.state);
-            self.window_frame
-                .update_wm_capabilities(window_config.capabilities);
-            self.window_frame
-                .set_hidden(window_config.decoration_mode != DecorationMode::Client);
+            if let Some(frame) = &mut self.window_frame {
+                frame.update_state(window_config.state);
+                frame.update_wm_capabilities(window_config.capabilities);
+                frame.set_hidden(false);
+            }
         }
 
         if let Some((mut w, mut h)) = pending.configure.take() {
@@ -954,26 +981,33 @@ impl WaylandWindowInner {
                 }
 
                 log::trace!("Resizing frame");
-                if !self.window_frame.is_hidden() {
+                if let Some(frame) = &mut self.window_frame {
                     // Clamp the size to at least one surface height/width.
                     let width = NonZeroU32::new(w).unwrap_or(NonZeroU32::MIN);
                     let height = NonZeroU32::new(h).unwrap_or(NonZeroU32::MIN);
-                    self.window_frame.resize(width, height);
-                    self.refresh_frame(); // NOW, not after do_paint(), otherwise desync on resize
+                    frame.resize(width, height);
+                    let (x, y) = frame.location();
+                    let (full_w, full_h) = frame.add_borders(w as u32, h as u32);
+                    self.window
+                        .as_mut()
+                        .unwrap()
+                        .xdg_surface()
+                        .set_window_geometry(
+                            x,
+                            y,
+                            full_w.try_into().unwrap(),
+                            full_h.try_into().unwrap(),
+                        );
+                } else {
+                    // self.window
+                    //     .as_ref()
+                    //     .unwrap()
+                    //     .xdg_surface()
+                    //     .set_window_geometry(0, 0, w.try_into().unwrap(), h.try_into().unwrap());
                 }
-                let (x, y) = self.window_frame.location();
-                let (full_w, full_h) = self.window_frame.add_borders(w as u32, h as u32);
-                self.window
-                    .as_mut()
-                    .unwrap()
-                    .xdg_surface()
-                    .set_window_geometry(
-                        x,
-                        y,
-                        full_w.try_into().unwrap(),
-                        full_h.try_into().unwrap(),
-                    );
-                // Compute the new pixel dimensions
+
+                self.refresh_frame(); // NOW, not after do_paint(), otherwise desync on resize
+                                      // Compute the new pixel dimensions
                 let new_dimensions = Dimensions {
                     pixel_width: pixel_width.try_into().unwrap(),
                     pixel_height: pixel_height.try_into().unwrap(),
@@ -1007,23 +1041,59 @@ impl WaylandWindowInner {
                     if let Some(wegl_surface) = self.wegl_surface.as_mut() {
                         wegl_surface.resize(pixel_width, pixel_height, 0, 0);
                     }
+                    // if self.surface_factor != factor {
+                    //     let wayland_conn = Connection::get().unwrap().wayland();
+                    //     let wayland_state = wayland_conn.wayland_state.borrow();
+                    //     let mut pool = wayland_state.mem_pool.borrow_mut();
+                    //
+                    //     // Make a "fake" buffer with the right dimensions, as
+                    //     // simply detaching the buffer can cause wlroots-derived
+                    //     // compositors consider the window to be unconfigured.
+                    //     if let Ok((buffer, _bytes)) = pool.create_buffer(
+                    //         factor as i32,
+                    //         factor as i32,
+                    //         (factor * 4.0) as i32,
+                    //         wayland_client::protocol::wl_shm::Format::Argb8888,
+                    //     ) {
+                    //         self.surface().attach(Some(buffer.wl_buffer()), 0, 0);
+                    //         self.surface().set_buffer_scale(factor as i32);
+                    //         self.surface().commit();
+                    //
+                    //         self.surface_factor = factor;
+                    //     }
+                    // }
                     if self.surface_factor != factor {
                         let wayland_conn = Connection::get().unwrap().wayland();
                         let wayland_state = wayland_conn.wayland_state.borrow();
+
                         let mut pool = wayland_state.mem_pool.borrow_mut();
 
-                        // Make a "fake" buffer with the right dimensions, as
-                        // simply detaching the buffer can cause wlroots-derived
-                        // compositors consider the window to be unconfigured.
-                        if let Ok((buffer, _bytes)) = pool.create_buffer(
-                            factor as i32,
-                            factor as i32,
-                            (factor * 4.0) as i32,
-                            wayland_client::protocol::wl_shm::Format::Argb8888,
-                        ) {
-                            self.surface().attach(Some(buffer.wl_buffer()), 0, 0);
-                            self.surface().set_buffer_scale(factor as i32);
-                            self.surface_factor = factor;
+                        // Compute the real buffer size in pixels
+                        let buf_w = (self.dimensions.pixel_width as f64 * factor).ceil() as i32;
+                        let buf_h = (self.dimensions.pixel_height as f64 * factor).ceil() as i32;
+                        let stride = buf_w.saturating_mul(4);
+
+                        log::debug!(
+                            "shm_pool: creating buffer w={} h={} stride={} scale_factor={}",
+                            buf_w,
+                            buf_h,
+                            stride,
+                            factor
+                        );
+
+                        // Only create if dimensions are valid
+                        if buf_w > 0 && buf_h > 0 && stride > 0 {
+                            if let Ok((buffer, _bytes)) = pool.create_buffer(
+                                buf_w,
+                                buf_h,
+                                stride,
+                                wayland_client::protocol::wl_shm::Format::Argb8888,
+                            ) {
+                                self.surface().attach(Some(buffer.wl_buffer()), 0, 0);
+                                self.surface().set_buffer_scale(factor as i32);
+                                self.surface().commit();
+                                self.surface_factor = factor;
+                            }
                         }
                     }
                 }
@@ -1115,7 +1185,9 @@ impl WaylandWindowInner {
         }
         if let Some(window) = self.window.as_ref() {
             window.set_title(title.clone());
-            self.window_frame.set_title(title.clone());
+            if let Some(frame) = &mut self.window_frame {
+                frame.set_title(title.clone());
+            }
         }
         self.refresh_frame();
         self.title = Some(title);
@@ -1396,16 +1468,23 @@ impl WaylandState {
                 // TODO: This should the new queue function
                 // p.queue_configure(&configure)
                 //
-                let mut changed;
+                let mut changed = false;
                 pending_event.had_configure_event = true;
                 if let (Some(w), Some(h)) = configure.new_size {
-                    let window_frame = &window_inner.borrow().window_frame;
-                    let (w, h) = window_frame.subtract_borders(w, h);
-                    changed = pending_event.configure.is_none();
-                    pending_event.configure.replace((
-                        w.unwrap_or(NonZeroU32::MIN).get(),
-                        h.unwrap_or(NonZeroU32::MIN).get(),
-                    ));
+                    if let Some(frame) = &mut window_inner.borrow_mut().window_frame {
+                        let (w, h) = frame.subtract_borders(w, h);
+                        // let window_frame = &window_inner.borrow().window_frame;
+                        changed = pending_event.configure.is_none();
+                        pending_event.configure.replace((
+                            w.unwrap_or(NonZeroU32::MIN).get(),
+                            h.unwrap_or(NonZeroU32::MIN).get(),
+                        ));
+                    } else {
+                        // If we don't have a frame, then we just use the
+                        // configure size as-is.
+                        changed = pending_event.configure.is_none();
+                        pending_event.configure.replace((w.get(), h.get()));
+                    }
                 } else {
                     changed = true;
                 }
@@ -1460,7 +1539,10 @@ impl CompositorHandler for WaylandState {
         let window_id = surface_data.window_id;
 
         WaylandConnection::with_window_inner(window_id, move |inner| {
-            inner.window_frame.set_scaling_factor(new_factor as f64);
+            if let Some(frame) = &mut inner.window_frame {
+                frame.set_scaling_factor(new_factor as f64);
+            }
+            // inner.window_frame.set_scaling_factor(new_factor as f64);
             Ok(())
         });
     }
