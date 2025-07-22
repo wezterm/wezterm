@@ -253,24 +253,8 @@ impl WaylandWindow {
         } else {
             Some(DecorationMode::Client)
         };
-        // window.request_decoration_mode(decor_mode);
-        window.request_decoration_mode(None);
+        window.request_decoration_mode(decor_mode);
 
-        // let mut window_frame = {
-        //     let wayland_state = &conn.wayland_state.borrow();
-        //     let shm = &wayland_state.shm;
-        //     let compositor = wayland_state.compositor.clone();
-        //     let subcompositor = wayland_state.subcompositor.clone();
-        //     AdwaitaFrame::new(
-        //         &window,
-        //         shm,
-        //         compositor.into(),
-        //         subcompositor,
-        //         qh.clone(),
-        //         FrameConfig::auto().hide_titlebar(!decorations.contains(WindowDecorations::TITLE)),
-        //     )
-        //     .expect("failed to create csd frame")
-        // };
         let mut window_frame: Option<AdwaitaFrame<WaylandState>> = if decorations
             == WindowDecorations::NONE
         {
@@ -308,12 +292,7 @@ impl WaylandWindow {
                 .xdg_surface()
                 .set_window_geometry(x, y, full_w as i32, full_h as i32);
         } else {
-            // window.xdg_surface().set_window_geometry(
-            //     0,
-            //     0,
-            //     dimensions.pixel_width as i32,
-            //     dimensions.pixel_height as i32,
-            // );
+            // Do nothing, we don't have a frame
         }
         window.commit();
 
@@ -675,9 +654,6 @@ impl WaylandWindowInner {
                 frame.draw();
             }
         }
-        // if self.window_frame.is_dirty() && !self.window_frame.is_hidden() {
-        //     self.window_frame.draw();
-        // }
     }
 
     fn request_drag_move(&mut self) -> anyhow::Result<()> {
@@ -1041,27 +1017,7 @@ impl WaylandWindowInner {
                     if let Some(wegl_surface) = self.wegl_surface.as_mut() {
                         wegl_surface.resize(pixel_width, pixel_height, 0, 0);
                     }
-                    // if self.surface_factor != factor {
-                    //     let wayland_conn = Connection::get().unwrap().wayland();
-                    //     let wayland_state = wayland_conn.wayland_state.borrow();
-                    //     let mut pool = wayland_state.mem_pool.borrow_mut();
-                    //
-                    //     // Make a "fake" buffer with the right dimensions, as
-                    //     // simply detaching the buffer can cause wlroots-derived
-                    //     // compositors consider the window to be unconfigured.
-                    //     if let Ok((buffer, _bytes)) = pool.create_buffer(
-                    //         factor as i32,
-                    //         factor as i32,
-                    //         (factor * 4.0) as i32,
-                    //         wayland_client::protocol::wl_shm::Format::Argb8888,
-                    //     ) {
-                    //         self.surface().attach(Some(buffer.wl_buffer()), 0, 0);
-                    //         self.surface().set_buffer_scale(factor as i32);
-                    //         self.surface().commit();
-                    //
-                    //         self.surface_factor = factor;
-                    //     }
-                    // }
+
                     if self.surface_factor != factor {
                         let wayland_conn = Connection::get().unwrap().wayland();
                         let wayland_state = wayland_conn.wayland_state.borrow();
@@ -1449,75 +1405,47 @@ impl WaylandState {
             .window_by_id(window_id)
             .expect("Inner Window should exist");
 
-        let p = window_inner.borrow().pending_event.clone();
-        let mut pending_event = p.lock().unwrap();
+        {
+            let p = window_inner.borrow().pending_event.clone();
+            let mut pending = p.lock().unwrap();
 
-        let changed = match event {
-            WaylandWindowEvent::Close => {
-                // TODO: This should the new queue function
-                // p.queue_close()
-                if !pending_event.close {
-                    pending_event.close = true;
-                    true
-                } else {
-                    false
+            match event {
+                WaylandWindowEvent::Close => {
+                    pending.close = true;
                 }
-            }
-            WaylandWindowEvent::Request(configure) => {
-                pending_event.window_configure.replace(configure.clone());
-                // TODO: This should the new queue function
-                // p.queue_configure(&configure)
-                //
-                let mut changed = false;
-                pending_event.had_configure_event = true;
-                if let (Some(w), Some(h)) = configure.new_size {
-                    if let Some(frame) = &mut window_inner.borrow_mut().window_frame {
-                        let (w, h) = frame.subtract_borders(w, h);
-                        // let window_frame = &window_inner.borrow().window_frame;
-                        changed = pending_event.configure.is_none();
-                        pending_event.configure.replace((
-                            w.unwrap_or(NonZeroU32::MIN).get(),
-                            h.unwrap_or(NonZeroU32::MIN).get(),
-                        ));
-                    } else {
-                        // If we don't have a frame, then we just use the
-                        // configure size as-is.
-                        changed = pending_event.configure.is_none();
-                        pending_event.configure.replace((w.get(), h.get()));
+                WaylandWindowEvent::Request(configure) => {
+                    pending.window_configure = Some(configure.clone());
+                    pending.had_configure_event = true;
+
+                    if let (Some(w), Some(h)) = configure.new_size {
+                        // If we have a CSD frame, subtract borders; otherwise use compositor size.
+                        if let Some(frame) = &mut window_inner.borrow_mut().window_frame {
+                            let (w2, h2) = frame.subtract_borders(w, h);
+                            pending.configure = Some((
+                                w2.unwrap_or(NonZeroU32::MIN).get(),
+                                h2.unwrap_or(NonZeroU32::MIN).get(),
+                            ));
+                        } else {
+                            pending.configure = Some((w.get(), h.get()));
+                        }
                     }
-                } else {
-                    changed = true;
-                }
 
-                let mut state = WindowState::default();
-                if configure.state.contains(SCTKWindowState::FULLSCREEN) {
-                    state |= WindowState::FULL_SCREEN;
+                    let mut state = WindowState::default();
+                    if configure.state.contains(SCTKWindowState::FULLSCREEN) {
+                        state |= WindowState::FULL_SCREEN;
+                    }
+                    if configure.state.contains(SCTKWindowState::MAXIMIZED) {
+                        state |= WindowState::MAXIMIZED;
+                    }
+                    pending.window_state = Some(state);
                 }
-                if configure.state.contains(SCTKWindowState::MAXIMIZED) {
-                    state |= WindowState::MAXIMIZED;
-                }
-
-                log::debug!(
-                    "Config: self.window_state={:?}, states: {:?} {:?}",
-                    pending_event.window_state,
-                    state,
-                    configure.state
-                );
-
-                if pending_event.window_state.is_none() && state != WindowState::default() {
-                    changed = true;
-                }
-
-                pending_event.window_state.replace(state);
-                changed
             }
-        };
-        if changed {
-            WaylandConnection::with_window_inner(window_id, move |inner| {
-                inner.dispatch_pending_event();
-                Ok(())
-            });
-        }
+        } // drop lock before calling into inner
+
+        WaylandConnection::with_window_inner(window_id, |inner| {
+            inner.dispatch_pending_event();
+            Ok(())
+        });
     }
 }
 
@@ -1542,7 +1470,6 @@ impl CompositorHandler for WaylandState {
             if let Some(frame) = &mut inner.window_frame {
                 frame.set_scaling_factor(new_factor as f64);
             }
-            // inner.window_frame.set_scaling_factor(new_factor as f64);
             Ok(())
         });
     }
