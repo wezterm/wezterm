@@ -90,6 +90,11 @@ struct SelectorEntry {
     label: String,
 }
 
+struct ArgumentSection {
+    header: String,
+    entries: Vec<TransientArgument>,
+}
+
 struct SelectorState {
     active_idx: usize,
     max_items: usize,
@@ -108,10 +113,9 @@ struct SelectorState {
     root_node: Rc<RefCell<TrieNode>>,
     cur_node: Rc<RefCell<TrieNode>>,
     context: Option<TransientContext>,
-    arguments: Vec<TransientArgument>,
     changes: Vec<Change>,
     colors: SelectorWithArgumentsColors,
-    argument_header: String,
+    section: ArgumentSection,
 }
 
 impl SelectorState {
@@ -121,7 +125,7 @@ impl SelectorState {
             .as_ref()
             .map_or_else(|| 0, |v| v.entries.len() + 2);
 
-        let positional_args_size = args.actions.len() + 1;
+        let positional_args_size = args.argument_section.entries.len() + 1;
 
         let overhead = context_size + positional_args_size + 3;
 
@@ -144,12 +148,19 @@ impl SelectorState {
 
         let filtered_entries = choices.clone();
 
-        let mut arguments = vec![];
+        let section = ArgumentSection {
+            header: args
+                .argument_section
+                .header
+                .clone()
+                .unwrap_or_else(|| "Default".to_string()),
+            entries: args.argument_section.entries.clone(),
+        };
+
         let mut trie_node = TrieNode::new();
 
-        for positional_arg in &args.actions {
+        for positional_arg in &section.entries {
             trie_node.add_word(&positional_arg.key, positional_arg.clone());
-            arguments.push(positional_arg.clone());
         }
 
         let root_node = Rc::new(RefCell::new(trie_node));
@@ -173,13 +184,9 @@ impl SelectorState {
             root_node,
             cur_node,
             context: args.context.clone(),
-            arguments,
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
             colors: SelectorWithArgumentsColors::new(),
-            argument_header: args
-                .action_header
-                .clone()
-                .unwrap_or("Arguments".to_string()),
+            section,
         }
     }
 
@@ -200,11 +207,10 @@ impl SelectorState {
             self.changes.push(Change::Text("\r\n\r\n".to_string()));
         }
 
-        self.changes
-            .push(Change::Text(self.argument_header.clone()));
+        self.changes.push(Change::Text(self.section.header.clone()));
         self.changes
             .push(Change::AllAttributes(CellAttributes::default()));
-        for positional_arg in &self.arguments {
+        for positional_arg in &self.section.entries {
             self.changes.append(&mut vec![
                 Change::Text("\r\n".to_string()),
                 Change::Attribute(AttributeChange::Foreground(self.colors.action_key_fg)),

@@ -606,14 +606,19 @@ pub struct TransientMenu {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct ArgumentSection {
+    #[dynamic(default)]
+    pub header: Option<String>,
+    pub entries: Vec<TransientArgument>,
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct SelectorWithArguments {
     pub description: String,
     #[dynamic(default)]
     pub context: Option<TransientContext>,
     pub choices: Vec<String>,
-    #[dynamic(default)]
-    pub action_header: Option<String>,
-    pub actions: Vec<TransientArgument>,
+    pub argument_section: ArgumentSection,
     #[dynamic(default)]
     pub multiple: bool,
     #[dynamic(default)]
