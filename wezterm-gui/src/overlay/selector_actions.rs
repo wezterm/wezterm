@@ -223,8 +223,12 @@ impl SelectorState {
             ]);
         }
 
+        self.changes.push(Change::CursorPosition {
+            x: Position::Absolute(0),
+            y: Position::EndRelative(self.selector_size + 2),
+        });
         self.changes
-            .push(Change::Text(format!("\r\n{}\r\n", "─".repeat(self.cols))));
+            .push(Change::Text("─".repeat(self.cols).to_string()));
 
         Ok(())
     }
