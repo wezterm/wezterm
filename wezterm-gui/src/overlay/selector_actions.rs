@@ -253,6 +253,22 @@ impl SelectorState {
         self.filtering ^= true;
     }
 
+    fn set_filtered_entries_multiple_marker(&mut self, mark: bool) {
+        if let Some(multiple_idx) = self.multiple_idx.as_mut() {
+            for entry in &mut self.filtered_entries {
+                multiple_idx[entry.idx] = mark;
+            }
+        }
+    }
+
+    fn toggle_filtered_entries_multiple_marker(&mut self) {
+        if let Some(multiple_idx) = self.multiple_idx.as_mut() {
+            for entry in &mut self.filtered_entries {
+                multiple_idx[entry.idx] ^= true;
+            }
+        }
+    }
+
     fn update_filter(&mut self) {
         if self.filter_term.is_empty() {
             self.filtered_entries = self.choices.clone();
@@ -375,7 +391,7 @@ impl SelectorState {
         while let Ok(Some(event)) = term.poll_input(None) {
             match event {
                 InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('G' | 'C' | 'D' | '['),
+                    key: KeyCode::Char('G' | 'C'),
                     modifiers: Modifiers::CTRL,
                 })
                 | InputEvent::Key(KeyEvent {
@@ -403,6 +419,27 @@ impl SelectorState {
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.toggle_search();
+                    self.render(term)?;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('A'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    self.set_filtered_entries_multiple_marker(true);
+                    self.render(term)?;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('D'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    self.set_filtered_entries_multiple_marker(false);
+                    self.render(term)?;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('T'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    self.toggle_filtered_entries_multiple_marker();
                     self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
