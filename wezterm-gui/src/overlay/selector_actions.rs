@@ -2,7 +2,7 @@ use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
 use config::configuration;
 use config::{
-    keyassignment::{KeyAssignment, SelectorWithArguments, TransientArgument, TransientContext},
+    keyassignment::{KeyAssignment, SelectorActions, TransientArgument, TransientContext},
     AnsiColor, ColorAttribute,
 };
 use luahelper::impl_lua_conversion_dynamic;
@@ -61,12 +61,12 @@ impl TrieNode {
     }
 }
 
-struct SelectorWithArgumentsColors {
+struct SelectorActionsColors {
     action_key_fg: ColorAttribute,
     multiple_marker_bg: ColorAttribute,
 }
 
-impl SelectorWithArgumentsColors {
+impl SelectorActionsColors {
     fn new() -> Self {
         let config = configuration();
         let colors = &config.resolved_palette;
@@ -114,12 +114,12 @@ struct SelectorState {
     cur_node: Rc<RefCell<TrieNode>>,
     context: Option<TransientContext>,
     changes: Vec<Change>,
-    colors: SelectorWithArgumentsColors,
+    colors: SelectorActionsColors,
     section: ArgumentSection,
 }
 
 impl SelectorState {
-    fn new(args: &SelectorWithArguments, window: GuiWin, pane: MuxPane, size: &ScreenSize) -> Self {
+    fn new(args: &SelectorActions, window: GuiWin, pane: MuxPane, size: &ScreenSize) -> Self {
         let context_size = args
             .context
             .as_ref()
@@ -185,7 +185,7 @@ impl SelectorState {
             cur_node,
             context: args.context.clone(),
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
-            colors: SelectorWithArgumentsColors::new(),
+            colors: SelectorActionsColors::new(),
             section,
         }
     }
@@ -460,7 +460,7 @@ impl SelectorState {
 
                             let name = match *positional_arg.action {
                                 KeyAssignment::EmitEvent(ref id) => id,
-                                _ => anyhow::bail!("SelectorWithArguments requires action to be defined by wezterm.action_callback")
+                                _ => anyhow::bail!("SelectorActions requires action to be defined by wezterm.action_callback")
                             };
 
                             let choices: Vec<String> = if let Some(multiple_idx) =
@@ -483,7 +483,7 @@ impl SelectorState {
                             };
 
                             if !choices.is_empty() {
-                                let result = SelectorWithArgumentsResult { choices };
+                                let result = SelectorActionsResult { choices };
                                 self.trigger_event(name, result);
                                 break;
                             }
@@ -500,7 +500,7 @@ impl SelectorState {
         Ok(())
     }
 
-    fn trigger_event(&self, name: &str, result: SelectorWithArgumentsResult) {
+    fn trigger_event(&self, name: &str, result: SelectorActionsResult) {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
@@ -514,12 +514,12 @@ impl SelectorState {
 }
 
 #[derive(FromDynamic, ToDynamic)]
-struct SelectorWithArgumentsResult {
+struct SelectorActionsResult {
     choices: Vec<String>,
 }
-impl_lua_conversion_dynamic!(SelectorWithArgumentsResult);
+impl_lua_conversion_dynamic!(SelectorActionsResult);
 
-fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: SelectorWithArgumentsResult) {
+fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: SelectorActionsResult) {
     promise::spawn::spawn(async move {
         config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, result))
             .await
@@ -532,7 +532,7 @@ async fn do_event(
     name: String,
     window: GuiWin,
     pane: MuxPane,
-    result: SelectorWithArgumentsResult,
+    result: SelectorActionsResult,
 ) -> anyhow::Result<()> {
     if let Some(lua) = lua {
         let args = lua.pack_multi((window, pane, result))?;
@@ -545,9 +545,9 @@ async fn do_event(
     Ok(())
 }
 
-pub fn show_selector_with_arguments_overlay(
+pub fn show_selector_actions_overlay(
     mut term: TermWizTerminal,
-    args: SelectorWithArguments,
+    args: SelectorActions,
     window: GuiWin,
     pane: MuxPane,
 ) -> anyhow::Result<()> {

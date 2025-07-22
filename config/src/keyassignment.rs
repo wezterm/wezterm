@@ -613,7 +613,7 @@ pub struct ArgumentSection {
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
-pub struct SelectorWithArguments {
+pub struct SelectorActions {
     pub description: String,
     #[dynamic(default)]
     pub context: Option<TransientContext>,
@@ -741,7 +741,7 @@ pub enum KeyAssignment {
     InputSelector(InputSelector),
     Confirmation(Confirmation),
     TransientMenu(TransientMenu),
-    SelectorWithArguments(SelectorWithArguments),
+    SelectorActions(SelectorActions),
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

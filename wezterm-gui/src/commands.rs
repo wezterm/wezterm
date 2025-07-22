@@ -806,7 +806,7 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &[],
             icon: None,
         },
-        SelectorWithArguments(_) => CommandDef {
+        SelectorActions(_) => CommandDef {
             brief: "Displays a list with actions".into(),
             doc: "Displays a list with actions".into(),
             keys: vec![],

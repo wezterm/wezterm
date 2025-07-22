@@ -31,7 +31,7 @@ use ::window::*;
 use anyhow::{anyhow, ensure, Context};
 use config::keyassignment::{
     Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
-    QuickSelectArguments, RotationDirection, SelectorWithArguments, SpawnCommand, SplitSize,
+    QuickSelectArguments, RotationDirection, SelectorActions, SpawnCommand, SplitSize,
     TransientMenu,
 };
 use config::window::WindowLevel;
@@ -2363,7 +2363,7 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
-    fn show_selector_with_arguments(&mut self, args: &SelectorWithArguments) {
+    fn show_selector_actions(&mut self, args: &SelectorActions) {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
             Some(tab) => tab,
@@ -2381,7 +2381,7 @@ impl TermWindow {
         let pane = MuxPane(pane.pane_id());
 
         let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
-            crate::overlay::selector_with_arguments::show_selector_with_arguments_overlay(
+            crate::overlay::selector_actions::show_selector_actions_overlay(
                 term, args, gui_win, pane,
             )
         });
@@ -3204,7 +3204,7 @@ impl TermWindow {
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
             TransientMenu(args) => self.show_transient_menu(args),
-            SelectorWithArguments(args) => self.show_selector_with_arguments(args),
+            SelectorActions(args) => self.show_selector_actions(args),
         };
         Ok(PerformAssignmentResult::Handled)
     }
