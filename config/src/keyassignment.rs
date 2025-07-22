@@ -603,6 +603,8 @@ pub struct TransientMenu {
     #[dynamic(default)]
     pub context: Option<TransientContext>,
     pub sections: Vec<TransientSection>,
+    #[dynamic(default)]
+    pub cancel: Option<Box<KeyAssignment>>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
@@ -623,6 +625,8 @@ pub struct SelectorActions {
     pub multiple: bool,
     #[dynamic(default)]
     pub fuzzy_description: Option<String>,
+    #[dynamic(default)]
+    pub cancel: Option<Box<KeyAssignment>>,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]

@@ -949,6 +949,7 @@ struct TransientState<'a> {
     changes: Vec<Change>,
     row_entities: Vec<Option<RenderableEntity<'a>>>,
     context: Option<TransientContext>,
+    cancel: Option<Box<KeyAssignment>>,
 }
 
 impl<'a> TransientState<'a> {
@@ -995,6 +996,7 @@ impl<'a> TransientState<'a> {
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
             row_entities,
             context,
+            cancel: args.cancel.clone(),
         }
     }
 
@@ -1073,13 +1075,24 @@ impl<'a> TransientState<'a> {
         Ok(())
     }
 
-    fn trigger_event(&self, name: &str) {
+    fn trigger_action_event(&self, name: &str) {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
         let result = TransientResult::from(&self.sections);
         promise::spawn::spawn_into_main_thread(async move {
-            trampoline(name, window, pane, result);
+            action_trampoline(name, window, pane, result);
+            anyhow::Result::<()>::Ok(())
+        })
+        .detach();
+    }
+
+    fn trigger_cancel_event(&self, name: &str) {
+        let name = name.to_string();
+        let window = self.window.clone();
+        let pane = self.pane;
+        promise::spawn::spawn_into_main_thread(async move {
+            cancel_trampoline(name, window, pane);
             anyhow::Result::<()>::Ok(())
         })
         .detach();
@@ -1096,6 +1109,11 @@ impl<'a> TransientState<'a> {
                     key: KeyCode::Escape,
                     ..
                 }) => {
+                    if let Some(key_assignment) = self.cancel.as_ref() {
+                        if let KeyAssignment::EmitEvent(ref id) = **key_assignment {
+                            self.trigger_cancel_event(id);
+                        }
+                    }
                     break;
                 }
                 InputEvent::Key(KeyEvent {
@@ -1209,7 +1227,7 @@ impl<'a> TransientState<'a> {
                                             KeyAssignment::EmitEvent(ref id) => id,
                                             _ => anyhow::bail!("TransientMenu requires action to be defined by wezterm.action_callback")
                                         };
-                                        self.trigger_event(name);
+                                        self.trigger_action_event(name);
                                         break;
                                     }
                                 }
@@ -1281,15 +1299,42 @@ impl<'a> From<&'a Vec<Rc<TransientSection<'a>>>> for TransientResult {
     }
 }
 
-fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: TransientResult) {
+fn cancel_trampoline(name: String, window: GuiWin, pane: MuxPane) {
     promise::spawn::spawn(async move {
-        config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, result))
+        config::with_lua_config_on_main_thread(move |lua| do_cancel_event(lua, name, window, pane))
             .await
     })
     .detach();
 }
 
-async fn do_event(
+async fn do_cancel_event(
+    lua: Option<Rc<mlua::Lua>>,
+    name: String,
+    window: GuiWin,
+    pane: MuxPane,
+) -> anyhow::Result<()> {
+    if let Some(lua) = lua {
+        let args = lua.pack_multi((window, pane))?;
+
+        if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
+            log::error!("while processing {} event: {:#}", name, err);
+        }
+    }
+
+    Ok(())
+}
+
+fn action_trampoline(name: String, window: GuiWin, pane: MuxPane, result: TransientResult) {
+    promise::spawn::spawn(async move {
+        config::with_lua_config_on_main_thread(move |lua| {
+            do_action_event(lua, name, window, pane, result)
+        })
+        .await
+    })
+    .detach();
+}
+
+async fn do_action_event(
     lua: Option<Rc<mlua::Lua>>,
     name: String,
     window: GuiWin,
