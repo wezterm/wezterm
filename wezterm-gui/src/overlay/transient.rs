@@ -193,12 +193,6 @@ impl<'a> SelectorState<'a> {
             }
         }
 
-        self.option
-            .render(&self.colors, &mut self.changes, term, false)?;
-
-        term.render(&self.changes)?;
-        self.changes.clear();
-
         Ok(())
     }
 
@@ -1173,22 +1167,16 @@ impl<'a> TransientState<'a> {
                                                     selector_state.run_loop(term)?;
                                                 } else {
                                                     self.line_prompt(term, &mut *option)?;
-                                                    option.render(
-                                                        &self.colors,
-                                                        &mut self.changes,
-                                                        term,
-                                                        true,
-                                                    )?;
                                                 }
                                             } else {
                                                 option.value = None;
-                                                option.render(
-                                                    &self.colors,
-                                                    &mut self.changes,
-                                                    term,
-                                                    true,
-                                                )?;
                                             }
+                                            option.render(
+                                                &self.colors,
+                                                &mut self.changes,
+                                                term,
+                                                true,
+                                            )?;
                                         }
                                         self.cur_node = Rc::clone(&self.root_node);
                                     }
