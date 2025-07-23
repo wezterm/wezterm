@@ -285,14 +285,12 @@ impl<'a> SelectorState<'a> {
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.move_up();
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('N' | 'J'),
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.move_down();
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('G' | 'C'),
@@ -321,7 +319,6 @@ impl<'a> SelectorState<'a> {
                 }) => {
                     if self.filter_term.pop().is_some() {
                         self.update_filter();
-                        self.render(term)?;
                     }
                 }
                 InputEvent::Key(KeyEvent {
@@ -330,10 +327,10 @@ impl<'a> SelectorState<'a> {
                 }) => {
                     self.filter_term.push(c);
                     self.update_filter();
-                    self.render(term)?;
                 }
                 _ => {}
             }
+            self.render(term)?;
         }
 
         Ok(())
