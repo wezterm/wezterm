@@ -196,7 +196,7 @@ impl<'a> SelectorState<'a> {
         Ok(())
     }
 
-    fn draw_separator(&mut self) {
+    fn draw_separator_and_show_cursor(&mut self) {
         let cols = self.cols;
         self.changes.append(&mut vec![
             Change::CursorPosition {
@@ -206,6 +206,7 @@ impl<'a> SelectorState<'a> {
             Change::ClearToEndOfScreen(ColorAttribute::Default),
             Change::Text("─".repeat(cols)),
             Change::Text("\r\n".to_string()),
+            Change::CursorVisibility(CursorVisibility::Visible),
         ]);
     }
 
@@ -263,13 +264,10 @@ impl<'a> SelectorState<'a> {
             }
             changes.push(Change::AllAttributes(CellAttributes::default()));
         }
-        changes.append(&mut vec![
-            Change::CursorPosition {
-                x: Position::Absolute(2 + self.option.description.len() + self.filter_term.len()),
-                y: Position::EndRelative(1 + input_selector_size),
-            },
-            Change::CursorVisibility(CursorVisibility::Visible),
-        ]);
+        changes.push(Change::CursorPosition {
+            x: Position::Absolute(2 + self.option.description.len() + self.filter_term.len()),
+            y: Position::EndRelative(1 + input_selector_size),
+        });
 
         term.render(changes)?;
         changes.clear();
@@ -1143,7 +1141,7 @@ impl<'a> TransientState<'a> {
                                                     row_entities: &self.row_entities,
                                                 };
 
-                                                selector_state.draw_separator();
+                                                selector_state.draw_separator_and_show_cursor();
                                                 selector_state.render(term)?;
                                                 selector_state.run_loop(term)?;
                                             } else {
