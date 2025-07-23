@@ -1162,7 +1162,7 @@ impl<'a> TransientState<'a> {
                                     TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
                                         let mut cyclic_switch = cyclic_switch.borrow_mut();
 
-                                        if cyclic_switch.choices.first().is_some() {
+                                        if !cyclic_switch.choices.is_empty() {
                                             if let Some(idx) = cyclic_switch.active_idx {
                                                 if idx == cyclic_switch.choices.len() - 1 {
                                                     cyclic_switch.active_idx =
