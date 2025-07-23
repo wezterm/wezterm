@@ -416,42 +416,36 @@ impl SelectorState {
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.move_up();
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('N' | 'J'),
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.move_down();
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('/'),
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.toggle_search();
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('A'),
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.set_filtered_entries_multiple_marker(true);
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('D'),
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.set_filtered_entries_multiple_marker(false);
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('T'),
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.toggle_filtered_entries_multiple_marker();
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,
@@ -459,7 +453,6 @@ impl SelectorState {
                 }) => {
                     self.toggle_multiple_idx();
                     self.move_down();
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,
@@ -467,15 +460,15 @@ impl SelectorState {
                 }) => {
                     self.toggle_multiple_idx();
                     self.move_up();
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Backspace,
                     modifiers: _,
-                }) if self.filtering => {
-                    if self.filter_term.pop().is_some() {
+                }) => {
+                    if self.filtering && self.filter_term.pop().is_some() {
                         self.update_filter();
-                        self.render(term)?;
+                    } else {
+                        continue;
                     }
                 }
                 InputEvent::Key(KeyEvent {
@@ -484,7 +477,6 @@ impl SelectorState {
                 }) if self.filtering => {
                     self.filter_term.push(c);
                     self.update_filter();
-                    self.render(term)?;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
@@ -540,9 +532,11 @@ impl SelectorState {
                             self.cur_node = Rc::clone(&self.root_node);
                         }
                     }
+                    continue;
                 }
                 _ => {}
             }
+            self.render(term)?;
         }
 
         Ok(())
