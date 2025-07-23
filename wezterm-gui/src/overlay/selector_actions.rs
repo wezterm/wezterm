@@ -406,7 +406,7 @@ impl SelectorState {
                 }) => {
                     if let Some(key_assignment) = self.cancel.as_ref() {
                         if let KeyAssignment::EmitEvent(ref id) = **key_assignment {
-                            self.trigger_cancel_event(id);
+                            self.trigger_event(id, None);
                         }
                     }
                     break;
@@ -532,7 +532,7 @@ impl SelectorState {
 
                             if !choices.is_empty() {
                                 let result = SelectorActionsResult { choices };
-                                self.trigger_action_event(name, result);
+                                self.trigger_event(name, Some(result));
                                 break;
                             }
                         }
@@ -548,25 +548,13 @@ impl SelectorState {
         Ok(())
     }
 
-    fn trigger_action_event(&self, name: &str, result: SelectorActionsResult) {
+    fn trigger_event(&self, name: &str, result: Option<SelectorActionsResult>) {
         let name = name.to_string();
         let window = self.window.clone();
         let pane = self.pane;
 
         promise::spawn::spawn_into_main_thread(async move {
-            action_trampoline(name, window, pane, result);
-            anyhow::Result::<()>::Ok(())
-        })
-        .detach();
-    }
-
-    fn trigger_cancel_event(&self, name: &str) {
-        let name = name.to_string();
-        let window = self.window.clone();
-        let pane = self.pane;
-
-        promise::spawn::spawn_into_main_thread(async move {
-            cancel_trampoline(name, window, pane);
+            trampoline(name, window, pane, result);
             anyhow::Result::<()>::Ok(())
         })
         .detach();
@@ -579,50 +567,27 @@ struct SelectorActionsResult {
 }
 impl_lua_conversion_dynamic!(SelectorActionsResult);
 
-fn cancel_trampoline(name: String, window: GuiWin, pane: MuxPane) {
+fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: Option<SelectorActionsResult>) {
     promise::spawn::spawn(async move {
-        config::with_lua_config_on_main_thread(move |lua| do_cancel_event(lua, name, window, pane))
+        config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, result))
             .await
     })
     .detach();
 }
 
-fn action_trampoline(name: String, window: GuiWin, pane: MuxPane, result: SelectorActionsResult) {
-    promise::spawn::spawn(async move {
-        config::with_lua_config_on_main_thread(move |lua| {
-            do_action_event(lua, name, window, pane, result)
-        })
-        .await
-    })
-    .detach();
-}
-
-async fn do_action_event(
+async fn do_event(
     lua: Option<Rc<mlua::Lua>>,
     name: String,
     window: GuiWin,
     pane: MuxPane,
-    result: SelectorActionsResult,
+    result: Option<SelectorActionsResult>,
 ) -> anyhow::Result<()> {
     if let Some(lua) = lua {
-        let args = lua.pack_multi((window, pane, result))?;
-
-        if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
-            log::error!("while processing {} event: {:#}", name, err);
-        }
-    }
-
-    Ok(())
-}
-
-async fn do_cancel_event(
-    lua: Option<Rc<mlua::Lua>>,
-    name: String,
-    window: GuiWin,
-    pane: MuxPane,
-) -> anyhow::Result<()> {
-    if let Some(lua) = lua {
-        let args = lua.pack_multi((window, pane))?;
+        let args = if let Some(result) = result {
+            lua.pack_multi((window, pane, result))?
+        } else {
+            lua.pack_multi((window, pane))?
+        };
 
         if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
             log::error!("while processing {} event: {:#}", name, err);
