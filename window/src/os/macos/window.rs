@@ -1385,7 +1385,6 @@ fn apply_decorations_to_window(
         };
 
         for titlebar_button in &[
-            appkit::NSWindowButton::NSWindowFullScreenButton,
             appkit::NSWindowButton::NSWindowMiniaturizeButton,
             appkit::NSWindowButton::NSWindowCloseButton,
             appkit::NSWindowButton::NSWindowZoomButton,
