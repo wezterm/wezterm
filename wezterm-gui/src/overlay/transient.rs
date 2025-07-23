@@ -1108,93 +1108,83 @@ impl<'a> TransientState<'a> {
                             if cur_node_borrowed.is_end_of_word {
                                 match cur_node_borrowed.entry.as_ref().unwrap() {
                                     TransientEntry::TransientSwitch(switch) => {
-                                        {
-                                            let mut switch = switch.borrow_mut();
-                                            switch.value = !switch.value;
+                                        let mut switch = switch.borrow_mut();
+                                        switch.value = !switch.value;
 
-                                            switch.render(
-                                                &self.colors,
-                                                &mut self.changes,
-                                                term,
-                                                true,
-                                            )?;
-                                        }
-                                        self.cur_node = Rc::clone(&self.root_node);
+                                        switch.render(
+                                            &self.colors,
+                                            &mut self.changes,
+                                            term,
+                                            true,
+                                        )?;
                                     }
                                     TransientEntry::TransientOption(option) => {
-                                        {
-                                            let mut option = option.borrow_mut();
-                                            if option.value.is_none() || !option.allow_nil {
-                                                if let Some(choices) = option.choices.clone() {
-                                                    let size = term.get_screen_size()?;
+                                        let mut option = option.borrow_mut();
+                                        if option.value.is_none() || !option.allow_nil {
+                                            if let Some(choices) = option.choices.clone() {
+                                                let size = term.get_screen_size()?;
 
-                                                    let max_items =
-                                                        size.rows.saturating_sub(ROW_OVERHEAD);
-                                                    let selector_size =
-                                                        choices.len().min(max_items);
+                                                let max_items =
+                                                    size.rows.saturating_sub(ROW_OVERHEAD);
+                                                let selector_size = choices.len().min(max_items);
 
-                                                    let mut selector_state = SelectorState {
-                                                        active_idx: 0,
-                                                        max_items,
-                                                        top_row: 0,
-                                                        filter_term: String::new(),
-                                                        filtered_entries: choices.clone(),
-                                                        choices,
-                                                        cols: size.cols,
-                                                        selector_size,
-                                                        changes: &mut self.changes,
-                                                        colors: &self.colors,
-                                                        option: &mut *option,
-                                                        row_entities: &self.row_entities,
-                                                    };
+                                                let mut selector_state = SelectorState {
+                                                    active_idx: 0,
+                                                    max_items,
+                                                    top_row: 0,
+                                                    filter_term: String::new(),
+                                                    filtered_entries: choices.clone(),
+                                                    choices,
+                                                    cols: size.cols,
+                                                    selector_size,
+                                                    changes: &mut self.changes,
+                                                    colors: &self.colors,
+                                                    option: &mut *option,
+                                                    row_entities: &self.row_entities,
+                                                };
 
-                                                    selector_state.draw_separator();
-                                                    selector_state.render(term)?;
-                                                    selector_state.run_loop(term)?;
+                                                selector_state.draw_separator();
+                                                selector_state.render(term)?;
+                                                selector_state.run_loop(term)?;
+                                            } else {
+                                                self.line_prompt(term, &mut *option)?;
+                                            }
+                                        } else {
+                                            option.value = None;
+                                        }
+                                        option.render(
+                                            &self.colors,
+                                            &mut self.changes,
+                                            term,
+                                            true,
+                                        )?;
+                                    }
+                                    TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
+                                        let mut cyclic_switch = cyclic_switch.borrow_mut();
+
+                                        if cyclic_switch.choices.first().is_some() {
+                                            if let Some(idx) = cyclic_switch.active_idx {
+                                                if idx == cyclic_switch.choices.len() - 1 {
+                                                    cyclic_switch.active_idx =
+                                                        if cyclic_switch.allow_nil {
+                                                            None
+                                                        } else {
+                                                            Some(0)
+                                                        };
                                                 } else {
-                                                    self.line_prompt(term, &mut *option)?;
+                                                    cyclic_switch.active_idx.replace(idx + 1);
                                                 }
                                             } else {
-                                                option.value = None;
+                                                cyclic_switch.active_idx = Some(0);
                                             }
-                                            option.render(
+
+                                            cyclic_switch.render(
                                                 &self.colors,
                                                 &mut self.changes,
                                                 term,
                                                 true,
                                             )?;
                                         }
-                                        self.cur_node = Rc::clone(&self.root_node);
-                                    }
-                                    TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
-                                        {
-                                            let mut cyclic_switch = cyclic_switch.borrow_mut();
-
-                                            if cyclic_switch.choices.first().is_some() {
-                                                if let Some(idx) = cyclic_switch.active_idx {
-                                                    if idx == cyclic_switch.choices.len() - 1 {
-                                                        cyclic_switch.active_idx =
-                                                            if cyclic_switch.allow_nil {
-                                                                None
-                                                            } else {
-                                                                Some(0)
-                                                            };
-                                                    } else {
-                                                        cyclic_switch.active_idx.replace(idx + 1);
-                                                    }
-                                                } else {
-                                                    cyclic_switch.active_idx = Some(0);
-                                                }
-
-                                                cyclic_switch.render(
-                                                    &self.colors,
-                                                    &mut self.changes,
-                                                    term,
-                                                    true,
-                                                )?;
-                                            }
-                                        }
-                                        self.cur_node = Rc::clone(&self.root_node);
                                     }
                                     TransientEntry::TransientArgument(positional_arg) => {
                                         let name = match *positional_arg.action {
@@ -1207,6 +1197,7 @@ impl<'a> TransientState<'a> {
                                         break;
                                     }
                                 }
+                                self.cur_node = Rc::clone(&self.root_node);
                             } else {
                                 self.cur_node = Rc::clone(&cur_node);
                             }
