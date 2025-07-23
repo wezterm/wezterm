@@ -1102,7 +1102,7 @@ impl<'a> TransientState<'a> {
                 }) => {
                     let cur_node = Rc::clone(&self.cur_node);
                     let cur_node = cur_node.borrow();
-                    match cur_node.find_char(c) {
+                    self.cur_node = match cur_node.find_char(c) {
                         Some(cur_node) => {
                             let cur_node_borrowed = cur_node.borrow();
                             if cur_node_borrowed.is_end_of_word {
@@ -1197,14 +1197,12 @@ impl<'a> TransientState<'a> {
                                         break;
                                     }
                                 }
-                                self.cur_node = Rc::clone(&self.root_node);
+                                Rc::clone(&self.root_node)
                             } else {
-                                self.cur_node = Rc::clone(&cur_node);
+                                Rc::clone(&cur_node)
                             }
                         }
-                        None => {
-                            self.cur_node = Rc::clone(&self.root_node);
-                        }
+                        None => Rc::clone(&self.root_node),
                     }
                 }
                 _ => {}
