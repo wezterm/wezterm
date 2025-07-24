@@ -257,6 +257,13 @@ impl SelectorState {
 
     fn toggle_search(&mut self) {
         self.filtering ^= true;
+        let cursor_visibility = if self.filtering {
+            CursorVisibility::Visible
+        } else {
+            CursorVisibility::Hidden
+        };
+        self.changes
+            .push(Change::CursorVisibility(cursor_visibility));
     }
 
     fn set_filtered_entries_multiple_marker(&mut self, mark: bool) {
@@ -322,20 +329,11 @@ impl SelectorState {
                 y: Position::EndRelative(self.selector_size + 1),
             },
             Change::ClearToEndOfScreen(ColorAttribute::Default),
-        ]);
-
-        if !self.filtering {
-            changes.push(Change::Text(format!(
+            Change::Text(format!(
                 "{}\r\n",
                 truncate_right(&self.description, max_width)
-            )));
-        } else {
-            let description = self.fuzzy_description.as_ref().unwrap_or(&self.description);
-            changes.push(Change::Text(truncate_right(
-                &format!("{}{}\r\n", description, self.filter_term),
-                max_width,
-            )));
-        }
+            )),
+        ]);
 
         let max_items = self.max_items;
 
@@ -387,6 +385,22 @@ impl SelectorState {
             }
             changes.push(Change::AllAttributes(CellAttributes::default()));
         }
+
+        if self.filtering {
+            let description = self.fuzzy_description.as_ref().unwrap_or(&self.description);
+            changes.append(&mut vec![
+                Change::CursorPosition {
+                    x: Position::Absolute(0),
+                    y: Position::EndRelative(self.selector_size + 1),
+                },
+                Change::ClearToEndOfLine(ColorAttribute::Default),
+                Change::Text(truncate_right(
+                    &format!("{}{}", description, self.filter_term),
+                    max_width,
+                )),
+            ]);
+        }
+
         term.render(changes)?;
         changes.clear();
 
