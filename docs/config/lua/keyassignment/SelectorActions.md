@@ -10,7 +10,7 @@ objects
 
 * `description` - text to display at the top of the menu
 * `context` - an optional argument that accepts a
-  [TransientContext](../TransientContext) object
+  [TransientContext](../TransientContext.md) object
 * `choices` - a lua table consisting of the potential choices. Each entry
   is itself a table with a `label` field and an optional `id` field.
   The label will be shown in the list, while the id can be a different

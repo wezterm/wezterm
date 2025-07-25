@@ -12,4 +12,4 @@ It is a lua object with the following fields:
   callback's function signature is `(window, pane, result)` where `window` and
   `pane` are the [Window](./window/index.md) and [Pane](./pane/index.md)
   objects from the current pane and window, and `result` is a
-  [SelectorActionsResult](./SelectorActionsResult) object
+  [SelectorActionsResult](./SelectorActionsResult.md) object

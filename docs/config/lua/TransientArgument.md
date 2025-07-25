@@ -10,9 +10,9 @@ It is a lua object with the following fields:
 * `description` - text to describe the argument
 * `action` - an event callback registered via `wezterm.action_callback`.  The
   callback's function signature is `(window, pane, result)` where `window` and
-  `pane` are the [Window](../window/index.md) and [Pane](../pane/index.md)
+  `pane` are the [Window](./window/index.md) and [Pane](./pane/index.md)
   objects from the current pane and window, and `result` is a
-  [TransientResult](./TransientResult) object
+  [TransientResult](./TransientResult.md) object
 
 
 Example of `TransientArgument` object:
