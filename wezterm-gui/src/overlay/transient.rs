@@ -990,6 +990,9 @@ impl<'a> TransientState<'a> {
     }
 
     fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
+        let description_len =
+            crate::tabbar::parse_status_text(&self.description, CellAttributes::blank()).len();
+
         self.changes.append(&mut vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
@@ -999,8 +1002,10 @@ impl<'a> TransientState<'a> {
             Change::Text(self.description.to_string()),
             Change::AllAttributes(CellAttributes::default()),
             Change::Text("\r\n".to_string()),
-            Change::Text("─".repeat(self.description.len())),
+            Change::Text("─".repeat(description_len)),
         ]);
+
+        crate::tabbar::parse_status_text(&self.description, CellAttributes::blank()).len();
 
         if let Some(context) = self.context.as_ref() {
             context.render(&self.colors, &mut self.changes, term, true)?;
