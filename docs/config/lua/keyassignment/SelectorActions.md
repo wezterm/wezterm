@@ -27,3 +27,26 @@ objects
   `pane` are the [Window](../window/index.md) and [Pane](../pane/index.md).
   This is an optional argument. If present, this callback is called when the
   user cancels the current overlay
+
+
+### Key Assignments
+
+The default key assignments in the SelectorActions are as follows:
+
+| Action  |  Key Assignment |
+|---------|-------------------|
+| Toggle fuzzy search | <kbd>Ctrl</kbd> + <kbd>/</kbd> |
+| Add to filtering string (if in fuzzy finding mode) | Any key not listed below |
+| Remove from filtering string (if in fuzzy finding mode) | <kbd>Backspace</kbd> |
+| Move Down      | <kbd>Ctrl</kbd> + <kbd>N</kbd> |
+|                | <kbd>Ctrl</kbd> + <kbd>J</kbd> |
+| Move Up        | <kbd>Ctrl</kbd> + <kbd>P</kbd> |
+|                | <kbd>Ctrl</kbd> + <kbd>K</kbd> |
+| Select all filtered entries (if multiple enabled) | <kbd>Ctrl</kbd> + <kbd>A</kbd> |
+| Deselect all filtered entries (if multiple enabled) | <kbd>Ctrl</kbd> + <kbd>D</kbd> |
+| Toggle all filtered entries (if multiple enabled) | <kbd>Ctrl</kbd> + <kbd>T</kbd> |
+| Toggle current entry and move down (if multiple enabled) | <kbd>Tab</kbd> |
+| Toggle current entry and move up (if multiple enabled) | <kbd>Shift</kbd> + <kbd>Tab</kbd> |
+| Quit     | <kbd>Ctrl</kbd> + <kbd>G</kbd> |
+|          | <kbd>Ctrl</kbd> + <kbd>C</kbd> |
+|          | <kbd>Escape</kbd> |
