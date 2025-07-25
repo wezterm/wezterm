@@ -42,7 +42,7 @@ of above-mentioned entities passed as an argument.
 * `{ TransientArgument = obj }` where `obj` is a [TransientArgument](../TransientArgument.md)
   object
 
-## Combining TransientMenu and SelectorActions for viewing logs for Docker containers with an ability to move around between pages
+## Combining TransientMenu and SelectorActions for viewing logs for Docker containers with an ability to move between KeyAssignments
 
 ```lua
 local wezterm = require 'wezterm'
