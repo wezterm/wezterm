@@ -1,12 +1,9 @@
 use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
-use config::configuration;
-use config::{
-    keyassignment::{
-        InputSelectorEntry, KeyAssignment, SelectorActions, TransientArgument, TransientContext,
-    },
-    AnsiColor, ColorAttribute,
+use config::keyassignment::{
+    InputSelectorEntry, KeyAssignment, SelectorActions, TransientArgument, TransientContext,
 };
+use config::{configuration, AnsiColor, ColorAttribute};
 use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
@@ -14,11 +11,9 @@ use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use termwiz::{
-    input::{InputEvent, KeyCode, KeyEvent},
-    surface::{Change, CursorVisibility, Position},
-    terminal::{ScreenSize, Terminal},
-};
+use termwiz::input::{InputEvent, KeyCode, KeyEvent};
+use termwiz::surface::{Change, CursorVisibility, Position};
+use termwiz::terminal::{ScreenSize, Terminal};
 use termwiz_funcs::truncate_right;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_term::{AttributeChange, CellAttributes};
