@@ -1,6 +1,5 @@
 use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
-use config::configuration;
 use config::keyassignment::{
     KeyAssignment, TransientArgument as KTransientArgument, TransientContext as KTransientContext,
     TransientContextEntry as KTransientContextEntry,
@@ -8,7 +7,7 @@ use config::keyassignment::{
     TransientMenu as KTransientMenu, TransientOption as KTransientOption,
     TransientSection as KTransientSection, TransientSwitch as KTransientSwitch,
 };
-use config::{AnsiColor, ColorAttribute};
+use config::{configuration, AnsiColor, ColorAttribute};
 use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
