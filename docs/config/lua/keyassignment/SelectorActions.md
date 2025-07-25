@@ -11,7 +11,11 @@ objects
 * `description` - text to display at the top of the menu
 * `context` - an optional argument that accepts a
   [TransientContext](../TransientContext) object
-* `choices` - list of strings to select from
+* `choices` - a lua table consisting of the potential choices. Each entry
+  is itself a table with a `label` field and an optional `id` field.
+  The label will be shown in the list, while the id can be a different
+  string that is meaningful to your action. The label can be used together
+  with [wezterm.format](../wezterm/format.md) to produce styled text.
 * `section` - an [SelectorActionsArgumentSection](../SelectorActionsArgumentSection.md)
   object * `multiple` - this is an optional argument. Defaults to `false`.
   If set to `true`, user can select multiple choices.
