@@ -619,7 +619,7 @@ pub struct SelectorActions {
     pub description: String,
     #[dynamic(default)]
     pub context: Option<TransientContext>,
-    pub choices: Vec<String>,
+    pub choices: Vec<InputSelectorEntry>,
     pub section: ArgumentSection,
     #[dynamic(default)]
     pub multiple: bool,

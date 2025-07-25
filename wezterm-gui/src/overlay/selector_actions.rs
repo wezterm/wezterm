@@ -2,7 +2,9 @@ use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::scripting::guiwin::GuiWin;
 use config::configuration;
 use config::{
-    keyassignment::{KeyAssignment, SelectorActions, TransientArgument, TransientContext},
+    keyassignment::{
+        InputSelectorEntry, KeyAssignment, SelectorActions, TransientArgument, TransientContext,
+    },
     AnsiColor, ColorAttribute,
 };
 use luahelper::impl_lua_conversion_dynamic;
@@ -88,6 +90,7 @@ impl SelectorActionsColors {
 struct SelectorEntry {
     idx: usize,
     label: String,
+    id: Option<String>,
 }
 
 struct ArgumentSection {
@@ -134,9 +137,10 @@ impl SelectorState {
             .choices
             .iter()
             .enumerate()
-            .map(|(idx, label)| SelectorEntry {
+            .map(|(idx, entry)| SelectorEntry {
                 idx,
-                label: label.clone(),
+                label: entry.label.clone(),
+                id: entry.id.clone(),
             })
             .collect();
 
@@ -517,24 +521,29 @@ impl SelectorState {
                                 _ => anyhow::bail!("SelectorActions requires action to be defined by wezterm.action_callback")
                             };
 
-                            let choices: Vec<String> = if let Some(multiple_idx) =
-                                self.multiple_idx.as_ref()
-                            {
-                                multiple_idx
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, val)| **val)
-                                    .map(|(idx, _)| self.choices[idx].label.clone())
-                                    .collect()
-                            } else {
-                                if !self.filtered_entries.is_empty() {
-                                    vec![self.choices[self.filtered_entries[self.active_idx].idx]
-                                        .label
-                                        .clone()]
+                            let choices: Vec<InputSelectorEntry> =
+                                if let Some(multiple_idx) = self.multiple_idx.as_ref() {
+                                    multiple_idx
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, val)| **val)
+                                        .map(|(idx, _)| InputSelectorEntry {
+                                            label: self.choices[idx].label.clone(),
+                                            id: self.choices[idx].id.clone(),
+                                        })
+                                        .collect()
                                 } else {
-                                    vec![]
-                                }
-                            };
+                                    if !self.filtered_entries.is_empty() {
+                                        let entry = &self.choices
+                                            [self.filtered_entries[self.active_idx].idx];
+                                        vec![InputSelectorEntry {
+                                            label: entry.label.clone(),
+                                            id: entry.id.clone(),
+                                        }]
+                                    } else {
+                                        vec![]
+                                    }
+                                };
 
                             if !choices.is_empty() {
                                 let result = SelectorActionsResult { choices };
@@ -571,7 +580,7 @@ impl SelectorState {
 
 #[derive(FromDynamic, ToDynamic)]
 struct SelectorActionsResult {
-    choices: Vec<String>,
+    choices: Vec<InputSelectorEntry>,
 }
 impl_lua_conversion_dynamic!(SelectorActionsResult);
 
