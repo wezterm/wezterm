@@ -55,6 +55,11 @@ local containers_logs_transient
 
 containers_logs_transient = function(state)
   return wezterm.action_callback(function(window, pane)
+    local selected_containers = {}
+    for _, container in ipairs(state.choices) do
+      table.insert(selected_containers, container.label)
+    end
+
     window:perform_action(
       act.TransientMenu {
         description = wezterm.format {
@@ -82,6 +87,13 @@ containers_logs_transient = function(state)
                 { Text = 'Operation' },
               },
               id = 'Logs',
+            },
+            {
+              label = wezterm.format {
+                { Foreground = { AnsiColor = 'Olive' } },
+                { Text = 'Selected containers' },
+              },
+              id = table.concat(selected_containers, ', '),
             },
           },
         },
