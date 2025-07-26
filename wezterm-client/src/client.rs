@@ -297,6 +297,53 @@ fn process_unilateral(
             .detach();
             return Ok(());
         }
+        Pdu::FloatingPaneVisibilityChanged(FloatingPaneVisibilityChanged { tab_id, visible }) => {
+            let tab_id = *tab_id;
+            let visible = visible.clone();
+            promise::spawn::spawn_into_main_thread(async move {
+                let mux = Mux::try_get().ok_or_else(|| anyhow!("no more mux"))?;
+                let client_domain = mux
+                    .get_domain(local_domain_id)
+                    .ok_or_else(|| anyhow!("no such domain {}", local_domain_id))?;
+                let client_domain =
+                    client_domain
+                        .downcast_ref::<ClientDomain>()
+                        .ok_or_else(|| {
+                            anyhow!("domain {} is not a ClientDomain instance", local_domain_id)
+                        })?;
+
+                client_domain.set_floating_pane_visibility(tab_id, visible);
+                let _ = client_domain.resync().await;
+                anyhow::Result::<()>::Ok(())
+            })
+            .detach();
+            return Ok(());
+        }
+        Pdu::ActiveFloatingPaneChanged(ActiveFloatingPaneChanged { index, tab_id }) => {
+            let tab_id = *tab_id;
+            let index = *index;
+            promise::spawn::spawn_into_main_thread(async move {
+                let mux = Mux::try_get().ok_or_else(|| anyhow!("no more mux"))?;
+                let client_domain = mux
+                    .get_domain(local_domain_id)
+                    .ok_or_else(|| anyhow!("no such domain {}", local_domain_id))?;
+
+                let client_domain =
+                    client_domain
+                        .downcast_ref::<ClientDomain>()
+                        .ok_or_else(|| {
+                            anyhow!("domain {} is not a ClientDomain instance", local_domain_id)
+                        })?;
+
+                client_domain.set_active_floating_pane(index, tab_id);
+                //TODO: is resync the best way to do this?
+                let _ = client_domain.resync().await;
+
+                anyhow::Result::<()>::Ok(())
+            })
+            .detach();
+            return Ok(());
+        }
         Pdu::TabResized(_) | Pdu::TabAddedToWindow(_) => {
             log::trace!("resync due to {:?}", decoded.pdu);
             promise::spawn::spawn_into_main_thread(async move {
@@ -1342,6 +1389,17 @@ impl Client {
     rpc!(list_panes, ListPanes = (), ListPanesResponse);
     rpc!(spawn_v2, SpawnV2, SpawnResponse);
     rpc!(split_pane, SplitPane, SpawnResponse);
+    rpc!(add_floating_pane, SpawnFloatingPane, SpawnResponse);
+    rpc!(
+        set_floating_pane_visibility,
+        FloatingPaneVisibilityChanged,
+        UnitResponse
+    );
+    rpc!(
+        set_active_floating_pane,
+        ActiveFloatingPaneChanged,
+        UnitResponse
+    );
     rpc!(
         move_pane_to_new_tab,
         MovePaneToNewTab,

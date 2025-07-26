@@ -29,7 +29,9 @@ use std::time::{Duration, Instant};
 use termwiz::escape::csi::{DecPrivateMode, DecPrivateModeCode, Device, Mode};
 use termwiz::escape::{Action, CSI};
 use thiserror::*;
-use wezterm_term::{Clipboard, ClipboardSelection, DownloadHandler, TerminalSize};
+use wezterm_term::{
+    Clipboard, ClipboardSelection, DownloadHandler, TerminalConfiguration, TerminalSize,
+};
 #[cfg(windows)]
 use winapi::um::winsock2::{SOL_SOCKET, SO_RCVBUF, SO_SNDBUF};
 
@@ -94,6 +96,14 @@ pub enum MuxNotification {
     WorkspaceRenamed {
         old_workspace: String,
         new_workspace: String,
+    },
+    FloatingPaneVisibilityChanged {
+        tab_id: TabId,
+        visible: bool,
+    },
+    ActiveFloatingPaneChanged {
+        tab_id: TabId,
+        index: usize,
     },
 }
 
@@ -1071,6 +1081,11 @@ impl Mux {
     pub fn resolve_pane_id(&self, pane_id: PaneId) -> Option<(DomainId, WindowId, TabId)> {
         let mut ids = None;
         for tab in self.tabs.read().values() {
+            if let Some((_, floating_pane)) = tab.get_floating_pane_by_pane_id(pane_id) {
+                ids = Some((tab.tab_id(), floating_pane.domain_id()));
+                break;
+            }
+
             for p in tab.iter_panes_ignoring_zoom() {
                 if p.pane.pane_id() == pane_id {
                     ids = Some((tab.tab_id(), p.pane.domain_id()));
@@ -1182,6 +1197,87 @@ impl Mux {
                 _ => None,
             }
         })
+    }
+
+    pub async fn spawn_floating_pane(
+        &self,
+        pane_id: PaneId,
+        command_builder: Option<CommandBuilder>,
+        command_dir: Option<String>,
+        domain: config::keyassignment::SpawnTabDomain,
+    ) -> anyhow::Result<(Arc<dyn Pane>, TerminalSize)> {
+        let (domain, tab_id, current_pane, term_config) = self
+            .resolve_spawn_tab_domain_from_pane_id(pane_id, domain)
+            .await?;
+
+        let command_dir = if !command_dir.is_some() {
+            self.resolve_cwd(
+                command_dir,
+                Some(Arc::clone(&current_pane)),
+                domain.domain_id(),
+                CachePolicy::FetchImmediate,
+            )
+        } else {
+            command_dir
+        };
+
+        let pane = domain
+            .add_floating_pane(tab_id, pane_id, command_builder, command_dir)
+            .await?;
+        let size = Self::apply_config_to_pane(Arc::clone(&pane), term_config);
+
+        Ok((pane, size))
+    }
+
+    async fn resolve_spawn_tab_domain_from_pane_id(
+        &self,
+        pane_id: PaneId,
+        domain: SpawnTabDomain,
+    ) -> anyhow::Result<(
+        Arc<dyn Domain>,
+        TabId,
+        Arc<dyn Pane>,
+        Option<Arc<dyn TerminalConfiguration>>,
+    )> {
+        let (_pane_domain_id, window_id, tab_id) = self
+            .resolve_pane_id(pane_id)
+            .ok_or_else(|| anyhow!("pane_id {} invalid", pane_id))?;
+
+        let domain = self
+            .resolve_spawn_tab_domain(Some(pane_id), &domain)
+            .context("resolve_spawn_tab_domain")?;
+
+        if domain.state() == DomainState::Detached {
+            domain.attach(Some(window_id)).await?;
+        }
+
+        let current_pane = self
+            .get_pane(pane_id)
+            .ok_or_else(|| anyhow!("pane_id {} is invalid", pane_id))?;
+
+        let term_config = current_pane.get_config();
+        Ok((domain, tab_id, current_pane, term_config))
+    }
+
+    fn apply_config_to_pane(
+        pane: Arc<dyn Pane>,
+        term_config: Option<Arc<dyn TerminalConfiguration>>,
+    ) -> TerminalSize {
+        if let Some(config) = term_config {
+            pane.set_config(config);
+        }
+
+        let dims = pane.get_dimensions();
+
+        let size = TerminalSize {
+            cols: dims.cols,
+            rows: dims.viewport_rows,
+            pixel_height: 0,
+            pixel_width: 0,
+            dpi: dims.dpi,
+        };
+
+        size
     }
 
     pub async fn split_pane(
