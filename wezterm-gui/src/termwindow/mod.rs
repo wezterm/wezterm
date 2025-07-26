@@ -1301,6 +1301,9 @@ impl TermWindow {
                     // Also handled by clientpane
                     self.update_title_post_status();
                 }
+                MuxNotification::FloatingPaneVisibilityChanged { .. } => {}
+                MuxNotification::ActiveFloatingPaneChanged { .. } => {}
+
                 MuxNotification::TabResized(_) => {
                     // Also handled by wezterm-client
                     self.update_title_post_status();
@@ -1508,6 +1511,8 @@ impl TermWindow {
                     return true;
                 }
             }
+            MuxNotification::FloatingPaneVisibilityChanged { .. } => {}
+            MuxNotification::ActiveFloatingPaneChanged { .. } => {}
             MuxNotification::Alert {
                 alert: Alert::ToastNotification { .. },
                 ..
@@ -2663,6 +2668,10 @@ impl TermWindow {
                     }),
                 );
             }
+            SpawnCommandInNewFloatingPane(spawn) => {
+                log::trace!("SpawnFloatingPane {:?}", spawn);
+                self.spawn_command(spawn, SpawnWhere::FloatingPane);
+            }
             ToggleFullScreen => {
                 self.window.as_ref().unwrap().toggle_fullscreen();
             }
@@ -2983,6 +2992,24 @@ impl TermWindow {
                     None => return Ok(PerformAssignmentResult::Handled),
                 };
                 tab.toggle_zoom();
+            }
+            ToggleFloatingPane => {
+                let mux = Mux::get();
+                let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+                    Some(tab) => tab,
+                    None => return Ok(PerformAssignmentResult::Handled),
+                };
+                if !tab.has_floating_pane() {
+                    self.spawn_command(
+                        &SpawnCommand {
+                            domain: config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
+                            ..Default::default()
+                        },
+                        SpawnWhere::FloatingPane,
+                    );
+                } else {
+                    tab.toggle_floating_pane();
+                }
             }
             SetPaneZoomState(zoomed) => {
                 let mux = Mux::get();
@@ -3409,6 +3436,16 @@ impl TermWindow {
         }
     }
 
+    pub fn is_floating_pane_active(&self) -> bool {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return false,
+        };
+
+        return tab.is_floating_pane_active();
+    }
+
     fn get_splits(&mut self) -> Vec<PositionedSplit> {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
@@ -3498,6 +3535,7 @@ impl TermWindow {
                 index: 0,
                 is_active: true,
                 is_zoomed: false,
+                is_floating: false,
                 left: 0,
                 top: 0,
                 width: size.cols as _,
@@ -3525,6 +3563,44 @@ impl TermWindow {
         };
 
         self.get_pos_panes_for_tab(&tab)
+    }
+
+    fn get_floating_pane_scroll_thumb_width(&self) -> usize {
+        if !self.show_scroll_bar {
+            return 0;
+        }
+        self.effective_right_padding(&self.config)
+    }
+
+    fn get_floating_pane_to_render(&self) -> Option<PositionedPane> {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return None,
+        };
+
+        if self
+            .tab_state(tab.tab_id())
+            .overlay
+            .as_ref()
+            .map(|overlay| overlay.pane.clone())
+            .is_some()
+        {
+            return None;
+        }
+
+        if !tab.floating_pane_is_visible() {
+            return None;
+        }
+
+        let mut pos = tab.get_active_floating_pane();
+        if let Some(ref mut pos) = pos {
+            if let Some(overlay) = self.pane_state(pos.pane.pane_id()).overlay.as_ref() {
+                pos.pane = Arc::clone(&overlay.pane);
+            }
+        }
+
+        pos
     }
 
     /// if pane_id.is_none(), removes any overlay for the specified tab.

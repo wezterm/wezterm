@@ -16,7 +16,7 @@ use config::keyassignment::{PaneDirection, ScrollbackEraseMode};
 use mux::client::{ClientId, ClientInfo};
 use mux::pane::PaneId;
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
-use mux::tab::{PaneNode, SerdeUrl, SplitRequest, TabId};
+use mux::tab::{SerdeUrl, SplitRequest, TabEntry, TabId};
 use mux::window::WindowId;
 use portable_pty::CommandBuilder;
 use rangeset::*;
@@ -502,6 +502,9 @@ pdu! {
     GetPaneDirection: 60,
     GetPaneDirectionResponse: 61,
     AdjustPaneSize: 62,
+    SpawnFloatingPane: 63,
+    FloatingPaneVisibilityChanged: 64,
+    ActiveFloatingPaneChanged: 65,
 }
 
 impl Pdu {
@@ -644,7 +647,7 @@ pub struct ListPanes {}
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct ListPanesResponse {
-    pub tabs: Vec<PaneNode>,
+    pub tabs: Vec<TabEntry>,
     pub tab_titles: Vec<String>,
     pub window_titles: HashMap<WindowId, String>,
 }
@@ -659,6 +662,26 @@ pub struct SplitPane {
     /// Instead of spawning a command, move the specified
     /// pane into the new split target
     pub move_pane_id: Option<PaneId>,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct SpawnFloatingPane {
+    pub pane_id: PaneId,
+    pub command: Option<CommandBuilder>,
+    pub command_dir: Option<String>,
+    pub domain: config::keyassignment::SpawnTabDomain,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct FloatingPaneVisibilityChanged {
+    pub tab_id: TabId,
+    pub visible: bool,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct ActiveFloatingPaneChanged {
+    pub index: usize,
+    pub tab_id: TabId,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]

@@ -725,6 +725,58 @@ impl SessionHandler {
                 .detach();
             }
 
+            Pdu::SpawnFloatingPane(float) => {
+                let client_id = self.client_id.clone();
+                spawn_into_main_thread(async move {
+                    schedule_spawn_floating_pane(float, send_response, client_id);
+                })
+                .detach();
+            }
+
+            Pdu::FloatingPaneVisibilityChanged(FloatingPaneVisibilityChanged {
+                tab_id,
+                visible,
+            }) => {
+                let client_id = self.client_id.clone();
+                spawn_into_main_thread(async move {
+                    catch(
+                        move || {
+                            let mux = Mux::get();
+                            let _identity = mux.with_identity(client_id);
+
+                            let tab = mux
+                                .get_tab(tab_id)
+                                .ok_or_else(|| anyhow!("no such tab {}", tab_id))?;
+                            tab.set_floating_pane_visibility(visible);
+                            Ok(Pdu::UnitResponse(UnitResponse {}))
+                        },
+                        send_response,
+                    );
+                })
+                .detach()
+            }
+
+            Pdu::ActiveFloatingPaneChanged(codec::ActiveFloatingPaneChanged { index, tab_id }) => {
+                let client_id = self.client_id.clone();
+                spawn_into_main_thread(async move {
+                    catch(
+                        move || {
+                            let mux = Mux::get();
+                            let _identity = mux.with_identity(client_id);
+
+                            let tab = mux
+                                .get_tab(tab_id)
+                                .ok_or_else(|| anyhow!("no such tab {}", tab_id))?;
+
+                            tab.set_active_floating_pane(index);
+                            Ok(Pdu::UnitResponse(UnitResponse {}))
+                        },
+                        send_response,
+                    );
+                })
+                .detach()
+            }
+
             Pdu::MovePaneToNewTab(request) => {
                 let client_id = self.client_id.clone();
                 spawn_into_main_thread(async move {
@@ -1059,6 +1111,47 @@ async fn split_pane(split: SplitPane, client_id: Option<Arc<ClientId>>) -> anyho
 
     let (pane, size) = mux
         .split_pane(split.pane_id, split.split_request, source, split.domain)
+        .await?;
+
+    Ok::<Pdu, anyhow::Error>(Pdu::SpawnResponse(SpawnResponse {
+        pane_id: pane.pane_id(),
+        tab_id,
+        window_id,
+        size,
+    }))
+}
+
+fn schedule_spawn_floating_pane<SND>(
+    float: SpawnFloatingPane,
+    send_response: SND,
+    client_id: Option<Arc<ClientId>>,
+) where
+    SND: Fn(anyhow::Result<Pdu>) + 'static,
+{
+    promise::spawn::spawn(
+        async move { send_response(spawn_floating_pane(float, client_id).await) },
+    )
+    .detach();
+}
+
+async fn spawn_floating_pane(
+    spawn_floating_pane: SpawnFloatingPane,
+    client_id: Option<Arc<ClientId>>,
+) -> anyhow::Result<Pdu> {
+    let mux = Mux::get();
+    let _identity = mux.with_identity(client_id);
+
+    let (_pane_domain_id, window_id, tab_id) = mux
+        .resolve_pane_id(spawn_floating_pane.pane_id)
+        .ok_or_else(|| anyhow!("pane_id {} invalid", spawn_floating_pane.pane_id))?;
+
+    let (pane, size) = mux
+        .spawn_floating_pane(
+            spawn_floating_pane.pane_id,
+            spawn_floating_pane.command,
+            spawn_floating_pane.command_dir,
+            spawn_floating_pane.domain,
+        )
         .await?;
 
     Ok::<Pdu, anyhow::Error>(Pdu::SpawnResponse(SpawnResponse {
