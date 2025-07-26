@@ -44,6 +44,7 @@ of above-mentioned entities passed as an argument.
 
 ## Combining TransientMenu and SelectorActions for viewing logs for Docker containers with an ability to move between KeyAssignments
 
+{% raw %}
 ```lua
 local wezterm = require 'wezterm'
 local act = wezterm.action
@@ -303,3 +304,4 @@ config.keys = {
 
 return config
 ```
+{% endraw %}
