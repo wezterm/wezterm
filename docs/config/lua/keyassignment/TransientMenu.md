@@ -169,18 +169,17 @@ containers_selector_actions = function(state)
       'container',
       'ls',
       '--format',
-      '{{.ID}}\n{{.Names}}',
+      '{{.ID}}:{{.Names}}',
     }
     if success then
-      local container_name_ids = wezterm.split_by_newlines(stdout)
       local containers = {}
-      local containers_len = #container_name_ids
-      for i = 1, containers_len, 2 do
-        table.insert(
-          containers,
-          { label = container_name_ids[i + 1], id = container_name_ids[i] }
-        )
+      for _, line in ipairs(wezterm.split_by_newlines(stdout)) do
+        local id, name = line:match '(.-):(.+)'
+        if id and name then
+          table.insert(containers, { label = name, id = id })
+        end
       end
+
       window:perform_action(
         act.SelectorActions {
           description = wezterm.format {
@@ -289,9 +288,9 @@ docker_actions_transient = function(state)
   end)
 end
 
-local M = wezterm.config_builder()
+local config = wezterm.config_builder()
 
-M.keys = {
+config.keys = {
   {
     key = 'k',
     mods = 'CTRL',
@@ -302,5 +301,5 @@ M.keys = {
   },
 }
 
-return M
+return config
 ```
