@@ -553,6 +553,8 @@ impl SelectorState {
                                 let result = SelectorActionsResult { choices };
                                 self.trigger_event(name, Some(result));
                                 break;
+                            } else {
+                                self.traversed_nodes = vec![Rc::clone(&self.root_node)];
                             }
                         }
                         None => {
