@@ -109,7 +109,7 @@ struct SelectorState {
     window: GuiWin,
     pane: MuxPane,
     root_node: Rc<RefCell<TrieNode>>,
-    cur_node: Rc<RefCell<TrieNode>>,
+    traversed_nodes: Vec<Rc<RefCell<TrieNode>>>,
     context: Option<TransientContext>,
     changes: Vec<Change>,
     colors: SelectorActionsColors,
@@ -164,7 +164,7 @@ impl SelectorState {
         }
 
         let root_node = Rc::new(RefCell::new(trie_node));
-        let cur_node = Rc::clone(&root_node);
+        let traversed_nodes = vec![Rc::clone(&root_node)];
 
         SelectorState {
             active_idx: 0,
@@ -182,7 +182,7 @@ impl SelectorState {
             window,
             pane,
             root_node,
-            cur_node,
+            traversed_nodes,
             context: args.context.clone(),
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
             colors: SelectorActionsColors::new(),
@@ -477,12 +477,21 @@ impl SelectorState {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Backspace,
                     modifiers: _,
-                }) => {
-                    if self.filtering && self.filter_term.pop().is_some() {
+                }) if self.filtering => {
+                    if self.filter_term.pop().is_some() {
                         self.update_filter();
                     } else {
                         continue;
                     }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Backspace,
+                    modifiers: _,
+                }) => {
+                    if self.traversed_nodes.get(1).is_some() {
+                        self.traversed_nodes.pop();
+                    }
+                    continue;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
@@ -495,14 +504,14 @@ impl SelectorState {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
-                    let cur_node = Rc::clone(&self.cur_node);
+                    let cur_node = Rc::clone(self.traversed_nodes.last().unwrap());
                     let cur_node = cur_node.borrow();
                     match cur_node.find_char(c) {
                         Some(cur_node) => {
                             let cur_node_borrowed = cur_node.borrow();
 
                             if !cur_node_borrowed.is_end_of_word {
-                                self.cur_node = Rc::clone(&cur_node);
+                                self.traversed_nodes.push(Rc::clone(&cur_node));
                                 continue;
                             }
 
@@ -547,7 +556,7 @@ impl SelectorState {
                             }
                         }
                         None => {
-                            self.cur_node = Rc::clone(&self.root_node);
+                            self.traversed_nodes = vec![Rc::clone(&self.root_node)];
                         }
                     }
                     continue;

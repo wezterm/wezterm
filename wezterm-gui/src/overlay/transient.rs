@@ -933,7 +933,7 @@ struct TransientState<'a> {
     sections: Vec<Rc<TransientSection<'a>>>,
     colors: TransientColors,
     root_node: Rc<RefCell<TrieNode>>,
-    cur_node: Rc<RefCell<TrieNode>>,
+    traversed_nodes: Vec<Rc<RefCell<TrieNode>>>,
     changes: Vec<Change>,
     row_entities: Vec<Option<RenderableEntity<'a>>>,
     context: Option<TransientContext>,
@@ -971,7 +971,7 @@ impl<'a> TransientState<'a> {
             sections.push(new_transient_section);
         }
         let root_node = Rc::new(RefCell::new(trie_node));
-        let cur_node = Rc::clone(&root_node);
+        let traversed_nodes = vec![Rc::clone(&root_node)];
 
         Self {
             window,
@@ -980,7 +980,7 @@ impl<'a> TransientState<'a> {
             sections,
             colors: TransientColors::new(),
             root_node,
-            cur_node,
+            traversed_nodes,
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
             row_entities,
             context,
@@ -1102,9 +1102,9 @@ impl<'a> TransientState<'a> {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
-                    let cur_node = Rc::clone(&self.cur_node);
+                    let cur_node = Rc::clone(self.traversed_nodes.last().unwrap());
                     let cur_node = cur_node.borrow();
-                    self.cur_node = match cur_node.find_char(c) {
+                    match cur_node.find_char(c) {
                         Some(cur_node) => {
                             let cur_node_borrowed = cur_node.borrow();
                             if cur_node_borrowed.is_end_of_word {
@@ -1199,12 +1199,22 @@ impl<'a> TransientState<'a> {
                                         break;
                                     }
                                 }
-                                Rc::clone(&self.root_node)
+                                self.traversed_nodes = vec![Rc::clone(&self.root_node)];
                             } else {
-                                Rc::clone(&cur_node)
+                                self.traversed_nodes.push(Rc::clone(&cur_node));
                             }
                         }
-                        None => Rc::clone(&self.root_node),
+                        None => {
+                            self.traversed_nodes = vec![Rc::clone(&self.root_node)];
+                        }
+                    }
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Backspace,
+                    ..
+                }) => {
+                    if self.traversed_nodes.get(1).is_some() {
+                        self.traversed_nodes.pop();
                     }
                 }
                 _ => {}
