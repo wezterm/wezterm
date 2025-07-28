@@ -1237,8 +1237,8 @@ struct TransientResult {
 }
 impl_lua_conversion_dynamic!(TransientResult);
 
-impl<'a> From<&'a Vec<Rc<TransientSection>>> for TransientResult {
-    fn from(value: &'a Vec<Rc<TransientSection>>) -> Self {
+impl From<&Vec<Rc<TransientSection>>> for TransientResult {
+    fn from(value: &Vec<Rc<TransientSection>>) -> Self {
         let mut entries: Vec<TransientResultEntry> = vec![];
 
         for section in value {
