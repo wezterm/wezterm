@@ -290,6 +290,14 @@ impl<'a> SelectorState<'a> {
                     self.move_down();
                 }
                 InputEvent::Key(KeyEvent {
+                    key: KeyCode::Backspace,
+                    ..
+                }) => {
+                    if self.filter_term.pop().is_some() {
+                        self.update_filter();
+                    }
+                }
+                InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('G' | 'C'),
                     modifiers: Modifiers::CTRL,
                 })
@@ -301,6 +309,13 @@ impl<'a> SelectorState<'a> {
                     break;
                 }
                 InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char(c),
+                    ..
+                }) => {
+                    self.filter_term.push(c);
+                    self.update_filter();
+                }
+                InputEvent::Key(KeyEvent {
                     key: KeyCode::Enter,
                     ..
                 }) => {
@@ -309,21 +324,6 @@ impl<'a> SelectorState<'a> {
                         self.clear_selector(term)?;
                         break;
                     }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Backspace,
-                    ..
-                }) => {
-                    if self.filter_term.pop().is_some() {
-                        self.update_filter();
-                    }
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char(c),
-                    ..
-                }) => {
-                    self.filter_term.push(c);
-                    self.update_filter();
                 }
                 _ => {}
             }

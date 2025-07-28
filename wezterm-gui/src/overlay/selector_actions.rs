@@ -410,21 +410,6 @@ impl SelectorState {
         while let Ok(Some(event)) = term.poll_input(None) {
             match event {
                 InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('G' | 'C'),
-                    modifiers: Modifiers::CTRL,
-                })
-                | InputEvent::Key(KeyEvent {
-                    key: KeyCode::Escape,
-                    ..
-                }) => {
-                    if let Some(key_assignment) = self.cancel.as_ref() {
-                        if let KeyAssignment::EmitEvent(ref id) = **key_assignment {
-                            self.trigger_event(id, None);
-                        }
-                    }
-                    break;
-                }
-                InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('P' | 'K'),
                     modifiers: Modifiers::CTRL,
                 }) => {
@@ -441,38 +426,6 @@ impl SelectorState {
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.toggle_search();
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('A'),
-                    modifiers: Modifiers::CTRL,
-                }) => {
-                    self.set_filtered_entries_multiple_marker(true);
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('D'),
-                    modifiers: Modifiers::CTRL,
-                }) => {
-                    self.set_filtered_entries_multiple_marker(false);
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('T'),
-                    modifiers: Modifiers::CTRL,
-                }) => {
-                    self.toggle_filtered_entries_multiple_marker();
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Tab,
-                    modifiers: Modifiers::NONE,
-                }) => {
-                    self.toggle_multiple_idx();
-                    self.move_down();
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Tab,
-                    modifiers: Modifiers::SHIFT,
-                }) => {
-                    self.toggle_multiple_idx();
-                    self.move_up();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Backspace,
@@ -492,6 +445,39 @@ impl SelectorState {
                         self.traversed_nodes.pop();
                     }
                     continue;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('G' | 'C'),
+                    modifiers: Modifiers::CTRL,
+                })
+                | InputEvent::Key(KeyEvent {
+                    key: KeyCode::Escape,
+                    ..
+                }) => {
+                    if let Some(key_assignment) = self.cancel.as_ref() {
+                        if let KeyAssignment::EmitEvent(ref id) = **key_assignment {
+                            self.trigger_event(id, None);
+                        }
+                    }
+                    break;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('A'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    self.set_filtered_entries_multiple_marker(true);
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('D'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    self.set_filtered_entries_multiple_marker(false);
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('T'),
+                    modifiers: Modifiers::CTRL,
+                }) => {
+                    self.toggle_filtered_entries_multiple_marker();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
@@ -562,6 +548,20 @@ impl SelectorState {
                         }
                     }
                     continue;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Tab,
+                    modifiers: Modifiers::NONE,
+                }) => {
+                    self.toggle_multiple_idx();
+                    self.move_down();
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Tab,
+                    modifiers: Modifiers::SHIFT,
+                }) => {
+                    self.toggle_multiple_idx();
+                    self.move_up();
                 }
                 _ => {}
             }
