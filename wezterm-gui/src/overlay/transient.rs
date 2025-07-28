@@ -169,10 +169,10 @@ struct SelectorState<'a> {
     changes: &'a mut Vec<Change>,
     colors: &'a TransientColors,
     option: &'a mut TransientOption,
-    row_entities: &'a Vec<Option<RenderableEntity<'a>>>,
+    row_entities: &'a Vec<Option<RenderableEntity>>,
 }
 
-impl<'a> SelectorState<'a> {
+impl SelectorState<'_> {
     fn clear_selector(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         let rows = self.max_items.saturating_add(ROW_OVERHEAD);
         let start_row = self.selector_size + 2;
@@ -726,15 +726,15 @@ impl TransientArgument {
     }
 }
 
-struct TransientSection<'a> {
-    header: &'a str,
+struct TransientSection {
+    header: String,
     entries: Vec<TransientEntry>,
     row: usize,
 }
 
-impl<'a> TransientSection<'a> {
+impl TransientSection {
     fn new(
-        section: &'a KTransientSection,
+        section: &KTransientSection,
         root: &mut TrieNode,
         row: &mut usize,
         row_entities: &mut Vec<Option<RenderableEntity>>,
@@ -750,7 +750,7 @@ impl<'a> TransientSection<'a> {
         *row += 2;
 
         Self {
-            header: &section.header,
+            header: section.header.clone(),
             entries,
             row: section_row,
         }
@@ -782,17 +782,17 @@ impl<'a> TransientSection<'a> {
     }
 }
 
-enum RenderableEntity<'a> {
+enum RenderableEntity {
     TransientContext(TransientContext),
     TransientContextEntry(TransientContextEntry),
-    TransientSection(Rc<TransientSection<'a>>),
+    TransientSection(Rc<TransientSection>),
     TransientOption(Rc<RefCell<TransientOption>>),
     TransientSwitch(Rc<RefCell<TransientSwitch>>),
     TransientArgument(TransientArgument),
     TransientCyclicSwitch(Rc<RefCell<TransientCyclicSwitch>>),
 }
 
-impl RenderableEntity<'_> {
+impl RenderableEntity {
     fn render(
         &self,
         colors: &TransientColors,
@@ -926,22 +926,22 @@ impl Renderable for TransientContext {
     }
 }
 
-struct TransientState<'a> {
+struct TransientState {
     window: GuiWin,
     pane: MuxPane,
-    description: &'a str,
-    sections: Vec<Rc<TransientSection<'a>>>,
+    description: String,
+    sections: Vec<Rc<TransientSection>>,
     colors: TransientColors,
     root_node: Rc<RefCell<TrieNode>>,
     traversed_nodes: Vec<Rc<RefCell<TrieNode>>>,
     changes: Vec<Change>,
-    row_entities: Vec<Option<RenderableEntity<'a>>>,
+    row_entities: Vec<Option<RenderableEntity>>,
     context: Option<TransientContext>,
     cancel: Option<Box<KeyAssignment>>,
 }
 
-impl<'a> TransientState<'a> {
-    fn new(args: &'a KTransientMenu, window: GuiWin, pane: MuxPane) -> Self {
+impl TransientState {
+    fn new(args: &KTransientMenu, window: GuiWin, pane: MuxPane) -> Self {
         let mut trie_node = TrieNode::new();
         let mut sections = vec![];
         let mut row = 3;
@@ -976,7 +976,7 @@ impl<'a> TransientState<'a> {
         Self {
             window,
             pane,
-            description: &args.description,
+            description: args.description.clone(),
             sections,
             colors: TransientColors::new(),
             root_node,
@@ -1237,7 +1237,7 @@ struct TransientResult {
 }
 impl_lua_conversion_dynamic!(TransientResult);
 
-impl<'a> From<&'a Vec<Rc<TransientSection<'a>>>> for TransientResult {
+impl<'a> From<&'a Vec<Rc<TransientSection>>> for TransientResult {
     fn from(value: &'a Vec<Rc<TransientSection>>) -> Self {
         let mut entries: Vec<TransientResultEntry> = vec![];
 
