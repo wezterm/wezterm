@@ -1556,7 +1556,10 @@ pub struct KeyEvent {
 }
 
 fn normalize_shift(key: KeyCode, modifiers: Modifiers) -> (KeyCode, Modifiers) {
-    if modifiers.contains(Modifiers::SHIFT) {
+    if modifiers
+        .remove_positional_mods()
+        .intersects(Modifiers::SHIFT)
+    {
         match key {
             KeyCode::Char(c) if c.is_ascii_uppercase() => (key, modifiers - Modifiers::SHIFT),
             KeyCode::Char(c) if c.is_ascii_lowercase() => (
