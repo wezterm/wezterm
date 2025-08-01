@@ -511,37 +511,37 @@ impl SelectorState {
                                 _ => anyhow::bail!("SelectorActions requires action to be defined by wezterm.action_callback")
                             };
 
-                            let choices: Vec<InputSelectorEntry> =
-                                if let Some(multiple_idx) = self.multiple_idx.as_ref() {
-                                    multiple_idx
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, val)| **val)
-                                        .map(|(idx, _)| InputSelectorEntry {
-                                            label: self.choices[idx].label.clone(),
-                                            id: self.choices[idx].id.clone(),
-                                        })
-                                        .collect()
-                                } else {
-                                    if !self.filtered_entries.is_empty() {
-                                        let entry = &self.choices
-                                            [self.filtered_entries[self.active_idx].idx];
-                                        vec![InputSelectorEntry {
-                                            label: entry.label.clone(),
-                                            id: entry.id.clone(),
-                                        }]
-                                    } else {
-                                        vec![]
-                                    }
-                                };
+                            let mut choices: Vec<InputSelectorEntry> = vec![];
 
-                            if !choices.is_empty() {
-                                let result = SelectorActionsResult { choices };
-                                self.trigger_event(name, Some(result));
-                                break;
-                            } else {
-                                self.traversed_nodes = vec![Rc::clone(&self.root_node)];
+                            if let Some(multiple_idx) = self.multiple_idx.as_ref() {
+                                choices = multiple_idx
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, val)| **val)
+                                    .map(|(idx, _)| InputSelectorEntry {
+                                        label: self.choices[idx].label.clone(),
+                                        id: self.choices[idx].id.clone(),
+                                    })
+                                    .collect();
                             }
+
+                            if choices.is_empty() && self.filtered_entries.is_empty() {
+                                self.traversed_nodes = vec![Rc::clone(&self.root_node)];
+                                continue;
+                            }
+
+                            if choices.is_empty() {
+                                let entry =
+                                    &self.choices[self.filtered_entries[self.active_idx].idx];
+                                choices = vec![InputSelectorEntry {
+                                    label: entry.label.clone(),
+                                    id: entry.id.clone(),
+                                }];
+                            }
+
+                            let result = SelectorActionsResult { choices };
+                            self.trigger_event(name, Some(result));
+                            break;
                         }
                         None => {
                             self.traversed_nodes = vec![Rc::clone(&self.root_node)];
