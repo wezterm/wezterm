@@ -168,6 +168,16 @@ impl SelectorState {
 
         let description = &args.description;
 
+        let (changes, fuzzy_description) =
+            if let Some(fuzzy_description) = args.fuzzy_description.as_ref() {
+                (vec![], fuzzy_description.to_string())
+            } else {
+                (
+                    vec![Change::CursorVisibility(CursorVisibility::Hidden)],
+                    description.to_string(),
+                )
+            };
+
         SelectorState {
             active_idx: 0,
             max_items,
@@ -180,16 +190,13 @@ impl SelectorState {
             filtering: args.fuzzy,
             filter_term: String::new(),
             description: description.to_string(),
-            fuzzy_description: args
-                .fuzzy_description
-                .clone()
-                .unwrap_or_else(|| description.to_string()),
+            fuzzy_description,
             window,
             pane,
             root_node,
             traversed_nodes,
             context: args.context.clone(),
-            changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
+            changes,
             colors: SelectorActionsColors::new(),
             section,
             cancel: args.cancel.clone(),
