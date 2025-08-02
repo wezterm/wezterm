@@ -22,6 +22,9 @@ objects
 * `fuzzy_description` - text to display when in fuzzy finding mode.
   This is an optional argument. Defaults to text mentioned against
   `description`
+* `fuzzy` - a boolean that defaults to `false`. If `true`, SelectorActions will start
+  in its fuzzy finding mode (this is equivalent to starting the SelectorActions and
+  pressing <kbd>Ctrl</kbd> + <kbd>/</kbd> in the default mode)
 * `cancel` - event callback registered via `wezterm.action_callback`. The
   callback's function signature is `(window, pane)` where `window` and
   `pane` are the [Window](../window/index.md) and [Pane](../pane/index.md).
