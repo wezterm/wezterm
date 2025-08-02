@@ -175,7 +175,7 @@ impl SelectorState {
             selector_size,
             multiple_idx,
             filtered_entries,
-            filtering: false,
+            filtering: args.fuzzy,
             filter_term: String::new(),
             description: args.description.clone(),
             fuzzy_description: args.fuzzy_description.clone(),

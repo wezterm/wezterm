@@ -626,6 +626,8 @@ pub struct SelectorActions {
     #[dynamic(default)]
     pub fuzzy_description: Option<String>,
     #[dynamic(default)]
+    pub fuzzy: bool,
+    #[dynamic(default)]
     pub cancel: Option<Box<KeyAssignment>>,
 }
 
