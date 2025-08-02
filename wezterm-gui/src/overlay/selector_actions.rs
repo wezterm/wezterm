@@ -105,7 +105,7 @@ struct SelectorState {
     filtering: bool,
     filter_term: String,
     description: String,
-    fuzzy_description: Option<String>,
+    fuzzy_description: String,
     window: GuiWin,
     pane: MuxPane,
     root_node: Rc<RefCell<TrieNode>>,
@@ -166,6 +166,8 @@ impl SelectorState {
         let root_node = Rc::new(RefCell::new(trie_node));
         let traversed_nodes = vec![Rc::clone(&root_node)];
 
+        let description = &args.description;
+
         SelectorState {
             active_idx: 0,
             max_items,
@@ -177,8 +179,11 @@ impl SelectorState {
             filtered_entries,
             filtering: args.fuzzy,
             filter_term: String::new(),
-            description: args.description.clone(),
-            fuzzy_description: args.fuzzy_description.clone(),
+            description: description.to_string(),
+            fuzzy_description: args
+                .fuzzy_description
+                .clone()
+                .unwrap_or_else(|| description.to_string()),
             window,
             pane,
             root_node,
@@ -386,7 +391,6 @@ impl SelectorState {
         }
 
         if self.filtering {
-            let description = self.fuzzy_description.as_ref().unwrap_or(&self.description);
             changes.append(&mut vec![
                 Change::CursorPosition {
                     x: Position::Absolute(0),
@@ -394,7 +398,7 @@ impl SelectorState {
                 },
                 Change::ClearToEndOfLine(ColorAttribute::Default),
                 Change::Text(truncate_right(
-                    &format!("{}{}", description, self.filter_term),
+                    &format!("{}{}", self.fuzzy_description, self.filter_term),
                     max_width,
                 )),
             ]);
