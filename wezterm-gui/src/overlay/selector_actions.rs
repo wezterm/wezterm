@@ -258,10 +258,16 @@ impl SelectorState {
         }
     }
 
-    fn toggle_multiple_idx(&mut self) {
+    fn toggle_multiple_idx_and_move(&mut self, down: bool) {
         if let Some(multiple_idx) = self.multiple_idx.as_mut() {
             if let Some(entry) = self.filtered_entries.get(self.active_idx) {
                 multiple_idx[entry.idx] ^= true;
+
+                if down {
+                    self.move_down();
+                } else {
+                    self.move_up();
+                }
             }
         }
     }
@@ -564,15 +570,13 @@ impl SelectorState {
                     key: KeyCode::Tab,
                     modifiers: Modifiers::NONE,
                 }) => {
-                    self.toggle_multiple_idx();
-                    self.move_down();
+                    self.toggle_multiple_idx_and_move(true);
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,
                     modifiers: Modifiers::SHIFT,
                 }) => {
-                    self.toggle_multiple_idx();
-                    self.move_up();
+                    self.toggle_multiple_idx_and_move(false);
                 }
                 _ => {}
             }
