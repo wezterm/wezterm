@@ -39,6 +39,7 @@ The default key assignments in the SelectorActions are as follows:
 | Action  |  Key Assignment |
 |---------|-------------------|
 | Toggle fuzzy search | <kbd>Ctrl</kbd> + <kbd>/</kbd> |
+| Disable fuzzy search (if in fuzzy finding mode) | <kbd>Enter</kbd> |
 | Add to filtering string (if in fuzzy finding mode) | Any key not listed below |
 | Remove from filtering string (if in fuzzy finding mode) | <kbd>Backspace</kbd> |
 | Move Down      | <kbd>Ctrl</kbd> + <kbd>N</kbd> |
