@@ -283,6 +283,12 @@ impl SelectorState {
             .push(Change::CursorVisibility(cursor_visibility));
     }
 
+    fn disable_search(&mut self) {
+        self.filtering = false;
+        self.changes
+            .push(Change::CursorVisibility(CursorVisibility::Hidden));
+    }
+
     fn set_filtered_entries_multiple_marker(&mut self, mark: bool) {
         if let Some(multiple_idx) = self.multiple_idx.as_mut() {
             for entry in &mut self.filtered_entries {
@@ -577,6 +583,16 @@ impl SelectorState {
                     modifiers: Modifiers::SHIFT,
                 }) => {
                     self.toggle_multiple_idx_and_move(false);
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Enter,
+                    ..
+                }) => {
+                    if self.filtering {
+                        self.disable_search();
+                    } else {
+                        continue;
+                    }
                 }
                 _ => {}
             }
