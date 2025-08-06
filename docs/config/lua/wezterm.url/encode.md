@@ -22,7 +22,8 @@ local function get_action_to_search(search_engine)
     description = 'Search with ' .. search_engine,
     action = wezterm.action_callback(function(_win, _pane, line)
       if line and #line > 0 then
-        local final_url = SEARCH_ENGINES[search_engine] .. wezterm.url.encode(line)
+        local final_url = SEARCH_ENGINES[search_engine]
+          .. wezterm.url.encode(line)
         wezterm.open_with(final_url)
       end
     end),
@@ -33,12 +34,12 @@ config.keys = {
   {
     key = 'g',
     mods = 'CTRL',
-    action = get_action_to_search('Google'),
+    action = get_action_to_search 'Google',
   },
   {
     key = 'y',
     mods = 'CTRL',
-    action = get_action_to_search('Youtube'),
+    action = get_action_to_search 'Youtube',
   },
 }
 
