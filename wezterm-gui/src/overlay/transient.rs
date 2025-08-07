@@ -386,7 +386,6 @@ impl SelectorState<'_> {
 
 struct TrieNode {
     children: HashMap<char, Rc<RefCell<TrieNode>>>,
-    is_end_of_word: bool,
     entry: Option<TransientEntry>,
 }
 
@@ -394,26 +393,22 @@ impl TrieNode {
     fn new() -> Self {
         Self {
             children: HashMap::new(),
-            is_end_of_word: true,
             entry: None,
         }
     }
 
     fn add_word(&mut self, word: &str, entry: TransientEntry) {
         match word.chars().next() {
-            Some(c) => {
-                match self.children.get(&c) {
-                    Some(child_node) => {
-                        child_node.borrow_mut().add_word(&word[1..], entry);
-                    }
-                    None => {
-                        let mut new_node = TrieNode::new();
-                        new_node.add_word(&word[1..], entry);
-                        self.children.insert(c, Rc::new(RefCell::new(new_node)));
-                    }
+            Some(c) => match self.children.get(&c) {
+                Some(child_node) => {
+                    child_node.borrow_mut().add_word(&word[1..], entry);
                 }
-                self.is_end_of_word = false;
-            }
+                None => {
+                    let mut new_node = TrieNode::new();
+                    new_node.add_word(&word[1..], entry);
+                    self.children.insert(c, Rc::new(RefCell::new(new_node)));
+                }
+            },
             None => self.entry = Some(entry),
         }
     }
@@ -1107,8 +1102,8 @@ impl TransientState {
                     match cur_node.find_char(c) {
                         Some(cur_node) => {
                             let cur_node_borrowed = cur_node.borrow();
-                            if cur_node_borrowed.is_end_of_word {
-                                match cur_node_borrowed.entry.as_ref().unwrap() {
+                            if let Some(entry) = cur_node_borrowed.entry.as_ref() {
+                                match entry {
                                     TransientEntry::TransientSwitch(switch) => {
                                         let mut switch = switch.borrow_mut();
                                         switch.value = !switch.value;

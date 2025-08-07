@@ -21,7 +21,6 @@ use window::Modifiers;
 
 struct TrieNode {
     children: HashMap<char, Rc<RefCell<TrieNode>>>,
-    is_end_of_word: bool,
     entry: Option<TransientArgument>,
 }
 
@@ -29,26 +28,22 @@ impl TrieNode {
     fn new() -> Self {
         Self {
             children: HashMap::new(),
-            is_end_of_word: true,
             entry: None,
         }
     }
 
     fn add_word(&mut self, word: &str, entry: TransientArgument) {
         match word.chars().next() {
-            Some(c) => {
-                match self.children.get(&c) {
-                    Some(child_node) => {
-                        child_node.borrow_mut().add_word(&word[1..], entry);
-                    }
-                    None => {
-                        let mut new_node = TrieNode::new();
-                        new_node.add_word(&word[1..], entry);
-                        self.children.insert(c, Rc::new(RefCell::new(new_node)));
-                    }
+            Some(c) => match self.children.get(&c) {
+                Some(child_node) => {
+                    child_node.borrow_mut().add_word(&word[1..], entry);
                 }
-                self.is_end_of_word = false;
-            }
+                None => {
+                    let mut new_node = TrieNode::new();
+                    new_node.add_word(&word[1..], entry);
+                    self.children.insert(c, Rc::new(RefCell::new(new_node)));
+                }
+            },
             None => self.entry = Some(entry),
         }
     }
@@ -519,14 +514,12 @@ impl SelectorState {
                         Some(cur_node) => {
                             let cur_node_borrowed = cur_node.borrow();
 
-                            if !cur_node_borrowed.is_end_of_word {
-                                self.traversed_nodes.push(Rc::clone(&cur_node));
-                                continue;
-                            }
-
                             let positional_arg = match cur_node_borrowed.entry.as_ref() {
                                 Some(positional_arg) => positional_arg,
-                                None => continue,
+                                None => {
+                                    self.traversed_nodes.push(Rc::clone(&cur_node));
+                                    continue;
+                                }
                             };
 
                             let name = match *positional_arg.action {
