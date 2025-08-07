@@ -457,7 +457,7 @@ impl<'a> SelectorState<'a> {
                     key: KeyCode::Backspace,
                     modifiers: _,
                 }) => {
-                    if self.traversed_nodes.get(1).is_some() {
+                    if self.traversed_nodes.len() >= 2 {
                         self.traversed_nodes.pop();
                     }
                     continue;
