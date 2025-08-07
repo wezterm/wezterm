@@ -8,7 +8,6 @@ use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
 use rayon::prelude::*;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
@@ -20,7 +19,7 @@ use wezterm_term::{AttributeChange, CellAttributes};
 use window::Modifiers;
 
 struct TrieNode {
-    children: HashMap<char, Rc<RefCell<TrieNode>>>,
+    children: HashMap<char, Box<TrieNode>>,
     entry: Option<TransientArgument>,
 }
 
@@ -33,23 +32,18 @@ impl TrieNode {
     }
 
     fn add_word(&mut self, word: &str, entry: TransientArgument) {
-        match word.chars().next() {
-            Some(c) => match self.children.get(&c) {
-                Some(child_node) => {
-                    child_node.borrow_mut().add_word(&word[1..], entry);
-                }
-                None => {
-                    let mut new_node = TrieNode::new();
-                    new_node.add_word(&word[1..], entry);
-                    self.children.insert(c, Rc::new(RefCell::new(new_node)));
-                }
-            },
-            None => self.entry = Some(entry),
+        let mut current = self;
+        for ch in word.chars() {
+            current = current
+                .children
+                .entry(ch)
+                .or_insert_with(|| Box::new(TrieNode::new()));
         }
+        current.entry = Some(entry);
     }
 
-    fn find_char(&self, c: char) -> Option<Rc<RefCell<TrieNode>>> {
-        self.children.get(&c).map(|child| Rc::clone(child))
+    fn find_char(&self, c: char) -> Option<&TrieNode> {
+        self.children.get(&c).map(|child| child.as_ref())
     }
 }
 
@@ -88,7 +82,7 @@ struct ArgumentSection {
     arguments: Vec<TransientArgument>,
 }
 
-struct SelectorState {
+struct SelectorState<'a> {
     active_idx: usize,
     max_items: usize,
     top_row: usize,
@@ -103,8 +97,8 @@ struct SelectorState {
     fuzzy_description: String,
     window: GuiWin,
     pane: MuxPane,
-    root_node: Rc<RefCell<TrieNode>>,
-    traversed_nodes: Vec<Rc<RefCell<TrieNode>>>,
+    root_node: &'a TrieNode,
+    traversed_nodes: Vec<&'a TrieNode>,
     context: Option<TransientContext>,
     changes: Vec<Change>,
     colors: SelectorActionsColors,
@@ -112,8 +106,14 @@ struct SelectorState {
     cancel: Option<Box<KeyAssignment>>,
 }
 
-impl SelectorState {
-    fn new(args: &SelectorActions, window: GuiWin, pane: MuxPane, size: &ScreenSize) -> Self {
+impl<'a> SelectorState<'a> {
+    fn new(
+        args: &SelectorActions,
+        window: GuiWin,
+        pane: MuxPane,
+        size: &ScreenSize,
+        trie_node: &'a mut TrieNode,
+    ) -> Self {
         let context_size = args
             .context
             .as_ref()
@@ -152,14 +152,12 @@ impl SelectorState {
             arguments: args.section.arguments.clone(),
         };
 
-        let mut trie_node = TrieNode::new();
-
         for positional_arg in &section.arguments {
             trie_node.add_word(&positional_arg.key, positional_arg.clone());
         }
 
-        let root_node = Rc::new(RefCell::new(trie_node));
-        let traversed_nodes = vec![Rc::clone(&root_node)];
+        let root_node = &*trie_node;
+        let traversed_nodes = vec![&*trie_node];
 
         let description = &args.description;
 
@@ -508,16 +506,13 @@ impl SelectorState {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
-                    let cur_node = Rc::clone(self.traversed_nodes.last().unwrap());
-                    let cur_node = cur_node.borrow();
+                    let cur_node = self.traversed_nodes.last().unwrap();
                     match cur_node.find_char(c) {
                         Some(cur_node) => {
-                            let cur_node_borrowed = cur_node.borrow();
-
-                            let positional_arg = match cur_node_borrowed.entry.as_ref() {
+                            let positional_arg = match cur_node.entry.as_ref() {
                                 Some(positional_arg) => positional_arg,
                                 None => {
-                                    self.traversed_nodes.push(Rc::clone(&cur_node));
+                                    self.traversed_nodes.push(cur_node);
                                     continue;
                                 }
                             };
@@ -542,7 +537,7 @@ impl SelectorState {
                             }
 
                             if choices.is_empty() && self.filtered_entries.is_empty() {
-                                self.traversed_nodes = vec![Rc::clone(&self.root_node)];
+                                self.traversed_nodes = vec![self.root_node];
                                 continue;
                             }
 
@@ -560,7 +555,7 @@ impl SelectorState {
                             break;
                         }
                         None => {
-                            self.traversed_nodes = vec![Rc::clone(&self.root_node)];
+                            self.traversed_nodes = vec![self.root_node];
                         }
                     }
                     continue;
@@ -652,7 +647,9 @@ pub fn show_selector_actions_overlay(
 ) -> anyhow::Result<()> {
     term.no_grab_mouse_in_raw_mode();
     let size = term.get_screen_size()?;
-    let mut state = SelectorState::new(&args, window, pane, &size);
+    let mut trie_node = TrieNode::new();
+
+    let mut state = SelectorState::new(&args, window, pane, &size, &mut trie_node);
 
     state.render_constants()?;
     state.render(&mut term)?;

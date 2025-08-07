@@ -385,7 +385,7 @@ impl SelectorState<'_> {
 }
 
 struct TrieNode {
-    children: HashMap<char, Rc<RefCell<TrieNode>>>,
+    children: HashMap<char, Box<TrieNode>>,
     entry: Option<TransientEntry>,
 }
 
@@ -398,23 +398,18 @@ impl TrieNode {
     }
 
     fn add_word(&mut self, word: &str, entry: TransientEntry) {
-        match word.chars().next() {
-            Some(c) => match self.children.get(&c) {
-                Some(child_node) => {
-                    child_node.borrow_mut().add_word(&word[1..], entry);
-                }
-                None => {
-                    let mut new_node = TrieNode::new();
-                    new_node.add_word(&word[1..], entry);
-                    self.children.insert(c, Rc::new(RefCell::new(new_node)));
-                }
-            },
-            None => self.entry = Some(entry),
+        let mut current = self;
+        for ch in word.chars() {
+            current = current
+                .children
+                .entry(ch)
+                .or_insert_with(|| Box::new(TrieNode::new()));
         }
+        current.entry = Some(entry);
     }
 
-    fn find_char(&self, c: char) -> Option<Rc<RefCell<TrieNode>>> {
-        self.children.get(&c).map(|child| Rc::clone(child))
+    fn find_char(&self, c: char) -> Option<&TrieNode> {
+        self.children.get(&c).map(|child| child.as_ref())
     }
 }
 
@@ -921,23 +916,27 @@ impl Renderable for TransientContext {
     }
 }
 
-struct TransientState {
+struct TransientState<'a> {
     window: GuiWin,
     pane: MuxPane,
     description: String,
     sections: Vec<Rc<TransientSection>>,
     colors: TransientColors,
-    root_node: Rc<RefCell<TrieNode>>,
-    traversed_nodes: Vec<Rc<RefCell<TrieNode>>>,
+    root_node: &'a TrieNode,
+    traversed_nodes: Vec<&'a TrieNode>,
     changes: Vec<Change>,
     row_entities: Vec<Option<RenderableEntity>>,
     context: Option<TransientContext>,
     cancel: Option<Box<KeyAssignment>>,
 }
 
-impl TransientState {
-    fn new(args: &KTransientMenu, window: GuiWin, pane: MuxPane) -> Self {
-        let mut trie_node = TrieNode::new();
+impl<'a> TransientState<'a> {
+    fn new(
+        args: &KTransientMenu,
+        window: GuiWin,
+        pane: MuxPane,
+        trie_node: &'a mut TrieNode,
+    ) -> Self {
         let mut sections = vec![];
         let mut row = 3;
         let mut row_entities: Vec<Option<RenderableEntity>> = vec![None, None, None];
@@ -957,7 +956,7 @@ impl TransientState {
 
         for section in &args.sections {
             let transient_section =
-                TransientSection::new(section, &mut trie_node, &mut row, &mut row_entities);
+                TransientSection::new(section, trie_node, &mut row, &mut row_entities);
             let transient_section_row = transient_section.row;
             let new_transient_section = Rc::new(transient_section);
             row_entities[transient_section_row] = Some(RenderableEntity::TransientSection(
@@ -965,8 +964,8 @@ impl TransientState {
             ));
             sections.push(new_transient_section);
         }
-        let root_node = Rc::new(RefCell::new(trie_node));
-        let traversed_nodes = vec![Rc::clone(&root_node)];
+        let root_node = &*trie_node;
+        let traversed_nodes = vec![&*trie_node];
 
         Self {
             window,
@@ -1097,12 +1096,10 @@ impl TransientState {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
-                    let cur_node = Rc::clone(self.traversed_nodes.last().unwrap());
-                    let cur_node = cur_node.borrow();
+                    let cur_node = self.traversed_nodes.last().unwrap();
                     match cur_node.find_char(c) {
                         Some(cur_node) => {
-                            let cur_node_borrowed = cur_node.borrow();
-                            if let Some(entry) = cur_node_borrowed.entry.as_ref() {
+                            if let Some(entry) = cur_node.entry.as_ref() {
                                 match entry {
                                     TransientEntry::TransientSwitch(switch) => {
                                         let mut switch = switch.borrow_mut();
@@ -1194,13 +1191,13 @@ impl TransientState {
                                         break;
                                     }
                                 }
-                                self.traversed_nodes = vec![Rc::clone(&self.root_node)];
+                                self.traversed_nodes = vec![self.root_node];
                             } else {
-                                self.traversed_nodes.push(Rc::clone(&cur_node));
+                                self.traversed_nodes.push(cur_node);
                             }
                         }
                         None => {
-                            self.traversed_nodes = vec![Rc::clone(&self.root_node)];
+                            self.traversed_nodes = vec![self.root_node];
                         }
                     }
                 }
@@ -1308,7 +1305,8 @@ pub fn show_transient_menu_overlay(
     pane: MuxPane,
 ) -> anyhow::Result<()> {
     term.no_grab_mouse_in_raw_mode();
-    let mut state = TransientState::new(&args, window, pane);
+    let mut trie_node = TrieNode::new();
+    let mut state = TransientState::new(&args, window, pane, &mut trie_node);
 
     state.render(&mut term)?;
     state.run_loop(&mut term)
