@@ -507,58 +507,58 @@ impl<'a> SelectorState<'a> {
                     ..
                 }) => {
                     let cur_node = self.traversed_nodes.last().unwrap();
-                    match cur_node.find_char(c) {
-                        Some(cur_node) => {
-                            let positional_arg = match cur_node.entry.as_ref() {
-                                Some(positional_arg) => positional_arg,
-                                None => {
-                                    self.traversed_nodes.push(cur_node);
-                                    continue;
-                                }
-                            };
 
-                            let name = match *positional_arg.action {
-                                KeyAssignment::EmitEvent(ref id) => id,
-                                _ => anyhow::bail!("SelectorActions requires action to be defined by wezterm.action_callback")
-                            };
-
-                            let mut choices: Vec<InputSelectorEntry> = vec![];
-
-                            if let Some(multiple_idx) = self.multiple_idx.as_ref() {
-                                choices = multiple_idx
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, val)| **val)
-                                    .map(|(idx, _)| InputSelectorEntry {
-                                        label: self.choices[idx].label.clone(),
-                                        id: self.choices[idx].id.clone(),
-                                    })
-                                    .collect();
-                            }
-
-                            if choices.is_empty() && self.filtered_entries.is_empty() {
-                                self.traversed_nodes = vec![self.root_node];
-                                continue;
-                            }
-
-                            if choices.is_empty() {
-                                let entry =
-                                    &self.choices[self.filtered_entries[self.active_idx].idx];
-                                choices = vec![InputSelectorEntry {
-                                    label: entry.label.clone(),
-                                    id: entry.id.clone(),
-                                }];
-                            }
-
-                            let result = SelectorActionsResult { choices };
-                            self.trigger_event(name, Some(result));
-                            break;
-                        }
+                    let cur_node = match cur_node.find_char(c) {
+                        Some(cur_node) => cur_node,
                         None => {
                             self.traversed_nodes = vec![self.root_node];
+                            continue;
                         }
+                    };
+
+                    let positional_arg = match cur_node.entry.as_ref() {
+                        Some(positional_arg) => positional_arg,
+                        None => {
+                            self.traversed_nodes.push(cur_node);
+                            continue;
+                        }
+                    };
+
+                    let name = match *positional_arg.action {
+                        KeyAssignment::EmitEvent(ref id) => id,
+                        _ => anyhow::bail!("SelectorActions requires action to be defined by wezterm.action_callback")
+                    };
+
+                    let mut choices: Vec<InputSelectorEntry> = vec![];
+
+                    if let Some(multiple_idx) = self.multiple_idx.as_ref() {
+                        choices = multiple_idx
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, val)| **val)
+                            .map(|(idx, _)| InputSelectorEntry {
+                                label: self.choices[idx].label.clone(),
+                                id: self.choices[idx].id.clone(),
+                            })
+                            .collect();
                     }
-                    continue;
+
+                    if choices.is_empty() && self.filtered_entries.is_empty() {
+                        self.traversed_nodes = vec![self.root_node];
+                        continue;
+                    }
+
+                    if choices.is_empty() {
+                        let entry = &self.choices[self.filtered_entries[self.active_idx].idx];
+                        choices = vec![InputSelectorEntry {
+                            label: entry.label.clone(),
+                            id: entry.id.clone(),
+                        }];
+                    }
+
+                    let result = SelectorActionsResult { choices };
+                    self.trigger_event(name, Some(result));
+                    break;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,

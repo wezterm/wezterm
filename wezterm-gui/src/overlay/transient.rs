@@ -1097,109 +1097,104 @@ impl<'a> TransientState<'a> {
                     ..
                 }) => {
                     let cur_node = self.traversed_nodes.last().unwrap();
-                    match cur_node.find_char(c) {
-                        Some(cur_node) => {
-                            if let Some(entry) = cur_node.entry.as_ref() {
-                                match entry {
-                                    TransientEntry::TransientSwitch(switch) => {
-                                        let mut switch = switch.borrow_mut();
-                                        switch.value = !switch.value;
 
-                                        switch.render(
-                                            &self.colors,
-                                            &mut self.changes,
-                                            term,
-                                            true,
-                                        )?;
-                                    }
-                                    TransientEntry::TransientOption(option) => {
-                                        let mut option = option.borrow_mut();
-                                        if option.value.is_none() || !option.allow_nil {
-                                            if let Some(choices) = option.choices.clone() {
-                                                let size = term.get_screen_size()?;
-
-                                                let max_items =
-                                                    size.rows.saturating_sub(ROW_OVERHEAD);
-                                                let selector_size = choices.len().min(max_items);
-
-                                                let mut selector_state = SelectorState {
-                                                    active_idx: 0,
-                                                    max_items,
-                                                    top_row: 0,
-                                                    filter_term: String::new(),
-                                                    filtered_entries: choices.clone(),
-                                                    choices,
-                                                    cols: size.cols,
-                                                    selector_size,
-                                                    changes: &mut self.changes,
-                                                    colors: &self.colors,
-                                                    option: &mut *option,
-                                                    row_entities: &self.row_entities,
-                                                };
-
-                                                selector_state.draw_separator_and_show_cursor();
-                                                selector_state.render(term)?;
-                                                selector_state.run_loop(term)?;
-                                            } else {
-                                                self.line_prompt(term, &mut *option)?;
-                                            }
-                                        } else {
-                                            option.value = None;
-                                        }
-                                        option.render(
-                                            &self.colors,
-                                            &mut self.changes,
-                                            term,
-                                            true,
-                                        )?;
-                                    }
-                                    TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
-                                        let mut cyclic_switch = cyclic_switch.borrow_mut();
-
-                                        if !cyclic_switch.choices.is_empty() {
-                                            cyclic_switch.active_idx =
-                                                if let Some(idx) = cyclic_switch.active_idx {
-                                                    if idx == cyclic_switch.choices.len() - 1 {
-                                                        if cyclic_switch.allow_nil {
-                                                            None
-                                                        } else {
-                                                            Some(0)
-                                                        }
-                                                    } else {
-                                                        Some(idx + 1)
-                                                    }
-                                                } else {
-                                                    Some(0)
-                                                };
-
-                                            cyclic_switch.render(
-                                                &self.colors,
-                                                &mut self.changes,
-                                                term,
-                                                true,
-                                            )?;
-                                        }
-                                    }
-                                    TransientEntry::TransientArgument(positional_arg) => {
-                                        let name = match *positional_arg.action {
-                                            KeyAssignment::EmitEvent(ref id) => id,
-                                            _ => anyhow::bail!("TransientMenu requires action to be defined by wezterm.action_callback")
-                                        };
-
-                                        let result = TransientResult::from(&self.sections);
-                                        self.trigger_event(name, Some(result));
-                                        break;
-                                    }
-                                }
-                                self.traversed_nodes = vec![self.root_node];
-                            } else {
-                                self.traversed_nodes.push(cur_node);
-                            }
-                        }
+                    let cur_node = match cur_node.find_char(c) {
+                        Some(cur_node) => cur_node,
                         None => {
                             self.traversed_nodes = vec![self.root_node];
+                            continue;
+                        }
+                    };
+
+                    let transient_entry = match cur_node.entry.as_ref() {
+                        Some(entry) => entry,
+                        None => {
+                            self.traversed_nodes.push(cur_node);
+                            continue;
+                        }
+                    };
+
+                    match transient_entry {
+                        TransientEntry::TransientSwitch(switch) => {
+                            let mut switch = switch.borrow_mut();
+                            switch.value = !switch.value;
+
+                            switch.render(&self.colors, &mut self.changes, term, true)?;
+                        }
+                        TransientEntry::TransientOption(option) => {
+                            let mut option = option.borrow_mut();
+                            if option.value.is_none() || !option.allow_nil {
+                                if let Some(choices) = option.choices.clone() {
+                                    let size = term.get_screen_size()?;
+
+                                    let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
+                                    let selector_size = choices.len().min(max_items);
+
+                                    let mut selector_state = SelectorState {
+                                        active_idx: 0,
+                                        max_items,
+                                        top_row: 0,
+                                        filter_term: String::new(),
+                                        filtered_entries: choices.clone(),
+                                        choices,
+                                        cols: size.cols,
+                                        selector_size,
+                                        changes: &mut self.changes,
+                                        colors: &self.colors,
+                                        option: &mut *option,
+                                        row_entities: &self.row_entities,
+                                    };
+
+                                    selector_state.draw_separator_and_show_cursor();
+                                    selector_state.render(term)?;
+                                    selector_state.run_loop(term)?;
+                                } else {
+                                    self.line_prompt(term, &mut *option)?;
+                                }
+                            } else {
+                                option.value = None;
+                            }
+                            option.render(&self.colors, &mut self.changes, term, true)?;
+                        }
+                        TransientEntry::TransientCyclicSwitch(cyclic_switch) => {
+                            let mut cyclic_switch = cyclic_switch.borrow_mut();
+
+                            if !cyclic_switch.choices.is_empty() {
+                                cyclic_switch.active_idx =
+                                    if let Some(idx) = cyclic_switch.active_idx {
+                                        if idx == cyclic_switch.choices.len() - 1 {
+                                            if cyclic_switch.allow_nil {
+                                                None
+                                            } else {
+                                                Some(0)
+                                            }
+                                        } else {
+                                            Some(idx + 1)
+                                        }
+                                    } else {
+                                        Some(0)
+                                    };
+
+                                cyclic_switch.render(
+                                    &self.colors,
+                                    &mut self.changes,
+                                    term,
+                                    true,
+                                )?;
+                            }
+                        }
+                        TransientEntry::TransientArgument(positional_arg) => {
+                            let name = match *positional_arg.action {
+                                KeyAssignment::EmitEvent(ref id) => id,
+                                _ => anyhow::bail!("TransientMenu requires action to be defined by wezterm.action_callback")
+                            };
+
+                            let result = TransientResult::from(&self.sections);
+                            self.trigger_event(name, Some(result));
+                            break;
                         }
                     }
+                    self.traversed_nodes = vec![self.root_node];
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Backspace,
