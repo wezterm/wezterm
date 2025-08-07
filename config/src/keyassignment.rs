@@ -678,6 +678,12 @@ pub enum RotationDirection {
     CounterClockwise,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
+pub enum ScrollDirection {
+    Up,
+    Down,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, FromDynamic, ToDynamic)]
 pub enum CopyModeAssignment {
     MoveToViewportBottom,
@@ -693,6 +699,7 @@ pub enum CopyModeAssignment {
     MoveToStartOfNextLine,
     MoveToSelectionOtherEnd,
     MoveToSelectionOtherEndHoriz,
+    MoveToBlankLine(ScrollDirection),
     MoveBackwardWord,
     MoveForwardWord,
     MoveForwardWordEnd,
