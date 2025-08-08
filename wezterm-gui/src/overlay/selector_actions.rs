@@ -160,17 +160,18 @@ impl<'a> SelectorState<'a> {
         let root_node = &*trie_node;
         let traversed_nodes = vec![&*trie_node];
 
-        let description = &args.description;
+        let description = args.description.to_string();
 
-        let (changes, fuzzy_description) =
-            if let Some(fuzzy_description) = args.fuzzy_description.as_ref() {
-                (vec![], fuzzy_description.to_string())
-            } else {
-                (
-                    vec![Change::CursorVisibility(CursorVisibility::Hidden)],
-                    description.to_string(),
-                )
-            };
+        let fuzzy_description = args.fuzzy_description.as_ref().map_or_else(
+            || args.description.to_string(),
+            |fuzzy_desc| fuzzy_desc.to_string(),
+        );
+
+        let changes = if args.fuzzy {
+            vec![]
+        } else {
+            vec![Change::CursorVisibility(CursorVisibility::Hidden)]
+        };
 
         SelectorState {
             active_idx: 0,
