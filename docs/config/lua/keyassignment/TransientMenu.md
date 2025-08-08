@@ -157,7 +157,6 @@ containers_logs_transient = function(state)
                       local cmd_len = #cmd
                       for _, container in ipairs(state.choices) do
                         cmd[cmd_len + 1] = container.id
-                        wezterm.log_info(cmd)
                         inner_window:perform_action(
                           act.SpawnCommandInNewTab { args = cmd },
                           inner_pane
