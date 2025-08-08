@@ -99,7 +99,7 @@ struct SelectorState<'a> {
     pane: MuxPane,
     root_node: &'a TrieNode,
     traversed_nodes: Vec<&'a TrieNode>,
-    context: Option<TransientContext>,
+    context: Option<&'a TransientContext>,
     changes: Vec<Change>,
     colors: SelectorActionsColors,
     section: ArgumentSection,
@@ -108,7 +108,7 @@ struct SelectorState<'a> {
 
 impl<'a> SelectorState<'a> {
     fn new(
-        args: &SelectorActions,
+        args: &'a SelectorActions,
         window: GuiWin,
         pane: MuxPane,
         size: &ScreenSize,
@@ -188,7 +188,7 @@ impl<'a> SelectorState<'a> {
             pane,
             root_node,
             traversed_nodes,
-            context: args.context.clone(),
+            context: args.context.as_ref(),
             changes,
             colors: SelectorActionsColors::new(),
             section,
