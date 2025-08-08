@@ -18,12 +18,12 @@ use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_term::{AttributeChange, CellAttributes};
 use window::Modifiers;
 
-struct TrieNode {
-    children: HashMap<char, Box<TrieNode>>,
-    entry: Option<TransientArgument>,
+struct TrieNode<'a> {
+    children: HashMap<char, Box<TrieNode<'a>>>,
+    entry: Option<&'a TransientArgument>,
 }
 
-impl TrieNode {
+impl<'a> TrieNode<'a> {
     fn new() -> Self {
         Self {
             children: HashMap::new(),
@@ -31,7 +31,7 @@ impl TrieNode {
         }
     }
 
-    fn add_word(&mut self, word: &str, entry: TransientArgument) {
+    fn add_word(&mut self, word: &str, entry: &'a TransientArgument) {
         let mut current = self;
         for ch in word.chars() {
             current = current
@@ -77,9 +77,9 @@ struct SelectorEntry {
     id: Option<String>,
 }
 
-struct ArgumentSection {
+struct ArgumentSection<'a> {
     header: String,
-    arguments: Vec<TransientArgument>,
+    arguments: Vec<&'a TransientArgument>,
 }
 
 struct SelectorState<'a> {
@@ -97,12 +97,12 @@ struct SelectorState<'a> {
     fuzzy_description: String,
     window: GuiWin,
     pane: MuxPane,
-    root_node: &'a TrieNode,
-    traversed_nodes: Vec<&'a TrieNode>,
+    root_node: &'a TrieNode<'a>,
+    traversed_nodes: Vec<&'a TrieNode<'a>>,
     context: Option<&'a TransientContext>,
     changes: Vec<Change>,
     colors: SelectorActionsColors,
-    section: ArgumentSection,
+    section: ArgumentSection<'a>,
     cancel: Option<Box<KeyAssignment>>,
 }
 
@@ -112,7 +112,7 @@ impl<'a> SelectorState<'a> {
         window: GuiWin,
         pane: MuxPane,
         size: &ScreenSize,
-        trie_node: &'a mut TrieNode,
+        trie_node: &'a mut TrieNode<'a>,
     ) -> Self {
         let context_size = args
             .context
@@ -143,17 +143,18 @@ impl<'a> SelectorState<'a> {
 
         let filtered_entries = choices.clone();
 
+        let arguments: Vec<&TransientArgument> = args.section.arguments.iter().collect();
         let section = ArgumentSection {
             header: args
                 .section
                 .header
                 .clone()
                 .unwrap_or_else(|| "Default".to_string()),
-            arguments: args.section.arguments.clone(),
+            arguments,
         };
 
-        for positional_arg in &section.arguments {
-            trie_node.add_word(&positional_arg.key, positional_arg.clone());
+        for positional_arg in &args.section.arguments {
+            trie_node.add_word(&positional_arg.key, positional_arg);
         }
 
         let root_node = &*trie_node;
