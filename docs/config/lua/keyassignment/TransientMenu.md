@@ -49,6 +49,39 @@ of above-mentioned entities passed as an argument.
 local wezterm = require 'wezterm'
 local act = wezterm.action
 
+local function description(text)
+  return wezterm.format {
+    { Attribute = { Intensity = 'Bold' } },
+    { Foreground = { AnsiColor = 'Teal' } },
+    { Text = text },
+  }
+end
+
+local function header(text)
+  return wezterm.format {
+    { Attribute = { Intensity = 'Bold' } },
+    { Foreground = { AnsiColor = 'Navy' } },
+    { Text = text },
+  }
+end
+
+local function entry_label(text)
+  return wezterm.format {
+    { Foreground = { AnsiColor = 'Olive' } },
+    { Text = text },
+  }
+end
+
+local function fuzzy_description(text)
+  return wezterm.format {
+    { Attribute = { Intensity = 'Bold' } },
+    { Foreground = { AnsiColor = 'Teal' } },
+    { Text = text },
+    'ResetAttributes',
+    { Text = ': ' },
+  }
+end
+
 local docker_actions_transient
 local containers_selector_actions
 local containers_logs_transient
@@ -62,48 +95,27 @@ containers_logs_transient = function(state)
 
     window:perform_action(
       act.TransientMenu {
-        description = wezterm.format {
-          { Attribute = { Intensity = 'Bold' } },
-          { Foreground = { AnsiColor = 'Teal' } },
-          { Text = 'Docker container logs' },
-        },
+        description = description 'Docker container logs',
         context = {
-          header = wezterm.format {
-            { Attribute = { Intensity = 'Bold' } },
-            { Foreground = { AnsiColor = 'Navy' } },
-            { Text = 'Context' },
-          },
+          header = header 'Context',
           entries = {
             {
-              label = wezterm.format {
-                { Foreground = { AnsiColor = 'Olive' } },
-                { Text = 'Entity' },
-              },
+              label = entry_label 'Entity',
               id = 'Containers',
             },
             {
-              label = wezterm.format {
-                { Foreground = { AnsiColor = 'Olive' } },
-                { Text = 'Operation' },
-              },
+              label = entry_label 'Operation',
               id = 'Logs',
             },
             {
-              label = wezterm.format {
-                { Foreground = { AnsiColor = 'Olive' } },
-                { Text = 'Selected containers' },
-              },
+              label = entry_label 'Selected containers',
               id = table.concat(selected_containers, ', '),
             },
           },
         },
         sections = {
           {
-            header = wezterm.format {
-              { Attribute = { Intensity = 'Bold' } },
-              { Foreground = { AnsiColor = 'Navy' } },
-              { Text = 'Flags' },
-            },
+            header = header 'Flags',
             entries = {
               {
                 TransientSwitch = {
@@ -125,11 +137,7 @@ containers_logs_transient = function(state)
             },
           },
           {
-            header = wezterm.format {
-              { Attribute = { Intensity = 'Bold' } },
-              { Foreground = { AnsiColor = 'Navy' } },
-              { Text = 'Actions' },
-            },
+            header = header 'Actions',
             entries = {
               {
                 TransientArgument = {
@@ -195,34 +203,19 @@ containers_selector_actions = function(state)
 
       window:perform_action(
         act.SelectorActions {
-          description = wezterm.format {
-            { Attribute = { Intensity = 'Bold' } },
-            { Foreground = { AnsiColor = 'Teal' } },
-            { Text = 'Select containers' },
-          },
+          description = description 'Select containers',
           context = {
-            header = wezterm.format {
-              { Attribute = { Intensity = 'Bold' } },
-              { Foreground = { AnsiColor = 'Navy' } },
-              { Text = 'Context' },
-            },
+            header = header 'Context',
             entries = {
               {
-                label = wezterm.format {
-                  { Foreground = { AnsiColor = 'Olive' } },
-                  { Text = 'Entity' },
-                },
+                label = entry_label 'Entity',
                 id = 'Containers',
               },
             },
           },
           choices = containers,
           section = {
-            header = wezterm.format {
-              { Attribute = { Intensity = 'Bold' } },
-              { Foreground = { AnsiColor = 'Navy' } },
-              { Text = 'Actions' },
-            },
+            header = header 'Actions',
             arguments = {
               {
                 key = 'l',
@@ -240,13 +233,7 @@ containers_selector_actions = function(state)
               },
             },
           },
-          fuzzy_description = wezterm.format {
-            { Attribute = { Intensity = 'Bold' } },
-            { Foreground = { AnsiColor = 'Teal' } },
-            { Text = 'Select containers' },
-            'ResetAttributes',
-            { Text = ': ' },
-          },
+          fuzzy_description = fuzzy_description 'Select containers',
           multiple = true,
           cancel = wezterm.action_callback(function(inner_window, inner_pane)
             inner_window:perform_action(
@@ -265,18 +252,10 @@ docker_actions_transient = function(state)
   return wezterm.action_callback(function(window, pane)
     window:perform_action(
       act.TransientMenu {
-        description = wezterm.format {
-          { Attribute = { Intensity = 'Bold' } },
-          { Foreground = { AnsiColor = 'Teal' } },
-          { Text = 'Docker action' },
-        },
+        description = description 'Docker action',
         sections = {
           {
-            header = wezterm.format {
-              { Attribute = { Intensity = 'Bold' } },
-              { Foreground = { AnsiColor = 'Navy' } },
-              { Text = 'Actions' },
-            },
+            header = header 'Actions',
             entries = {
               {
                 TransientArgument = {
