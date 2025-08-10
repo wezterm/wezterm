@@ -86,8 +86,8 @@ struct SelectorState<'a> {
     selector_size: usize,
     changes: &'a mut Vec<Change>,
     colors: &'a TransientColors,
-    option: &'a DTransientOption<'a>,
-    row_entities: &'a Vec<Option<&'a DRenderableEntity<'a>>>,
+    option: &'a TransientOption<'a>,
+    row_entities: &'a Vec<Option<&'a RenderableEntity<'a>>>,
 }
 
 impl SelectorState<'_> {
@@ -308,7 +308,7 @@ impl SelectorState<'_> {
 
 struct TrieNode<'a> {
     children: HashMap<char, Box<TrieNode<'a>>>,
-    entry: Option<&'a DRenderableEntity<'a>>,
+    entry: Option<&'a RenderableEntity<'a>>,
 }
 
 impl<'a> TrieNode<'a> {
@@ -319,7 +319,7 @@ impl<'a> TrieNode<'a> {
         }
     }
 
-    fn add_word(&mut self, word: &str, entry: &'a DRenderableEntity<'a>) {
+    fn add_word(&mut self, word: &str, entry: &'a RenderableEntity<'a>) {
         let mut current = self;
         for ch in word.chars() {
             current = current
@@ -358,13 +358,13 @@ impl TransientColors {
     }
 }
 
-struct DTransientSwitch<'a> {
+struct TransientSwitch<'a> {
     delegate: &'a KTransientSwitch,
     value: RefCell<bool>,
     row: usize,
 }
 
-impl<'a> Renderable for DTransientSwitch<'a> {
+impl<'a> Renderable for TransientSwitch<'a> {
     fn render(
         &self,
         colors: &TransientColors,
@@ -407,13 +407,13 @@ impl<'a> Renderable for DTransientSwitch<'a> {
     }
 }
 
-struct DTransientOption<'a> {
+struct TransientOption<'a> {
     delegate: &'a KTransientOption,
     value: RefCell<Option<String>>,
     row: usize,
 }
 
-impl<'a> Renderable for DTransientOption<'a> {
+impl<'a> Renderable for TransientOption<'a> {
     fn render(
         &self,
         colors: &TransientColors,
@@ -457,13 +457,13 @@ impl<'a> Renderable for DTransientOption<'a> {
     }
 }
 
-struct DTransientCyclicSwitch<'a> {
+struct TransientCyclicSwitch<'a> {
     delegate: &'a KTransientCyclicSwitch,
     active_idx: RefCell<Option<usize>>,
     row: usize,
 }
 
-impl<'a> Renderable for DTransientCyclicSwitch<'a> {
+impl<'a> Renderable for TransientCyclicSwitch<'a> {
     fn render(
         &self,
         colors: &TransientColors,
@@ -536,12 +536,12 @@ impl<'a> Renderable for DTransientCyclicSwitch<'a> {
     }
 }
 
-struct DTransientArgument<'a> {
+struct TransientArgument<'a> {
     delegate: &'a KTransientArgument,
     row: usize,
 }
 
-impl<'a> Renderable for DTransientArgument<'a> {
+impl<'a> Renderable for TransientArgument<'a> {
     fn render(
         &self,
         colors: &TransientColors,
@@ -566,12 +566,12 @@ impl<'a> Renderable for DTransientArgument<'a> {
     }
 }
 
-struct DTransientSection<'a> {
+struct TransientSection<'a> {
     delegate: &'a KTransientSection,
     row: usize,
 }
 
-impl<'a> Renderable for DTransientSection<'a> {
+impl<'a> Renderable for TransientSection<'a> {
     fn render(
         &self,
         _colors: &TransientColors,
@@ -592,17 +592,17 @@ impl<'a> Renderable for DTransientSection<'a> {
     }
 }
 
-enum DRenderableEntity<'a> {
-    TransientContext(DTransientContext<'a>),
-    TransientContextEntry(DTransientContextEntry<'a>),
-    TransientSection(DTransientSection<'a>),
-    TransientOption(DTransientOption<'a>),
-    TransientSwitch(DTransientSwitch<'a>),
-    TransientArgument(DTransientArgument<'a>),
-    TransientCyclicSwitch(DTransientCyclicSwitch<'a>),
+enum RenderableEntity<'a> {
+    TransientContext(TransientContext<'a>),
+    TransientContextEntry(TransientContextEntry<'a>),
+    TransientSection(TransientSection<'a>),
+    TransientOption(TransientOption<'a>),
+    TransientSwitch(TransientSwitch<'a>),
+    TransientArgument(TransientArgument<'a>),
+    TransientCyclicSwitch(TransientCyclicSwitch<'a>),
 }
 
-impl<'a> DRenderableEntity<'a> {
+impl<'a> RenderableEntity<'a> {
     fn render(
         &self,
         colors: &TransientColors,
@@ -610,25 +610,25 @@ impl<'a> DRenderableEntity<'a> {
         term: &mut TermWizTerminal,
     ) -> termwiz::Result<()> {
         match self {
-            DRenderableEntity::TransientContext(context) => {
+            RenderableEntity::TransientContext(context) => {
                 context.render(colors, changes, term, false)
             }
-            DRenderableEntity::TransientContextEntry(entry) => {
+            RenderableEntity::TransientContextEntry(entry) => {
                 entry.render(colors, changes, term, false)
             }
-            DRenderableEntity::TransientSection(section) => {
+            RenderableEntity::TransientSection(section) => {
                 section.render(colors, changes, term, false)
             }
-            DRenderableEntity::TransientSwitch(switch) => {
+            RenderableEntity::TransientSwitch(switch) => {
                 switch.render(colors, changes, term, false)
             }
-            DRenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
+            RenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
                 cyclic_switch.render(colors, changes, term, false)
             }
-            DRenderableEntity::TransientOption(option) => {
+            RenderableEntity::TransientOption(option) => {
                 option.render(colors, changes, term, false)
             }
-            DRenderableEntity::TransientArgument(positional_arg) => {
+            RenderableEntity::TransientArgument(positional_arg) => {
                 positional_arg.render(colors, changes, term, false)
             }
         }
@@ -636,12 +636,12 @@ impl<'a> DRenderableEntity<'a> {
 }
 
 #[derive(Clone)]
-struct DTransientContextEntry<'a> {
+struct TransientContextEntry<'a> {
     delegate: &'a KTransientContextEntry,
     row: usize,
 }
 
-impl<'a> Renderable for DTransientContextEntry<'a> {
+impl<'a> Renderable for TransientContextEntry<'a> {
     fn render(
         &self,
         _colors: &TransientColors,
@@ -665,12 +665,12 @@ impl<'a> Renderable for DTransientContextEntry<'a> {
 }
 
 #[derive(Clone)]
-struct DTransientContext<'a> {
+struct TransientContext<'a> {
     delegate: &'a KTransientContext,
     row: usize,
 }
 
-impl<'a> Renderable for DTransientContext<'a> {
+impl<'a> Renderable for TransientContext<'a> {
     fn render(
         &self,
         _colors: &TransientColors,
@@ -698,7 +698,7 @@ struct TransientState<'a> {
     root_node: &'a TrieNode<'a>,
     traversed_nodes: Vec<&'a TrieNode<'a>>,
     changes: Vec<Change>,
-    row_entities: Vec<Option<&'a DRenderableEntity<'a>>>,
+    row_entities: Vec<Option<&'a RenderableEntity<'a>>>,
     cancel: Option<Box<KeyAssignment>>,
 }
 
@@ -707,7 +707,7 @@ impl<'a> TransientState<'a> {
         args: &KTransientMenu,
         window: GuiWin,
         pane: MuxPane,
-        row_entities: Vec<Option<&'a DRenderableEntity<'a>>>,
+        row_entities: Vec<Option<&'a RenderableEntity<'a>>>,
         trie_node: &'a TrieNode<'a>,
     ) -> Self {
         let root_node = trie_node;
@@ -756,7 +756,7 @@ impl<'a> TransientState<'a> {
     fn line_prompt(
         &mut self,
         term: &mut TermWizTerminal,
-        option: &'a DTransientOption<'a>,
+        option: &'a TransientOption<'a>,
     ) -> anyhow::Result<()> {
         let size = term.get_screen_size()?;
         self.changes.append(&mut vec![
@@ -853,12 +853,12 @@ impl<'a> TransientState<'a> {
                     };
 
                     match transient_entry {
-                        DRenderableEntity::TransientSwitch(switch) => {
+                        RenderableEntity::TransientSwitch(switch) => {
                             switch.value.replace_with(|&mut val| !val);
 
                             switch.render(&self.colors, &mut self.changes, term, true)?;
                         }
-                        DRenderableEntity::TransientOption(option) => {
+                        RenderableEntity::TransientOption(option) => {
                             if option.value.borrow().is_none() || !option.delegate.allow_nil {
                                 if let Some(choices) = option.delegate.choices.clone() {
                                     let size = term.get_screen_size()?;
@@ -892,7 +892,7 @@ impl<'a> TransientState<'a> {
                             }
                             option.render(&self.colors, &mut self.changes, term, true)?;
                         }
-                        DRenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
+                        RenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
                             if !cyclic_switch.delegate.choices.is_empty() {
                                 cyclic_switch.active_idx.replace_with(|idx| {
                                     if let Some(idx) = idx {
@@ -917,7 +917,7 @@ impl<'a> TransientState<'a> {
                                 )?;
                             }
                         }
-                        DRenderableEntity::TransientArgument(positional_arg) => {
+                        RenderableEntity::TransientArgument(positional_arg) => {
                             let name = match *positional_arg.delegate.action {
                                 KeyAssignment::EmitEvent(ref id) => id,
                                 _ => anyhow::bail!("TransientMenu requires action to be defined by wezterm.action_callback")
@@ -959,25 +959,25 @@ struct TransientResult {
 }
 impl_lua_conversion_dynamic!(TransientResult);
 
-impl<'a> From<&'a Vec<Option<&'a DRenderableEntity<'a>>>> for TransientResult {
-    fn from(value: &'a Vec<Option<&'a DRenderableEntity<'a>>>) -> Self {
+impl<'a> From<&'a Vec<Option<&'a RenderableEntity<'a>>>> for TransientResult {
+    fn from(value: &'a Vec<Option<&'a RenderableEntity<'a>>>) -> Self {
         let mut entries: Vec<TransientResultEntry> = vec![];
 
         for entry in value.iter().skip(3).filter_map(|k| *k) {
             match entry {
-                DRenderableEntity::TransientOption(option) => {
+                RenderableEntity::TransientOption(option) => {
                     entries.push(TransientResultEntry {
                         flag: option.delegate.flag.clone(),
                         value: option.value.borrow().to_dynamic(),
                     });
                 }
-                DRenderableEntity::TransientSwitch(switch) => {
+                RenderableEntity::TransientSwitch(switch) => {
                     entries.push(TransientResultEntry {
                         flag: switch.delegate.flag.clone(),
                         value: switch.value.borrow().to_dynamic(),
                     });
                 }
-                DRenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
+                RenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
                     entries.push(TransientResultEntry {
                         flag: cyclic_switch.delegate.flag.clone(),
                         value: cyclic_switch
@@ -1035,26 +1035,26 @@ pub fn show_transient_menu_overlay(
     pane: MuxPane,
 ) -> anyhow::Result<()> {
     term.no_grab_mouse_in_raw_mode();
-    let mut row_entities: Vec<Option<DRenderableEntity>> = vec![None, None];
+    let mut row_entities: Vec<Option<RenderableEntity>> = vec![None, None];
 
     let mut row = 2;
     if let Some(k_context) = args.context.as_ref() {
         row_entities.push(None);
         row += 1;
 
-        let transient_context = DTransientContext {
+        let transient_context = TransientContext {
             delegate: k_context,
             row,
         };
-        row_entities.push(Some(DRenderableEntity::TransientContext(transient_context)));
+        row_entities.push(Some(RenderableEntity::TransientContext(transient_context)));
         row += 1;
 
         for k_context_entry in &k_context.entries {
-            let entry = DTransientContextEntry {
+            let entry = TransientContextEntry {
                 delegate: k_context_entry,
                 row,
             };
-            row_entities.push(Some(DRenderableEntity::TransientContextEntry(entry)));
+            row_entities.push(Some(RenderableEntity::TransientContextEntry(entry)));
             row += 1;
         }
     }
@@ -1063,24 +1063,24 @@ pub fn show_transient_menu_overlay(
         row_entities.push(None);
         row += 1;
 
-        let transient_section = DTransientSection {
+        let transient_section = TransientSection {
             delegate: k_section,
             row,
         };
-        row_entities.push(Some(DRenderableEntity::TransientSection(transient_section)));
+        row_entities.push(Some(RenderableEntity::TransientSection(transient_section)));
         row += 1;
 
         for k_transient_entry in &k_section.entries {
             let transient_entry = match k_transient_entry {
                 KTransientEntry::TransientSwitch(switch) => {
-                    DRenderableEntity::TransientSwitch(DTransientSwitch {
+                    RenderableEntity::TransientSwitch(TransientSwitch {
                         delegate: &switch,
                         value: RefCell::new(switch.default),
                         row,
                     })
                 }
                 KTransientEntry::TransientOption(option) => {
-                    DRenderableEntity::TransientOption(DTransientOption {
+                    RenderableEntity::TransientOption(TransientOption {
                         delegate: &option,
                         value: RefCell::new(option.default.clone()),
                         row,
@@ -1096,14 +1096,14 @@ pub fn show_transient_menu_overlay(
                                 .position(|choice| choice == default)
                         },
                     );
-                    DRenderableEntity::TransientCyclicSwitch(DTransientCyclicSwitch {
+                    RenderableEntity::TransientCyclicSwitch(TransientCyclicSwitch {
                         delegate: &cyclic_switch,
                         active_idx: RefCell::new(active_idx),
                         row,
                     })
                 }
                 KTransientEntry::TransientArgument(positional_arg) => {
-                    DRenderableEntity::TransientArgument(DTransientArgument {
+                    RenderableEntity::TransientArgument(TransientArgument {
                         delegate: &positional_arg,
                         row,
                     })
@@ -1118,16 +1118,16 @@ pub fn show_transient_menu_overlay(
 
     for entity in row_entities.iter().filter_map(|k| k.as_ref()) {
         match entity {
-            DRenderableEntity::TransientSwitch(switch) => {
+            RenderableEntity::TransientSwitch(switch) => {
                 trie_node.add_word(&switch.delegate.key, entity);
             }
-            DRenderableEntity::TransientOption(option) => {
+            RenderableEntity::TransientOption(option) => {
                 trie_node.add_word(&option.delegate.key, entity);
             }
-            DRenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
+            RenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
                 trie_node.add_word(&cyclic_switch.delegate.key, entity);
             }
-            DRenderableEntity::TransientArgument(positional_arg) => {
+            RenderableEntity::TransientArgument(positional_arg) => {
                 trie_node.add_word(&positional_arg.delegate.key, entity);
             }
             _ => {}
