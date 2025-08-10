@@ -65,16 +65,6 @@ impl LineEditorHost for PromptHost {
     }
 }
 
-trait Renderable {
-    fn render(
-        &self,
-        colors: &TransientColors,
-        changes: &mut Vec<Change>,
-        term: &mut TermWizTerminal,
-        render_now: bool,
-    ) -> termwiz::Result<()>;
-}
-
 struct SelectorState<'a> {
     active_idx: usize,
     max_items: usize,
@@ -364,7 +354,7 @@ struct TransientSwitch<'a> {
     row: usize,
 }
 
-impl<'a> Renderable for TransientSwitch<'a> {
+impl<'a> TransientSwitch<'a> {
     fn render(
         &self,
         colors: &TransientColors,
@@ -413,7 +403,7 @@ struct TransientOption<'a> {
     row: usize,
 }
 
-impl<'a> Renderable for TransientOption<'a> {
+impl<'a> TransientOption<'a> {
     fn render(
         &self,
         colors: &TransientColors,
@@ -463,7 +453,7 @@ struct TransientCyclicSwitch<'a> {
     row: usize,
 }
 
-impl<'a> Renderable for TransientCyclicSwitch<'a> {
+impl<'a> TransientCyclicSwitch<'a> {
     fn render(
         &self,
         colors: &TransientColors,
@@ -541,14 +531,8 @@ struct TransientArgument<'a> {
     row: usize,
 }
 
-impl<'a> Renderable for TransientArgument<'a> {
-    fn render(
-        &self,
-        colors: &TransientColors,
-        changes: &mut Vec<Change>,
-        _term: &mut TermWizTerminal,
-        _render_now: bool,
-    ) -> termwiz::Result<()> {
+impl<'a> TransientArgument<'a> {
+    fn render(&self, colors: &TransientColors, changes: &mut Vec<Change>) -> termwiz::Result<()> {
         changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
@@ -571,14 +555,8 @@ struct TransientSection<'a> {
     row: usize,
 }
 
-impl<'a> Renderable for TransientSection<'a> {
-    fn render(
-        &self,
-        _colors: &TransientColors,
-        changes: &mut Vec<Change>,
-        _term: &mut TermWizTerminal,
-        _render_now: bool,
-    ) -> termwiz::Result<()> {
+impl<'a> TransientSection<'a> {
+    fn render(&self, changes: &mut Vec<Change>) -> termwiz::Result<()> {
         changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
@@ -615,12 +593,10 @@ impl<'a> RenderableEntity<'a> {
             Self::TransientCyclicSwitch(cyclic_switch) => {
                 cyclic_switch.render(colors, changes, term, false)
             }
-            Self::TransientArgument(positional_arg) => {
-                positional_arg.render(colors, changes, term, false)
-            }
-            Self::TransientSection(section) => section.render(colors, changes, term, false),
-            Self::TransientContext(context) => context.render(colors, changes, term, false),
-            Self::TransientContextEntry(entry) => entry.render(colors, changes, term, false),
+            Self::TransientArgument(positional_arg) => positional_arg.render(colors, changes),
+            Self::TransientSection(section) => section.render(changes),
+            Self::TransientContext(context) => context.render(changes),
+            Self::TransientContextEntry(entry) => entry.render(changes),
         }
     }
 }
@@ -631,14 +607,8 @@ struct TransientContextEntry<'a> {
     row: usize,
 }
 
-impl<'a> Renderable for TransientContextEntry<'a> {
-    fn render(
-        &self,
-        _colors: &TransientColors,
-        changes: &mut Vec<Change>,
-        _term: &mut TermWizTerminal,
-        _render_now: bool,
-    ) -> termwiz::Result<()> {
+impl<'a> TransientContextEntry<'a> {
+    fn render(&self, changes: &mut Vec<Change>) -> termwiz::Result<()> {
         changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
@@ -660,14 +630,8 @@ struct TransientContext<'a> {
     row: usize,
 }
 
-impl<'a> Renderable for TransientContext<'a> {
-    fn render(
-        &self,
-        _colors: &TransientColors,
-        changes: &mut Vec<Change>,
-        _term: &mut TermWizTerminal,
-        _render_entries: bool,
-    ) -> termwiz::Result<()> {
+impl<'a> TransientContext<'a> {
+    fn render(&self, changes: &mut Vec<Change>) -> termwiz::Result<()> {
         changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
