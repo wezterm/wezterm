@@ -610,27 +610,17 @@ impl<'a> RenderableEntity<'a> {
         term: &mut TermWizTerminal,
     ) -> termwiz::Result<()> {
         match self {
-            RenderableEntity::TransientContext(context) => {
-                context.render(colors, changes, term, false)
-            }
-            RenderableEntity::TransientContextEntry(entry) => {
-                entry.render(colors, changes, term, false)
-            }
-            RenderableEntity::TransientSection(section) => {
-                section.render(colors, changes, term, false)
-            }
-            RenderableEntity::TransientSwitch(switch) => {
-                switch.render(colors, changes, term, false)
-            }
-            RenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
+            Self::TransientOption(option) => option.render(colors, changes, term, false),
+            Self::TransientSwitch(switch) => switch.render(colors, changes, term, false),
+            Self::TransientCyclicSwitch(cyclic_switch) => {
                 cyclic_switch.render(colors, changes, term, false)
             }
-            RenderableEntity::TransientOption(option) => {
-                option.render(colors, changes, term, false)
-            }
-            RenderableEntity::TransientArgument(positional_arg) => {
+            Self::TransientArgument(positional_arg) => {
                 positional_arg.render(colors, changes, term, false)
             }
+            Self::TransientSection(section) => section.render(colors, changes, term, false),
+            Self::TransientContext(context) => context.render(colors, changes, term, false),
+            Self::TransientContextEntry(entry) => entry.render(colors, changes, term, false),
         }
     }
 }
