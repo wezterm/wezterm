@@ -988,6 +988,29 @@ impl<'a> From<&'a Vec<Option<RenderableEntity<'a>>>> for TransientResult {
     }
 }
 
+fn create_trie<'a>(
+    row_entities: &'a Vec<Option<RenderableEntity<'a>>>,
+    trie_node: &mut TrieNode<'a>,
+) {
+    for entity in row_entities.iter().filter_map(|k| k.as_ref()) {
+        match entity {
+            RenderableEntity::TransientSwitch(switch) => {
+                trie_node.add_word(&switch.delegate.key, entity);
+            }
+            RenderableEntity::TransientOption(option) => {
+                trie_node.add_word(&option.delegate.key, entity);
+            }
+            RenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
+                trie_node.add_word(&cyclic_switch.delegate.key, entity);
+            }
+            RenderableEntity::TransientArgument(positional_arg) => {
+                trie_node.add_word(&positional_arg.delegate.key, entity);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: Option<TransientResult>) {
     promise::spawn::spawn(async move {
         config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, result))
@@ -1026,7 +1049,6 @@ pub fn show_transient_menu_overlay(
 ) -> anyhow::Result<()> {
     term.no_grab_mouse_in_raw_mode();
     let mut row_entities: Vec<Option<RenderableEntity>> = vec![None, None];
-
     let mut row = 2;
     if let Some(k_context) = args.context.as_ref() {
         row_entities.push(None);
@@ -1105,24 +1127,7 @@ pub fn show_transient_menu_overlay(
     }
 
     let mut trie_node = TrieNode::new();
-
-    for entity in row_entities.iter().filter_map(|k| k.as_ref()) {
-        match entity {
-            RenderableEntity::TransientSwitch(switch) => {
-                trie_node.add_word(&switch.delegate.key, entity);
-            }
-            RenderableEntity::TransientOption(option) => {
-                trie_node.add_word(&option.delegate.key, entity);
-            }
-            RenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
-                trie_node.add_word(&cyclic_switch.delegate.key, entity);
-            }
-            RenderableEntity::TransientArgument(positional_arg) => {
-                trie_node.add_word(&positional_arg.delegate.key, entity);
-            }
-            _ => {}
-        }
-    }
+    create_trie(&row_entities, &mut trie_node);
 
     let mut state = TransientState::new(&args, window, pane, &row_entities, &trie_node);
 
