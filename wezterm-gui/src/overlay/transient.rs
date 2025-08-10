@@ -1011,44 +1011,12 @@ fn create_trie<'a>(
     }
 }
 
-fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: Option<TransientResult>) {
-    promise::spawn::spawn(async move {
-        config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, result))
-            .await
-    })
-    .detach();
-}
-
-async fn do_event(
-    lua: Option<Rc<mlua::Lua>>,
-    name: String,
-    window: GuiWin,
-    pane: MuxPane,
-    result: Option<TransientResult>,
-) -> anyhow::Result<()> {
-    if let Some(lua) = lua {
-        let args = if let Some(result) = result {
-            lua.pack_multi((window, pane, result))?
-        } else {
-            lua.pack_multi((window, pane))?
-        };
-
-        if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
-            log::error!("while processing {} event: {:#}", name, err);
-        }
-    }
-
-    Ok(())
-}
-
-pub fn show_transient_menu_overlay(
-    mut term: TermWizTerminal,
-    args: KTransientMenu,
-    window: GuiWin,
-    pane: MuxPane,
-) -> anyhow::Result<()> {
-    term.no_grab_mouse_in_raw_mode();
-    let mut row_entities: Vec<Option<RenderableEntity>> = vec![None, None];
+fn create_row_entities<'a, 'b>(
+    args: &'a KTransientMenu,
+    row_entities: &'b mut Vec<Option<RenderableEntity<'a>>>,
+) where
+    'a: 'b,
+{
     let mut row = 2;
     if let Some(k_context) = args.context.as_ref() {
         row_entities.push(None);
@@ -1125,6 +1093,47 @@ pub fn show_transient_menu_overlay(
             row += 1;
         }
     }
+}
+
+fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: Option<TransientResult>) {
+    promise::spawn::spawn(async move {
+        config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, result))
+            .await
+    })
+    .detach();
+}
+
+async fn do_event(
+    lua: Option<Rc<mlua::Lua>>,
+    name: String,
+    window: GuiWin,
+    pane: MuxPane,
+    result: Option<TransientResult>,
+) -> anyhow::Result<()> {
+    if let Some(lua) = lua {
+        let args = if let Some(result) = result {
+            lua.pack_multi((window, pane, result))?
+        } else {
+            lua.pack_multi((window, pane))?
+        };
+
+        if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
+            log::error!("while processing {} event: {:#}", name, err);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn show_transient_menu_overlay(
+    mut term: TermWizTerminal,
+    args: KTransientMenu,
+    window: GuiWin,
+    pane: MuxPane,
+) -> anyhow::Result<()> {
+    term.no_grab_mouse_in_raw_mode();
+    let mut row_entities: Vec<Option<RenderableEntity>> = vec![None, None];
+    create_row_entities(&args, &mut row_entities);
 
     let mut trie_node = TrieNode::new();
     create_trie(&row_entities, &mut trie_node);
