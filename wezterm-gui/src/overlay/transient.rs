@@ -87,7 +87,7 @@ struct SelectorState<'a> {
     changes: &'a mut Vec<Change>,
     colors: &'a TransientColors,
     option: &'a TransientOption<'a>,
-    row_entities: &'a Vec<Option<&'a RenderableEntity<'a>>>,
+    row_entities: &'a Vec<Option<RenderableEntity<'a>>>,
 }
 
 impl SelectorState<'_> {
@@ -688,7 +688,7 @@ struct TransientState<'a> {
     root_node: &'a TrieNode<'a>,
     traversed_nodes: Vec<&'a TrieNode<'a>>,
     changes: Vec<Change>,
-    row_entities: Vec<Option<&'a RenderableEntity<'a>>>,
+    row_entities: &'a Vec<Option<RenderableEntity<'a>>>,
     cancel: Option<Box<KeyAssignment>>,
 }
 
@@ -697,7 +697,7 @@ impl<'a> TransientState<'a> {
         args: &KTransientMenu,
         window: GuiWin,
         pane: MuxPane,
-        row_entities: Vec<Option<&'a RenderableEntity<'a>>>,
+        row_entities: &'a Vec<Option<RenderableEntity<'a>>>,
         trie_node: &'a TrieNode<'a>,
     ) -> Self {
         let root_node = trie_node;
@@ -868,7 +868,7 @@ impl<'a> TransientState<'a> {
                                         changes: &mut self.changes,
                                         colors: &self.colors,
                                         option,
-                                        row_entities: &self.row_entities,
+                                        row_entities: self.row_entities,
                                     };
 
                                     selector_state.draw_separator_and_show_cursor();
@@ -913,7 +913,7 @@ impl<'a> TransientState<'a> {
                                 _ => anyhow::bail!("TransientMenu requires action to be defined by wezterm.action_callback")
                             };
 
-                            let result = TransientResult::from(&self.row_entities);
+                            let result = TransientResult::from(self.row_entities);
                             self.trigger_event(name, Some(result));
                             break;
                         }
@@ -949,11 +949,11 @@ struct TransientResult {
 }
 impl_lua_conversion_dynamic!(TransientResult);
 
-impl<'a> From<&'a Vec<Option<&'a RenderableEntity<'a>>>> for TransientResult {
-    fn from(value: &'a Vec<Option<&'a RenderableEntity<'a>>>) -> Self {
+impl<'a> From<&'a Vec<Option<RenderableEntity<'a>>>> for TransientResult {
+    fn from(value: &'a Vec<Option<RenderableEntity<'a>>>) -> Self {
         let mut entries: Vec<TransientResultEntry> = vec![];
 
-        for entry in value.iter().skip(3).filter_map(|k| *k) {
+        for entry in value.iter().skip(3).filter_map(|k| k.as_ref()) {
             match entry {
                 RenderableEntity::TransientOption(option) => {
                     entries.push(TransientResultEntry {
@@ -1124,13 +1124,7 @@ pub fn show_transient_menu_overlay(
         }
     }
 
-    let mut state = TransientState::new(
-        &args,
-        window,
-        pane,
-        row_entities.iter().map(|k| k.as_ref()).collect(),
-        &trie_node,
-    );
+    let mut state = TransientState::new(&args, window, pane, &row_entities, &trie_node);
 
     state.render(&mut term)?;
     state.run_loop(&mut term)
