@@ -953,7 +953,7 @@ impl<'a> From<&'a Vec<Option<RenderableEntity<'a>>>> for TransientResult {
 }
 
 fn create_trie<'a>(
-    row_entities: &'a Vec<Option<RenderableEntity<'a>>>,
+    row_entities: &'a Vec<Option<RenderableEntity<'_>>>,
     trie_node: &mut TrieNode<'a>,
 ) {
     for entity in row_entities.iter().filter_map(|k| k.as_ref()) {
