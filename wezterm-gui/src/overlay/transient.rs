@@ -309,7 +309,7 @@ impl<'a> TrieNode<'a> {
         }
     }
 
-    fn add_word(&mut self, word: &str, entry: &'a RenderableEntity<'a>) {
+    fn add_word(&mut self, word: &str, entry: &'a RenderableEntity<'_>) {
         let mut current = self;
         for ch in word.chars() {
             current = current
@@ -580,7 +580,7 @@ enum RenderableEntity<'a> {
     TransientCyclicSwitch(TransientCyclicSwitch<'a>),
 }
 
-impl<'a> RenderableEntity<'a> {
+impl RenderableEntity<'_> {
     fn render(
         &self,
         colors: &TransientColors,
@@ -661,8 +661,8 @@ impl<'a> TransientState<'a> {
         args: &KTransientMenu,
         window: GuiWin,
         pane: MuxPane,
-        row_entities: &'a Vec<Option<RenderableEntity<'a>>>,
-        trie_node: &'a TrieNode<'a>,
+        row_entities: &'a Vec<Option<RenderableEntity<'_>>>,
+        trie_node: &'a TrieNode<'_>,
     ) -> Self {
         let root_node = trie_node;
         let traversed_nodes = vec![trie_node];
@@ -913,8 +913,8 @@ struct TransientResult {
 }
 impl_lua_conversion_dynamic!(TransientResult);
 
-impl<'a> From<&'a Vec<Option<RenderableEntity<'a>>>> for TransientResult {
-    fn from(value: &'a Vec<Option<RenderableEntity<'a>>>) -> Self {
+impl From<&Vec<Option<RenderableEntity<'_>>>> for TransientResult {
+    fn from(value: &Vec<Option<RenderableEntity<'_>>>) -> Self {
         let mut entries: Vec<TransientResultEntry> = vec![];
 
         for entry in value.iter().skip(3).filter_map(|k| k.as_ref()) {
