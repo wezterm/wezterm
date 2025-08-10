@@ -320,7 +320,7 @@ impl<'a> TrieNode<'a> {
         current.entry = Some(entry);
     }
 
-    fn find_char(&self, c: char) -> Option<&TrieNode> {
+    fn find_char(&self, c: char) -> Option<&TrieNode<'_>> {
         self.children.get(&c).map(|child| child.as_ref())
     }
 }
