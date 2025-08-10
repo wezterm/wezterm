@@ -975,12 +975,10 @@ fn create_trie<'a>(
     }
 }
 
-fn create_row_entities<'a, 'b>(
+fn create_row_entities<'a>(
     args: &'a KTransientMenu,
-    row_entities: &'b mut Vec<Option<RenderableEntity<'a>>>,
-) where
-    'a: 'b,
-{
+    row_entities: &mut Vec<Option<RenderableEntity<'a>>>,
+) {
     let mut row = 2;
     if let Some(k_context) = args.context.as_ref() {
         row_entities.push(None);
