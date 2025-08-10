@@ -710,7 +710,7 @@ impl<'a> TransientState<'a> {
     fn line_prompt(
         &mut self,
         term: &mut TermWizTerminal,
-        option: &'a TransientOption<'a>,
+        option: &TransientOption<'a>,
     ) -> anyhow::Result<()> {
         let size = term.get_screen_size()?;
         self.changes.append(&mut vec![
