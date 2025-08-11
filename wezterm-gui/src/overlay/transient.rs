@@ -788,7 +788,10 @@ impl<'a> TransientState<'a> {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
-                    let cur_node = self.traversed_nodes.last().unwrap();
+                    let cur_node = self
+                        .traversed_nodes
+                        .last()
+                        .expect("Root node is always traversed");
 
                     let cur_node = match cur_node.find_char(c) {
                         Some(cur_node) => cur_node,
