@@ -112,7 +112,7 @@ impl<'a> SelectorState<'a> {
         window: GuiWin,
         pane: MuxPane,
         size: &ScreenSize,
-        trie_node: &'a mut TrieNode<'a>,
+        trie_node: &'a TrieNode<'_>,
     ) -> Self {
         let context_size = args
             .context
@@ -153,12 +153,8 @@ impl<'a> SelectorState<'a> {
             arguments,
         };
 
-        for positional_arg in &args.section.arguments {
-            trie_node.add_word(&positional_arg.key, positional_arg);
-        }
-
-        let root_node = &*trie_node;
-        let traversed_nodes = vec![&*trie_node];
+        let root_node = trie_node;
+        let traversed_nodes = vec![trie_node];
 
         let description = args.description.to_string();
 
@@ -611,6 +607,12 @@ struct SelectorActionsResult {
 }
 impl_lua_conversion_dynamic!(SelectorActionsResult);
 
+fn create_trie<'a>(args: &'a SelectorActions, trie_node: &mut TrieNode<'a>) {
+    for positional_arg in &args.section.arguments {
+        trie_node.add_word(&positional_arg.key, positional_arg);
+    }
+}
+
 fn trampoline(name: String, window: GuiWin, pane: MuxPane, result: Option<SelectorActionsResult>) {
     promise::spawn::spawn(async move {
         config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, result))
@@ -649,9 +651,11 @@ pub fn show_selector_actions_overlay(
 ) -> anyhow::Result<()> {
     term.no_grab_mouse_in_raw_mode();
     let size = term.get_screen_size()?;
-    let mut trie_node = TrieNode::new();
 
-    let mut state = SelectorState::new(&args, window, pane, &size, &mut trie_node);
+    let mut trie_node = TrieNode::new();
+    create_trie(&args, &mut trie_node);
+
+    let mut state = SelectorState::new(&args, window, pane, &size, &trie_node);
 
     state.render_constants()?;
     state.render(&mut term)?;
