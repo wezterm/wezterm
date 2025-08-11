@@ -126,10 +126,7 @@ impl<'a> SelectorState<'a> {
         let max_items = size.rows.saturating_sub(overhead);
         let selector_size = choices.len().min(max_items);
 
-        let multiple_idx: Option<Vec<bool>> = args
-            .multiple
-            .then(|| choices.iter().map(|_| false).collect());
-
+        let multiple_idx = args.multiple.then(|| vec![false; choices.len()]);
         let filtered_entries = choices.iter().collect();
 
         let arguments: Vec<&TransientArgument> = args.section.arguments.iter().collect();
