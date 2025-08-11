@@ -12,7 +12,7 @@ use luahelper::impl_lua_conversion_dynamic;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
 use rayon::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
@@ -350,7 +350,7 @@ impl TransientColors {
 
 struct TransientSwitch<'a> {
     delegate: &'a KTransientSwitch,
-    value: RefCell<bool>,
+    value: Cell<bool>,
     row: usize,
 }
 
@@ -376,7 +376,7 @@ impl<'a> TransientSwitch<'a> {
             Change::Text(format!(" {} (", delegate.description)),
         ]);
 
-        if *self.value.borrow() {
+        if self.value.get() {
             changes.append(&mut vec![
                 Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
                 Change::Attribute(AttributeChange::Foreground(colors.flag_fg)),
@@ -808,7 +808,7 @@ impl<'a> TransientState<'a> {
 
                     match transient_entry {
                         RenderableEntity::TransientSwitch(switch) => {
-                            switch.value.replace_with(|&mut val| !val);
+                            switch.value.update(|val| !val);
 
                             switch.render(&self.colors, &mut self.changes, term, true)?;
                         }
@@ -928,7 +928,7 @@ impl From<&Vec<Option<RenderableEntity<'_>>>> for TransientResult {
                 RenderableEntity::TransientSwitch(switch) => {
                     entries.push(TransientResultEntry {
                         flag: switch.delegate.flag.clone(),
-                        value: switch.value.borrow().to_dynamic(),
+                        value: switch.value.get().to_dynamic(),
                     });
                 }
                 RenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
@@ -1017,7 +1017,7 @@ fn create_row_entities<'a>(
                 KTransientEntry::TransientSwitch(switch) => {
                     RenderableEntity::TransientSwitch(TransientSwitch {
                         delegate: &switch,
-                        value: RefCell::new(switch.default),
+                        value: Cell::new(switch.default),
                         row,
                     })
                 }
