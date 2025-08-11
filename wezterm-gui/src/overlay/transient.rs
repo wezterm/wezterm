@@ -70,8 +70,8 @@ struct SelectorState<'a> {
     max_items: usize,
     top_row: usize,
     filter_term: String,
-    filtered_entries: Vec<String>,
-    choices: Vec<String>,
+    filtered_entries: Vec<&'a str>,
+    choices: &'a Vec<String>,
     cols: usize,
     selector_size: usize,
     changes: &'a mut Vec<Change>,
@@ -232,7 +232,7 @@ impl SelectorState<'_> {
                     ..
                 }) => {
                     if let Some(entry) = self.filtered_entries.get(self.active_idx).cloned() {
-                        self.option.value.replace(Some(entry));
+                        self.option.value.replace(Some(entry.to_string()));
                         self.clear_selector(term)?;
                         break;
                     }
@@ -247,7 +247,7 @@ impl SelectorState<'_> {
 
     fn update_filter(&mut self) {
         if self.filter_term.is_empty() {
-            self.filtered_entries = self.choices.clone();
+            self.filtered_entries = self.choices.iter().map(|choice| choice.as_str()).collect();
             return;
         }
 
@@ -273,8 +273,7 @@ impl SelectorState<'_> {
         scores.sort_by(|a, b| a.score.cmp(&b.score).reverse());
 
         for result in scores {
-            self.filtered_entries
-                .push(self.choices[result.row_idx].clone());
+            self.filtered_entries.push(&self.choices[result.row_idx]);
         }
 
         self.active_idx = 0;
@@ -817,18 +816,20 @@ impl<'a> TransientState<'a> {
                         }
                         RenderableEntity::TransientOption(option) => {
                             if option.value.borrow().is_none() || !option.delegate.allow_nil {
-                                if let Some(choices) = option.delegate.choices.clone() {
+                                if let Some(choices) = option.delegate.choices.as_ref() {
                                     let size = term.get_screen_size()?;
 
                                     let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
                                     let selector_size = choices.len().min(max_items);
+                                    let filtered_entries =
+                                        choices.iter().map(|choice| choice.as_str()).collect();
 
                                     let mut selector_state = SelectorState {
                                         active_idx: 0,
                                         max_items,
                                         top_row: 0,
                                         filter_term: String::new(),
-                                        filtered_entries: choices.clone(),
+                                        filtered_entries,
                                         choices,
                                         cols: size.cols,
                                         selector_size,
