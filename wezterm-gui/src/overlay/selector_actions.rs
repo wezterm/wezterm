@@ -71,10 +71,9 @@ impl SelectorActionsColors {
 }
 
 #[derive(Clone)]
-struct SelectorEntry {
+struct SelectorEntry<'a> {
+    delegate: &'a InputSelectorEntry,
     idx: usize,
-    label: String,
-    id: Option<String>,
 }
 
 struct ArgumentSection<'a> {
@@ -86,11 +85,11 @@ struct SelectorState<'a> {
     active_idx: usize,
     max_items: usize,
     top_row: usize,
-    choices: Vec<SelectorEntry>,
+    choices: &'a Vec<SelectorEntry<'a>>,
     cols: usize,
     selector_size: usize,
     multiple_idx: Option<Vec<bool>>,
-    filtered_entries: Vec<SelectorEntry>,
+    filtered_entries: Vec<&'a SelectorEntry<'a>>,
     filtering: bool,
     filter_term: String,
     description: String,
@@ -113,6 +112,7 @@ impl<'a> SelectorState<'a> {
         pane: MuxPane,
         size: &ScreenSize,
         trie_node: &'a TrieNode<'_>,
+        choices: &'a Vec<SelectorEntry<'a>>,
     ) -> Self {
         let context_size = args
             .context
@@ -123,17 +123,6 @@ impl<'a> SelectorState<'a> {
 
         let overhead = context_size + positional_args_size + 3;
 
-        let choices: Vec<SelectorEntry> = args
-            .choices
-            .iter()
-            .enumerate()
-            .map(|(idx, entry)| SelectorEntry {
-                idx,
-                label: entry.label.clone(),
-                id: entry.id.clone(),
-            })
-            .collect();
-
         let max_items = size.rows.saturating_sub(overhead);
         let selector_size = choices.len().min(max_items);
 
@@ -141,7 +130,7 @@ impl<'a> SelectorState<'a> {
             .multiple
             .then(|| choices.iter().map(|_| false).collect());
 
-        let filtered_entries = choices.clone();
+        let filtered_entries = choices.iter().collect();
 
         let arguments: Vec<&TransientArgument> = args.section.arguments.iter().collect();
         let section = ArgumentSection {
@@ -298,7 +287,7 @@ impl<'a> SelectorState<'a> {
 
     fn update_filter(&mut self) {
         if self.filter_term.is_empty() {
-            self.filtered_entries = self.choices.clone();
+            self.filtered_entries = self.choices.iter().collect();
             return;
         }
 
@@ -316,7 +305,7 @@ impl<'a> SelectorState<'a> {
             .par_iter()
             .enumerate()
             .filter_map(|(row_idx, entry)| {
-                let score = matcher_score(&pattern, &entry.label)?;
+                let score = matcher_score(&pattern, &entry.delegate.label)?;
                 Some(MatchResult { row_idx, score })
             })
             .collect();
@@ -324,8 +313,7 @@ impl<'a> SelectorState<'a> {
         scores.sort_by(|a, b| a.score.cmp(&b.score).reverse());
 
         for result in scores {
-            self.filtered_entries
-                .push(self.choices[result.row_idx].clone());
+            self.filtered_entries.push(&self.choices[result.row_idx]);
         }
 
         self.active_idx = 0;
@@ -388,7 +376,7 @@ impl<'a> SelectorState<'a> {
             }
 
             changes.push(Change::Text("    ".to_string()));
-            let mut line = crate::tabbar::parse_status_text(&entry.label, attr.clone());
+            let mut line = crate::tabbar::parse_status_text(&entry.delegate.label, attr.clone());
             if line.len() > max_width {
                 line.resize(max_width, termwiz::surface::SEQ_ZERO);
             }
@@ -535,8 +523,8 @@ impl<'a> SelectorState<'a> {
                             .enumerate()
                             .filter(|(_, val)| **val)
                             .map(|(idx, _)| InputSelectorEntry {
-                                label: self.choices[idx].label.clone(),
-                                id: self.choices[idx].id.clone(),
+                                label: self.choices[idx].delegate.label.clone(),
+                                id: self.choices[idx].delegate.id.clone(),
                             })
                             .collect();
                     }
@@ -549,8 +537,8 @@ impl<'a> SelectorState<'a> {
                     if choices.is_empty() {
                         let entry = &self.choices[self.filtered_entries[self.active_idx].idx];
                         choices = vec![InputSelectorEntry {
-                            label: entry.label.clone(),
-                            id: entry.id.clone(),
+                            label: entry.delegate.label.clone(),
+                            id: entry.delegate.id.clone(),
                         }];
                     }
 
@@ -652,10 +640,17 @@ pub fn show_selector_actions_overlay(
     term.no_grab_mouse_in_raw_mode();
     let size = term.get_screen_size()?;
 
+    let choices: Vec<SelectorEntry<'_>> = args
+        .choices
+        .iter()
+        .enumerate()
+        .map(|(idx, delegate)| SelectorEntry { delegate, idx })
+        .collect();
+
     let mut trie_node = TrieNode::new();
     create_trie(&args, &mut trie_node);
 
-    let mut state = SelectorState::new(&args, window, pane, &size, &trie_node);
+    let mut state = SelectorState::new(&args, window, pane, &size, &trie_node, &choices);
 
     state.render_constants()?;
     state.render(&mut term)?;
