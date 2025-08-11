@@ -112,7 +112,7 @@ impl<'a> SelectorState<'a> {
         pane: MuxPane,
         size: &ScreenSize,
         trie_node: &'a TrieNode<'_>,
-        choices: &'a Vec<SelectorEntry<'a>>,
+        choices: &'a Vec<SelectorEntry<'_>>,
     ) -> Self {
         let context_size = args
             .context
