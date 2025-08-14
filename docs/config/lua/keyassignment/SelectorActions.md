@@ -42,10 +42,13 @@ The default key assignments in the SelectorActions are as follows:
 | Disable fuzzy search (if in fuzzy finding mode) | <kbd>Enter</kbd> |
 | Add to filtering string (if in fuzzy finding mode) | Any key not listed below |
 | Remove from filtering string (if in fuzzy finding mode) | <kbd>Backspace</kbd> |
+| Start fuzzy search (if in the default mode) | <kbd>/</kbd> |
 | Move Down      | <kbd>Ctrl</kbd> + <kbd>N</kbd> |
 |                | <kbd>Ctrl</kbd> + <kbd>J</kbd> |
+|                | <kbd>j</kbd> (if not in list of keys for accumulated input)|
 | Move Up        | <kbd>Ctrl</kbd> + <kbd>P</kbd> |
 |                | <kbd>Ctrl</kbd> + <kbd>K</kbd> |
+|                | <kbd>k</kbd> (if not in list of keys for accumulated input)|
 | Select all filtered entries (if multiple enabled) | <kbd>Ctrl</kbd> + <kbd>A</kbd> |
 | Deselect all filtered entries (if multiple enabled) | <kbd>Ctrl</kbd> + <kbd>D</kbd> |
 | Toggle all filtered entries (if multiple enabled) | <kbd>Ctrl</kbd> + <kbd>T</kbd> |
