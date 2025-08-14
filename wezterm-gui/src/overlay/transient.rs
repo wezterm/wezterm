@@ -448,7 +448,7 @@ impl<'a> TransientOption<'a> {
 
 struct TransientCyclicSwitch<'a> {
     delegate: &'a KTransientCyclicSwitch,
-    active_idx: RefCell<Option<usize>>,
+    active_idx: Cell<Option<usize>>,
     row: usize,
 }
 
@@ -474,7 +474,7 @@ impl<'a> TransientCyclicSwitch<'a> {
             Change::Text(format!(" {} (", delegate.description)),
         ]);
 
-        if let Some(idx) = *self.active_idx.borrow() {
+        if let Some(idx) = self.active_idx.get() {
             changes.append(&mut vec![
                 Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
                 Change::Attribute(AttributeChange::Foreground(colors.flag_fg)),
@@ -852,16 +852,16 @@ impl<'a> TransientState<'a> {
                         }
                         RenderableEntity::TransientCyclicSwitch(cyclic_switch) => {
                             if !cyclic_switch.delegate.choices.is_empty() {
-                                cyclic_switch.active_idx.replace_with(|idx| {
+                                cyclic_switch.active_idx.update(|idx| {
                                     if let Some(idx) = idx {
-                                        if *idx == cyclic_switch.delegate.choices.len() - 1 {
+                                        if idx == cyclic_switch.delegate.choices.len() - 1 {
                                             if cyclic_switch.delegate.allow_nil {
                                                 None
                                             } else {
                                                 Some(0)
                                             }
                                         } else {
-                                            Some(*idx + 1)
+                                            Some(idx + 1)
                                         }
                                     } else {
                                         Some(0)
@@ -940,7 +940,7 @@ impl From<&Vec<Option<RenderableEntity<'_>>>> for TransientResult {
                         flag: cyclic_switch.delegate.flag.clone(),
                         value: cyclic_switch
                             .active_idx
-                            .borrow()
+                            .get()
                             .map_or_else(
                                 || None,
                                 |idx| cyclic_switch.delegate.choices.get(idx).cloned(),
@@ -1044,7 +1044,7 @@ fn create_row_entities<'a>(
                     );
                     RenderableEntity::TransientCyclicSwitch(TransientCyclicSwitch {
                         delegate: &cyclic_switch,
-                        active_idx: RefCell::new(active_idx),
+                        active_idx: Cell::new(active_idx),
                         row,
                     })
                 }
