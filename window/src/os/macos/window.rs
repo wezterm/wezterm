@@ -667,7 +667,7 @@ impl Window {
 }
 
 impl HasDisplayHandle for Window {
-    fn display_handle(&self) -> Result<DisplayHandle, HandleError> {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         unsafe {
             Ok(DisplayHandle::borrow_raw(RawDisplayHandle::AppKit(
                 AppKitDisplayHandle::new(),
@@ -677,7 +677,7 @@ impl HasDisplayHandle for Window {
 }
 
 impl HasWindowHandle for Window {
-    fn window_handle(&self) -> Result<WindowHandle, HandleError> {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
         let handle =
             AppKitWindowHandle::new(NonNull::new(self.ns_view as *mut _).expect("non-null"));
         unsafe { Ok(WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle))) }

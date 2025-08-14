@@ -192,7 +192,7 @@ impl Pane for TermWizTerminalPane {
         Ok(Some(Box::new(self.render_rx.try_clone()?)))
     }
 
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
         MutexGuard::map(self.writer.lock(), |writer| {
             let w: &mut dyn std::io::Write = writer;
             w

@@ -334,7 +334,7 @@ impl Pane for QuickSelectOverlay {
         Ok(None)
     }
 
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
         self.delegate.writer()
     }
 

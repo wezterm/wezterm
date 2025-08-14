@@ -21,7 +21,7 @@ impl AsyncSslStream {
 
 #[cfg(unix)]
 impl std::os::fd::AsFd for AsyncSslStream {
-    fn as_fd(&self) -> std::os::fd::BorrowedFd {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
         self.s.get_ref().as_fd()
     }
 }

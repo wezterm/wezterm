@@ -3275,13 +3275,13 @@ impl TermWindow {
         }
     }
 
-    pub fn pane_state(&self, pane_id: PaneId) -> RefMut<PaneState> {
+    pub fn pane_state(&self, pane_id: PaneId) -> RefMut<'_, PaneState> {
         RefMut::map(self.pane_state.borrow_mut(), |state| {
             state.entry(pane_id).or_insert_with(PaneState::default)
         })
     }
 
-    pub fn tab_state(&self, tab_id: TabId) -> RefMut<TabState> {
+    pub fn tab_state(&self, tab_id: TabId) -> RefMut<'_, TabState> {
         RefMut::map(self.tab_state.borrow_mut(), |state| {
             state.entry(tab_id).or_insert_with(TabState::default)
         })
