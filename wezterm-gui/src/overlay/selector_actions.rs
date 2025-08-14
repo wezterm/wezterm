@@ -249,9 +249,9 @@ impl<'a> SelectorState<'a> {
         }
     }
 
-    fn toggle_search(&mut self) {
-        self.filtering ^= true;
-        let cursor_visibility = if self.filtering {
+    fn set_search(&mut self, val: bool) {
+        self.filtering = val;
+        let cursor_visibility = if val {
             CursorVisibility::Visible
         } else {
             CursorVisibility::Hidden
@@ -260,10 +260,8 @@ impl<'a> SelectorState<'a> {
             .push(Change::CursorVisibility(cursor_visibility));
     }
 
-    fn disable_search(&mut self) {
-        self.filtering = false;
-        self.changes
-            .push(Change::CursorVisibility(CursorVisibility::Hidden));
+    fn toggle_search(&mut self) {
+        self.set_search(!self.filtering);
     }
 
     fn set_filtered_entries_multiple_marker(&mut self, mark: bool) {
@@ -486,6 +484,45 @@ impl<'a> SelectorState<'a> {
                     self.update_filter();
                 }
                 InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('j'),
+                    modifiers: Modifiers::NONE,
+                }) if !self
+                    .traversed_nodes
+                    .last()
+                    .as_ref()
+                    .unwrap()
+                    .children
+                    .contains_key(&'j') =>
+                {
+                    self.move_down();
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('k'),
+                    modifiers: Modifiers::NONE,
+                }) if !self
+                    .traversed_nodes
+                    .last()
+                    .as_ref()
+                    .unwrap()
+                    .children
+                    .contains_key(&'k') =>
+                {
+                    self.move_up();
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('/'),
+                    modifiers: Modifiers::NONE,
+                }) if !self
+                    .traversed_nodes
+                    .last()
+                    .as_ref()
+                    .unwrap()
+                    .children
+                    .contains_key(&'/') =>
+                {
+                    self.set_search(true);
+                }
+                InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
                     ..
                 }) => {
@@ -563,7 +600,7 @@ impl<'a> SelectorState<'a> {
                     ..
                 }) => {
                     if self.filtering {
-                        self.disable_search();
+                        self.set_search(false);
                     } else {
                         continue;
                     }
