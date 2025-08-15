@@ -224,29 +224,36 @@ impl<'a> SelectorState<'a> {
     }
 
     fn move_up(&mut self) {
-        self.active_idx = self.active_idx.saturating_sub(1);
+        self.active_idx = self.active_idx.saturating_sub(self.repeat[0] as usize);
         if self.active_idx < self.top_row {
             self.top_row = self.active_idx;
         }
     }
 
     fn move_down(&mut self) {
-        self.active_idx = (self.active_idx + 1).min(self.filtered_entries.len() - 1);
+        self.active_idx =
+            (self.active_idx + self.repeat[0] as usize).min(self.filtered_entries.len() - 1);
         if self.active_idx > self.top_row + self.max_items {
             self.top_row = self.active_idx.saturating_sub(self.max_items);
         }
     }
 
     fn toggle_multiple_idx_and_move(&mut self, down: bool) {
-        if let Some(multiple_idx) = self.multiple_idx.as_mut() {
-            if let Some(entry) = self.filtered_entries.get(self.active_idx) {
-                multiple_idx[entry.idx] ^= true;
+        // start_idx and end_idx are guaranteed to be within bounds of filtered_entries if
+        // filtered_entries is not empty
+        if !self.filtered_entries.is_empty() && self.multiple_idx.as_ref().is_some() {
+            let init_active_idx = self.active_idx;
+            let (start_idx, end_idx) = if down {
+                self.move_down();
+                (init_active_idx, self.active_idx.saturating_sub(1))
+            } else {
+                self.move_up();
+                (self.active_idx + 1, init_active_idx)
+            };
 
-                if down {
-                    self.move_down();
-                } else {
-                    self.move_up();
-                }
+            let multiple_idx = self.multiple_idx.as_mut().unwrap();
+            for entry in &self.filtered_entries[start_idx..=end_idx] {
+                multiple_idx[entry.idx] ^= true;
             }
         }
     }
@@ -416,17 +423,13 @@ impl<'a> SelectorState<'a> {
                     key: KeyCode::Char('P' | 'K'),
                     modifiers: Modifiers::CTRL,
                 }) => {
-                    for _ in 0..self.repeat[0] {
-                        self.move_up();
-                    }
+                    self.move_up();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('N' | 'J'),
                     modifiers: Modifiers::CTRL,
                 }) => {
-                    for _ in 0..self.repeat[0] {
-                        self.move_down();
-                    }
+                    self.move_down();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('/'),
@@ -504,9 +507,7 @@ impl<'a> SelectorState<'a> {
                     .children
                     .contains_key(&'j') =>
                 {
-                    for _ in 0..self.repeat[0] {
-                        self.move_down();
-                    }
+                    self.move_down();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('k'),
@@ -519,9 +520,7 @@ impl<'a> SelectorState<'a> {
                     .children
                     .contains_key(&'k') =>
                 {
-                    for _ in 0..self.repeat[0] {
-                        self.move_up();
-                    }
+                    self.move_up();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('/'),
@@ -616,17 +615,13 @@ impl<'a> SelectorState<'a> {
                     key: KeyCode::Tab,
                     modifiers: Modifiers::NONE,
                 }) => {
-                    for _ in 0..self.repeat[0] {
-                        self.toggle_multiple_idx_and_move(true);
-                    }
+                    self.toggle_multiple_idx_and_move(true);
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,
                     modifiers: Modifiers::SHIFT,
                 }) => {
-                    for _ in 0..self.repeat[0] {
-                        self.toggle_multiple_idx_and_move(false);
-                    }
+                    self.toggle_multiple_idx_and_move(false);
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Enter,
