@@ -106,25 +106,21 @@ impl SelectorState<'_> {
     }
 
     fn draw_separator_and_show_cursor(&mut self) {
-        let cols = self.cols;
         self.changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
                 y: Position::EndRelative(2 + self.selector_size),
             },
             Change::ClearToEndOfScreen(ColorAttribute::Default),
-            Change::Text("─".repeat(cols)),
+            Change::Text("─".repeat(self.cols)),
             Change::Text("\r\n".to_string()),
             Change::CursorVisibility(CursorVisibility::Visible),
         ]);
     }
 
     fn render(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
-        let cols = self.cols;
-        let max_width = cols.saturating_sub(6);
-
+        let max_width = self.cols.saturating_sub(6);
         let changes = &mut self.changes;
-
         let input_selector_size = self.selector_size;
 
         changes.append(&mut vec![

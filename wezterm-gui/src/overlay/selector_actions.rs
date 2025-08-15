@@ -336,9 +336,8 @@ impl<'a> SelectorState<'a> {
 
     fn render(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         let changes = &mut self.changes;
+        let max_width = self.cols.saturating_sub(6);
 
-        let cols = self.cols;
-        let max_width = cols.saturating_sub(6);
         changes.append(&mut vec![
             Change::CursorPosition {
                 x: Position::Absolute(0),
