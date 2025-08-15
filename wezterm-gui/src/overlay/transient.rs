@@ -200,10 +200,8 @@ impl SelectorState<'_> {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Backspace,
                     ..
-                }) => {
-                    if self.filter_term.pop().is_some() {
-                        self.update_filter();
-                    }
+                }) if self.filter_term.pop().is_some() => {
+                    self.update_filter();
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('G' | 'C'),
@@ -233,7 +231,7 @@ impl SelectorState<'_> {
                         break;
                     }
                 }
-                _ => {}
+                _ => continue,
             }
             self.render(term)?;
         }

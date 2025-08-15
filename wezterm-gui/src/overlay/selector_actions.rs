@@ -639,7 +639,7 @@ impl<'a> SelectorState<'a> {
                         continue;
                     }
                 }
-                _ => {}
+                _ => continue,
             }
             self.render(term)?;
         }
