@@ -43,17 +43,18 @@ The default key assignments in the SelectorActions are as follows:
 | Add to filtering string (if in fuzzy finding mode) | Any key not listed below |
 | Remove from filtering string (if in fuzzy finding mode) | <kbd>Backspace</kbd> |
 | Start fuzzy search (if in the default mode) | <kbd>/</kbd> |
-| Move Down      | <kbd>Ctrl</kbd> + <kbd>N</kbd> |
-|                | <kbd>Ctrl</kbd> + <kbd>J</kbd> |
-|                | <kbd>j</kbd> (if not in list of keys for accumulated input)|
-| Move Up        | <kbd>Ctrl</kbd> + <kbd>P</kbd> |
-|                | <kbd>Ctrl</kbd> + <kbd>K</kbd> |
-|                | <kbd>k</kbd> (if not in list of keys for accumulated input)|
+| Set count (if in the default mode) | <kbd>0</kbd> to <kbd>9</kbd> (if not in list of keys for accumulated input) |
+| Move Down (count times if count set, else 1) | <kbd>Ctrl</kbd> + <kbd>N</kbd> |
+|                                              | <kbd>Ctrl</kbd> + <kbd>J</kbd> |
+|                                              | <kbd>j</kbd> (if not in list of keys for accumulated input)|
+| Move Up (count times if count set, else 1) | <kbd>Ctrl</kbd> + <kbd>P</kbd> |
+|                                            | <kbd>Ctrl</kbd> + <kbd>K</kbd> |
+|                                            | <kbd>k</kbd> (if not in list of keys for accumulated input)|
 | Select all filtered entries (if multiple enabled) | <kbd>Ctrl</kbd> + <kbd>A</kbd> |
 | Deselect all filtered entries (if multiple enabled) | <kbd>Ctrl</kbd> + <kbd>D</kbd> |
 | Toggle all filtered entries (if multiple enabled) | <kbd>Ctrl</kbd> + <kbd>T</kbd> |
-| Toggle current entry and move down (if multiple enabled) | <kbd>Tab</kbd> |
-| Toggle current entry and move up (if multiple enabled) | <kbd>Shift</kbd> + <kbd>Tab</kbd> |
+| Toggle current entry and move down (if multiple enabled) (count times if count set, else 1) | <kbd>Tab</kbd> |
+| Toggle current entry and move up (if multiple enabled) (count times if count set, else 1) | <kbd>Shift</kbd> + <kbd>Tab</kbd> |
 | Quit     | <kbd>Ctrl</kbd> + <kbd>G</kbd> |
 |          | <kbd>Ctrl</kbd> + <kbd>C</kbd> |
 |          | <kbd>Escape</kbd> |
