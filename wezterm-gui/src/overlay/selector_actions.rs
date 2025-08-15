@@ -103,6 +103,7 @@ struct SelectorState<'a> {
     colors: SelectorActionsColors,
     section: ArgumentSection<'a>,
     cancel: Option<Box<KeyAssignment>>,
+    repeat: [u8; 2],
 }
 
 impl<'a> SelectorState<'a> {
@@ -177,6 +178,7 @@ impl<'a> SelectorState<'a> {
             colors: SelectorActionsColors::new(),
             section,
             cancel: args.cancel.clone(),
+            repeat: [1, 1],
         }
     }
 
@@ -405,18 +407,26 @@ impl<'a> SelectorState<'a> {
 
     fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
         while let Ok(Some(event)) = term.poll_input(None) {
+            self.repeat[0] = self.repeat[1];
+            if self.repeat[1] != 1 {
+                self.repeat[1] = 1;
+            }
             match event {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('P' | 'K'),
                     modifiers: Modifiers::CTRL,
                 }) => {
-                    self.move_up();
+                    for _ in 0..self.repeat[0] {
+                        self.move_up();
+                    }
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('N' | 'J'),
                     modifiers: Modifiers::CTRL,
                 }) => {
-                    self.move_down();
+                    for _ in 0..self.repeat[0] {
+                        self.move_down();
+                    }
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('/'),
@@ -494,7 +504,9 @@ impl<'a> SelectorState<'a> {
                     .children
                     .contains_key(&'j') =>
                 {
-                    self.move_down();
+                    for _ in 0..self.repeat[0] {
+                        self.move_down();
+                    }
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('k'),
@@ -507,7 +519,9 @@ impl<'a> SelectorState<'a> {
                     .children
                     .contains_key(&'k') =>
                 {
-                    self.move_up();
+                    for _ in 0..self.repeat[0] {
+                        self.move_up();
+                    }
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char('/'),
@@ -521,6 +535,21 @@ impl<'a> SelectorState<'a> {
                     .contains_key(&'/') =>
                 {
                     self.set_search(true);
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char(c),
+                    modifiers: Modifiers::NONE,
+                }) if c.is_ascii_digit()
+                    && !self
+                        .traversed_nodes
+                        .last()
+                        .as_ref()
+                        .unwrap()
+                        .children
+                        .contains_key(&c) =>
+                {
+                    self.repeat[1] = c as u8 - '0' as u8;
+                    continue;
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
@@ -587,13 +616,17 @@ impl<'a> SelectorState<'a> {
                     key: KeyCode::Tab,
                     modifiers: Modifiers::NONE,
                 }) => {
-                    self.toggle_multiple_idx_and_move(true);
+                    for _ in 0..self.repeat[0] {
+                        self.toggle_multiple_idx_and_move(true);
+                    }
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Tab,
                     modifiers: Modifiers::SHIFT,
                 }) => {
-                    self.toggle_multiple_idx_and_move(false);
+                    for _ in 0..self.repeat[0] {
+                        self.toggle_multiple_idx_and_move(false);
+                    }
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Enter,
