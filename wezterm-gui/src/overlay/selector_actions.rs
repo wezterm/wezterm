@@ -282,7 +282,7 @@ impl<'a> SelectorState<'a> {
 
     fn set_filtered_entries_multiple_marker(&mut self, mark: bool) {
         if let Some(multiple_idx) = self.multiple_idx.as_mut() {
-            for entry in &mut self.filtered_entries {
+            for entry in &self.filtered_entries {
                 multiple_idx[entry.idx] = mark;
             }
         }
@@ -290,7 +290,7 @@ impl<'a> SelectorState<'a> {
 
     fn toggle_filtered_entries_multiple_marker(&mut self) {
         if let Some(multiple_idx) = self.multiple_idx.as_mut() {
-            for entry in &mut self.filtered_entries {
+            for entry in &self.filtered_entries {
                 multiple_idx[entry.idx] ^= true;
             }
         }
