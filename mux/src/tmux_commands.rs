@@ -1024,7 +1024,7 @@ impl TmuxCommand for SendKeys {
         for &byte in self.keys.iter() {
             write!(&mut s, "0x{:X} ", byte).expect("unable to write key");
         }
-        format!("send-keys -t %{} {}\r", self.pane, s)
+        format!("send-keys -H -t %{} {}\r", self.pane, s)
     }
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
