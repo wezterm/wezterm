@@ -140,9 +140,6 @@ impl<'a> SelectorState<'a> {
             arguments,
         };
 
-        let root_node = trie_node;
-        let traversed_nodes = vec![trie_node];
-
         let description = args.description.to_string();
 
         let fuzzy_description = args.fuzzy_description.as_ref().map_or_else(
@@ -171,8 +168,8 @@ impl<'a> SelectorState<'a> {
             fuzzy_description,
             window,
             pane,
-            root_node,
-            traversed_nodes,
+            root_node: trie_node,
+            traversed_nodes: vec![trie_node],
             context: args.context.as_ref(),
             changes,
             colors: SelectorActionsColors::new(),

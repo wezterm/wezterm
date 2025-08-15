@@ -659,16 +659,13 @@ impl<'a> TransientState<'a> {
         row_entities: &'a Vec<Option<RenderableEntity<'_>>>,
         trie_node: &'a TrieNode<'_>,
     ) -> Self {
-        let root_node = trie_node;
-        let traversed_nodes = vec![trie_node];
-
         Self {
             window,
             pane,
             description: args.description.clone(),
             colors: TransientColors::new(),
-            root_node,
-            traversed_nodes,
+            root_node: trie_node,
+            traversed_nodes: vec![trie_node],
             changes: vec![Change::CursorVisibility(CursorVisibility::Hidden)],
             row_entities,
             cancel: args.cancel.clone(),
