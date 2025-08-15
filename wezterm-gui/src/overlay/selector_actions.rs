@@ -245,10 +245,20 @@ impl<'a> SelectorState<'a> {
             let init_active_idx = self.active_idx;
             let (start_idx, end_idx) = if down {
                 self.move_down();
-                (init_active_idx, self.active_idx.saturating_sub(1))
+                let end_idx = if self.active_idx != init_active_idx {
+                    self.active_idx.saturating_sub(1)
+                } else {
+                    init_active_idx
+                };
+                (init_active_idx, end_idx)
             } else {
                 self.move_up();
-                (self.active_idx + 1, init_active_idx)
+                let start_idx = if self.active_idx != init_active_idx {
+                    self.active_idx + 1
+                } else {
+                    init_active_idx
+                };
+                (start_idx, init_active_idx)
             };
 
             let multiple_idx = self.multiple_idx.as_mut().unwrap();
