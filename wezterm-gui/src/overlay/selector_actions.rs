@@ -115,13 +115,8 @@ impl<'a> SelectorState<'a> {
         trie_node: &'a TrieNode<'_>,
         choices: &'a Vec<SelectorEntry<'_>>,
     ) -> Self {
-        let context_size = args
-            .context
-            .as_ref()
-            .map_or_else(|| 0, |v| v.entries.len() + 2);
-
+        let context_size = args.context.as_ref().map_or(0, |v| v.entries.len() + 2);
         let positional_args_size = args.section.arguments.len() + 1;
-
         let overhead = context_size + positional_args_size + 3;
 
         let max_items = size.rows.saturating_sub(overhead);
