@@ -140,12 +140,10 @@ impl<'a> SelectorState<'a> {
             arguments,
         };
 
-        let description = args.description.clone();
-
-        let fuzzy_description = args.fuzzy_description.as_ref().map_or_else(
-            || args.description.clone(),
-            |fuzzy_desc| fuzzy_desc.to_string(),
-        );
+        let fuzzy_description = args
+            .fuzzy_description
+            .clone()
+            .unwrap_or_else(|| args.description.clone());
 
         let changes = if args.fuzzy {
             vec![]
@@ -164,7 +162,7 @@ impl<'a> SelectorState<'a> {
             filtered_entries,
             filtering: args.fuzzy,
             filter_term: String::new(),
-            description: description.to_string(),
+            description: args.description.clone(),
             fuzzy_description,
             window,
             pane,
