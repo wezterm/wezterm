@@ -932,10 +932,7 @@ impl From<&Vec<Option<RenderableEntity<'_>>>> for TransientResult {
                         value: cyclic_switch
                             .active_idx
                             .get()
-                            .map_or_else(
-                                || None,
-                                |idx| cyclic_switch.delegate.choices.get(idx).cloned(),
-                            )
+                            .map(|idx| cyclic_switch.delegate.choices.get(idx).cloned())
                             .to_dynamic(),
                     });
                 }
@@ -1024,15 +1021,16 @@ fn create_row_entities<'a>(
                     })
                 }
                 KTransientEntry::TransientCyclicSwitch(cyclic_switch) => {
-                    let active_idx = cyclic_switch.default.as_ref().map_or_else(
-                        || None,
-                        |default| {
+                    let active_idx = cyclic_switch
+                        .default
+                        .as_ref()
+                        .map(|default| {
                             cyclic_switch
                                 .choices
                                 .iter()
                                 .position(|choice| choice == default)
-                        },
-                    );
+                        })
+                        .flatten();
                     RenderableEntity::TransientCyclicSwitch(TransientCyclicSwitch {
                         delegate: &cyclic_switch,
                         active_idx: Cell::new(active_idx),
