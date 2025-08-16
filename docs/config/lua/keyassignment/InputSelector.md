@@ -1,6 +1,7 @@
 ---
 tags:
   - prompt
+  - selector
 ---
 
 # `InputSelector`

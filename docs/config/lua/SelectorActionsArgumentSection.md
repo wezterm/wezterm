@@ -1,6 +1,7 @@
 ---
 tags:
   - transient
+  - selector
 ---
 
 # `SelectorActionsArgumentSection`
