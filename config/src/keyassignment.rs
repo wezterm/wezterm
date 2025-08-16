@@ -534,6 +534,7 @@ fn default_message() -> String {
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct TransientSwitch {
     pub key: String,
+    #[dynamic(default)]
     pub default: bool,
     pub description: String,
     pub flag: String,
