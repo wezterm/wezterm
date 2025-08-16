@@ -9,7 +9,7 @@ tags:
 {{since('nightly')}}
 
 Activates an overlay to display a list of choices for the
-user to select from along with list of [SelectorActionsArgument](../SelectorActionsArgument.md)
+user to select from along with list of [TransientArgument](../TransientArgument.md)
 objects 
 
 `SelectorActions` accepts the following fields:
