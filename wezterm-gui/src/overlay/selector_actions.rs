@@ -214,8 +214,7 @@ impl<'a> SelectorState<'a> {
             x: Position::Absolute(0),
             y: Position::EndRelative(self.selector_size + 2),
         });
-        self.changes
-            .push(Change::Text("─".repeat(self.cols).to_string()));
+        self.changes.push(Change::Text("─".repeat(self.cols)));
 
         Ok(())
     }
