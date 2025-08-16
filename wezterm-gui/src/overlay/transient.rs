@@ -373,11 +373,11 @@ impl<'a> TransientSwitch<'a> {
             changes.append(&mut vec![
                 Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
                 Change::Attribute(AttributeChange::Foreground(colors.flag_fg)),
-                Change::Text(delegate.flag.to_string()),
+                Change::Text(delegate.flag.clone()),
                 Change::AllAttributes(CellAttributes::default()),
             ]);
         } else {
-            changes.push(Change::Text(delegate.flag.to_string()));
+            changes.push(Change::Text(delegate.flag.clone()));
         }
         changes.push(Change::Text(")".to_string()));
 
@@ -472,7 +472,7 @@ impl<'a> TransientCyclicSwitch<'a> {
             changes.append(&mut vec![
                 Change::Attribute(AttributeChange::Intensity(Intensity::Bold)),
                 Change::Attribute(AttributeChange::Foreground(colors.flag_fg)),
-                Change::Text(delegate.flag.to_string()),
+                Change::Text(delegate.flag.clone()),
                 Change::AllAttributes(CellAttributes::default()),
             ]);
             if delegate.choices.first().is_some() {
@@ -496,7 +496,7 @@ impl<'a> TransientCyclicSwitch<'a> {
                 changes.push(Change::Text("]".to_string()));
             }
         } else {
-            changes.push(Change::Text(delegate.flag.to_string()));
+            changes.push(Change::Text(delegate.flag.clone()));
             if delegate.choices.first().is_some() {
                 let mut prefix = " [";
                 for (cur_idx, choice) in delegate.choices.iter().enumerate() {
@@ -555,7 +555,7 @@ impl<'a> TransientSection<'a> {
                 x: Position::Absolute(0),
                 y: Position::Absolute(self.row),
             },
-            Change::Text(self.delegate.header.to_string()),
+            Change::Text(self.delegate.header.clone()),
             Change::AllAttributes(CellAttributes::default()),
         ]);
 
@@ -608,9 +608,9 @@ impl<'a> TransientContextEntry<'a> {
                 y: Position::Absolute(self.row),
             },
             Change::ClearToEndOfLine(ColorAttribute::Default),
-            Change::Text(self.delegate.label.to_string()),
+            Change::Text(self.delegate.label.clone()),
             Change::Text(": ".to_string()),
-            Change::Text(self.delegate.id.to_string()),
+            Change::Text(self.delegate.id.clone()),
         ]);
 
         Ok(())
@@ -680,7 +680,7 @@ impl<'a> TransientState<'a> {
                 x: Position::Absolute(0),
                 y: Position::Absolute(0),
             },
-            Change::Text(self.description.to_string()),
+            Change::Text(self.description.clone()),
             Change::AllAttributes(CellAttributes::default()),
             Change::Text("\r\n".to_string()),
             Change::Text("─".repeat(description_len)),

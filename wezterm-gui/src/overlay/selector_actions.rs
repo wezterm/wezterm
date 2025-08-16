@@ -140,10 +140,10 @@ impl<'a> SelectorState<'a> {
             arguments,
         };
 
-        let description = args.description.to_string();
+        let description = args.description.clone();
 
         let fuzzy_description = args.fuzzy_description.as_ref().map_or_else(
-            || args.description.to_string(),
+            || args.description.clone(),
             |fuzzy_desc| fuzzy_desc.to_string(),
         );
 
@@ -182,7 +182,7 @@ impl<'a> SelectorState<'a> {
     fn render_constants(&mut self) -> termwiz::Result<()> {
         if let Some(context) = self.context.as_ref() {
             self.changes.append(&mut vec![
-                Change::Text(context.header.to_string()),
+                Change::Text(context.header.clone()),
                 Change::AllAttributes(CellAttributes::default()),
             ]);
             for entry in &context.entries {
@@ -203,7 +203,7 @@ impl<'a> SelectorState<'a> {
             self.changes.append(&mut vec![
                 Change::Text("\r\n".to_string()),
                 Change::Attribute(AttributeChange::Foreground(self.colors.action_key_fg)),
-                Change::Text(positional_arg.key.to_string()),
+                Change::Text(positional_arg.key.clone()),
                 Change::Attribute(AttributeChange::Foreground(ColorAttribute::Default)),
                 Change::Text(format!(" {}", positional_arg.description)),
                 Change::AllAttributes(CellAttributes::default()),
