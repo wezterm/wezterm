@@ -1,3 +1,8 @@
+---
+tags:
+  - transient
+---
+
 # `TransientSwitch`
 
 {{since('nightly')}}

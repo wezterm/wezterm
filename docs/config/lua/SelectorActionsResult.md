@@ -1,3 +1,8 @@
+---
+tags:
+  - transient
+---
+
 # `SelectorActionsResult`
 
 {{since('nightly')}}

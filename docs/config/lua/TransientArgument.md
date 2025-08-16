@@ -1,3 +1,8 @@
+---
+tags:
+  - transient
+---
+
 # `TransientArgument`
 
 {{since('nightly')}}
