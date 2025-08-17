@@ -119,9 +119,14 @@ impl CopyOverlay {
         cursor.shape = termwiz::surface::CursorShape::SteadyBlock;
         cursor.visibility = CursorVisibility::Visible;
 
-        let (_domain, _window, tab_id) = mux::Mux::get()
-            .resolve_pane_id(pane.pane_id())
-            .ok_or_else(|| anyhow::anyhow!("no tab contains the current pane"))?;
+        let tab_id = match term_window.get_active_pane_or_overlay_with_tab_id() {
+            Some((active_pane_or_overlay, tab_id))
+                if active_pane_or_overlay.pane_id() == pane.pane_id() =>
+            {
+                tab_id
+            }
+            _ => return Err(anyhow::anyhow!("no tab contains the current pane")),
+        };
 
         let window = term_window
             .window
