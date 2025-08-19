@@ -9,7 +9,7 @@ tags:
 
 When the BEL ascii sequence is sent to a pane, the bell is "rung" in that pane.
 
-You may choose to configure the `visual_bell` option so show a visible representation of the bell event,
+You may choose to configure the `visual_bell` option to show a visible representation of the bell event,
 by having the background color of the pane briefly change color.
 
 There are four fields to the visual_bell config option:
