@@ -12,7 +12,7 @@ When the BEL ascii sequence is sent to a pane, the bell is "rung" in that pane.
 You may choose to configure the `visual_bell` option to show a visible representation of the bell event,
 by having the background color of the pane briefly change color.
 
-There are four fields to the visual_bell config option:
+There are four fields to the `visual_bell` config option:
 
 * `fade_in_duration_ms` - how long it should take for the bell color to fade in, in milliseconds. The default is 0.
 * `fade_out_duration_ms` - how long it should take for the bell color to fade out, in milliseconds. The default is 0.
