@@ -1,8 +1,9 @@
-# update_all function
+# `wezterm.plugin.update_all()`
 
 {{since('20230320-124340-559cb7b0')}}
 
-Attempt to fast-forward or `pull --rebase` each of the repos in the plugin directory.
+Attempt to _fast-forward_ or run `gih pull --rebase` for each of the repos
+in the plugin directory.
 
 !!! Note
 

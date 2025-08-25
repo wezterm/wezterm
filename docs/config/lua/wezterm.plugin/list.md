@@ -1,8 +1,8 @@
-# list function
+# `wezterm.plugin.list()`
 
 {{since('20230320-124340-559cb7b0')}}
 
-Will return a table array listing all the plugin repos in the plugin directory
+Will return a table array listing all the plugin repos in the plugin directory.
 
 Each entry has three fields:
 
