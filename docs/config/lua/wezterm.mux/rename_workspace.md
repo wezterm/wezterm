@@ -5,8 +5,8 @@
 Renames the workspace *old* to *new*.
 
 ```lua
-wezterm.mux.rename_workspace(
-  wezterm.mux.get_active_workspace(),
-  'something different'
-)
+local wezterm = require 'wezterm'
+local active = wezterm.mux.get_active_workspace()
+
+wezterm.mux.rename_workspace(active, 'something different')
 ```
