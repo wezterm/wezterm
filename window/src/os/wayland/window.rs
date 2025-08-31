@@ -921,8 +921,6 @@ impl WaylandWindowInner {
                         ) {
                             self.surface().attach(Some(buffer.wl_buffer()), 0, 0);
                             self.surface().set_buffer_scale(factor as i32);
-                            self.surface().commit();
-
                             self.surface_factor = factor;
                         }
                     }
