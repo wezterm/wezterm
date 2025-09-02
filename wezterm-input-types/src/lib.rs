@@ -2051,6 +2051,7 @@ bitflags! {
         const INTEGRATED_BUTTONS = 16;
         const MACOS_FORCE_SQUARE_CORNERS = 32;
         const MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR = 64;
+        const MACOS_DISABLE_TITLEBAR_DRAG = 128;
     }
 }
 
@@ -2075,6 +2076,9 @@ impl Into<String> for &WindowDecorations {
             s.push("MACOS_FORCE_DISABLE_SHADOW");
         } else if self.contains(WindowDecorations::MACOS_FORCE_SQUARE_CORNERS) {
             s.push("MACOS_FORCE_SQUARE_CORNERS");
+        }
+        if self.contains(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG) {
+            s.push("MACOS_DISABLE_TITLEBAR_DRAG");
         }
         if s.is_empty() {
             "NONE".to_string()
@@ -2104,6 +2108,8 @@ impl TryFrom<String> for WindowDecorations {
                 flags |= Self::MACOS_FORCE_ENABLE_SHADOW;
             } else if ele == "MACOS_FORCE_SQUARE_CORNERS" {
                 flags |= Self::MACOS_FORCE_SQUARE_CORNERS;
+            } else if ele == "MACOS_DISABLE_TITLEBAR_DRAG" {
+                flags |= Self::MACOS_DISABLE_TITLEBAR_DRAG;
             } else if ele == "INTEGRATED_BUTTONS" {
                 flags |= Self::INTEGRATED_BUTTONS;
             } else {

@@ -466,10 +466,9 @@ impl Window {
         };
 
         unsafe {
-            let style_mask = decoration_to_mask(
-                config.window_decorations,
-                config.integrated_title_button_style,
-            );
+        	// Normalize first
+		    let normalized_decorations = resolve_compatible_decorations(config.window_decorations, config.integrated_title_button_style);
+            let style_mask = from_normalized_decoration_to_mask(normalized_decorations);
             let rect = NSRect::new(
                 NSPoint::new(0., 0.),
                 NSSize::new(width as f64, height as f64),
@@ -1355,13 +1354,31 @@ impl WindowInner {
     }
 }
 
-fn effective_decorations(
+/// Resolves conflicting decoration flags to produce a compatible set.
+///
+/// Invariants after this function:
+/// - If INTEGRATED_BUTTONS is present, MACOS_DISABLE_TITLEBAR_DRAG is absent.
+/// - If TITLE is present, MACOS_DISABLE_TITLEBAR_DRAG is absent.
+/// - If integrated_title_button_style != MacOsNative, INTEGRATED_BUTTONS is absent.
+fn resolve_compatible_decorations(
     mut decorations: WindowDecorations,
     integrated_title_button_style: IntegratedTitleButtonStyle,
 ) -> WindowDecorations {
+    // INTEGRATED_BUTTONS requires native buttons
     if integrated_title_button_style != IntegratedTitleButtonStyle::MacOsNative {
         decorations.remove(WindowDecorations::INTEGRATED_BUTTONS);
     }
+
+    // INTEGRATED_BUTTONS needs a draggable title area
+    if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS) {
+        decorations.remove(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG);
+    }
+
+    // Showing a TITLE implies the title area is draggable; drop the "disable dragging" flag
+    if decorations.contains(WindowDecorations::TITLE) {
+        decorations.remove(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG);
+    }
+
     decorations
 }
 
@@ -1370,93 +1387,156 @@ fn apply_decorations_to_window(
     decorations: WindowDecorations,
     integrated_title_button_style: IntegratedTitleButtonStyle,
 ) {
-    let mask = decoration_to_mask(decorations, integrated_title_button_style);
-    let decorations = effective_decorations(decorations, integrated_title_button_style);
+	// Normalize first
+    let normalized_decorations = resolve_compatible_decorations(decorations, integrated_title_button_style);
+    // Compute mask once
+    let mask = from_normalized_decoration_to_mask(normalized_decorations);
+
     unsafe {
         window.setStyleMask_(mask);
 
-        let hidden = if decorations.contains(WindowDecorations::TITLE)
-            || decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
-        {
-            NO
-        } else {
-            YES
-        };
+        let has_titlebar =
+            mask.contains(NSWindowStyleMask::NSTitledWindowMask);
 
-        for titlebar_button in &[
-            appkit::NSWindowButton::NSWindowMiniaturizeButton,
-            appkit::NSWindowButton::NSWindowCloseButton,
-            appkit::NSWindowButton::NSWindowZoomButton,
-        ] {
-            let button = window.standardWindowButton_(*titlebar_button);
-            let _: () = msg_send![button, setHidden: hidden];
-        }
+        if has_titlebar {
+        	// Buttons are visible when TITLE or INTEGRATED_BUTTONS are set
+	        let show_buttons = normalized_decorations.contains(WindowDecorations::TITLE)
+    	        || normalized_decorations.contains(WindowDecorations::INTEGRATED_BUTTONS);
 
-        window.setTitleVisibility_(if decorations.contains(WindowDecorations::TITLE) {
-            appkit::NSWindowTitleVisibility::NSWindowTitleVisible
-        } else {
-            appkit::NSWindowTitleVisibility::NSWindowTitleHidden
-        });
+            // Only access standardWindowButton_ if we actually have a titlebar
+            for titlebar_button in &[
+                appkit::NSWindowButton::NSWindowMiniaturizeButton,
+                appkit::NSWindowButton::NSWindowCloseButton,
+                appkit::NSWindowButton::NSWindowZoomButton,
+            ] {
+                let button = window.standardWindowButton_(*titlebar_button);
+                if button != nil {
+                    let _: () = msg_send![button, setHidden: if show_buttons { NO } else { YES }];
+                }
+            }
 
-        if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
-            || decorations.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR)
-        {
-            window.setTitlebarAppearsTransparent_(YES);
+            window.setTitleVisibility_(if normalized_decorations.contains(WindowDecorations::TITLE) {
+                appkit::NSWindowTitleVisibility::NSWindowTitleVisible
+            } else {
+                appkit::NSWindowTitleVisibility::NSWindowTitleHidden
+            });
+
+            // Make the bar transparent if we integrate buttons or paint our own background
+            let transparent_titlebar =
+                normalized_decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
+                || normalized_decorations.contains(
+                    WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR,
+                )
+                // also keep prior behavior: if we hide buttons, prefer transparent
+                || !show_buttons;
+
+            window.setTitlebarAppearsTransparent_(if transparent_titlebar { YES } else { NO });
         } else {
-            window.setTitlebarAppearsTransparent_(hidden);
+            // No titlebar: don't touch buttons or titlebar appearance/visibility.
+            // (These setters are no-ops without a titlebar, but avoiding them
+            // also avoids calling methods on nil internal views.)
         }
     }
 }
 
-fn decoration_to_mask(
-    decorations: WindowDecorations,
-    integrated_title_button_style: IntegratedTitleButtonStyle,
+fn from_normalized_decoration_to_mask(
+    decorations: WindowDecorations
 ) -> NSWindowStyleMask {
-    let decorations = effective_decorations(decorations, integrated_title_button_style);
+    // Ignore shadow-only toggles at the mask level
     let decorations = decorations.difference(
         WindowDecorations::MACOS_FORCE_DISABLE_SHADOW
             | WindowDecorations::MACOS_FORCE_ENABLE_SHADOW,
     );
-    if decorations == WindowDecorations::TITLE | WindowDecorations::RESIZE {
-        NSWindowStyleMask::NSTitledWindowMask
-            | NSWindowStyleMask::NSClosableWindowMask
-            | NSWindowStyleMask::NSMiniaturizableWindowMask
-            | NSWindowStyleMask::NSResizableWindowMask
-    } else if decorations
-        == WindowDecorations::MACOS_FORCE_SQUARE_CORNERS | WindowDecorations::RESIZE
-    {
-        NSWindowStyleMask::NSClosableWindowMask
-            | NSWindowStyleMask::NSMiniaturizableWindowMask
-            | NSWindowStyleMask::NSResizableWindowMask
-            | NSWindowStyleMask::NSFullSizeContentViewWindowMask
-    } else if decorations == WindowDecorations::RESIZE
-        || decorations == WindowDecorations::INTEGRATED_BUTTONS
-        || decorations == WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE
-    {
-        NSWindowStyleMask::NSTitledWindowMask
-            | NSWindowStyleMask::NSClosableWindowMask
-            | NSWindowStyleMask::NSMiniaturizableWindowMask
-            | NSWindowStyleMask::NSResizableWindowMask
-            | NSWindowStyleMask::NSFullSizeContentViewWindowMask
-    } else if decorations == WindowDecorations::NONE {
-        NSWindowStyleMask::NSTitledWindowMask
-            | NSWindowStyleMask::NSClosableWindowMask
-            | NSWindowStyleMask::NSMiniaturizableWindowMask
-            | NSWindowStyleMask::NSFullSizeContentViewWindowMask
-    } else if decorations == WindowDecorations::TITLE {
-        NSWindowStyleMask::NSTitledWindowMask
-            | NSWindowStyleMask::NSClosableWindowMask
-            | NSWindowStyleMask::NSMiniaturizableWindowMask
-    } else if decorations == WindowDecorations::MACOS_FORCE_SQUARE_CORNERS {
-        NSWindowStyleMask::NSClosableWindowMask
-            | NSWindowStyleMask::NSMiniaturizableWindowMask
-            | NSWindowStyleMask::NSFullSizeContentViewWindowMask
-    } else {
-        NSWindowStyleMask::NSTitledWindowMask
-            | NSWindowStyleMask::NSClosableWindowMask
-            | NSWindowStyleMask::NSMiniaturizableWindowMask
-            | NSWindowStyleMask::NSResizableWindowMask
+
+    // A couple of debug checks to assert the invariants
+    // if someone passes to this function non-normalized flags by mistake later
+    // before invoking resolve_compatible_decorations(...)
+    debug_assert!(
+	    !(decorations.contains(WindowDecorations::TITLE)
+	      && decorations.contains(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG)),
+	    "TITLE cannot coexist with MACOS_DISABLE_TITLEBAR_DRAG (normalize first)"
+	);
+	debug_assert!(
+	    !(decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
+	      && decorations.contains(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG)),
+	    "INTEGRATED_BUTTONS disables MACOS_DISABLE_TITLEBAR_DRAG (normalize first)"
+	);
+
+    // Start from "common-sense defaults" that wezterm historically relies on:
+    // titled (so the window can be key), closable & miniaturizable.
+    //
+    // Note about "Titled-by-default" rationale:
+	//
+	// We intentionally start with NSTitledWindowMask even when the config says
+	// the title should be *invisible*. In WezTerm, the TITLE decoration controls
+	// visibility (UI), not whether the NSWindow is classified as “titled” (behavior).
+	// Keeping the window titled preserves a number of AppKit behaviors we rely on:
+	//
+	// To make the window *look* titleless when TITLE isn’t provided, we don’t drop
+	// NSTitledWindowMask. Instead, later in apply_decorations_to_window we:
+	//   * setTitleVisibility_(Hidden)
+	//   * setTitlebarAppearsTransparent_(YES) when appropriate
+	//   * hide the standard traffic-light buttons
+	//
+	// Net effect: visually borderless, while retaining the benefits of a titled window.
+	let mut mask = NSWindowStyleMask::NSTitledWindowMask
+	    | NSWindowStyleMask::NSClosableWindowMask
+	    | NSWindowStyleMask::NSMiniaturizableWindowMask;
+
+    // RESIZE is opt-in
+    if decorations.contains(WindowDecorations::RESIZE) {
+        mask |= NSWindowStyleMask::NSResizableWindowMask;
     }
+
+    // Hidden title
+    let hidden_title = !decorations.contains(WindowDecorations::TITLE);
+
+    // Integrated buttons
+    let has_integrated_buttons = decorations.contains(WindowDecorations::INTEGRATED_BUTTONS);
+            
+    if hidden_title || has_integrated_buttons {
+    	// When the title is hidden, we apply NSFullSizeContentViewWindowMask which
+    	// effectively allows interaction with the title region for drag operations,
+    	// even if the title region is hidden. However, if the user provides
+    	// MACOS_DISABLE_TITLEBAR_DRAG, we omit the mask, resulting in the
+        // content displayed over the entire window, but disabling interactions with 
+        // the title bar region for drag operations.
+
+        // When INTEGRATED_BUTTONS is provided, it is necessary to apply
+        // NSFullSizeContentViewWindowMask because otherwise the integrated buttons
+        // would appear outside of the content view.
+
+        // Note that MACOS_DISABLE_TITLEBAR_DRAG can only be provided
+        // when TITLE is not provided. Moreover, INTEGRATED_BUTTONS disables 
+        // MACOS_DISABLE_TITLEBAR_DRAG. Both mechanisms are ensured by
+        // resolve_compatible_decorations(...)
+    	let enable_title_area_for_dragging =
+    		!decorations.contains(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG);
+
+    	if enable_title_area_for_dragging {
+    		mask |= NSWindowStyleMask::NSFullSizeContentViewWindowMask;	
+    	}
+    }
+
+    // When only MACOS_FORCE_SQUARE_CORNERS is set (and neither TITLE/RESIZE/INTEGRATED_BUTTONS),
+    // prior code omitted NSTitledWindowMask. Preserve that here by *not* adding it in this case.
+    // (We started with Titled above, so undo it if we match this exact shape.)
+    let only_square_corners =
+        decorations.contains(WindowDecorations::MACOS_FORCE_SQUARE_CORNERS)
+            && !decorations.intersects(
+                WindowDecorations::TITLE
+                    | WindowDecorations::RESIZE
+                    | WindowDecorations::INTEGRATED_BUTTONS,
+            );
+
+    if only_square_corners {
+        // Rebuild mask without NSTitledWindowMask; keep whatever we already added above
+        mask = (mask & !NSWindowStyleMask::NSTitledWindowMask)
+            | NSWindowStyleMask::NSClosableWindowMask
+            | NSWindowStyleMask::NSMiniaturizableWindowMask;
+    }
+
+    mask
 }
 
 unsafe fn get_view_class_name(id: id) -> Option<String> {
