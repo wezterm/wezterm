@@ -203,6 +203,20 @@ pub struct Config {
     )]
     pub scrollback_lines: usize,
 
+    /// If true, convert large wheel deltas into multiple discrete ticks
+    /// when forwarding to TUI apps (tmux, vim, emacs, …).
+    /// Default: false
+    #[dynamic(default = "default_tui_scroll_gesture_support")]
+    pub tui_scroll_gesture_support: bool,
+
+    /// The divisor for precise scrolling devices (like trackpads / Magic Mouse).
+    /// Default: 15.0 (WezTerm’s current hard-coded value).
+    #[dynamic(
+        default = "default_precise_scroll_scale",
+        validate = "validate_precise_scroll_scale"
+    )]
+    pub precise_scroll_scale: f64,
+
     /// If no `prog` is specified on the command line, use this
     /// instead of running the user's shell.
     /// For example, to have `wezterm` always run `top` by default,
@@ -1695,6 +1709,24 @@ fn validate_scrollback_lines(value: &usize) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn default_tui_scroll_gesture_support() -> bool {
+    false
+}
+
+fn default_precise_scroll_scale() -> f64 {
+    15.0
+}
+
+fn validate_precise_scroll_scale(value: &f64) -> Result<(), String> {
+    if *value <= 0.0 {
+        Err(format!(
+            "Illegal value {value} for precise_scroll_scale; it must be positive and greater than zero!"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn default_initial_rows() -> u16 {
