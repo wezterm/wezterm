@@ -1393,50 +1393,52 @@ fn apply_decorations_to_window(
     let mask = from_normalized_decoration_to_mask(normalized_decorations);
 
     unsafe {
-        window.setStyleMask_(mask);
+	    window.setStyleMask_(mask);
 
-        let has_titlebar =
-            mask.contains(NSWindowStyleMask::NSTitledWindowMask);
+	    // Resolve common toggles once
+	    let has_titlebar = mask.contains(NSWindowStyleMask::NSTitledWindowMask);
+	    if has_titlebar {
+	        let hidden_title = !normalized_decorations.contains(WindowDecorations::TITLE);
+	        let show_buttons =
+	            normalized_decorations.contains(WindowDecorations::TITLE) ||
+	            normalized_decorations.contains(WindowDecorations::INTEGRATED_BUTTONS);
 
-        if has_titlebar {
-        	// Buttons are visible when TITLE or INTEGRATED_BUTTONS are set
-	        let show_buttons = normalized_decorations.contains(WindowDecorations::TITLE)
-    	        || normalized_decorations.contains(WindowDecorations::INTEGRATED_BUTTONS);
+	        // Standard traffic-light buttons
+	        for titlebar_button in &[
+	            appkit::NSWindowButton::NSWindowMiniaturizeButton,
+	            appkit::NSWindowButton::NSWindowCloseButton,
+	            appkit::NSWindowButton::NSWindowZoomButton,
+	        ] {
+	            let button = window.standardWindowButton_(*titlebar_button);
+	            if button != nil {
+	                let _: () = msg_send![button, setHidden: if show_buttons { NO } else { YES }];
+	            }
+	        }
 
-            // Only access standardWindowButton_ if we actually have a titlebar
-            for titlebar_button in &[
-                appkit::NSWindowButton::NSWindowMiniaturizeButton,
-                appkit::NSWindowButton::NSWindowCloseButton,
-                appkit::NSWindowButton::NSWindowZoomButton,
-            ] {
-                let button = window.standardWindowButton_(*titlebar_button);
-                if button != nil {
-                    let _: () = msg_send![button, setHidden: if show_buttons { NO } else { YES }];
-                }
-            }
+	        // Title visibility
+	        window.setTitleVisibility_(if hidden_title {
+	            appkit::NSWindowTitleVisibility::NSWindowTitleHidden
+	        } else {
+	            appkit::NSWindowTitleVisibility::NSWindowTitleVisible
+	        });
 
-            window.setTitleVisibility_(if normalized_decorations.contains(WindowDecorations::TITLE) {
-                appkit::NSWindowTitleVisibility::NSWindowTitleVisible
-            } else {
-                appkit::NSWindowTitleVisibility::NSWindowTitleHidden
-            });
+	        // Titlebar transparency:
+	        //  - integrated buttons (we draw into the bar),
+	        //  - matching background color mode,
+	        //  - or when we hide buttons (visual chrome off) => prefer transparent.
+	        let transparent_titlebar =
+	            normalized_decorations.contains(WindowDecorations::INTEGRATED_BUTTONS) ||
+	            normalized_decorations.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR) ||
+	            hidden_title || !show_buttons;
 
-            // Make the bar transparent if we integrate buttons or paint our own background
-            let transparent_titlebar =
-                normalized_decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
-                || normalized_decorations.contains(
-                    WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR,
-                )
-                // also keep prior behavior: if we hide buttons, prefer transparent
-                || !show_buttons;
-
-            window.setTitlebarAppearsTransparent_(if transparent_titlebar { YES } else { NO });
-        } else {
+	        window.setTitlebarAppearsTransparent_(if transparent_titlebar { YES } else { NO });
+	    }
+	    else {
             // No titlebar: don't touch buttons or titlebar appearance/visibility.
             // (These setters are no-ops without a titlebar, but avoiding them
             // also avoids calling methods on nil internal views.)
         }
-    }
+	}
 }
 
 fn from_normalized_decoration_to_mask(
