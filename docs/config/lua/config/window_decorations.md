@@ -49,6 +49,15 @@ The value is a set of flags:
       system titlebar background color to match the terminal background color
       defined by your configuration.  This option doesn't make sense to use
       without also including `TITLE|RESIZE` in the set of decorations.
+    * `MACOS_DISABLE_TITLEBAR_DRAG` — on macOS, **do not reserve the titlebar
+      region for dragging** when the title is hidden. This makes the top row of content
+      (e.g. the first line of the terminal) fully interactive for text selection and clicks.
+      
+      **Compatibility:**
+      - This flag is **ignored** when `TITLE` is present (a visible title implies a draggable area).
+      - This flag is **ignored** when `INTEGRATED_BUTTONS` is present (integrated buttons require a draggable area and a full-size content view).
+      
+      Combine it with `RESIZE` if you still want a resizable window.
 
 On X11 and Wayland, the windowing system may override the window decorations.
 
@@ -76,3 +85,17 @@ desktop environment to resize the window.  Windows users may wish to consider
 
 !!! tip
     You probably always want `RESIZE` to be listed in your `window_decorations`.
+
+!!! tip "macOS: enable system drag-by-gesture"
+    If you choose `MACOS_DISABLE_TITLEBAR_DRAG` to avoid reserving the titlebar area for
+    dragging, you can enable a system gesture to move any window (including wezterm) by holding
+    **Control + Command** and dragging anywhere in the window:
+    ```
+    defaults write -g NSWindowShouldDragOnGesture -bool true
+    ```
+    To revert:
+    ```
+    defaults delete -g NSWindowShouldDragOnGesture
+    ```
+    With this gesture enabled, removing the titlebar drag region lets you select text
+    starting from the very first line without accidental window drags.
