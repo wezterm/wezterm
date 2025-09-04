@@ -1357,8 +1357,6 @@ impl WindowInner {
 /// Resolves conflicting decoration flags to produce a compatible set.
 ///
 /// Invariants after this function:
-/// - If INTEGRATED_BUTTONS is present, MACOS_DISABLE_TITLEBAR_DRAG is absent.
-/// - If TITLE is present, MACOS_DISABLE_TITLEBAR_DRAG is absent.
 /// - If integrated_title_button_style != MacOsNative, INTEGRATED_BUTTONS is absent.
 fn resolve_compatible_decorations(
     mut decorations: WindowDecorations,
@@ -1367,16 +1365,6 @@ fn resolve_compatible_decorations(
     // INTEGRATED_BUTTONS requires native buttons
     if integrated_title_button_style != IntegratedTitleButtonStyle::MacOsNative {
         decorations.remove(WindowDecorations::INTEGRATED_BUTTONS);
-    }
-
-    // INTEGRATED_BUTTONS needs a draggable title area
-    if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS) {
-        decorations.remove(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG);
-    }
-
-    // Showing a TITLE implies the title area is draggable; drop the "disable dragging" flag
-    if decorations.contains(WindowDecorations::TITLE) {
-        decorations.remove(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG);
     }
 
     decorations
@@ -1449,21 +1437,7 @@ fn from_normalized_decoration_to_mask(
         WindowDecorations::MACOS_FORCE_DISABLE_SHADOW
             | WindowDecorations::MACOS_FORCE_ENABLE_SHADOW,
     );
-
-    // A couple of debug checks to assert the invariants
-    // if someone passes to this function non-normalized flags by mistake later
-    // before invoking resolve_compatible_decorations(...)
-    debug_assert!(
-	    !(decorations.contains(WindowDecorations::TITLE)
-	      && decorations.contains(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG)),
-	    "TITLE cannot coexist with MACOS_DISABLE_TITLEBAR_DRAG (normalize first)"
-	);
-	debug_assert!(
-	    !(decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
-	      && decorations.contains(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG)),
-	    "INTEGRATED_BUTTONS disables MACOS_DISABLE_TITLEBAR_DRAG (normalize first)"
-	);
-
+	
     // Start from "common-sense defaults" that wezterm historically relies on:
     // titled (so the window can be key), closable & miniaturizable.
     //
@@ -1498,26 +1472,15 @@ fn from_normalized_decoration_to_mask(
             
     if hidden_title || has_integrated_buttons {
     	// When the title is hidden, we apply NSFullSizeContentViewWindowMask which
-    	// effectively allows interaction with the title region for drag operations,
-    	// even if the title region is hidden. However, if the user provides
-    	// MACOS_DISABLE_TITLEBAR_DRAG, we omit the mask, resulting in the
-        // content displayed over the entire window, but disabling interactions with 
-        // the title bar region for drag operations.
+    	// effectively allows using the title bar region to display the terminal content
+    	// However, interactions with the title region lead to drag operations,
+    	// even if the title region is hidden, and prevent selecting text in the first line.
 
         // When INTEGRATED_BUTTONS is provided, it is necessary to apply
         // NSFullSizeContentViewWindowMask because otherwise the integrated buttons
         // would appear outside of the content view.
 
-        // Note that MACOS_DISABLE_TITLEBAR_DRAG can only be provided
-        // when TITLE is not provided. Moreover, INTEGRATED_BUTTONS disables 
-        // MACOS_DISABLE_TITLEBAR_DRAG. Both mechanisms are ensured by
-        // resolve_compatible_decorations(...)
-    	let enable_title_area_for_dragging =
-    		!decorations.contains(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG);
-
-    	if enable_title_area_for_dragging {
-    		mask |= NSWindowStyleMask::NSFullSizeContentViewWindowMask;	
-    	}
+    	mask |= NSWindowStyleMask::NSFullSizeContentViewWindowMask;	
     }
 
     // When only MACOS_FORCE_SQUARE_CORNERS is set (and neither TITLE/RESIZE/INTEGRATED_BUTTONS),
