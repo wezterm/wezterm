@@ -1354,10 +1354,13 @@ impl WindowInner {
     }
 }
 
-/// Resolves conflicting decoration flags to produce a compatible set.
-///
-/// Invariants after this function:
-/// - If integrated_title_button_style != MacOsNative, INTEGRATED_BUTTONS is absent.
+// Resolves conflicting decoration flags to produce a compatible set.
+//
+// Invariants after this function:
+// - If integrated_title_button_style != MacOsNative, INTEGRATED_BUTTONS is absent.
+// - If INTEGRATED_BUTTONS is present, TITLE is absent
+// - If MACOS_FORCE_SQUARE_CORNERS is present, TITLE & MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR & INTEGRATED_BUTTONS are absent
+// - If TITLE is present, MACOS_DISABLE_TITLEBAR_DRAG is absent.
 fn resolve_compatible_decorations(
     mut decorations: WindowDecorations,
     integrated_title_button_style: IntegratedTitleButtonStyle,
@@ -1368,7 +1371,7 @@ fn resolve_compatible_decorations(
     }
 
     // If we draw integrated buttons, we want the title hidden regardless of TITLE.
-    // (This makes `TITLE | INTEGRATED_BUTTONS` -> "no title", as per the matrix.)
+    // This makes `TITLE | INTEGRATED_BUTTONS` -> "no title", as per the matrix.
     if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS) {
         decorations.remove(WindowDecorations::TITLE);
     }
@@ -1387,6 +1390,10 @@ fn resolve_compatible_decorations(
         // Note: we intentionally DO NOT remove RESIZE (resizing stays additive).
     }
 
+    if decorations.contains(WindowDecorations::TITLE) {
+    	decorations.remove(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG);
+    }
+
     decorations
 }
 
@@ -1397,6 +1404,8 @@ fn resolve_compatible_decorations(
 // RESIZE → titled, resizable, full-size (hidden title).
 // INTEGRATED_BUTTONS → titled, not resizable, full-size.
 // TITLE | INTEGRATED_BUTTONS → not resizable, integrated buttons, untitled (TITLE removed in normalization), full-size.
+// TITLE | MACOS_DISABLE_TITLEBAR_DRAG → → titled, not resizable, no full-size (MACOS_DISABLE_TITLEBAR_DRAG removed in normalization)
+// MACOS_DISABLE_TITLEBAR_DRAG → no dragging by title bar 
 // MACOS_FORCE_SQUARE_CORNERS → untitled, not resizable, full-size.
 // MACOS_FORCE_SQUARE_CORNERS | RESIZE → untitled, resizable, full-size.
 // MACOS_FORCE_SQUARE_CORNERS | TITLE → untitled (TITLE removed in normalization), full-size.
@@ -2426,6 +2435,23 @@ impl WindowView {
     extern "C" fn mouse_down(this: &mut Object, _sel: Sel, nsevent: id) {
         Self::mouse_common(this, nsevent, MouseEventKind::Press(MousePress::Left));
     }
+
+    extern "C" fn mouse_down_can_move_window(this: &Object, _: Sel) -> BOOL {
+	    // Log every time the function is triggered
+	    if let Some(myself) = Self::get_this(this) {
+	        let inner = myself.inner.borrow();
+	        let should_disable_drag = inner
+	            .config
+	            .window_decorations
+	            .contains(WindowDecorations::MACOS_DISABLE_TITLEBAR_DRAG);
+
+	        if should_disable_drag {
+	            return NO;
+	        }
+	    }
+	    YES
+	}
+
     extern "C" fn right_mouse_up(this: &mut Object, _sel: Sel, nsevent: id) {
         Self::mouse_common(this, nsevent, MouseEventKind::Release(MousePress::Right));
     }
@@ -3259,14 +3285,10 @@ impl WindowView {
 
         cls.add_protocol(Protocol::get("CALayerDelegate").expect("CALayerDelegate not defined"));
 
-		extern "C" fn no(_: &Object, _: Sel) -> BOOL {
-		    NO
-		}
-
         unsafe {
         	cls.add_method(
 	            sel!(mouseDownCanMoveWindow),
-	            no as extern "C" fn(&Object, Sel) -> BOOL,
+	            Self::mouse_down_can_move_window as extern "C" fn(&Object, Sel) -> BOOL,
 	        );
 
             cls.add_method(

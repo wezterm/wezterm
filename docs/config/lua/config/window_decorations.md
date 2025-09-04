@@ -44,10 +44,10 @@ The value is a set of flags:
 
     * `MACOS_FORCE_SQUARE_CORNERS` - on macOS, force the window to have square
       rather than rounded corners. It is not compatible with `TITLE` or
-      `INTEGRATED_BUTTONS`
+      `INTEGRATED_BUTTONS`.
     * `MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR` - on macOS, change the
       system titlebar background color to match the terminal background color
-      defined by your configuration.  This option doesn't make sense to use
+      defined by your configuration. This option doesn't make sense to use
       without also including `TITLE|RESIZE` in the set of decorations.
     * `MACOS_DISABLE_TITLEBAR_DRAG` — on macOS, **do not reserve the titlebar
       region for dragging** when the title is hidden. This makes the top row of content
@@ -55,7 +55,10 @@ The value is a set of flags:
       
       **Compatibility:**
       - This flag is **ignored** when `TITLE` is present (a visible title implies a draggable area).
-      - This flag is **ignored** when `INTEGRATED_BUTTONS` is present (integrated buttons require a draggable area and a full-size content view).
+      
+      **Restart required:** changes to `MACOS_DISABLE_TITLEBAR_DRAG` are only applied when a
+      window is created. Updating this flag at runtime will not affect existing
+      windows; **restart WezTerm** (or close and reopen windows) for the change to take effect.
       
       Combine it with `RESIZE` if you still want a resizable window.
 
@@ -63,14 +66,14 @@ On X11 and Wayland, the windowing system may override the window decorations.
 
 When the titlebar is disabled you can drag the window using the tab bar if it
 is enabled, or by holding down `SUPER` and dragging the window (on Windows:
-CTRL-SHIFT and drag the window).  You can map this dragging function for
+CTRL-SHIFT and drag the window). You can map this dragging function for
 yourself via the [StartWindowDrag](../keyassignment/StartWindowDrag.md) key
-assignment.  Note that if the pane is running an application that has enabled
+assignment. Note that if the pane is running an application that has enabled
 mouse reporting you will need to hold down the `SHIFT` modifier in order for
 `StartWindowDrag` to be recognized.
 
 When the resizable border is disabled you will need to use features of your
-desktop environment to resize the window.  Windows users may wish to consider
+desktop environment to resize the window. Windows users may wish to consider
 [AltSnap](https://github.com/RamonUnch/AltSnap).
 
 !!! warning
