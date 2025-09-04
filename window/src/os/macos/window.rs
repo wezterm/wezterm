@@ -503,7 +503,7 @@ impl Window {
                 ime_text: String::new(),
             }));
 
-            let window: id = msg_send![get_window_class(), alloc];
+            let window: id = msg_send![get_wezterm_window_class(), alloc];
             let window = StrongPtr::new(NSWindow::initWithContentRect_styleMask_backing_defer_(
                 window,
                 rect,
@@ -1965,7 +1965,7 @@ fn key_modifiers(flags: NSEventModifierFlags) -> Modifiers {
 /// canBecomeKeyWindow so that our simple fullscreen style can keep
 /// focus once the titlebar has been removed; the default behavior of
 /// NSWindow is to reject focus when it doesn't have a titlebar!
-fn get_window_class() -> &'static Class {
+fn get_wezterm_window_class() -> &'static Class {
     Class::get(WINDOW_CLS_NAME).unwrap_or_else(|| {
         let mut cls = ClassDecl::new(WINDOW_CLS_NAME, class!(NSWindow))
             .expect("Unable to register Window class");
@@ -3245,10 +3245,10 @@ impl WindowView {
     }
 
     fn get_class() -> &'static Class {
-        Class::get(VIEW_CLS_NAME).unwrap_or_else(Self::define_class)
+        Class::get(VIEW_CLS_NAME).unwrap_or_else(Self::get_wezterm_view_class)
     }
 
-    fn define_class() -> &'static Class {
+    fn get_wezterm_view_class() -> &'static Class {
         let mut cls = ClassDecl::new(VIEW_CLS_NAME, class!(NSView))
             .expect("Unable to register WindowView class");
 
@@ -3259,7 +3259,16 @@ impl WindowView {
 
         cls.add_protocol(Protocol::get("CALayerDelegate").expect("CALayerDelegate not defined"));
 
+		extern "C" fn no(_: &Object, _: Sel) -> BOOL {
+		    NO
+		}
+
         unsafe {
+        	cls.add_method(
+	            sel!(mouseDownCanMoveWindow),
+	            no as extern "C" fn(&Object, Sel) -> BOOL,
+	        );
+
             cls.add_method(
                 sel!(dealloc),
                 WindowView::dealloc as extern "C" fn(&mut Object, Sel),
