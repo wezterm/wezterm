@@ -247,53 +247,13 @@ impl WaylandWindow {
         window.set_title(name.to_string());
         let decorations = config.window_decorations;
 
-        // NOTE: `None` means we don't care, not "no decorations"!
+        // Ask for SSD vs CSD
         let decor_mode = if decorations == WindowDecorations::NONE {
             Some(DecorationMode::Server)
         } else {
             Some(DecorationMode::Client)
         };
         window.request_decoration_mode(decor_mode);
-
-        let mut window_frame: Option<AdwaitaFrame<WaylandState>> = if decorations
-            == WindowDecorations::NONE
-        {
-            None
-        } else {
-            let wayland_state = conn.wayland_state.borrow();
-            let frame = AdwaitaFrame::new(
-                &window,
-                &wayland_state.shm,
-                wayland_state.compositor.clone().into(),
-                wayland_state.subcompositor.clone(),
-                qh.clone(),
-                FrameConfig::auto().hide_titlebar(!decorations.contains(WindowDecorations::TITLE)),
-            )
-            .expect("failed to create csd frame");
-            Some(frame)
-        };
-        if let Some(frame) = &mut window_frame {
-            frame.set_resizable(decorations.contains(WindowDecorations::RESIZE));
-            frame.set_hidden(false);
-            frame.resize(
-                NonZeroU32::new(dimensions.pixel_width as u32)
-                    .ok_or_else(|| anyhow!("dimensions {dimensions:?} are invalid"))?,
-                NonZeroU32::new(dimensions.pixel_height as u32)
-                    .ok_or_else(|| anyhow!("dimensions {dimensions:?} are invalid"))?,
-            );
-
-            window.set_min_size(Some((32, 32)));
-            let (x, y) = frame.location();
-            let (full_w, full_h) = frame.add_borders(
-                dimensions.pixel_width as u32,
-                dimensions.pixel_height as u32,
-            );
-            window
-                .xdg_surface()
-                .set_window_geometry(x, y, full_w as i32, full_h as i32);
-        } else {
-            // Do nothing, we don't have a frame
-        }
         window.commit();
 
         let copy_and_paste = CopyAndPaste::create();
@@ -312,7 +272,7 @@ impl WaylandWindow {
             copy_and_paste,
             invalidated: false,
             window: Some(window),
-            window_frame,
+            window_frame: None,
             dimensions,
             resize_increments: None,
             window_state: WindowState::default(),
@@ -358,6 +318,14 @@ impl WaylandWindow {
         };
 
         wait_configure.recv().await?;
+
+        // Apply the initial decoration state from the config (create/destroy CSD frame and switch
+        // to SSD as needed)
+        {
+            let decorations = { inner.borrow().config.window_decorations };
+            let mut inner_mut = inner.borrow_mut();
+            inner_mut.apply_window_decorations(decorations);
+        }
 
         Ok(window_handle)
     }
@@ -1212,6 +1180,115 @@ impl WaylandWindowInner {
         Ok(())
     }
 
+    fn apply_window_decorations(&mut self, decorations: WindowDecorations) {
+        self.request_decoration_mode(decorations);
+
+        let want_csd = decorations != WindowDecorations::NONE;
+        let have_csd = self.window_frame.is_some();
+        match (have_csd, want_csd) {
+            (false, true) => {
+                if let Err(err) = self.create_csd_frame() {
+                    log::error!("create_csd_frame failed: {err:#}");
+                } else {
+                    self.pending_event.lock().unwrap().refresh_decorations = true;
+                }
+            }
+            (true, false) => {
+                self.destroy_csd_frame();
+            }
+            (true, true) => {
+                self.reconfigure_existing_csd();
+            }
+            (false, false) => { /* stay SSD */ }
+        }
+    }
+
+    fn request_decoration_mode(&self, want: WindowDecorations) {
+        if let Some(win) = self.window.as_ref() {
+            let mode = if want == WindowDecorations::NONE {
+                Some(DecorationMode::Server)
+            } else {
+                Some(DecorationMode::Client)
+            };
+            win.request_decoration_mode(mode);
+            win.commit();
+        }
+    }
+
+    fn create_csd_frame(&mut self) -> anyhow::Result<()> {
+        if self.window_frame.is_some() {
+            return Ok(());
+        }
+        let conn = Connection::get().unwrap().wayland();
+        let wayland_state = conn.wayland_state.borrow();
+        let qh = conn.event_queue.borrow().handle();
+
+        let win = self.window.as_ref().ok_or_else(|| anyhow!("no window"))?;
+        let decorations = self.config.window_decorations;
+
+        let mut frame = AdwaitaFrame::new(
+            win,
+            &wayland_state.shm,
+            wayland_state.compositor.clone().into(),
+            wayland_state.subcompositor.clone(),
+            qh.clone(),
+            FrameConfig::auto().hide_titlebar(!decorations.contains(WindowDecorations::TITLE)),
+        )
+        .expect("failed to create csd frame");
+
+        frame.set_resizable(decorations.contains(WindowDecorations::RESIZE));
+        frame.set_hidden(false);
+
+        // Size to current content size
+        let w = NonZeroU32::new(self.pixels_to_surface(self.dimensions.pixel_width as i32) as u32)
+            .unwrap_or(NonZeroU32::MIN);
+        let h = NonZeroU32::new(self.pixels_to_surface(self.dimensions.pixel_height as i32) as u32)
+            .unwrap_or(NonZeroU32::MIN);
+        frame.resize(w, h);
+
+        // Account for borders in xdg_window geometry
+        let (x, y) = frame.location();
+        let (full_w, full_h) = frame.add_borders(w.get(), h.get());
+        win.xdg_surface()
+            .set_window_geometry(x, y, full_w as i32, full_h as i32);
+        win.set_min_size(Some((32, 32)));
+
+        if let Some(title) = self.title.as_ref() {
+            frame.set_title(title.clone());
+        }
+
+        self.window_frame = Some(frame);
+        Ok(())
+    }
+
+    fn destroy_csd_frame(&mut self) {
+        if let Some(mut frame) = self.window_frame.take() {
+            // Hide to stop input/paint
+            frame.set_hidden(true);
+            drop(frame);
+            if let Some(win) = self.window.as_ref() {
+                // Back to SSD
+                win.commit();
+            }
+        }
+        self.pending_event.lock().unwrap().refresh_decorations = true;
+    }
+
+    fn reconfigure_existing_csd(&mut self) {
+        if let Some(frame) = &mut self.window_frame {
+            let decorations = self.config.window_decorations;
+            frame.set_hidden(false);
+            frame.set_resizable(decorations.contains(WindowDecorations::RESIZE));
+            frame.set_config(
+                FrameConfig::auto().hide_titlebar(!decorations.contains(WindowDecorations::TITLE)),
+            );
+            if let Some(title) = self.title.as_ref() {
+                frame.set_title(title.clone());
+            }
+            self.refresh_frame();
+        }
+    }
+
     fn surface(&self) -> &WlSurface {
         self.window
             .as_ref()
@@ -1372,8 +1449,18 @@ impl WaylandWindowInner {
     }
 
     fn config_did_change(&mut self, config: ConfigHandle) {
+        let old_decor = self.config.window_decorations;
         self.config = config;
         self.update_window_background_blur();
+
+        let new_decor = self.config.window_decorations;
+        if new_decor != old_decor {
+            // SSD <-> CSD (or vice versa)
+            self.apply_window_decorations(new_decor);
+        } else if new_decor != WindowDecorations::NONE && self.window_frame.is_some() {
+            // Still CSD, just reconfigure the existing frame
+            self.reconfigure_existing_csd();
+        }
     }
 
     fn update_window_background_blur(&self) {
