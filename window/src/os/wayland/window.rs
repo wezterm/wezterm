@@ -942,12 +942,6 @@ impl WaylandWindowInner {
                             full_w.try_into().unwrap(),
                             full_h.try_into().unwrap(),
                         );
-                } else {
-                    // self.window
-                    //     .as_ref()
-                    //     .unwrap()
-                    //     .xdg_surface()
-                    //     .set_window_geometry(0, 0, w.try_into().unwrap(), h.try_into().unwrap());
                 }
 
                 self.refresh_frame(); // NOW, not after do_paint(), otherwise desync on resize
