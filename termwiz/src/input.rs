@@ -61,6 +61,7 @@ bitflags! {
     }
 }
 
+#[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputEvent {
     Key(KeyEvent),
