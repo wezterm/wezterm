@@ -578,7 +578,7 @@ impl ImageData {
         }
     }
 
-    pub fn data(&self) -> MutexGuard<ImageDataType> {
+    pub fn data(&self) -> MutexGuard<'_, ImageDataType> {
         self.data.lock().unwrap()
     }
 

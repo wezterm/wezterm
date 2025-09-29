@@ -32,7 +32,7 @@ pub struct UnixStream(StreamImpl);
 
 #[cfg(unix)]
 impl AsFd for UnixStream {
-    fn as_fd(&self) -> BorrowedFd {
+    fn as_fd(&self) -> BorrowedFd<'_> {
         self.0.as_fd()
     }
 }

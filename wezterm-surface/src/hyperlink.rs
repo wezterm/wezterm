@@ -139,7 +139,7 @@ impl<'t> Match<'t> {
         c0.start()..c0.end()
     }
 
-    fn highlight(&self) -> Option<fancy_regex::Match> {
+    fn highlight(&self) -> Option<fancy_regex::Match<'_>> {
         self.captures.get(self.rule.highlight)
     }
 

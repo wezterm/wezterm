@@ -425,7 +425,7 @@ impl Pane for LocalPane {
         Ok(())
     }
 
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
         Mux::get().record_input_for_current_identity();
         MutexGuard::map(self.writer.lock(), |writer| {
             let w: &mut dyn std::io::Write = writer;
@@ -1067,7 +1067,10 @@ impl LocalPane {
         None
     }
 
-    fn divine_process_list(&self, policy: CachePolicy) -> Option<MappedMutexGuard<CachedProcInfo>> {
+    fn divine_process_list(
+        &self,
+        policy: CachePolicy,
+    ) -> Option<MappedMutexGuard<'_, CachedProcInfo>> {
         if let ProcessState::Running { pid: Some(pid), .. } = &*self.process.lock() {
             let mut proc_list = self.proc_list.lock();
 

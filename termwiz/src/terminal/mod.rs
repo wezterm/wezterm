@@ -71,7 +71,7 @@ pub trait Terminal {
 
     /// Returns a capability probing helper that will use escape
     /// sequences to attempt to probe information from the terminal
-    fn probe_capabilities(&mut self) -> Option<ProbeCapabilities> {
+    fn probe_capabilities(&mut self) -> Option<ProbeCapabilities<'_>> {
         None
     }
 

@@ -397,7 +397,7 @@ impl TripleVertexBuffer {
         (num_quads * VERTICES_PER_CELL, num_quads * INDICES_PER_CELL)
     }
 
-    pub fn map(&self) -> MappedQuads {
+    pub fn map(&self) -> MappedQuads<'_> {
         let mut bufs = self.current_vb_mut();
 
         // To map the vertex buffer, we need to hold a mutable reference to
@@ -476,7 +476,7 @@ impl RenderLayer {
         }
     }
 
-    pub fn quad_allocator(&self) -> TripleLayerQuadAllocator {
+    pub fn quad_allocator(&self) -> TripleLayerQuadAllocator<'_> {
         // We're creating a self-referential struct here to manage the lifetimes
         // of these related items.  The transmutes are safe because we're only
         // transmuting the lifetimes (not the types), and we're keeping hold
@@ -559,7 +559,7 @@ pub struct BorrowedLayers {
 }
 
 impl TripleLayerQuadAllocatorTrait for BorrowedLayers {
-    fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl> {
+    fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl<'_>> {
         self.layers[layer_num].allocate()
     }
 

@@ -63,14 +63,14 @@ clap = {version="4.0", features=["derive"]}
 clap_complete = "4.4"
 clap_complete_fig = "4.0"
 clipboard-win = "2.2"
-cocoa = "0.26"
+cocoa = "=0.25.0"
 codec = { path = "codec" }
 color-funcs = { path = "lua-api-crates/color-funcs" }
 colorgrad = "0.6"
 config = { path = "config" }
-core-foundation = "0.10"
-core-graphics = "0.24"
-core-text = "21.0"
+core-foundation = "=0.10.0"
+core-graphics = "=0.24.0"
+core-text = "=21.0.0"
 criterion = "0.5"
 crossbeam = "0.8"
 csscolorparser = "0.6"
@@ -261,7 +261,7 @@ wezterm-term = { path = "term" }
 wezterm-toast-notification = { path = "wezterm-toast-notification" }
 wezterm-uds = { path = "wezterm-uds" }
 wezterm-version = { path = "wezterm-version" }
-wgpu = "24.0.1"
+wgpu = "25.0.2"
 whoami = "1.5"
 winapi = "0.3.9"
 window = {path="window"}

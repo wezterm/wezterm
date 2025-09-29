@@ -135,6 +135,8 @@ As features stabilize some brief notes about them will accumulate here.
 * [TabInformation](config/lua/TabInformation.md) now exposes `is_last_active` as
   a boolean property to indicate whether a tab was the prior active tab.
   Thanks to @masriomarm! #6895
+* Indicate support for OSC 52 (clipboard extensions) in Primary DA Response.
+  Thanks to @j4james! #7046
 
 #### Fixed
 * Race condition when very quickly adjusting font scale, and other improvements
@@ -241,6 +243,8 @@ As features stabilize some brief notes about them will accumulate here.
 * Passing a `SpawnCommand` to the `SwitchToWorkspace` assignment would ignore
   `set_environment_variables`. Thanks to @vincentbesanceney! #6850 #6845
 * `libssh` based ssh sessions will now respect `ServerAliveInterval`. #4023
+* macOS: prevent infinite loop in `Services` menu validation. Thanks to @cpick!
+  #7098 #6738 #6833 #6864
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
