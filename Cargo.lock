@@ -849,7 +849,7 @@ dependencies = [
  "serde",
  "smol",
  "termwiz",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "varbincode",
  "wezterm-term",
  "zstd",
@@ -1685,7 +1685,7 @@ name = "filedescriptor"
 version = "0.8.3"
 dependencies = [
  "libc",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "winapi",
 ]
 
@@ -3475,7 +3475,7 @@ dependencies = [
  "termwiz",
  "termwiz-funcs",
  "textwrap",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "url",
  "wezterm-dynamic",
  "wezterm-ssh",
@@ -4408,7 +4408,7 @@ dependencies = [
  "async-task",
  "flume",
  "lazy_static",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -5678,7 +5678,7 @@ dependencies = [
  "siphasher",
  "terminfo",
  "termios",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "ucd-trie",
  "unicode-segmentation",
  "vtparse",
@@ -6598,7 +6598,7 @@ dependencies = [
  "serde",
  "sha2",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "uuid",
 ]
 
@@ -6612,7 +6612,7 @@ dependencies = [
  "ordered-float 4.6.0",
  "serde",
  "sha2",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "wezterm-blob-leases",
  "wezterm-char-props",
  "wezterm-color-types",
@@ -6657,7 +6657,7 @@ dependencies = [
  "smol",
  "termwiz",
  "textwrap",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "umask",
  "url",
  "wezterm-dynamic",
@@ -6767,7 +6767,7 @@ dependencies = [
  "ordered-float 4.6.0",
  "rangeset",
  "termwiz",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "walkdir",
  "wezterm-bidi",
  "wezterm-color-types",
@@ -6837,7 +6837,7 @@ dependencies = [
  "termwiz",
  "termwiz-funcs",
  "textwrap",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "tiny-skia",
  "umask",
  "unicode-normalization",
@@ -6975,7 +6975,7 @@ dependencies = [
  "socket2",
  "ssh2",
  "termwiz",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "wezterm-uds",
  "whoami",
 ]
@@ -7315,7 +7315,7 @@ dependencies = [
  "shared_library",
  "shlex",
  "smithay-client-toolkit",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "tiny-skia",
  "url",
  "wayland-backend",
