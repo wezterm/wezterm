@@ -905,7 +905,9 @@ impl WaylandWindowInner {
                 let mut pixel_width = self.surface_to_pixels(w.try_into().unwrap());
                 let mut pixel_height = self.surface_to_pixels(h.try_into().unwrap());
 
-                if self.window_state.can_resize() {
+                if self.window_state.can_resize()
+                    && !self.window_state.contains(WindowState::FULL_SCREEN)
+                {
                     if let Some(incr) = self.resize_increments {
                         let min_width = incr.base_width + incr.x;
                         let min_height = incr.base_height + incr.y;
@@ -942,6 +944,13 @@ impl WaylandWindowInner {
                             full_w.try_into().unwrap(),
                             full_h.try_into().unwrap(),
                         );
+                } else {
+                    // No frame (SSD)
+                    self.window
+                        .as_mut()
+                        .unwrap()
+                        .xdg_surface()
+                        .set_window_geometry(0, 0, w as i32, h as i32);
                 }
 
                 self.refresh_frame(); // NOW, not after do_paint(), otherwise desync on resize
@@ -1498,9 +1507,14 @@ impl WaylandState {
                     pending.window_configure = Some(configure.clone());
                     pending.had_configure_event = true;
 
+                    let is_fullscreen = configure.state.contains(SCTKWindowState::FULLSCREEN);
+
                     if let (Some(w), Some(h)) = configure.new_size {
-                        // If we have a CSD frame, subtract borders; otherwise use compositor size.
-                        if let Some(frame) = &mut window_inner.borrow_mut().window_frame {
+                        // In fullscreen, use compositor size without subtracting borders
+                        // In windowed mode with CSD, subtract borders
+                        if is_fullscreen {
+                            pending.configure = Some((w.get(), h.get()));
+                        } else if let Some(frame) = &mut window_inner.borrow_mut().window_frame {
                             let (w2, h2) = frame.subtract_borders(w, h);
                             pending.configure = Some((
                                 w2.unwrap_or(NonZeroU32::MIN).get(),
