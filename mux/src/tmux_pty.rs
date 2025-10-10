@@ -1,4 +1,6 @@
-use crate::tmux::{RefTmuxRemotePane, TmuxCmdQueue, TmuxDomainState};
+use crate::tmux::{
+    classify_handshake_sequence, HandshakeMatch, RefTmuxRemotePane, TmuxCmdQueue, TmuxDomainState,
+};
 use crate::tmux_commands::{Resize, SendKeys};
 use crate::DomainId;
 use filedescriptor::FileDescriptor;
@@ -6,6 +8,35 @@ use parking_lot::{Condvar, Mutex};
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty};
 use std::io::{Read, Write};
 use std::sync::Arc;
+
+fn queue_send_keys(
+    domain_id: DomainId,
+    master_pane: &RefTmuxRemotePane,
+    cmd_queue: &Arc<Mutex<TmuxCmdQueue>>,
+    buf: &[u8],
+) -> std::io::Result<usize> {
+    if should_suppress_tmux_handshake(buf) {
+        log::trace!("suppressing tmux control handshake payload: {:?}", buf);
+        return Ok(0);
+    }
+
+    let pane_id = {
+        let pane_lock = master_pane.lock();
+        pane_lock.pane_id
+    };
+    log::trace!("pane:{}, content:{:?}", &pane_id, buf);
+    let mut queue = cmd_queue.lock();
+    queue.push_back(Box::new(SendKeys {
+        pane: pane_id,
+        keys: buf.to_vec(),
+    }));
+    TmuxDomainState::schedule_send_next_command(domain_id);
+    Ok(0)
+}
+
+fn should_suppress_tmux_handshake(buf: &[u8]) -> bool {
+    matches!(classify_handshake_sequence(buf), HandshakeMatch::Complete(len) if len == buf.len())
+}
 
 /// A local tmux pane(tab) based on a tmux pty
 #[derive(Debug)]
@@ -24,18 +55,7 @@ struct TmuxPtyWriter {
 
 impl Write for TmuxPtyWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let pane_id = {
-            let pane_lock = self.master_pane.lock();
-            pane_lock.pane_id
-        };
-        log::trace!("pane:{}, content:{:?}", &pane_id, buf);
-        let mut cmd_queue = self.cmd_queue.lock();
-        cmd_queue.push_back(Box::new(SendKeys {
-            pane: pane_id,
-            keys: buf.to_vec(),
-        }));
-        TmuxDomainState::schedule_send_next_command(self.domain_id);
-        Ok(0)
+        queue_send_keys(self.domain_id, &self.master_pane, &self.cmd_queue, buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -45,18 +65,7 @@ impl Write for TmuxPtyWriter {
 
 impl Write for TmuxPty {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let pane_id = {
-            let pane_lock = self.master_pane.lock();
-            pane_lock.pane_id
-        };
-        log::trace!("pane:{}, content:{:?}", &pane_id, buf);
-        let mut cmd_queue = self.cmd_queue.lock();
-        cmd_queue.push_back(Box::new(SendKeys {
-            pane: pane_id,
-            keys: buf.to_vec(),
-        }));
-        TmuxDomainState::schedule_send_next_command(self.domain_id);
-        Ok(0)
+        queue_send_keys(self.domain_id, &self.master_pane, &self.cmd_queue, buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {

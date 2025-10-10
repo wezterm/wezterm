@@ -170,9 +170,11 @@ impl TmuxDomainState {
         mux.remove_tab(tab.tab_id);
 
         let mut pane_map = self.remote_panes.lock();
+        let mut handshake = self.handshake_buffers.lock();
         let mut backlog = self.backlog.lock();
         for pane_id in &tab.panes {
             pane_map.remove(pane_id);
+            handshake.remove(pane_id);
             backlog.remove(pane_id);
         }
         self.window_order.lock().retain(|id| *id != window_id);
