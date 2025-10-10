@@ -114,6 +114,7 @@ impl TmuxDomainState {
             .and_modify(|tab| {
                 tab.layout_csum = target.layout_csum.clone();
                 tab.title = target.window_name.clone();
+                tab.tab_id = *tab_id;
             })
             .or_insert_with(|| TmuxTab {
                 tab_id: *tab_id,
@@ -161,16 +162,20 @@ impl TmuxDomainState {
 
     pub fn remove_detached_window(&self, window_id: TmuxWindowId) -> anyhow::Result<()> {
         let mut gui_tabs = self.gui_tabs.lock();
-        let tab = match gui_tabs.get(&window_id) {
-            Some(x) => x,
-            None => {
-                anyhow::bail!("Cannot find the window {window_id}")
-            }
+        let Some(tab) = gui_tabs.remove(&window_id) else {
+            anyhow::bail!("Cannot find the window {window_id}")
         };
 
         let mux = Mux::get();
         mux.remove_tab(tab.tab_id);
-        gui_tabs.remove(&window_id);
+
+        let mut pane_map = self.remote_panes.lock();
+        let mut backlog = self.backlog.lock();
+        for pane_id in &tab.panes {
+            pane_map.remove(pane_id);
+            backlog.remove(pane_id);
+        }
+        self.window_order.lock().retain(|id| *id != window_id);
 
         Ok(())
     }
@@ -379,6 +384,8 @@ impl TmuxDomainState {
         };
         let mux = Mux::get();
 
+        let mut new_order = Vec::new();
+
         self.create_gui_window();
         let mut gui_window = self.gui_window.lock();
         let gui_window_id = match gui_window.as_mut() {
@@ -392,6 +399,8 @@ impl TmuxDomainState {
             if window.session_id != current_session {
                 continue;
             }
+
+            new_order.push(window.window_id);
 
             let size = TerminalSize {
                 rows: window.window_height as usize,
@@ -544,6 +553,10 @@ impl TmuxDomainState {
             }
         }
 
+        if !new_order.is_empty() {
+            *self.window_order.lock() = new_order;
+        }
+
         // To keep the active window last one to make it active after set the focus pane
         match windows.iter().find(|w| w.window_active) {
             Some(window) => {
@@ -609,20 +622,18 @@ impl TmuxDomainState {
                     MuxNotification::TabTitleChanged { tab_id, title } => {
                         let rename = {
                             let mut gui_tabs = tmux_domain.inner.gui_tabs.lock();
-                            gui_tabs
-                                .iter_mut()
-                                .find_map(|(window_id, tab)| {
-                                    if tab.tab_id == tab_id {
-                                        if tab.title == title {
-                                            None
-                                        } else {
-                                            tab.title = title.clone();
-                                            Some((*window_id, title.clone()))
-                                        }
-                                    } else {
+                            gui_tabs.iter_mut().find_map(|(window_id, tab)| {
+                                if tab.tab_id == tab_id {
+                                    if tab.title == title {
                                         None
+                                    } else {
+                                        tab.title = title.clone();
+                                        Some((*window_id, title.clone()))
                                     }
-                                })
+                                } else {
+                                    None
+                                }
+                            })
                         };
                         if let Some((window_id, title)) = rename {
                             tmux_domain
@@ -660,6 +671,7 @@ impl TmuxDomainState {
                                 TmuxDomainState::schedule_send_next_command(domain_id);
                             }
                         }
+                        tmux_domain.inner.reconcile_tab_order(window_id);
                     }
                     _ => {}
                 }
@@ -1103,6 +1115,27 @@ impl TmuxCommand for RenameWindow {
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
             let error = format!("rename-window in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SwapWindow {
+    pub src: TmuxWindowId,
+    pub dst: TmuxWindowId,
+}
+
+impl TmuxCommand for SwapWindow {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        format!("swap-window -s %{} -t %{}\n", self.src, self.dst)
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        if result.error {
+            let error = format!("swap-window in domain={domain_id} failed: {result:#?}");
             log::error!("{error}");
             anyhow::bail!("{error}");
         }

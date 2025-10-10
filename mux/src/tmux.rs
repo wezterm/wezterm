@@ -3,7 +3,7 @@ use crate::domain::{alloc_domain_id, Domain, DomainId, DomainState, SplitSource}
 use crate::pane::{Pane, PaneId};
 use crate::tab::{SplitRequest, Tab, TabId};
 use crate::tmux_commands::{
-    ListAllPanes, ListAllWindows, ListCommands, NewWindow, SplitPane, TmuxCommand,
+    ListAllPanes, ListAllWindows, ListCommands, NewWindow, SplitPane, SwapWindow, TmuxCommand,
 };
 use crate::window::WindowId;
 use crate::{Mux, MuxWindowBuilder};
@@ -77,6 +77,7 @@ pub(crate) struct TmuxDomainState {
     pub attach_state: Mutex<AttachState>,
     pending_splits: Mutex<VecDeque<promise::Promise<TmuxPaneId>>>,
     pub backlog: Mutex<HashMap<TmuxPaneId, Vec<u8>>>,
+    pub window_order: Mutex<Vec<TmuxWindowId>>,
 }
 
 pub struct TmuxDomain {
@@ -84,6 +85,92 @@ pub struct TmuxDomain {
 }
 
 impl TmuxDomainState {
+    pub fn reconcile_tab_order(&self, local_window_id: WindowId) {
+        if *self.attach_state.lock() != AttachState::Done {
+            return;
+        }
+
+        let mux = Mux::get();
+
+        let desired: Vec<TmuxWindowId> = {
+            let Some(window) = mux.get_window(local_window_id) else {
+                return;
+            };
+
+            let gui_tabs = self.gui_tabs.lock();
+            if gui_tabs.is_empty() {
+                return;
+            }
+            let mut tab_to_window = HashMap::new();
+            for (window_id, tab) in gui_tabs.iter() {
+                tab_to_window.insert(tab.tab_id, *window_id);
+            }
+            drop(gui_tabs);
+
+            window
+                .iter()
+                .filter_map(|tab| tab_to_window.get(&tab.tab_id()).copied())
+                .collect()
+        };
+
+        if desired.len() <= 1 {
+            *self.window_order.lock() = desired;
+            return;
+        }
+
+        let mut current = {
+            let order = self.window_order.lock();
+            if order.is_empty() {
+                desired.clone()
+            } else {
+                order.clone()
+            }
+        };
+
+        if current == desired {
+            return;
+        }
+
+        if current.len() != desired.len() {
+            *self.window_order.lock() = desired;
+            return;
+        }
+
+        let mut ops = Vec::new();
+        for i in 0..desired.len() {
+            if current[i] == desired[i] {
+                continue;
+            }
+            if let Some(j) = (i + 1..current.len()).find(|&j| current[j] == desired[i]) {
+                let src = current[i];
+                let dst = current[j];
+                ops.push((src, dst));
+                current.swap(i, j);
+            } else {
+                *self.window_order.lock() = desired;
+                return;
+            }
+        }
+
+        if ops.is_empty() {
+            *self.window_order.lock() = desired;
+            return;
+        }
+
+        {
+            let mut queue = self.cmd_queue.lock();
+            for (src, dst) in &ops {
+                queue.push_back(Box::new(SwapWindow {
+                    src: *src,
+                    dst: *dst,
+                }));
+            }
+        }
+
+        TmuxDomainState::schedule_send_next_command(self.domain_id);
+        *self.window_order.lock() = desired;
+    }
+
     pub fn advance(&self, events: Box<Vec<Event>>) {
         for event in events.iter() {
             let state = *self.state.lock();
@@ -216,12 +303,10 @@ impl TmuxDomainState {
                     let title = format!("{}", name);
                     let tab_id = {
                         let mut gui_tabs = self.gui_tabs.lock();
-                        gui_tabs
-                            .get_mut(&window)
-                            .map(|tab| {
-                                tab.title = title.clone();
-                                tab.tab_id
-                            })
+                        gui_tabs.get_mut(&window).map(|tab| {
+                            tab.title = title.clone();
+                            tab.tab_id
+                        })
                     };
                     if let Some(tab_id) = tab_id {
                         let mux = Mux::get();
@@ -360,6 +445,7 @@ impl TmuxDomain {
             attach_state: Mutex::new(AttachState::Init),
             pending_splits: Mutex::new(VecDeque::default()),
             backlog: Mutex::new(HashMap::default()),
+            window_order: Mutex::new(Vec::new()),
         });
 
         Self { inner }
