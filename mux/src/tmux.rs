@@ -59,6 +59,7 @@ pub(crate) struct TmuxTab {
     pub tab_id: TabId, // local tab ID
     pub tmux_window_id: TmuxWindowId,
     pub layout_csum: String,
+    pub title: String,
     pub panes: HashSet<TmuxPaneId>, // tmux panes within tmux window
 }
 
@@ -212,11 +213,20 @@ impl TmuxDomainState {
                     log::info!("tmux window pane changed: {}:{}", window, pane);
                 }
                 Event::WindowRenamed { window, name } => {
-                    let gui_tabs = self.gui_tabs.lock();
-                    if let Some(x) = gui_tabs.get(&window) {
+                    let title = format!("{}", name);
+                    let tab_id = {
+                        let mut gui_tabs = self.gui_tabs.lock();
+                        gui_tabs
+                            .get_mut(&window)
+                            .map(|tab| {
+                                tab.title = title.clone();
+                                tab.tab_id
+                            })
+                    };
+                    if let Some(tab_id) = tab_id {
                         let mux = Mux::get();
-                        if let Some(tab) = mux.get_tab(x.tab_id) {
-                            tab.set_title(&format!("{}", name));
+                        if let Some(tab) = mux.get_tab(tab_id) {
+                            tab.set_title(&title);
                         }
                     }
                 }
