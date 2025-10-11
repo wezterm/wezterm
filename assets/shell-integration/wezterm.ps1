@@ -7,7 +7,6 @@
 #  - OSC 1337 user-vars: WEZTERM_PROG (full command line), WEZTERM_CMD (resolved command),
 #    WEZTERM_USER, WEZTERM_HOST, WEZTERM_IN_TMUX
 #  - Toggleable via functions (enable/disable)
-#  - Works on Windows, macOS, Linux (PowerShell 7+)
 
 # Create a new dynamic module so we don't pollute the global namespace
 # with our functions and variables
@@ -111,8 +110,8 @@ $null = New-Module wezterm {
       }
 
       [pscustomobject]@{
-        Line    = ($tokens ?? "")
-        Command = ($resolved ?? "")
+        Line    = "$tokens"
+        Command = "$resolved"
       }
     }
 
