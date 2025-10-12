@@ -6,6 +6,7 @@ use crate::DomainId;
 use filedescriptor::FileDescriptor;
 use parking_lot::{Condvar, Mutex};
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty};
+use std::borrow::Cow;
 use std::io::{Read, Write};
 use std::sync::Arc;
 
@@ -15,27 +16,56 @@ fn queue_send_keys(
     cmd_queue: &Arc<Mutex<TmuxCmdQueue>>,
     buf: &[u8],
 ) -> std::io::Result<usize> {
-    if should_suppress_tmux_handshake(buf) {
-        log::trace!("suppressing tmux control handshake payload: {:?}", buf);
-        return Ok(0);
-    }
+    let wrapped_handshake = maybe_wrap_tmux_passthrough(buf);
 
     let pane_id = {
         let pane_lock = master_pane.lock();
         pane_lock.pane_id
     };
-    log::trace!("pane:{}, content:{:?}", &pane_id, buf);
+    let content: Cow<[u8]> = match wrapped_handshake {
+        Some(vec) => Cow::Owned(vec),
+        None => Cow::Borrowed(buf),
+    };
+    log::trace!("pane:{}, content:{:?}", &pane_id, content.as_ref());
     let mut queue = cmd_queue.lock();
     queue.push_back(Box::new(SendKeys {
         pane: pane_id,
-        keys: buf.to_vec(),
+        keys: content.into_owned(),
     }));
     TmuxDomainState::schedule_send_next_command(domain_id);
     Ok(0)
 }
 
-fn should_suppress_tmux_handshake(buf: &[u8]) -> bool {
-    matches!(classify_handshake_sequence(buf), HandshakeMatch::Complete(len) if len == buf.len())
+fn maybe_wrap_tmux_passthrough(buf: &[u8]) -> Option<Vec<u8>> {
+    match classify_handshake_sequence(buf) {
+        HandshakeMatch::Complete(len) if len == buf.len() => {
+            if buf.starts_with(b"\x1bPtmux;") {
+                None
+            } else {
+                log::trace!("wrapping tmux control handshake payload: {:?}", buf);
+                Some(wrap_in_tmux_passthrough(buf))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn wrap_in_tmux_passthrough(payload: &[u8]) -> Vec<u8> {
+    const PREFIX: &[u8] = b"\x1bPtmux;";
+    const SUFFIX: &[u8] = b"\x1b\\";
+    let mut wrapped = Vec::with_capacity(PREFIX.len() + payload.len() * 2 + SUFFIX.len());
+    wrapped.extend_from_slice(PREFIX);
+    for &byte in payload {
+        // Each ESC inside the passthrough body must be doubled so tmux forwards a single ESC.
+        if byte == 0x1b {
+            wrapped.push(0x1b);
+            wrapped.push(0x1b);
+        } else {
+            wrapped.push(byte);
+        }
+    }
+    wrapped.extend_from_slice(SUFFIX);
+    wrapped
 }
 
 /// A local tmux pane(tab) based on a tmux pty
