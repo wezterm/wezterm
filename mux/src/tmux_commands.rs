@@ -1125,6 +1125,48 @@ impl TmuxCommand for RenameWindow {
 }
 
 #[derive(Debug)]
+pub(crate) struct SendPaneReport {
+    pub pane: TmuxPaneId,
+    pub report: Vec<u8>,
+}
+
+impl TmuxCommand for SendPaneReport {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        let mut s = String::new();
+        write!(&mut s, "refresh-client -r \"%%{}:", self.pane).unwrap();
+        escape_bytes_for_tmux(&mut s, &self.report);
+        s.push_str("\"\r");
+        s
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        if result.error {
+            let error = format!(
+                "refresh-client -r in domain={domain_id} failed: {result:#?}"
+            );
+            log::error!("{error}");
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+}
+
+fn escape_bytes_for_tmux(dest: &mut String, data: &[u8]) {
+    for &byte in data {
+        match byte {
+            0..=31 => {
+                write!(dest, "\\{:03o}", byte).expect("write! to string cannot fail");
+            }
+            b'\\' | b'"' => {
+                dest.push('\\');
+                dest.push(byte as char);
+            }
+            _ => dest.push(byte as char),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct SwapWindow {
     pub src: TmuxWindowId,
     pub dst: TmuxWindowId,
