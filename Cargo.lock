@@ -5064,7 +5064,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sctk-adwaita"
 version = "0.11.0"
-source = "git+https://github.com/PolyMeilex/sctk-adwaita?branch=master#1f0d2e15d2fd64fba3eb7c717a2df0863dad47db"
+source = "git+https://github.com/PolyMeilex/sctk-adwaita?rev=a0bce432181d11d4b035fe4f64bd6dab6fcb4cbd#a0bce432181d11d4b035fe4f64bd6dab6fcb4cbd"
 dependencies = [
  "ab_glyph",
  "log",
