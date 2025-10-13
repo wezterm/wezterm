@@ -1229,13 +1229,18 @@ impl WaylandWindowInner {
         let win = self.window.as_ref().ok_or_else(|| anyhow!("no window"))?;
         let decorations = self.config.window_decorations;
 
+        let mut frame_config = FrameConfig::auto();
+        frame_config = frame_config.hide_titlebar(!decorations.contains(WindowDecorations::TITLE));
+        // Hide border by default
+        frame_config = frame_config.hide_border(true);
+
         let mut frame = AdwaitaFrame::new(
             win,
             &wayland_state.shm,
             wayland_state.compositor.clone().into(),
             wayland_state.subcompositor.clone(),
             qh.clone(),
-            FrameConfig::auto().hide_titlebar(!decorations.contains(WindowDecorations::TITLE)),
+            frame_config,
         )
         .expect("failed to create csd frame");
 
