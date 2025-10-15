@@ -99,7 +99,7 @@ $null = New-Module wezterm {
             if ($gc.CommandType -eq 'Alias') {
               $resolved = $gc.Definition
             } else {
-              $resolved = $gc.Name
+              $resolved = $gc.Name -replace '(?i)\.exe$', ''
             }
           } else {
             $resolved = $candidate
