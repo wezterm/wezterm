@@ -1286,9 +1286,13 @@ impl WaylandWindowInner {
             let decorations = self.config.window_decorations;
             frame.set_hidden(false);
             frame.set_resizable(decorations.contains(WindowDecorations::RESIZE));
-            frame.set_config(
-                FrameConfig::auto().hide_titlebar(!decorations.contains(WindowDecorations::TITLE)),
-            );
+            let mut frame_config = FrameConfig::auto();
+            frame_config =
+                frame_config.hide_titlebar(!decorations.contains(WindowDecorations::TITLE));
+            // Hide border by default
+            frame_config = frame_config.hide_border(true);
+            frame.set_config(frame_config);
+
             if let Some(title) = self.title.as_ref() {
                 frame.set_title(title.clone());
             }
