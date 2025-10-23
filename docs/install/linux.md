@@ -180,6 +180,16 @@ hide:
     $ sudo dnf copr enable wezfurlong/wezterm-nightly
     $ sudo dnf install wezterm
     ```
+    
+    ## Fedora Atomic Desktops (Silverblue, Kinoite) specific
+
+    To perform initial installation:
+
+    ```console
+    sudo wget https://copr.fedorainfracloud.org/coprs/wezfurlong/wezterm-nightly/repo/fedora-$(rpm -E %fedora)/wezfurlong-wezterm-nightly-fedora-$(rpm -E %fedora).repo -O /etc/yum.repos.d/_copr:copr.fedorainfracloud.org:wezfurlong:wezterm-nightly.repo
+    sudo rpm-ostree install wezterm
+    ```
+
     ## openSUSE specific
 
     To perform initial installation:
