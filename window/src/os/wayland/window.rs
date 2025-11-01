@@ -1354,29 +1354,39 @@ impl WaylandWindowInner {
                 self.emit_focus(mapper, false);
             }
             WlKeyboardEvent::Key { key, state, .. } => {
-                if let Some(event) = mapper.process_wayland_key(
-                    key,
-                    state.into_result().unwrap() == KeyState::Pressed,
-                    &mut self.events,
-                ) {
-                    let rep = Arc::new(Mutex::new(KeyRepeatState {
-                        when: Instant::now(),
-                        event,
-                    }));
-                    self.key_repeat.replace((key, Arc::clone(&rep)));
-                    let window_id = SurfaceUserData::from_wl(
-                        self.window
-                            .as_ref()
-                            .expect("window should exist")
-                            .wl_surface(),
-                    )
-                    .window_id;
-                    KeyRepeatState::schedule(rep, window_id);
-                } else if let Some((cur_key, _)) = self.key_repeat.as_ref() {
-                    // important to check that it's the same key, because the release of the previously
-                    // repeated key can come right after the press of the newly held key
-                    if *cur_key == key {
-                        self.key_repeat.take();
+                let key_state = state.into_result().unwrap();
+                let is_pressed = matches!(key_state, KeyState::Pressed | KeyState::Repeated);
+
+                if let Some(event) = mapper.process_wayland_key(key, is_pressed, &mut self.events) {
+                    if key_state == KeyState::Pressed {
+                        // Keep repeat fallback for compositors that do not support wl_keyboard v10
+                        let rep = Arc::new(Mutex::new(KeyRepeatState {
+                            when: Instant::now(),
+                            event,
+                        }));
+                        self.key_repeat.replace((key, Arc::clone(&rep)));
+                        let window_id = SurfaceUserData::from_wl(
+                            self.window
+                                .as_ref()
+                                .expect("window should exist")
+                                .wl_surface(),
+                        )
+                        .window_id;
+                        KeyRepeatState::schedule(rep, window_id);
+                    } else if key_state == KeyState::Repeated {
+                        // Compositor is sending Repeated events, cancel our custom repeat
+                        // (wl_keyboard v10+)
+                        if let Some((cur_key, _)) = self.key_repeat.as_ref() {
+                            if *cur_key == key {
+                                self.key_repeat.take();
+                            }
+                        }
+                    }
+                } else if key_state == KeyState::Released {
+                    if let Some((cur_key, _)) = self.key_repeat.as_ref() {
+                        if *cur_key == key {
+                            self.key_repeat.take();
+                        }
                     }
                 }
             }
