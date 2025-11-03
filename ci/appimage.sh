@@ -13,6 +13,8 @@ install -Dm644 assets/icon/terminal.png AppDir/usr/share/icons/hicolor/128x128/a
 install -Dm644 assets/wezterm.desktop AppDir/usr/share/applications/org.wezfurlong.wezterm.desktop
 install -Dm644 assets/wezterm.appdata.xml AppDir/usr/share/metainfo/org.wezfurlong.wezterm.appdata.xml
 install -Dm644 assets/wezterm-nautilus.py AppDir/usr/share/nautilus-python/extensions/wezterm-nautilus.py
+install -Dm644 assets/wezterm.gschema.xml AppDir/usr/share/glib-2.0/schemas/wezterm.gschema.xml
+glib-compile-schemas AppDir/usr/share/glib-2.0/schemas/wezterm.gschema.xml
 
 [ -x /tmp/linuxdeploy ] || ( curl -L 'https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage' -o /tmp/linuxdeploy && chmod +x /tmp/linuxdeploy )
 

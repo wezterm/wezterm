@@ -69,6 +69,7 @@
           ++ lib.optionals stdenv.isLinux [
             libxkbcommon
             wayland
+            glib
 
             xorg.libX11
             xorg.libxcb
@@ -169,6 +170,8 @@
               --zsh assets/shell-completion/zsh
 
             install -Dm644 assets/wezterm-nautilus.py -t $out/share/nautilus-python/extensions
+            install -Dm644 assets/wezterm.gschema.xml -t $out/share/glib-2.0/schemas
+            glib-compile-schemas $out/share/glib-2.0/schemas
           '';
 
           passthru = {

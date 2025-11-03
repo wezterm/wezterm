@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="wezterm">
+    <schema id="org.wezfurlong.wezterm" path="/org/wezfurlong/wezterm/">
+        <key name="new-tab" type="b">
+            <default>false</default>
+            <summary>Open wezterm in new tab</summary>
+            <description></description>
+        </key>
+    </schema>
+</schemalist>

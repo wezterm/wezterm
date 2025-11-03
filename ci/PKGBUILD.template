@@ -61,4 +61,6 @@ package() {
                  "${pkgdir}/usr/share/applications/org.wezfurlong.wezterm.desktop"
   install -Dm644 squashfs-root/usr/share/nautilus-python/extensions/wezterm-nautilus.py \
                  "${pkgdir}/usr/share/nautilus-python/extensions/wezterm-nautilus.py"
+  install -Dm644 squashfs-root/wezterm.gschema.xml \
+                 "${pkgdir}/usr/share/glib-2.0/schemas"
 }

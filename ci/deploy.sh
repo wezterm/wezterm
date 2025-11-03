@@ -228,6 +228,7 @@ install -Dm644 assets/icon/terminal.png %{buildroot}/usr/share/icons/hicolor/128
 install -Dm644 assets/wezterm.desktop %{buildroot}/usr/share/applications/org.wezfurlong.wezterm.desktop
 install -Dm644 assets/wezterm.appdata.xml %{buildroot}/usr/share/metainfo/org.wezfurlong.wezterm.appdata.xml
 install -Dm644 assets/wezterm-nautilus.py %{buildroot}/usr/share/nautilus-python/extensions/wezterm-nautilus.py
+install -Dm644 assets/wezterm.gschema.xml %{buildroot}/usr/share/glib-2.0/schemas/wezterm.gschema.xml
 
 %files
 /usr/bin/open-wezterm-here
@@ -241,6 +242,7 @@ install -Dm644 assets/wezterm-nautilus.py %{buildroot}/usr/share/nautilus-python
 /usr/share/applications/org.wezfurlong.wezterm.desktop
 /usr/share/metainfo/org.wezfurlong.wezterm.appdata.xml
 /usr/share/nautilus-python/extensions/wezterm-nautilus.py*
+/usr/share/glib-2.0/schemas/wezterm.gschema.xml
 /etc/profile.d/*
 EOF
 
@@ -286,6 +288,7 @@ EOF
 set -e
 if [ "\$1" = "configure" ] ; then
         update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/open-wezterm-here 20
+        glib-compile-schemas /share/glib-2.0/schemas
 fi
 EOF
 
@@ -294,6 +297,14 @@ EOF
 set -e
 if [ "\$1" = "remove" ]; then
 	update-alternatives --remove x-terminal-emulator /usr/bin/open-wezterm-here
+fi
+EOF
+
+        cat > pkg/debian/postrm <<EOF
+#!/bin/sh
+set -e
+if [ "\$1" = "remove" ] || [ "\$1" = "purge" ]; then
+        glib-compile-schemas /share/glib-2.0/schemas
 fi
 EOF
 
@@ -317,6 +328,7 @@ EOF
         install -Dm644 assets/wezterm.desktop pkg/debian/usr/share/applications/org.wezfurlong.wezterm.desktop
         install -Dm644 assets/wezterm.appdata.xml pkg/debian/usr/share/metainfo/org.wezfurlong.wezterm.appdata.xml
         install -Dm644 assets/wezterm-nautilus.py pkg/debian/usr/share/nautilus-python/extensions/wezterm-nautilus.py
+        install -Dm644 assets/wezterm.gschema.xml pkg/usr/share/glib-2.0/schemas/wezterm.gschema.xml
         install -Dm644 assets/shell-completion/bash pkg/debian/usr/share/bash-completion/completions/wezterm
         install -Dm644 assets/shell-completion/zsh pkg/debian/usr/share/zsh/functions/Completion/Unix/_wezterm
         install -Dm644 assets/shell-integration/* -t pkg/debian/etc/profile.d
