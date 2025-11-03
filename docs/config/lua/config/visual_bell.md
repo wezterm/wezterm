@@ -58,4 +58,4 @@ config.visual_bell = {
 }
 ```
 
-See also [audible_bell](audible_bell.md) and [bell event](../window-events/bell.md).
+See also [audible_bell](audible_bell.md), [bell_urgency_hint](bell_urgency_hint.md), and [bell event](../window-events/bell.md).
