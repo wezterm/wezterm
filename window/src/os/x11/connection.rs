@@ -86,6 +86,7 @@ pub struct XConnection {
     pub atom_state_maximized_horz: Atom,
     pub atom_state_hidden: Atom,
     pub atom_state_fullscreen: Atom,
+    pub atom_state_demands_attention: Atom,
     pub atom_net_wm_state: Atom,
     pub atom_motif_wm_hints: Atom,
     pub atom_net_wm_pid: Atom,
@@ -704,6 +705,8 @@ impl XConnection {
         let atom_state_maximized_horz = Self::intern_atom(&conn, "_NET_WM_STATE_MAXIMIZED_HORZ")?;
         let atom_state_hidden = Self::intern_atom(&conn, "_NET_WM_STATE_HIDDEN")?;
         let atom_state_fullscreen = Self::intern_atom(&conn, "_NET_WM_STATE_FULLSCREEN")?;
+        let atom_state_demands_attention =
+            Self::intern_atom(&conn, "_NET_WM_STATE_DEMANDS_ATTENTION")?;
         let atom_net_wm_state = Self::intern_atom(&conn, "_NET_WM_STATE")?;
         let atom_motif_wm_hints = Self::intern_atom(&conn, "_MOTIF_WM_HINTS")?;
         let atom_net_wm_pid = Self::intern_atom(&conn, "_NET_WM_PID")?;
@@ -841,6 +844,7 @@ impl XConnection {
             atom_state_maximized_horz,
             atom_state_hidden,
             atom_state_fullscreen,
+            atom_state_demands_attention,
             atom_net_wm_state,
             atom_motif_wm_hints,
             atom_net_wm_pid,

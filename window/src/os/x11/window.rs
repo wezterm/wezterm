@@ -1266,6 +1266,14 @@ impl XWindowInner {
         )
     }
 
+    fn set_attention_hint(&mut self, enable: bool) -> anyhow::Result<()> {
+        self.set_wm_state(
+            NetWmStateAction::with_bool(enable),
+            self.conn().atom_state_demands_attention,
+            None,
+        )
+    }
+
     #[allow(clippy::identity_op)]
     fn adjust_decorations(&mut self, decorations: WindowDecorations) -> anyhow::Result<()> {
         // Set the motif hints to disable decorations.
@@ -2017,6 +2025,13 @@ impl WindowOps for XWindow {
     fn focus(&self) {
         XConnection::with_window_inner(self.0, |inner| {
             inner.focus();
+            Ok(())
+        });
+    }
+
+    fn set_attention_hint(&self, enabled: bool) {
+        XConnection::with_window_inner(self.0, move |inner| {
+            let _ = inner.set_attention_hint(enabled);
             Ok(())
         });
     }
