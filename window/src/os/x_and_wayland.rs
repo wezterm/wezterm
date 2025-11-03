@@ -274,6 +274,14 @@ impl WindowOps for Window {
         }
     }
 
+    fn set_attention_hint(&self, enabled: bool) {
+        match self {
+            Self::X11(x) => x.set_attention_hint(enabled),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.set_attention_hint(enabled),
+        }
+    }
+
     fn toggle_fullscreen(&self) {
         match self {
             Self::X11(x) => x.toggle_fullscreen(),
