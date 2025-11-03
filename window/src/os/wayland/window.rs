@@ -503,6 +503,13 @@ impl WindowOps for WaylandWindow {
         WaylandConnection::with_window_inner(self.0, move |inner| Ok(inner.restore()));
     }
 
+    fn set_attention_hint(&self, enabled: bool) {
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.set_attention_hint(enabled);
+            Ok(())
+        });
+    }
+
     fn config_did_change(&self, config: &ConfigHandle) {
         let config = config.clone();
         WaylandConnection::with_window_inner(self.0, move |inner| {
@@ -1261,6 +1268,43 @@ impl WaylandWindowInner {
         if let Some(window) = self.window.as_mut() {
             window.unset_maximized();
         }
+    }
+
+    fn set_attention_hint(&mut self, enabled: bool) {
+        log::debug!("set_attention_hint: enabled={}", enabled);
+
+        if !enabled {
+            // Wayland doesn't provide a way to clear urgency;
+            // the compositor clears it automatically when user focuses the window
+            return;
+        }
+
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let wayland_state = conn.wayland_state.borrow();
+
+        // Check if xdg-activation protocol is available
+        let activation = match wayland_state.xdg_activation.as_ref() {
+            Some(activation) => activation,
+            None => {
+                log::warn!("xdg-activation protocol not available, urgency not supported");
+                return;
+            }
+        };
+
+        let qh = conn.event_queue.borrow().handle();
+        use smithay_client_toolkit::activation::RequestData;
+
+        // Request activation token
+        activation.request_token(
+            &qh,
+            RequestData {
+                app_id: Some(String::from("org.wezfurlong.wezterm")),
+                seat_and_serial: None, // NO serial for self-urgency!
+                surface: Some(self.surface().clone()),
+            },
+        );
+
+        log::debug!("Requested activation token for urgency");
     }
 
     fn config_did_change(&mut self, config: ConfigHandle) {
