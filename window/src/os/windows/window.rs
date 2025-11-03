@@ -732,6 +732,28 @@ impl WindowInner {
             }
         }
     }
+
+    fn set_attention_hint(&self, enabled: bool) {
+        let hwnd = self.hwnd.0;
+
+        unsafe {
+            let (flags, count) = if enabled {
+                (FLASHW_ALL | FLASHW_TIMERNOFG, 0)
+            } else {
+                (FLASHW_STOP, 0)
+            };
+
+            let mut flash_info = FLASHWINFO {
+                cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
+                hwnd,
+                dwFlags: flags,
+                uCount: count,
+                dwTimeout: 0,
+            };
+
+            FlashWindowEx(&mut flash_info);
+        }
+    }
 }
 
 impl HasDisplayHandle for Window {
@@ -852,6 +874,13 @@ impl WindowOps for Window {
 
     fn restore(&self) {
         schedule_show_window(self.0, ShowWindowCommand::Normal);
+    }
+
+    fn set_attention_hint(&self, enabled: bool) {
+        Connection::with_window_inner(self.0, move |inner| {
+            inner.set_attention_hint(enabled);
+            Ok(())
+        });
     }
 
     fn set_cursor(&self, cursor: Option<MouseCursor>) {
