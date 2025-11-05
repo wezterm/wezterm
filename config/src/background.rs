@@ -1,4 +1,6 @@
-use crate::{default_one_point_oh, Config, Dimension, HsbTransform, PixelUnit, RgbaColor};
+use crate::{
+    default_one_point_oh, default_zero_f32, Config, Dimension, HsbTransform, PixelUnit, RgbaColor,
+};
 use luahelper::impl_lua_conversion_dynamic;
 use termwiz::color::SrgbaTuple;
 use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, Value};
@@ -10,6 +12,9 @@ pub struct ImageFileSource {
     /// Adjust the animation rate for animated images
     #[dynamic(default = "default_one_point_oh")]
     pub speed: f32,
+
+    #[dynamic(default = "default_zero_f32")]
+    pub blur: f32,
 }
 
 #[derive(Debug, Clone, ToDynamic)]
@@ -35,6 +40,7 @@ impl FromDynamic for ImageFileSourceWrap {
                 inner: ImageFileSource {
                     path: path.to_string(),
                     speed: 1.0,
+                    blur: 0.0,
                 },
             }),
             _ => {
@@ -107,6 +113,7 @@ impl BackgroundLayer {
                 inner: ImageFileSource {
                     path: path.to_string_lossy().to_string(),
                     speed: 1.0,
+                    blur: 0.0,
                 },
             })
         } else {

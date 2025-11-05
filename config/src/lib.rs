@@ -832,3 +832,7 @@ fn default_one_point_oh() -> f32 {
 fn default_true() -> bool {
     true
 }
+
+fn default_zero_f32() -> f32 {
+    0.0
+}
