@@ -15,6 +15,7 @@ use crate::keyassignment::{
 };
 use crate::keys::{Key, LeaderKey, Mouse};
 use crate::lua::make_lua_context;
+use crate::quic::{QuicDomainClient, QuicDomainServer};
 use crate::ssh::{SshBackend, SshDomain};
 use crate::tls::{TlsDomainClient, TlsDomainServer};
 use crate::units::Dimension;
@@ -376,6 +377,15 @@ pub struct Config {
     /// The set of tls domains that we can connect to as a client
     #[dynamic(default)]
     pub tls_clients: Vec<TlsDomainClient>,
+
+    /// When running in server mode, defines configuration for
+    /// each of the QUIC endpoints that we'll listen for connections
+    #[dynamic(default)]
+    pub quic_servers: Vec<QuicDomainServer>,
+
+    /// The set of QUIC domains that we can connect to as a client
+    #[dynamic(default)]
+    pub quic_clients: Vec<QuicDomainClient>,
 
     /// Constrains the rate at which the multiplexer client will
     /// speculatively fetch line data.
@@ -1252,6 +1262,9 @@ impl Config {
         }
         for d in &self.tls_clients {
             check_domain(&d.name, "tls domain")?;
+        }
+        for d in &self.quic_clients {
+            check_domain(&d.name, "quic domain")?;
         }
         Ok(())
     }
