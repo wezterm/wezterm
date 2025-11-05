@@ -24,19 +24,19 @@ hide:
     First, [setup flatpak on your system](https://flatpak.org/setup/), then:
 
     ```console
-    $ flatpak install flathub org.wezfurlong.wezterm
+    flatpak install flathub org.wezfurlong.wezterm
     ```
 
     and then run:
 
     ```console
-    $ flatpak run org.wezfurlong.wezterm
+    flatpak run org.wezfurlong.wezterm
     ```
 
     You may wish to define an alias for convenience:
 
     ```console
-    $ alias wezterm='flatpak run org.wezfurlong.wezterm'
+    alias wezterm='flatpak run org.wezfurlong.wezterm'
     ```
 
     !!! note
@@ -72,23 +72,23 @@ hide:
     [Nightly AppImage :material-tray-arrow-down:]({{ ubuntu20_AppImage_nightly }}){ .md-button }
 
     ```console
-    $ curl -LO {{ ubuntu20_AppImage_stable }}
-    $ chmod +x {{ ubuntu20_AppImage_stable_asset }}
+    curl -LO {{ ubuntu20_AppImage_stable }}
+    chmod +x {{ ubuntu20_AppImage_stable_asset }}
     ```
 
     You may then execute the appimage directly to launch wezterm, with no
     specific installation steps required:
 
     ```console
-    $ ./{{ ubuntu20_AppImage_stable_asset }}
+    ./{{ ubuntu20_AppImage_stable_asset }}
     ```
 
     That said, you may wish to make it a bit more convenient:
 
     ```console
-    $ mkdir ~/bin
-    $ mv ./{{ ubuntu20_AppImage_stable_asset }} ~/bin/wezterm
-    $ ~/bin/wezterm
+    mkdir ~/bin
+    mv ./{{ ubuntu20_AppImage_stable_asset }} ~/bin/wezterm
+    ~/bin/wezterm
     ```
 
     * Configuration instructions can be [found here](../config/files.md)
@@ -100,27 +100,27 @@ hide:
     steps:
 
     ```console
-    $ curl -fsSL https://apt.fury.io/wez/gpg.key | sudo gpg --yes --dearmor -o /usr/share/keyrings/wezterm-fury.gpg
-    $ echo 'deb [signed-by=/usr/share/keyrings/wezterm-fury.gpg] https://apt.fury.io/wez/ * *' | sudo tee /etc/apt/sources.list.d/wezterm.list
-    $ sudo chmod 644 /usr/share/keyrings/wezterm-fury.gpg
+    curl -fsSL https://apt.fury.io/wez/gpg.key | sudo gpg --yes --dearmor -o /usr/share/keyrings/wezterm-fury.gpg
+    echo 'deb [signed-by=/usr/share/keyrings/wezterm-fury.gpg] https://apt.fury.io/wez/ * *' | sudo tee /etc/apt/sources.list.d/wezterm.list
+    sudo chmod 644 /usr/share/keyrings/wezterm-fury.gpg
     ```
 
     Update your dependencies:
 
     ```console
-    $ sudo apt update
+    sudo apt update
     ```
 
     Now you can install wezterm:
 
     ```console
-    $ sudo apt install wezterm
+    sudo apt install wezterm
     ```
 
     or to install a nightly build:
 
     ```console
-    $ sudo apt install wezterm-nightly
+    sudo apt install wezterm-nightly
     ```
 
     !!! note
@@ -148,8 +148,8 @@ hide:
     shows how to install the Ubuntu 22 package:
 
     ```console
-    $ curl -LO {{ ubuntu22_deb_stable }}
-    $ sudo apt install -y ./{{ ubuntu22_deb_stable_asset }}
+    curl -LO {{ ubuntu22_deb_stable }}
+    sudo apt install -y ./{{ ubuntu22_deb_stable_asset }}
     ```
 
     * The package installs `/usr/bin/wezterm` and `/usr/share/applications/org.wezfurlong.wezterm.desktop`
@@ -177,8 +177,8 @@ hide:
     To perform initial installation:
 
     ```console
-    $ sudo dnf copr enable wezfurlong/wezterm-nightly
-    $ sudo dnf install wezterm
+    sudo dnf copr enable wezfurlong/wezterm-nightly
+    sudo dnf install wezterm
     ```
     
     ## Fedora Atomic Desktops (Silverblue, Kinoite) specific
@@ -186,8 +186,8 @@ hide:
     To perform initial installation:
 
     ```console
-    $ sudo wget https://copr.fedorainfracloud.org/coprs/wezfurlong/wezterm-nightly/repo/fedora-$(rpm -E %fedora)/wezfurlong-wezterm-nightly-fedora-$(rpm -E %fedora).repo -O /etc/yum.repos.d/_copr:copr.fedorainfracloud.org:wezfurlong:wezterm-nightly.repo
-    $ sudo rpm-ostree install wezterm
+    sudo wget https://copr.fedorainfracloud.org/coprs/wezfurlong/wezterm-nightly/repo/fedora-$(rpm -E %fedora)/wezfurlong-wezterm-nightly-fedora-$(rpm -E %fedora).repo -O /etc/yum.repos.d/_copr:copr.fedorainfracloud.org:wezfurlong:wezterm-nightly.repo
+    sudo rpm-ostree install wezterm
     ```
 
     ## openSUSE specific
@@ -195,20 +195,20 @@ hide:
     To perform initial installation:
 
     ```console
-    $ sudo zypper in dnf
-    $ sudo dnf copr enable wezfurlong/wezterm-nightly <repository>
+    sudo zypper in dnf
+    sudo dnf copr enable wezfurlong/wezterm-nightly <repository>
     ```
     where `<repository>` is one of the following, depending on the flavor and architecture:
     `opensuse-tumbleweed-x86_64`, `opensuse-tumbleweed-aarch64`, `opensuse-leap-15.5-x86_64`, `opensuse-leap-15.5-aarch64`.
 
     ```console
-    $ sudo dnf install wezterm
+    sudo dnf install wezterm
     ```
 
     ## Update
 
     ```console
-    $ sudo dnf update wezterm
+    sudo dnf update wezterm
     ```
 
 === "Fedora/RPM"
@@ -236,7 +236,7 @@ hide:
     shows how to install the Fedora 39 package:
 
     ```console
-    $ sudo dnf install -y {{ fedora39_rpm_stable }}
+    sudo dnf install -y {{ fedora39_rpm_stable }}
     ```
 
 === "openSUSE"
@@ -251,7 +251,7 @@ hide:
     The stable version of WezTerm is available in the official repositories.
 
     ```console
-    $ zypper install wezterm
+    zypper install wezterm
     ```
 
     ## openSUSE Leap
@@ -280,22 +280,22 @@ hide:
     can install wezterm from our tap:
 
     ```console
-    $ brew tap wezterm/wezterm-linuxbrew
-    $ brew install wezterm
+    brew tap wezterm/wezterm-linuxbrew
+    brew install wezterm
     ```
 
     If you'd like to use a nightly build you can perform a head install:
 
     ```console
-    $ brew install --HEAD wezterm
+    brew install --HEAD wezterm
     ```
 
     to upgrade to a newer nightly, it is simplest to remove then
     install:
 
     ```console
-    $ brew rm wezterm
-    $ brew install --HEAD wezterm
+    brew rm wezterm
+    brew install --HEAD wezterm
     ```
 === "Nix/NixOS"
 
