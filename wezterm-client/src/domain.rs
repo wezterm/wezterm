@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use codec::{ListPanesResponse, SpawnV2, SplitPane};
 use config::keyassignment::SpawnTabDomain;
-use config::{SshDomain, TlsDomainClient, UnixDomain};
+use config::{QuicDomainClient, SshDomain, TlsDomainClient, UnixDomain};
 use mux::connui::{ConnectionUI, ConnectionUIParams};
 use mux::domain::{alloc_domain_id, Domain, DomainId, DomainState, SplitSource};
 use mux::pane::{Pane, PaneId};
@@ -180,6 +180,7 @@ pub enum ClientDomainConfig {
     Unix(UnixDomain),
     Tls(TlsDomainClient),
     Ssh(SshDomain),
+    Quic(QuicDomainClient),
 }
 
 impl ClientDomainConfig {
@@ -188,6 +189,7 @@ impl ClientDomainConfig {
             ClientDomainConfig::Unix(unix) => &unix.name,
             ClientDomainConfig::Tls(tls) => &tls.name,
             ClientDomainConfig::Ssh(ssh) => &ssh.name,
+            ClientDomainConfig::Quic(quic) => &quic.name,
         }
     }
 
@@ -196,6 +198,7 @@ impl ClientDomainConfig {
             ClientDomainConfig::Unix(unix) => unix.local_echo_threshold_ms,
             ClientDomainConfig::Tls(tls) => tls.local_echo_threshold_ms,
             ClientDomainConfig::Ssh(ssh) => ssh.local_echo_threshold_ms,
+            ClientDomainConfig::Quic(quic) => quic.local_echo_threshold_ms,
         }
     }
 
@@ -204,6 +207,7 @@ impl ClientDomainConfig {
             ClientDomainConfig::Unix(unix) => unix.overlay_lag_indicator,
             ClientDomainConfig::Tls(tls) => tls.overlay_lag_indicator,
             ClientDomainConfig::Ssh(ssh) => ssh.overlay_lag_indicator,
+            ClientDomainConfig::Quic(quic) => quic.overlay_lag_indicator,
         }
     }
 
@@ -218,6 +222,7 @@ impl ClientDomainConfig {
                     format!("SSH mux {}", ssh.remote_address)
                 }
             }
+            ClientDomainConfig::Quic(quic) => format!("QUIC mux {}", quic.remote_address),
         }
     }
 
@@ -226,6 +231,7 @@ impl ClientDomainConfig {
             ClientDomainConfig::Unix(unix) => unix.connect_automatically,
             ClientDomainConfig::Tls(tls) => tls.connect_automatically,
             ClientDomainConfig::Ssh(ssh) => ssh.connect_automatically,
+            ClientDomainConfig::Quic(quic) => quic.connect_automatically,
         }
     }
 }
@@ -962,6 +968,9 @@ impl Domain for ClientDomain {
                     }
                     ClientDomainConfig::Tls(tls) => Client::new_tls(domain_id, tls, &mut cloned_ui),
                     ClientDomainConfig::Ssh(ssh) => Client::new_ssh(domain_id, ssh, &mut cloned_ui),
+                    ClientDomainConfig::Quic(quic) => {
+                        Client::new_quic(domain_id, quic, &mut cloned_ui)
+                    }
                 })
                 .await?;
 

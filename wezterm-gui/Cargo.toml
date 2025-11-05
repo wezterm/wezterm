@@ -25,6 +25,7 @@ vendored-fonts = [
 ]
 dhat-heap = ["dhat"]    # if you are doing heap profiling
 dhat-ad-hoc = ["dhat"]  # if you are doing ad hoc profiling
+quic = ["wezterm-client/quic"]
 
 [build-dependencies]
 anyhow.workspace = true

@@ -176,6 +176,7 @@ procinfo = { path = "procinfo" }
 procinfo-funcs = { path = "lua-api-crates/procinfo-funcs" }
 promise = { path = "promise" }
 quote = "1.0.2"
+quinn = { version = "0.11", default-features = false, features = ["runtime-smol", "rustls-ring"] }
 rangeset = { path = "rangeset" }
 ratelim= { path = "ratelim" }
 raw-window-handle = "0.6"
@@ -186,6 +187,7 @@ reqwest = "0.12"
 resize = "0.5"
 rstest = "0.21"
 rusqlite = "0.32"
+rustls-pemfile = { version = "2" }
 serde = {version="1.0", default-features=false, features = ["derive"]}
 serde-funcs = { path = "lua-api-crates/serde-funcs" }
 serde_json = "1.0"
@@ -219,6 +221,7 @@ termwiz = { version="0.24.0", path = "termwiz" }
 termwiz-funcs = { path = "lua-api-crates/termwiz-funcs" }
 textwrap = "0.16"
 thiserror = "1.0"
+time = "0.3"
 time-funcs = { path = "lua-api-crates/time-funcs" }
 tiny-skia = "0.11"
 tokio = "1.43"
@@ -240,6 +243,7 @@ wayland-client = "0.31"
 wayland-egl = "0.32"
 wayland-protocols = "0.32"
 wayland-protocols-plasma = { version="0.3.6", features=["client"] }
+webpki-roots = "1"
 wezterm-bidi = { version="0.2.3", path = "bidi", default-features=false}
 wezterm-blob-leases = { version="0.1.1", path = "wezterm-blob-leases"}
 wezterm-cell = { path = "wezterm-cell"}
