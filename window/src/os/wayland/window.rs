@@ -697,6 +697,12 @@ impl WaylandWindowInner {
         self.dimensions.pixels_to_surface(pixels)
     }
 
+    fn should_show_client_side_frame(&self, window_config: &WindowConfigure) -> bool {
+        let user_wants_decorations = self.config.window_decorations != WindowDecorations::NONE;
+        let compositor_selected_client = window_config.decoration_mode == DecorationMode::Client;
+        user_wants_decorations && compositor_selected_client
+    }
+
     pub(super) fn dispatch_dropped_files(&mut self, paths: Vec<PathBuf>) {
         self.events.dispatch(WindowEvent::DroppedFile(paths));
     }
@@ -841,6 +847,12 @@ impl WaylandWindowInner {
             self.window_frame.update_state(window_config.state);
             self.window_frame
                 .update_wm_capabilities(window_config.capabilities);
+
+            let should_hide_frame = !self.should_show_client_side_frame(window_config);
+            if should_hide_frame && !self.window_frame.is_hidden() {
+                self.window_frame.set_hidden(true);
+                pending.refresh_decorations = true;
+            }
         }
 
         if let Some((mut w, mut h)) = pending.configure.take() {
@@ -877,6 +889,19 @@ impl WaylandWindowInner {
                 }
 
                 log::trace!("Resizing frame");
+
+                if let Some(ref window_config) = pending.window_configure {
+                    // Now that we have valid dimensions, we can safely show the frame
+                    // if both conditions are met:
+                    // 1. User wants decorations (not NONE)
+                    // 2. Compositor selected client-side decoration mode
+                    let should_show_frame = self.should_show_client_side_frame(window_config);
+                    if should_show_frame && self.window_frame.is_hidden() {
+                        self.window_frame.set_hidden(false);
+                        pending.refresh_decorations = true;
+                    }
+                }
+
                 if !self.window_frame.is_hidden() {
                     // Clamp the size to at least one surface heigh/width.
                     let width = NonZeroU32::new(w).unwrap_or(NonZeroU32::new(1).unwrap());
