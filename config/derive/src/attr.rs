@@ -5,6 +5,7 @@ use syn::{
     Result, Type,
 };
 
+#[allow(unused)]
 pub struct ContainerInfo {
     pub into: Option<Path>,
     pub try_from: Option<Path>,
@@ -67,6 +68,7 @@ pub enum DefValue {
     Path(Path),
 }
 
+#[allow(unused)]
 pub struct FieldInfo<'a> {
     pub field: &'a Field,
     pub type_name: String,
@@ -128,7 +130,7 @@ impl<'a> FieldInfo<'a> {
     }
 }
 
-pub fn field_info(field: &Field) -> Result<FieldInfo> {
+pub fn field_info(field: &Field) -> Result<FieldInfo<'_>> {
     let mut name = field.ident.as_ref().unwrap().to_string();
     let mut skip = false;
     let mut flatten = false;

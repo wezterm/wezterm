@@ -33,33 +33,39 @@ function ghapi() {
   fi
 }
 
-[[ -f /tmp/wezterm.releases.json ]] || ghapi /repos/wez/wezterm/releases > /tmp/wezterm.releases.json
-[[ -f /tmp/wezterm.nightly.json ]] || ghapi /repos/wez/wezterm/releases/tags/nightly > /tmp/wezterm.nightly.json
+[[ -f /tmp/wezterm.releases.json ]] || ghapi /repos/wezterm/wezterm/releases > /tmp/wezterm.releases.json
+[[ -f /tmp/wezterm.nightly.json ]] || ghapi /repos/wezterm/wezterm/releases/tags/nightly > /tmp/wezterm.nightly.json
 python3 ci/subst-release-info.py || exit 1
 python3 ci/generate-docs.py || exit 1
 
 # Adjust path to pick up pip-installed binaries
 PATH="$HOME/.local/bin;$PATH"
 
-PIP=pip3
-if ! hash pip3 >/dev/null ; then
-  PIP=pip
+if hash black 2>/dev/null ; then
+  black ci/generate-docs.py ci/subst-release-info.py
 fi
-
-$PIP install --quiet mkdocs-material mkdocs-git-revision-date-localized-plugin black mkdocs-exclude mkdocs-include-markdown-plugin mkdocs-macros-plugin
-if test -n "${CARDS}" ; then
-  $PIP install --quiet pillow cairosvg
-fi
-
-black ci/generate-docs.py ci/subst-release-info.py
 
 cp "assets/icon/terminal.png" docs/favicon.png
 cp "assets/icon/wezterm-icon.svg" docs/favicon.svg
 mkdir -p docs/fonts
-cp assets/fonts/Symbols-Nerd-Font-Mono.ttf docs/fonts/
+cp assets/fonts/SymbolsNerdFontMono-Regular.ttf docs/fonts/
+
+docker_or_podman() {
+  if hash podman 2>/dev/null ; then
+    podman "$@"
+  elif hash docker 2>/dev/null ; then
+    docker "$@"
+  else
+    echo "Please install either podman or docker"
+    exit 1
+  fi
+}
+
+docker_or_podman build -t wezterm/mkdocs-material -f ci/Dockerfile.docs .
 
 if [ "$SERVE" == "yes" ] ; then
-  mkdocs "$@"
+  docker_or_podman run --rm -it -p8000:8000 -v ${PWD}:/docs wezterm/mkdocs-material serve -a 0.0.0.0:8000
+  #docker_or_podman run --rm -it --network=host -v ${PWD}:/docs wezterm/mkdocs-material $@
 else
-  mkdocs build
+  docker_or_podman run --rm -e CARDS=true -v ${PWD}:/docs wezterm/mkdocs-material build
 fi

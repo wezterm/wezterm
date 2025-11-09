@@ -12,6 +12,7 @@ use wezterm_dynamic::{FromDynamic, ToDynamic};
 struct RepoSpec {
     url: String,
     component: String,
+    plugin_dir: PathBuf,
 }
 
 /// Given a URL, generate a string that can be used as a directory name.
@@ -34,10 +35,13 @@ fn compute_repo_dir(url: &str) -> String {
             c => dir.push_str(&format!("u{}", c as u32)),
         }
     }
+    if dir.ends_with("sZs") {
+        dir.truncate(dir.len() - 3);
+    }
     dir
 }
 
-fn get_remote(repo: &Repository) -> anyhow::Result<Option<Remote>> {
+fn get_remote(repo: &Repository) -> anyhow::Result<Option<Remote<'_>>> {
     let remotes = repo.remotes()?;
     for remote in remotes.iter() {
         if let Some(name) = remote {
@@ -55,7 +59,13 @@ impl RepoSpec {
             anyhow::bail!("invalid repo spec {url}");
         }
 
-        Ok(Self { url, component })
+        let plugin_dir = RepoSpec::plugins_dir().join(&component);
+
+        Ok(Self {
+            url,
+            component,
+            plugin_dir,
+        })
     }
 
     fn load_from_dir(path: PathBuf) -> anyhow::Result<Self> {
@@ -66,18 +76,24 @@ impl RepoSpec {
             .ok_or_else(|| anyhow!("{path:?} isn't unicode"))?
             .to_string();
 
+        let plugin_dir = RepoSpec::plugins_dir().join(&component);
+
         let repo = Repository::open(&path)?;
         let remote = get_remote(&repo)?.ok_or_else(|| anyhow!("no remotes!?"))?;
         let url = remote.url();
         if let Some(url) = url {
             let url = url.to_string();
-            return Ok(Self { component, url });
+            return Ok(Self {
+                component,
+                url,
+                plugin_dir,
+            });
         }
         anyhow::bail!("Unable to create a complete RepoSpec for repo at {path:?}");
     }
 
     fn plugins_dir() -> PathBuf {
-        config::RUNTIME_DIR.join("plugins")
+        config::DATA_DIR.join("plugins")
     }
 
     fn checkout_path(&self) -> PathBuf {
@@ -143,8 +159,8 @@ impl RepoSpec {
         std::fs::create_dir_all(&plugins_dir)?;
         let target_dir = TempDir::new_in(&plugins_dir)?;
         log::debug!("Cloning {} into temporary dir {target_dir:?}", self.url);
-        let _repo = Repository::clone_recurse(&self.url, target_dir.path())?;
-        let target_dir = target_dir.into_path();
+        Repository::clone_recurse(&self.url, target_dir.path())?;
+        let target_dir = target_dir.keep();
         let checkout_path = self.checkout_path();
         match std::fs::rename(&target_dir, &checkout_path) {
             Ok(_) => {
@@ -168,7 +184,7 @@ impl RepoSpec {
     }
 }
 
-fn require_plugin(lua: &Lua, url: String) -> anyhow::Result<Value> {
+fn require_plugin(lua: &Lua, url: String) -> anyhow::Result<Value<'_>> {
     let spec = RepoSpec::parse(url)?;
 
     if !spec.is_checked_out() {
@@ -247,8 +263,8 @@ mod test {
         for (input, expect) in &[
             ("foo", "foo"),
             (
-                "githubsDscom/wez/wezterm-plugins",
-                "githubsDscomsZswezsZswezterm-plugins",
+                "githubsDscom/wezterm/wezterm-plugins",
+                "githubsDscomsZsweztermsZswezterm-plugins",
             ),
             ("localhost:8080/repo", "localhostsCs8080sZsrepo"),
         ] {

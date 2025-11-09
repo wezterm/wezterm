@@ -5,8 +5,7 @@ use crate::TermWindow;
 use ::window::*;
 use anyhow::{Context, Error};
 use config::keyassignment::{KeyAssignment, SpawnCommand};
-use config::ConfigSubscription;
-pub use config::FrontEndSelection;
+use config::{ConfigSubscription, NotificationHandling};
 use mux::client::ClientId;
 use mux::window::WindowId as MuxWindowId;
 use mux::{Mux, MuxNotification};
@@ -96,7 +95,7 @@ impl GuiFrontEnd {
                 MuxNotification::PaneOutput(_) => {}
                 MuxNotification::PaneAdded(_) => {}
                 MuxNotification::Alert {
-                    pane_id: _,
+                    pane_id,
                     alert:
                         Alert::ToastNotification {
                             title,
@@ -104,16 +103,38 @@ impl GuiFrontEnd {
                             focus: _,
                         },
                 } => {
-                    let message = if title.is_none() { "" } else { &body };
-                    let title = title.as_ref().unwrap_or(&body);
-                    // FIXME: if notification.focus is true, we should do
-                    // something here to arrange to focus pane_id when the
-                    // notification is clicked
-                    persistent_toast_notification(title, message);
+                    let mux = Mux::get();
+
+                    if let Some((_domain, window_id, tab_id)) = mux.resolve_pane_id(pane_id) {
+                        let config = config::configuration();
+
+                        if let Some((_fdomain, f_window, f_tab, f_pane)) =
+                            mux.resolve_focused_pane(&client_id)
+                        {
+                            let show = match config.notification_handling {
+                                NotificationHandling::NeverShow => false,
+                                NotificationHandling::AlwaysShow => true,
+                                NotificationHandling::SuppressFromFocusedPane => f_pane != pane_id,
+                                NotificationHandling::SuppressFromFocusedTab => f_tab != tab_id,
+                                NotificationHandling::SuppressFromFocusedWindow => {
+                                    f_window != window_id
+                                }
+                            };
+
+                            if show {
+                                let message = if title.is_none() { "" } else { &body };
+                                let title = title.as_ref().unwrap_or(&body);
+                                // FIXME: if notification.focus is true, we should do
+                                // something here to arrange to focus pane_id when the
+                                // notification is clicked
+                                persistent_toast_notification(title, message);
+                            }
+                        }
+                    }
                 }
                 MuxNotification::Alert {
                     pane_id: _,
-                    alert: Alert::Bell,
+                    alert: Alert::Bell | Alert::Progress(_),
                 } => {
                     // Handled via TermWindowNotif; NOP it here.
                 }
@@ -198,6 +219,16 @@ impl GuiFrontEnd {
         log::trace!("Got app event {event:?}");
         match event {
             ApplicationEvent::OpenCommandScript(file_name) => {
+                let quoted_file_name = match shlex::try_quote(&file_name) {
+                    Ok(name) => name.to_owned().to_string(),
+                    Err(_) => {
+                        log::error!(
+                            "OpenCommandScript: {file_name} has embedded NUL bytes and
+                             cannot be launched via the shell"
+                        );
+                        return;
+                    }
+                };
                 promise::spawn::spawn(async move {
                     use config::keyassignment::SpawnTabDomain;
                     use wezterm_term::TerminalSize;
@@ -231,7 +262,7 @@ impl GuiFrontEnd {
                         Ok((_tab, pane, _window_id)) => {
                             log::trace!("Spawned {file_name} as pane_id {}", pane.pane_id());
                             let mut writer = pane.writer();
-                            write!(writer, "{} ; exit\n", shlex::quote(&file_name)).ok();
+                            write!(writer, "{quoted_file_name} ; exit\n").ok();
                         }
                         Err(err) => {
                             log::error!("Failed to spawn {file_name}: {err:#?}");
@@ -248,8 +279,9 @@ impl GuiFrontEnd {
 
                 fn spawn_command(spawn: &SpawnCommand, spawn_where: SpawnWhere) {
                     let config = config::configuration();
-                    let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi()) as u32;
-                    let size = config.initial_size(dpi);
+                    let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi());
+                    let size =
+                        config.initial_size(dpi as u32, crate::cell_pixel_dims(&config, dpi).ok());
                     let term_config = Arc::new(config::TermConfig::with_config(config));
 
                     crate::spawn::spawn_command_impl(spawn, spawn_where, size, None, term_config)

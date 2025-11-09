@@ -1,20 +1,32 @@
 #![cfg(target_os = "macos")]
+#![allow(unexpected_cfgs)] // <https://github.com/SSheldon/rust-objc/issues/125>
 
 use crate::locator::{FontDataSource, FontLocator, FontOrigin};
 use crate::parser::ParsedFont;
+use cocoa::base::id;
 use config::{FontAttributes, FontStretch, FontStyle, FontWeight};
 use core_foundation::array::CFArray;
-use core_foundation::base::TCFType;
+use core_foundation::base::{CFRange, TCFType};
 use core_foundation::dictionary::CFDictionary;
-use core_foundation::string::CFString;
+use core_foundation::string::{CFString, CFStringRef};
 use core_text::font::*;
 use core_text::font_descriptor::*;
+use objc::*;
 use rangeset::RangeSet;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
 lazy_static::lazy_static! {
     static ref FALLBACK: Vec<ParsedFont> = build_fallback_list();
+}
+
+#[link(name = "CoreText", kind = "framework")]
+extern "C" {
+    fn CTFontCreateForString(
+        currentFont: CTFontRef,
+        string: CFStringRef,
+        range: CFRange,
+    ) -> CTFontRef;
 }
 
 /// A FontLocator implemented using the system font loading
@@ -114,22 +126,90 @@ impl FontLocator for CoreTextFontLocator {
         &self,
         codepoints: &[char],
     ) -> anyhow::Result<Vec<ParsedFont>> {
-        let mut wanted = RangeSet::new();
-        for &c in codepoints {
-            wanted.add(c as u32);
-        }
         let mut matches = vec![];
-        for font in FALLBACK.iter() {
-            if let Ok(cov) = font.coverage_intersection(&wanted) {
-                if !cov.is_empty() {
-                    matches.push((cov.len(), font.clone()));
+
+        let menlo =
+            new_from_name("Menlo", 0.0).map_err(|_| anyhow::anyhow!("failed to get Menlo font"))?;
+
+        for &c in codepoints {
+            let mut wanted = RangeSet::new();
+            wanted.add(c as u32);
+            let text = CFString::new(&c.to_string());
+
+            let font = unsafe {
+                CTFontCreateForString(
+                    menlo.as_concrete_TypeRef(),
+                    text.as_concrete_TypeRef(),
+                    CFRange::init(0, 1),
+                )
+            };
+
+            if font.is_null() {
+                continue;
+            }
+
+            let font = unsafe { CTFont::wrap_under_create_rule(font) };
+
+            let candidates = handles_from_descriptor(&font.copy_descriptor());
+
+            let mut matched_any = false;
+
+            for font in candidates {
+                if font.names().family == ".LastResort"
+                    || font.names().postscript_name.as_deref() == Some("LastResort")
+                {
+                    // Always exclude a last resort font, as it has
+                    // placeholder glyphs for everything
+                    continue;
+                }
+
+                let is_normal = font.weight() == FontWeight::REGULAR
+                    && font.stretch() == FontStretch::Normal
+                    && font.style() == FontStyle::Normal;
+                if !is_normal {
+                    // Only use normal attributed text for fallbacks,
+                    // otherwise we'll end up picking something with
+                    // undefined and undesirable attributes
+                    // <https://github.com/wezterm/wezterm/issues/4808>
+                    continue;
+                }
+
+                if let Ok(cov) = font.coverage_intersection(&wanted) {
+                    // Explicitly check coverage because the list may not
+                    // actually match the text we asked about(!)
+                    if !cov.is_empty() {
+                        matches.push((cov.len(), font));
+                        matched_any = true;
+                    }
+                }
+            }
+
+            if !matched_any {
+                // Consult our global, more general list of fallbacks
+                for font in FALLBACK.iter() {
+                    if let Ok(cov) = font.coverage_intersection(&wanted) {
+                        if !cov.is_empty() {
+                            matches.push((cov.len(), font.clone()));
+                        }
+                    }
                 }
             }
         }
+
         // Add the handles in order of descending coverage; the idea being
         // that if a font has a large coverage then it is probably a better
         // candidate and more likely to result in other glyphs matching
         // in future shaping calls.
+        let mut wanted = RangeSet::new();
+        for &c in codepoints {
+            wanted.add(c as u32);
+        }
+        for (cov_len, font) in &mut matches {
+            if let Ok(cov) = font.coverage_intersection(&wanted) {
+                *cov_len = cov.len();
+            }
+        }
+
         matches.sort_by(|(a_len, a), (b_len, b)| {
             let primary = a_len.cmp(&b_len).reverse();
             if primary == Ordering::Equal {
@@ -138,6 +218,9 @@ impl FontLocator for CoreTextFontLocator {
                 primary
             }
         });
+        matches.dedup();
+
+        log::trace!("fallback candidates for {codepoints:?} is {matches:#?}");
 
         Ok(matches.into_iter().map(|(_len, handle)| handle).collect())
     }
@@ -168,20 +251,25 @@ fn build_fallback_list() -> Vec<ParsedFont> {
 fn build_fallback_list_impl() -> anyhow::Result<Vec<ParsedFont>> {
     let menlo =
         new_from_name("Menlo", 0.0).map_err(|_| anyhow::anyhow!("failed to get Menlo font"))?;
-    let lang = "en"
+
+    let user_defaults: id = unsafe { msg_send![class!(NSUserDefaults), standardUserDefaults] };
+
+    let apple_lang = "AppleLanguages"
         .parse::<CFString>()
         .map_err(|_| anyhow::anyhow!("failed to parse lang name en as CFString"))?;
-    let langs = CFArray::from_CFTypes(&[lang]);
+
+    let langs: CFArray<CFString> =
+        unsafe { msg_send![user_defaults, stringArrayForKey:apple_lang] };
+
     let cascade = cascade_list_for_languages(&menlo, &langs);
     let mut fonts = vec![];
     // Explicitly include Menlo itself, as it appears to be the only
     // font on macOS that contains U+2718.
-    // <https://github.com/wez/wezterm/issues/849>
+    // <https://github.com/wezterm/wezterm/issues/849>
     fonts.append(&mut handles_from_descriptor(&menlo.copy_descriptor()));
     for descriptor in &cascade {
         fonts.append(&mut handles_from_descriptor(&descriptor));
     }
-
     // Some of the fallback fonts are special fonts that don't exist on
     // disk, and that we can't open.
     // In particular, `.AppleSymbolsFB` is one such font.  Let's try

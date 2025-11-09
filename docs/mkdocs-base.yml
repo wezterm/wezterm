@@ -1,10 +1,10 @@
 copyright: Copyright &copy; 2018-Present Wez Furlong
 use_directory_urls: false
 site_name: Wez's Terminal Emulator
-site_url: https://wezfurlong.org/wezterm/
+site_url: https://wezterm.org/
 site_description: Wez's Terminal Emulator
-repo_url: https://github.com/wez/wezterm
-repo_name: wez/wezterm
+repo_url: https://github.com/wezterm/wezterm
+repo_name: wezterm/wezterm
 edit_uri: edit/main/docs/
 docs_dir: docs
 site_dir: gh_pages
@@ -50,8 +50,6 @@ theme:
     - toc.follow
 plugins:
   - include-markdown
-  - tags:
-      tags_file: tags.md
   - macros:
       module_name: mkdocs_macros
   - search:
@@ -72,6 +70,19 @@ plugins:
         - "book.toml"
         - "overrides/**"
 
+exclude_docs: |
+  **/_index.md
+  **/*.markdown
+  generate_toc.py
+  README.markdown
+  build.sh
+  SUMMARY.md
+  book.toml
+  overrides/**
+
+not_in_nav: |
+  tags.md
+
 extra_css:
   - style.css
   - colorschemes/scheme.css
@@ -86,7 +97,7 @@ markdown_extensions:
   - pymdownx.saneheaders
   - pymdownx.magiclink:
       repo_url_shorthand: true
-      user: wez
+      user: wezterm
       repo: wezterm
   - pymdownx.details
   - attr_list
@@ -102,8 +113,8 @@ markdown_extensions:
       base_path: "./docs"
   - pymdownx.inlinehilite
   - pymdownx.emoji:
-      emoji_index: !!python/name:materialx.emoji.twemoji
-      emoji_generator: !!python/name:materialx.emoji.to_svg
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.tasklist:
       custom_checkbox: true
   - pymdownx.tabbed:
@@ -117,7 +128,7 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/wez/wezterm
+      link: https://github.com/wezterm/wezterm
     - icon: fontawesome/brands/mastodon
       link: https://fosstodon.org/@wez
     - icon: fontawesome/brands/twitter

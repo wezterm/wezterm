@@ -8,6 +8,7 @@ on:
       - "**/*.rs"
       - "**/Cargo.lock"
       - "**/Cargo.toml"
+      - ".cargo/config.toml"
       - ".github/workflows/gen_centos9.yml"
       - "assets/fonts/**/*"
       - "assets/icon/*"
@@ -26,6 +27,10 @@ jobs:
   build:
     runs-on: "ubuntu-latest"
     container: "quay.io/centos/centos:stream9"
+    env:
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
 
     steps:
       - name: "Install config manager"
@@ -50,29 +55,48 @@ jobs:
         shell: bash
         run: "git config --global --add safe.directory /__w/wezterm/wezterm"
       - name: "checkout repo"
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: "recursive"
       - name: "Install Rust"
         uses: dtolnay/rust-toolchain@stable
-      - name: "Cache cargo"
-        uses: Swatinem/rust-cache@v2
+      - name: "Compile with sccache"
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: "Cache Rust Dependencies"
+        uses: actions/cache@v4
+        id: cache-cargo-vendor
         with:
-          key: "centos9-None-2-${{ runner.os }}-cargo"
+          path: |
+            vendor
+            .cargo/config
+          key: "cargo-deps-${{ hashFiles('**/Cargo.lock') }}"
+      - name: "Vendor dependecies"
+        if: steps.cache-cargo-vendor.outputs.cache-hit != 'true'
+        shell: bash
+        run: "cargo vendor --locked --versioned-dirs >> .cargo/config"
       - name: "Install System Deps"
         shell: bash
         run: "env CI=yes PATH=$PATH ./get-deps"
-      - name: "Build (Release mode)"
+      - name: "Build wezterm (Release mode)"
         shell: bash
-        run: "cargo build --all --release"
+        run: "cargo build -p wezterm --release"
+      - name: "Build wezterm-gui (Release mode)"
+        shell: bash
+        run: "cargo build -p wezterm-gui --release"
+      - name: "Build wezterm-mux-server (Release mode)"
+        shell: bash
+        run: "cargo build -p wezterm-mux-server --release"
+      - name: "Build strip-ansi-escapes (Release mode)"
+        shell: bash
+        run: "cargo build -p strip-ansi-escapes --release"
       - name: "Install cargo-nextest from Cargo"
-        uses: baptiste0928/cargo-install@v2
+        uses: baptiste0928/cargo-install@v3
         with:
           crate: "cargo-nextest"
           cache-key: "centos9"
-      - name: "Test (Release mode)"
+      - name: "Test"
         shell: bash
-        run: "cargo nextest run --all --release --no-fail-fast"
+        run: "cargo nextest run --all --no-fail-fast"
       - name: "Package"
         shell: bash
         run: "bash ci/deploy.sh"
@@ -80,7 +104,7 @@ jobs:
         shell: bash
         run: "mv ~/rpmbuild/RPMS/*/*.rpm ."
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: "centos9"
           path: "wezterm-*.rpm"

@@ -1,163 +1,129 @@
-use anyhow::{anyhow, bail, Context, Error};
-use filedescriptor::{FileDescriptor, Pipe};
+use anyhow::{anyhow, bail};
 use smithay_client_toolkit as toolkit;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
-use std::os::unix::prelude::{FromRawFd, IntoRawFd};
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
-use toolkit::primary_selection::*;
-use toolkit::reexports::client::protocol::wl_data_offer::{Event as DataOfferEvent, WlDataOffer};
-use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
-use wayland_client::protocol::wl_data_source::Event as DataSourceEvent;
+use toolkit::data_device_manager::data_offer::SelectionOffer;
+use toolkit::data_device_manager::{ReadPipe, WritePipe};
+use toolkit::primary_selection::device::PrimarySelectionDeviceHandler;
+use toolkit::primary_selection::selection::PrimarySelectionSourceHandler;
+use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1;
+use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1;
 
-use crate::connection::ConnectionOps;
-use crate::Clipboard;
+use crate::{Clipboard, ConnectionOps};
+
+use super::data_device::TEXT_MIME_TYPE;
+use super::state::WaylandState;
 
 #[derive(Default)]
 pub struct CopyAndPaste {
-    data_offer: Option<WlDataOffer>,
-    pub(crate) last_serial: u32,
+    data_offer: Option<SelectionOffer>,
 }
 
 impl std::fmt::Debug for CopyAndPaste {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         fmt.debug_struct("CopyAndPaste")
-            .field("last_serial", &self.last_serial)
             .field("data_offer", &self.data_offer.is_some())
             .finish()
     }
 }
 
-pub const TEXT_MIME_TYPE: &str = "text/plain;charset=utf-8";
-
 impl CopyAndPaste {
-    pub fn create() -> Arc<Mutex<Self>> {
+    pub(super) fn create() -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Default::default()))
     }
 
-    pub fn update_last_serial(&mut self, serial: u32) {
-        if serial != 0 {
-            self.last_serial = serial;
-        }
-    }
-
-    pub fn get_clipboard_data(&mut self, clipboard: Clipboard) -> anyhow::Result<FileDescriptor> {
+    pub(super) fn get_clipboard_data(&mut self, clipboard: Clipboard) -> anyhow::Result<ReadPipe> {
         let conn = crate::Connection::get().unwrap().wayland();
-        let pointer = conn.pointer.borrow();
+        let wayland_state = conn.wayland_state.borrow();
         let primary_selection = if let Clipboard::PrimarySelection = clipboard {
-            pointer.primary_selection_device.as_ref()
+            wayland_state.primary_selection_device.as_ref()
         } else {
             None
         };
+
         match primary_selection {
-            Some(device) => {
-                let pipe = device.with_selection(|offer| {
-                    offer
-                        .ok_or_else(|| anyhow!("no primary selection offer"))
-                        .and_then(|o| {
-                            o.receive(TEXT_MIME_TYPE.to_string())
-                                .with_context(|| "failed to open read pipe".to_string())
-                        })
-                })?;
-                Ok(unsafe { FileDescriptor::from_raw_fd(pipe.into_raw_fd()) })
+            Some(primary_selection) => {
+                let offer = primary_selection
+                    .data()
+                    .selection_offer()
+                    .ok_or_else(|| anyhow!("no primary selection offer"))?;
+                let pipe = offer.receive(TEXT_MIME_TYPE.to_string())?;
+                Ok(pipe)
             }
             None => {
                 let offer = self
                     .data_offer
                     .as_ref()
                     .ok_or_else(|| anyhow!("no data offer"))?;
-                let pipe = Pipe::new().map_err(Error::msg)?;
-                offer.receive(TEXT_MIME_TYPE.to_string(), pipe.write.as_raw_fd());
-                Ok(pipe.read)
+                let pipe = offer.receive(TEXT_MIME_TYPE.to_string())?;
+                Ok(pipe)
             }
         }
     }
 
-    pub fn set_clipboard_data(&mut self, clipboard: Clipboard, data: String) {
+    pub(super) fn set_clipboard_data(&mut self, clipboard: Clipboard, data: String) {
         let conn = crate::Connection::get().unwrap().wayland();
-        let pointer = conn.pointer.borrow();
+        let qh = conn.event_queue.borrow().handle();
+        let mut wayland_state = conn.wayland_state.borrow_mut();
+        let last_serial = *wayland_state.last_serial.borrow();
+
         let primary_selection = if let Clipboard::PrimarySelection = clipboard {
-            conn.environment
-                .get_primary_selection_manager()
-                .zip(pointer.primary_selection_device.as_ref())
+            wayland_state.primary_selection_device.as_ref()
         } else {
             None
         };
 
         match primary_selection {
-            Some((manager, device)) => {
-                let source = PrimarySelectionSource::new(
-                    &manager,
-                    &[TEXT_MIME_TYPE.to_string()],
-                    move |event, _dispatch_data| match event {
-                        PrimarySelectionSourceEvent::Cancelled => {
-                            crate::Connection::get()
-                                .unwrap()
-                                .wayland()
-                                .pointer
-                                .borrow()
-                                .data_device
-                                .set_selection(None, 0);
-                        }
-                        PrimarySelectionSourceEvent::Send { pipe, .. } => {
-                            let fd = unsafe { FileDescriptor::from_raw_fd(pipe.into_raw_fd()) };
-                            write_selection_to_pipe(fd, &data);
-                        }
-                    },
-                );
-                device.set_selection(&Some(source), self.last_serial)
+            Some(primary_selection) => {
+                let manager = wayland_state.primary_selection_manager.as_ref().unwrap();
+                let source = manager.create_selection_source(&qh, [TEXT_MIME_TYPE]);
+                source.set_selection(&primary_selection, last_serial);
+                wayland_state
+                    .primary_selection_source
+                    .replace((source, data));
             }
             None => {
-                let source = conn
-                    .environment
-                    .require_global::<WlDataDeviceManager>()
-                    .create_data_source();
-                source.quick_assign(move |_source, event, _dispatch_data| {
-                    if let DataSourceEvent::Send { fd, .. } = event {
-                        let fd = unsafe { FileDescriptor::from_raw_fd(fd) };
-                        write_selection_to_pipe(fd, &data);
-                    }
-                });
-                source.offer(TEXT_MIME_TYPE.to_string());
-                conn.pointer
-                    .borrow()
-                    .data_device
-                    .set_selection(Some(&source), self.last_serial);
+                let data_device = &wayland_state.data_device;
+                let source = wayland_state
+                    .data_device_manager_state
+                    .create_copy_paste_source(&qh, vec![TEXT_MIME_TYPE]);
+                source.set_selection(data_device.as_ref().unwrap(), last_serial);
+                wayland_state.copy_paste_source.replace((source, data));
             }
         }
     }
 
-    pub fn handle_data_offer(&mut self, event: DataOfferEvent, offer: WlDataOffer) {
-        match event {
-            DataOfferEvent::Offer { mime_type } => {
-                if mime_type == TEXT_MIME_TYPE {
-                    offer.accept(self.last_serial, Some(mime_type));
-                    self.data_offer.replace(offer);
-                } else {
-                    // Refuse other mime types
-                    offer.accept(self.last_serial, None);
-                }
-            }
-            DataOfferEvent::SourceActions { .. } | DataOfferEvent::Action { .. } => {
-                // ignore drag and drop events
-            }
-            _ => {}
-        }
-    }
-
-    pub fn confirm_selection(&mut self, offer: WlDataOffer) {
+    pub(super) fn confirm_selection(&mut self, offer: SelectionOffer) {
         self.data_offer.replace(offer);
     }
 }
 
-fn write_selection_to_pipe(fd: FileDescriptor, text: &str) {
+impl WaylandState {
+    pub(super) fn resolve_copy_and_paste(&mut self) -> Option<Arc<Mutex<CopyAndPaste>>> {
+        let active_surface_id = self.active_surface_id.borrow();
+        let active_surface_id = active_surface_id.as_ref()?;
+        let pending = self.surface_to_pending.get(&active_surface_id)?;
+        Some(Arc::clone(&pending.lock().unwrap().copy_and_paste))
+    }
+}
+
+pub(super) fn write_selection_to_pipe(fd: WritePipe, text: &str) {
     if let Err(e) = write_pipe_with_timeout(fd, text.as_bytes()) {
         log::error!("while sending primary selection to pipe: {}", e);
     }
 }
 
-fn write_pipe_with_timeout(mut file: FileDescriptor, data: &[u8]) -> anyhow::Result<()> {
-    file.set_non_blocking(true)?;
+fn write_pipe_with_timeout(mut file: WritePipe, data: &[u8]) -> anyhow::Result<()> {
+    // set non-blocking I/O on the pipe
+    // (adapted from FileDescriptor::set_non_blocking_impl in /filedescriptor/src/unix.rs)
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } != 0 {
+        bail!(
+            "failed to change non-blocking mode: {}",
+            std::io::Error::last_os_error()
+        )
+    }
+
     let mut pfd = libc::pollfd {
         fd: file.as_raw_fd(),
         events: libc::POLLOUT,
@@ -183,4 +149,47 @@ fn write_pipe_with_timeout(mut file: FileDescriptor, data: &[u8]) -> anyhow::Res
     }
 
     Ok(())
+}
+
+impl PrimarySelectionDeviceHandler for WaylandState {
+    fn selection(
+        &mut self,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<Self>,
+        _primary_selection_device: &ZwpPrimarySelectionDeviceV1,
+    ) {
+        // TODO: do we need to do anything here?
+    }
+}
+
+impl PrimarySelectionSourceHandler for WaylandState {
+    fn send_request(
+        &mut self,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<Self>,
+        source: &ZwpPrimarySelectionSourceV1,
+        mime: String,
+        write_pipe: toolkit::data_device_manager::WritePipe,
+    ) {
+        if mime != TEXT_MIME_TYPE {
+            return;
+        };
+
+        if let Some((ps_source, data)) = &self.primary_selection_source {
+            if ps_source.inner() != source {
+                return;
+            }
+            write_selection_to_pipe(write_pipe, data);
+        }
+    }
+
+    fn cancelled(
+        &mut self,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<Self>,
+        source: &ZwpPrimarySelectionSourceV1,
+    ) {
+        self.primary_selection_source.take();
+        source.destroy();
+    }
 }

@@ -13,8 +13,8 @@ use config::{ConfigHandle, ImePreeditRendering, SystemBackdrop};
 use lazy_static::lazy_static;
 use promise::Future;
 use raw_window_handle::{
-    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
-    WindowsDisplayHandle,
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
+    RawWindowHandle, Win32WindowHandle, WindowHandle, WindowsDisplayHandle,
 };
 use shared_library::shared_library;
 use std::any::Any;
@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::ffi::OsString;
 use std::io::{self, Error as IoError};
+use std::num::NonZeroIsize;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
@@ -38,6 +39,7 @@ use winapi::shared::winerror::S_OK;
 use winapi::um::imm::*;
 use winapi::um::libloaderapi::GetModuleHandleW;
 use winapi::um::shellapi::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
+use winapi::um::shellscalingapi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use winapi::um::sysinfoapi::{GetTickCount, GetVersionExW};
 use winapi::um::uxtheme::{
     CloseThemeData, GetThemeFont, GetThemeSysFont, OpenThemeData, SetWindowTheme,
@@ -142,14 +144,19 @@ fn rect_height(r: &RECT) -> i32 {
     r.bottom - r.top
 }
 
-fn adjust_client_to_window_dimensions(style: u32, width: usize, height: usize) -> (i32, i32) {
+fn adjust_client_to_window_dimensions(
+    style: u32,
+    width: usize,
+    height: usize,
+    dpi: u32,
+) -> (i32, i32) {
     let mut rect = RECT {
         left: 0,
         top: 0,
         right: width as _,
         bottom: height as _,
     };
-    unsafe { AdjustWindowRect(&mut rect, style, 0) };
+    unsafe { AdjustWindowRectExForDpi(&mut rect, style, 0, 0, dpi) };
 
     (rect_width(&rect), rect_height(&rect))
 }
@@ -166,7 +173,7 @@ fn rc_from_pointer(lparam: LPVOID) -> Rc<RefCell<WindowInner>> {
     let cloned = Rc::clone(&arc);
 
     // We must not drop this ref though; turn it back into a raw pointer!
-    Rc::into_raw(arc);
+    let _ = Rc::into_raw(arc);
 
     cloned
 }
@@ -194,18 +201,22 @@ fn callback_behavior() -> glium::debug::DebugCallbackBehavior {
     }
 }
 
-unsafe impl HasRawDisplayHandle for WindowInner {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
-        RawDisplayHandle::Windows(WindowsDisplayHandle::empty())
+impl HasDisplayHandle for WindowInner {
+    fn display_handle(&self) -> Result<DisplayHandle, HandleError> {
+        unsafe {
+            Ok(DisplayHandle::borrow_raw(RawDisplayHandle::Windows(
+                WindowsDisplayHandle::new(),
+            )))
+        }
     }
 }
 
-unsafe impl HasRawWindowHandle for WindowInner {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        let mut handle = Win32WindowHandle::empty();
-        handle.hwnd = self.hwnd.0 as *mut _;
-        handle.hinstance = unsafe { GetModuleHandleW(null()) } as _;
-        RawWindowHandle::Win32(handle)
+impl HasWindowHandle for WindowInner {
+    fn window_handle(&self) -> Result<WindowHandle, HandleError> {
+        let mut handle =
+            Win32WindowHandle::new(NonZeroIsize::new(self.hwnd.0 as _).expect("non-zero"));
+        handle.hinstance = NonZeroIsize::new(unsafe { GetModuleHandleW(null()) } as _);
+        unsafe { Ok(WindowHandle::borrow_raw(RawWindowHandle::Win32(handle))) }
     }
 }
 
@@ -251,6 +262,30 @@ impl WindowInner {
         Ok(gl_state)
     }
 
+    fn get_effective_dpi(&self) -> usize {
+        let actual_dpi = unsafe { GetDpiForWindow(self.hwnd.0) } as f64;
+
+        if self.config.dpi_by_screen.is_empty() {
+            return self.config.dpi.unwrap_or(actual_dpi) as usize;
+        }
+
+        unsafe {
+            let mut mi: MONITORINFOEXW = std::mem::zeroed();
+            mi.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+            let mon = MonitorFromWindow(self.hwnd.0, MONITOR_DEFAULTTONEAREST);
+            GetMonitorInfoW(mon, &mut mi as *mut MONITORINFOEXW as *mut MONITORINFO);
+
+            if let Ok(info) = crate::os::windows::connection::ScreenInfoHelper::new() {
+                let name = info.monitor_name(&mi);
+                if let Some(dpi) = self.config.dpi_by_screen.get(&name).copied() {
+                    return dpi as usize;
+                }
+            }
+
+            actual_dpi as usize
+        }
+    }
+
     /// Check if we need to generate a resize callback.
     /// Calls resize if needed.
     /// Returns true if we did.
@@ -282,7 +317,7 @@ impl WindowInner {
         let current_dims = Dimensions {
             pixel_width,
             pixel_height,
-            dpi: unsafe { GetDpiForWindow(self.hwnd.0) as usize },
+            dpi: self.get_effective_dpi(),
         };
 
         let same = self
@@ -366,6 +401,15 @@ fn decorations_to_style(decorations: WindowDecorations) -> u32 {
     }
 }
 
+fn get_primary_monitor_dpi() -> u32 {
+    let primary = unsafe { MonitorFromWindow(null_mut(), MONITOR_DEFAULTTOPRIMARY) };
+    assert!(!primary.is_null(), "MonitorFromWindow() returned NULL");
+    let mut dpi_x = USER_DEFAULT_SCREEN_DPI as u32;
+    let mut dpi_y = USER_DEFAULT_SCREEN_DPI as u32;
+    unsafe { GetDpiForMonitor(primary, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+    dpi_x
+}
+
 impl Window {
     fn create_window(
         config: ConfigHandle,
@@ -403,8 +447,9 @@ impl Window {
 
         let decorations = config.window_decorations;
         let style = decorations_to_style(decorations);
+        let frame_dpi = get_primary_monitor_dpi();
         let (width, height) =
-            adjust_client_to_window_dimensions(style, geometry.width, geometry.height);
+            adjust_client_to_window_dimensions(style, geometry.width, geometry.height, frame_dpi);
 
         let (x, y) = match (geometry.x, geometry.y) {
             (Some(x), Some(y)) => (x, y),
@@ -689,19 +734,24 @@ impl WindowInner {
     }
 }
 
-unsafe impl HasRawDisplayHandle for Window {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
-        RawDisplayHandle::Windows(WindowsDisplayHandle::empty())
+impl HasDisplayHandle for Window {
+    fn display_handle(&self) -> Result<DisplayHandle, HandleError> {
+        unsafe {
+            Ok(DisplayHandle::borrow_raw(RawDisplayHandle::Windows(
+                WindowsDisplayHandle::new(),
+            )))
+        }
     }
 }
 
-unsafe impl HasRawWindowHandle for Window {
-    fn raw_window_handle(&self) -> RawWindowHandle {
+impl HasWindowHandle for Window {
+    fn window_handle(&self) -> Result<WindowHandle, HandleError> {
         let conn = Connection::get().expect("raw_window_handle only callable on main thread");
         let handle = conn.get_window(self.0).expect("window handle invalid!?");
 
         let inner = handle.borrow();
-        inner.raw_window_handle()
+        let handle = inner.window_handle()?;
+        unsafe { Ok(WindowHandle::borrow_raw(handle.as_raw())) }
     }
 }
 
@@ -855,10 +905,12 @@ impl WindowOps for Window {
             let decorations = inner.config.window_decorations;
             promise::spawn::spawn(async move {
                 log::trace!("set_inner_size called with {width}x{height}");
+                let frame_dpi = unsafe { GetDpiForWindow(hwnd.0) };
                 let (width, height) = adjust_client_to_window_dimensions(
                     decorations_to_style(decorations),
                     width,
                     height,
+                    frame_dpi,
                 );
                 let window_state = get_window_state(hwnd.0);
                 if window_state.can_resize() {
@@ -874,6 +926,10 @@ impl WindowOps for Window {
                             SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
                         );
                         wm_paint(hwnd.0, 0, 0, 0);
+                        if let Some(inner) = rc_from_hwnd(hwnd.0) {
+                            let mut inner = inner.borrow_mut();
+                            inner.events.dispatch(WindowEvent::SetInnerSizeCompleted);
+                        }
                     }
                 } else {
                     log::trace!(
@@ -1089,14 +1145,14 @@ unsafe fn wm_nccalcsize(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
     }
 
     if inner.saved_placement.is_none() {
-        let dpi = GetDpiForWindow(hwnd);
+        let dpi = inner.get_effective_dpi() as u32;
         let frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi);
         let frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi);
         let padding = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
 
         let params = (lparam as *mut NCCALCSIZE_PARAMS).as_mut().unwrap();
 
-        let mut requested_client_rect = &mut params.rgrc[0];
+        let requested_client_rect = &mut params.rgrc[0];
 
         requested_client_rect.right -= frame_x + padding;
         requested_client_rect.left += frame_x + padding;
@@ -1160,7 +1216,7 @@ unsafe fn wm_nchittest(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) ->
 
     // The adjustment in NCCALCSIZE messes with the detection
     // of the top hit area so manually fixing that.
-    let dpi = GetDpiForWindow(hwnd);
+    let dpi = inner.get_effective_dpi() as u32;
     let frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi) as isize;
     let frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi) as isize;
     let padding = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) as isize;
@@ -1378,7 +1434,7 @@ fn apply_theme(hwnd: HWND) -> Option<LRESULT> {
         if let Some(inner) = rc_from_hwnd(hwnd) {
             let mut inner = inner.borrow_mut();
 
-            // Set Arylic or Mica system Backdrop
+            // Set Acrylic or Mica system Backdrop
             let pv_attribute = match inner.config.win32_system_backdrop {
                 SystemBackdrop::Auto => DWM_SYSTEMBACKDROP_TYPE::DWMSBT_AUTO,
                 SystemBackdrop::Disable => DWM_SYSTEMBACKDROP_TYPE::DWMSBT_NONE,
@@ -1387,9 +1443,9 @@ fn apply_theme(hwnd: HWND) -> Option<LRESULT> {
                 SystemBackdrop::Tabbed => DWM_SYSTEMBACKDROP_TYPE::DWMSBT_TABBEDWINDOW,
             };
 
-            let margins = match inner.config.win32_system_backdrop {
-                SystemBackdrop::Auto | SystemBackdrop::Disable => 0,
-                SystemBackdrop::Acrylic | SystemBackdrop::Mica | SystemBackdrop::Tabbed => -1,
+            let margins = match inner.config.window_decorations {
+                WindowDecorations::TITLE => -1,
+                _ => 0,
             };
 
             DwmExtendFrameIntoClientArea(
@@ -1735,7 +1791,7 @@ unsafe fn nc_mouse_button(
         ReleaseCapture();
     }
 
-    if wparam != HTMAXBUTTON as _ {
+    if wparam != HTMAXBUTTON as usize {
         return None;
     }
 
@@ -1807,7 +1863,7 @@ unsafe fn nc_mouse_move(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
         inner.track_mouse_leave = TrackMouseEvent(&mut trk) == winapi::shared::minwindef::TRUE;
     }
 
-    if wparam != HTMAXBUTTON as _ {
+    if wparam != HTMAXBUTTON as usize {
         return None;
     }
 
@@ -2371,7 +2427,7 @@ impl KeyboardLayoutInfo {
         unsafe {
             self.update();
         }
-        if vk <= u8::MAX.into() {
+        if vk <= (u8::MAX as u32) {
             self.dead_keys
                 .get(&(Self::fixup_mods(mods), vk as u8))
                 .map(|dead| dead.dead_char)
@@ -2388,7 +2444,7 @@ impl KeyboardLayoutInfo {
         unsafe {
             self.update();
         }
-        if leader.1 <= u8::MAX.into() && key.1 <= u8::MAX.into() {
+        if leader.1 <= (u8::MAX as u32) && key.1 <= (u8::MAX as u32) {
             if let Some(dead) = self
                 .dead_keys
                 .get(&(Self::fixup_mods(leader.0), leader.1 as u8))
@@ -2509,7 +2565,7 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
         && (keys[VK_CONTROL as usize] & 0x80 != 0)
     {
         // AltGr is pressed; while AltGr is on the RHS of the keyboard
-        // is is not the same thing as right-alt.
+        // is not the same thing as right-alt.
         // Windows sets RMENU and CONTROL to indicate AltGr and we
         // have to keep these in the key state in order for ToUnicode
         // to map the key correctly.
@@ -2667,7 +2723,7 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
                             // They pressed the same dead key twice,
                             // emit the underlying char again and call
                             // it done.
-                            // <https://github.com/wez/wezterm/issues/1729>
+                            // <https://github.com/wezterm/wezterm/issues/1729>
                             inner.events.dispatch(WindowEvent::KeyEvent(key.clone()));
                             return Some(0);
                         }

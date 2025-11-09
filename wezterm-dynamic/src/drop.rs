@@ -1,5 +1,10 @@
 use crate::Value;
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 /// Non-recursive drop implementation.
 /// This is taken from dtolnay's miniserde library
 /// and is reproduced here under the terms of its

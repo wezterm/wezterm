@@ -31,6 +31,7 @@ be used to specify which ssh library is used.
 wezterm is now able to parse `~/.ssh/config` and `/etc/ssh/ssh_config`
 and respects the following options:
 
+* `IdentityAgent`
 * `IdentityFile`
 * `Hostname`
 * `User`
@@ -53,6 +54,18 @@ All other options are parsed but have no effect.  Notably, neither `Match` or
 {{since('20210814-124438-54e29167:')}}
 
 `Include` is now supported.
+
+{{since('nightly')}}
+
+`ProxyUseFDpass` is now supported. (But not on Microsoft Windows).
+
+`ServerAliveInterval` is now supported by the `libssh` backend.  Setting it to
+a non-zero value will cause wezterm to send an `IGNORE` packet on that interval.
+`ServerAliveCountMax` is NOT supported by this backend.  This keepalive
+mechanism will not actively track the number of keepalives or disconnect the
+session; the packets are sent in a fire-and-forget manner as a least effort way
+to keep some traffic flowing on the connection to persuade intervening network
+hardware to keep the session alive.
 
 ### CLI Overrides
 

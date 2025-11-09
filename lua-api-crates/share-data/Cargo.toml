@@ -2,13 +2,14 @@
 name = "share-data"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0"
-config = { path = "../../config" }
-wezterm-dynamic = { path = "../../wezterm-dynamic" }
-lazy_static = "1.4"
-luahelper = { path = "../../luahelper" }
-ordered-float = "3.0"
+anyhow.workspace = true
+config.workspace = true
+lazy_static.workspace = true
+luahelper.workspace = true
+ordered-float.workspace = true
+wezterm-dynamic.workspace = true

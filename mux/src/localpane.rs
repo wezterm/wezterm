@@ -1,7 +1,7 @@
 use crate::domain::DomainId;
 use crate::pane::{
-    CloseReason, ForEachPaneLogicalLine, LogicalLine, Pane, PaneId, Pattern, SearchResult,
-    WithPaneLines,
+    CachePolicy, CloseReason, ForEachPaneLogicalLine, LogicalLine, Pane, PaneId, Pattern,
+    SearchResult, WithPaneLines,
 };
 use crate::renderable::*;
 use crate::tmux::{TmuxDomain, TmuxDomainState};
@@ -9,7 +9,7 @@ use crate::{Domain, Mux, MuxNotification};
 use anyhow::Error;
 use async_trait::async_trait;
 use config::keyassignment::ScrollbackEraseMode;
-use config::{configuration, ExitBehavior};
+use config::{configuration, ExitBehavior, ExitBehaviorMessaging};
 use fancy_regex::Regex;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty, PtySize};
@@ -31,7 +31,7 @@ use url::Url;
 use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Alert, AlertHandler, Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent,
+    Alert, AlertHandler, Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, Progress,
     SemanticZone, StableRowIndex, Terminal, TerminalConfiguration, TerminalSize,
 };
 
@@ -42,7 +42,7 @@ enum ProcessState {
     Running {
         child_waiter: Receiver<IoResult<ExitStatus>>,
         pid: Option<u32>,
-        signaller: Box<dyn ChildKiller + Send + Sync>,
+        signaller: Box<dyn ChildKiller + Sync>,
         // Whether we've explicitly killed the child
         killed: bool,
     },
@@ -115,11 +115,17 @@ impl CachedLeaderInfo {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum LocalPaneConnectionState {
+    Connecting,
+    Connected,
+}
+
 pub struct LocalPane {
     pane_id: PaneId,
     terminal: Mutex<Terminal>,
     process: Mutex<ProcessState>,
-    pty: Mutex<Box<dyn MasterPty + Send>>,
+    pty: Mutex<Box<dyn MasterPty>>,
     writer: Mutex<Box<dyn Write + Send>>,
     domain_id: DomainId,
     tmux_domain: Mutex<Option<Arc<TmuxDomainState>>>,
@@ -166,7 +172,11 @@ impl Pane for LocalPane {
     }
 
     fn get_keyboard_encoding(&self) -> KeyboardEncoding {
-        self.terminal.lock().get_keyboard_encoding()
+        if self.tmux_domain.lock().is_some() {
+            KeyboardEncoding::Xterm
+        } else {
+            self.terminal.lock().get_keyboard_encoding()
+        }
     }
 
     fn get_current_seqno(&self) -> SequenceNo {
@@ -213,6 +223,24 @@ impl Pane for LocalPane {
         self.terminal.lock().user_vars().clone()
     }
 
+    fn exit_behavior(&self) -> Option<ExitBehavior> {
+        // If we are ssh, and we've not yet fully connected,
+        // then override exit_behavior so that we can show
+        // connection issues
+        let mut pty = self.pty.lock();
+        let is_ssh_connecting = pty
+            .downcast_mut::<crate::ssh::WrappedSshPty>()
+            .map(|s| s.is_connecting())
+            .unwrap_or(false);
+        let is_failed_spawn = pty.is::<crate::domain::FailedSpawnPty>();
+
+        if is_ssh_connecting || is_failed_spawn {
+            Some(ExitBehavior::CloseOnCleanExit)
+        } else {
+            None
+        }
+    }
+
     fn kill(&self) {
         let mut proc = self.process.lock();
         log::debug!(
@@ -236,12 +264,16 @@ impl Pane for LocalPane {
 
     fn is_dead(&self) -> bool {
         let mut proc = self.process.lock();
-        let mut notify = None;
 
         const EXIT_BEHAVIOR: &str = "This message is shown because \
-            \x1b]8;;https://wezfurlong.org/wezterm/\
+            \x1b]8;;https://wezterm.org/\
             config/lua/config/exit_behavior.html\
             \x1b\\exit_behavior\x1b]8;;\x1b\\";
+
+        let mut terse = String::new();
+        let mut brief = String::new();
+        let mut trailer = String::new();
+        let cmd = &self.command_description;
 
         match &mut *proc {
             ProcessState::Running {
@@ -263,31 +295,30 @@ impl Pane for LocalPane {
                             .contains(&status.exit_code()),
                     };
 
-                    match (configuration().exit_behavior, success, killed) {
+                    match (
+                        self.exit_behavior()
+                            .unwrap_or_else(|| configuration().exit_behavior),
+                        success,
+                        killed,
+                    ) {
                         (ExitBehavior::Close, _, _) => *proc = ProcessState::Dead,
-                        (ExitBehavior::CloseOnCleanExit, false, false) => {
-                            notify = Some(format!(
-                                "\r\n⚠️  Process {} didn't exit cleanly\r\n{}.\r\n{}=\"CloseOnCleanExit\"\r\n",
-                                self.command_description,
-                                status,
-                                EXIT_BEHAVIOR
-                            ));
+                        (ExitBehavior::CloseOnCleanExit, false, _) => {
+                            brief = format!("⚠️  Process {cmd} didn't exit cleanly");
+                            terse = format!("{status}.");
+                            trailer = format!("{EXIT_BEHAVIOR}=\"CloseOnCleanExit\"");
+
                             *proc = ProcessState::DeadPendingClose { killed: false }
                         }
                         (ExitBehavior::CloseOnCleanExit, ..) => *proc = ProcessState::Dead,
                         (ExitBehavior::Hold, success, false) => {
+                            trailer = format!("{EXIT_BEHAVIOR}=\"Hold\"");
+
                             if success {
-                                notify = Some(format!(
-                                    "\r\n👍 Process {} completed.\r\n{}=\"Hold\"\r\n",
-                                    self.command_description, EXIT_BEHAVIOR
-                                ));
+                                brief = format!("👍 Process {cmd} completed.");
+                                terse = "done".to_string();
                             } else {
-                                notify = Some(format!(
-                                    "\r\n⚠️  Process {} didn't exit cleanly\r\n{}.\r\n{}=\"Hold\"\r\n",
-                                    self.command_description,
-                                    status,
-                                    EXIT_BEHAVIOR
-                                ));
+                                brief = format!("⚠️  Process {cmd} didn't exit cleanly");
+                                terse = format!("{status}");
                             }
                             *proc = ProcessState::DeadPendingClose { killed: false }
                         }
@@ -303,6 +334,30 @@ impl Pane for LocalPane {
                 }
             }
             ProcessState::Dead => {}
+        }
+
+        let mut notify = None;
+        if !terse.is_empty() {
+            match configuration().exit_behavior_messaging {
+                ExitBehaviorMessaging::Verbose => {
+                    if terse == "done" {
+                        notify = Some(format!("\r\n{brief}\r\n{trailer}"));
+                    } else {
+                        notify = Some(format!("\r\n{brief}\r\n{terse}\r\n{trailer}"));
+                    }
+                }
+                ExitBehaviorMessaging::Brief => {
+                    if terse == "done" {
+                        notify = Some(format!("\r\n{brief}"));
+                    } else {
+                        notify = Some(format!("\r\n{brief}\r\n{terse}"));
+                    }
+                }
+                ExitBehaviorMessaging::Terse => {
+                    notify = Some(format!("\r\n[{terse}]"));
+                }
+                ExitBehaviorMessaging::None => {}
+            }
         }
 
         if let Some(notify) = notify {
@@ -344,7 +399,7 @@ impl Pane for LocalPane {
     fn key_down(&self, key: KeyCode, mods: KeyModifiers) -> Result<(), Error> {
         Mux::get().record_input_for_current_identity();
         if self.tmux_domain.lock().is_some() {
-            log::error!("key: {:?}", key);
+            log::trace!("key: {:?}", key);
             if key == KeyCode::Char('q') {
                 self.terminal.lock().send_paste("detach\n")?;
             }
@@ -370,7 +425,7 @@ impl Pane for LocalPane {
         Ok(())
     }
 
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
         Mux::get().record_input_for_current_identity();
         MutexGuard::map(self.writer.lock(), |writer| {
             let w: &mut dyn std::io::Write = writer;
@@ -396,7 +451,7 @@ impl Pane for LocalPane {
         // If the title is the default pane title, then try to spice
         // things up a bit by returning the process basename instead
         if title == "wezterm" {
-            if let Some(proc_name) = self.get_foreground_process_name() {
+            if let Some(proc_name) = self.get_foreground_process_name(CachePolicy::AllowStale) {
                 let proc_name = std::path::Path::new(&proc_name);
                 if let Some(name) = proc_name.file_name() {
                     return name.to_string_lossy().to_string();
@@ -405,6 +460,10 @@ impl Pane for LocalPane {
         }
 
         title
+    }
+
+    fn get_progress(&self) -> Progress {
+        self.terminal.lock().get_progress()
     }
 
     fn palette(&self) -> ColorPalette {
@@ -450,12 +509,12 @@ impl Pane for LocalPane {
         }
     }
 
-    fn get_current_working_dir(&self) -> Option<Url> {
+    fn get_current_working_dir(&self, policy: CachePolicy) -> Option<Url> {
         self.terminal
             .lock()
             .get_current_dir()
             .cloned()
-            .or_else(|| self.divine_current_working_dir())
+            .or_else(|| self.divine_current_working_dir(policy))
     }
 
     fn tty_name(&self) -> Option<String> {
@@ -471,19 +530,19 @@ impl Pane for LocalPane {
         }
     }
 
-    fn get_foreground_process_info(&self) -> Option<LocalProcessInfo> {
+    fn get_foreground_process_info(&self, policy: CachePolicy) -> Option<LocalProcessInfo> {
         #[cfg(unix)]
         if let Some(pid) = self.pty.lock().process_group_leader() {
             return LocalProcessInfo::with_root_pid(pid as u32);
         }
 
-        self.divine_foreground_process()
+        self.divine_foreground_process(policy)
     }
 
-    fn get_foreground_process_name(&self) -> Option<String> {
+    fn get_foreground_process_name(&self, policy: CachePolicy) -> Option<String> {
         #[cfg(unix)]
         {
-            let leader = self.get_leader();
+            let leader = self.get_leader(policy);
             if let Some(path) = &leader.path {
                 return Some(path.to_string_lossy().to_string());
             }
@@ -491,7 +550,7 @@ impl Pane for LocalPane {
         }
 
         #[cfg(windows)]
-        if let Some(fg) = self.divine_foreground_process() {
+        if let Some(fg) = self.divine_foreground_process(policy) {
             return Some(fg.executable.to_string_lossy().to_string());
         }
 
@@ -500,7 +559,7 @@ impl Pane for LocalPane {
     }
 
     fn can_close_without_prompting(&self, _reason: CloseReason) -> bool {
-        if let Some(info) = self.divine_process_list(true) {
+        if let Some(info) = self.divine_process_list(CachePolicy::FetchImmediate) {
             log::trace!(
                 "can_close_without_prompting? procs in pane {:#?}",
                 info.root
@@ -901,10 +960,10 @@ impl AlertHandler for LocalPaneNotifHandler {
 /// Without this, typing `exit` in `cmd.exe` would keep the pane around
 /// until something else triggered the mux to prune dead processes.
 fn split_child(
-    mut process: Box<dyn Child + Send>,
+    mut process: Box<dyn Child>,
 ) -> (
     Receiver<IoResult<ExitStatus>>,
-    Box<dyn ChildKiller + Send + Sync>,
+    Box<dyn ChildKiller + Sync>,
     Option<u32>,
 ) {
     let pid = process.process_id();
@@ -930,7 +989,7 @@ impl LocalPane {
         pane_id: PaneId,
         mut terminal: Terminal,
         process: Box<dyn Child + Send>,
-        pty: Box<dyn MasterPty + Send>,
+        pty: Box<dyn MasterPty>,
         writer: Box<dyn Write + Send>,
         domain_id: DomainId,
         command_description: String,
@@ -964,10 +1023,12 @@ impl LocalPane {
     }
 
     #[cfg(unix)]
-    fn get_leader(&self) -> CachedLeaderInfo {
+    fn get_leader(&self, policy: CachePolicy) -> CachedLeaderInfo {
         let mut leader = self.leader.lock();
 
-        if let Some(info) = leader.as_mut() {
+        if policy == CachePolicy::FetchImmediate {
+            leader.replace(CachedLeaderInfo::new(self.pty.lock().as_raw_fd()));
+        } else if let Some(info) = leader.as_mut() {
             // If stale, queue up some work in another thread to update.
             // Right now, we'll return the stale data.
             if info.expired() && info.can_update() {
@@ -987,33 +1048,33 @@ impl LocalPane {
         (*leader).clone().unwrap()
     }
 
-    fn divine_current_working_dir(&self) -> Option<Url> {
+    fn divine_current_working_dir(&self, policy: CachePolicy) -> Option<Url> {
         #[cfg(unix)]
         {
-            let leader = self.get_leader();
+            let leader = self.get_leader(policy);
             if let Some(path) = &leader.current_working_dir {
-                return Url::parse(&format!("file://localhost{}", path.display())).ok();
+                return Url::from_directory_path(path).ok();
             }
             return None;
         }
 
         #[cfg(windows)]
-        if let Some(fg) = self.divine_foreground_process() {
-            // Since windows paths typically start with something like C:\,
-            // we cannot simply stick `localhost` on the front; we have to
-            // omit the hostname otherwise the url parser is unhappy.
-            return Url::parse(&format!("file://{}", fg.cwd.display())).ok();
+        if let Some(fg) = self.divine_foreground_process(policy) {
+            return Url::from_directory_path(fg.cwd).ok();
         }
 
         #[allow(unreachable_code)]
         None
     }
 
-    fn divine_process_list(&self, force_refresh: bool) -> Option<MappedMutexGuard<CachedProcInfo>> {
+    fn divine_process_list(
+        &self,
+        policy: CachePolicy,
+    ) -> Option<MappedMutexGuard<'_, CachedProcInfo>> {
         if let ProcessState::Running { pid: Some(pid), .. } = &*self.process.lock() {
             let mut proc_list = self.proc_list.lock();
 
-            let expired = force_refresh
+            let expired = policy == CachePolicy::FetchImmediate
                 || proc_list
                     .as_ref()
                     .map(|info| info.updated.elapsed() > PROC_INFO_CACHE_TTL)
@@ -1064,8 +1125,8 @@ impl LocalPane {
     }
 
     #[allow(dead_code)]
-    fn divine_foreground_process(&self) -> Option<LocalProcessInfo> {
-        if let Some(info) = self.divine_process_list(false) {
+    fn divine_foreground_process(&self, policy: CachePolicy) -> Option<LocalProcessInfo> {
+        if let Some(info) = self.divine_process_list(policy) {
             Some(info.foreground.clone())
         } else {
             None
@@ -1076,7 +1137,7 @@ impl LocalPane {
 impl Drop for LocalPane {
     fn drop(&mut self) {
         // Avoid lingering zombies if we can, but don't block forever.
-        // <https://github.com/wez/wezterm/issues/558>
+        // <https://github.com/wezterm/wezterm/issues/558>
         if let ProcessState::Running { signaller, .. } = &mut *self.process.lock() {
             let _ = signaller.kill();
         }

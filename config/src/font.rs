@@ -250,7 +250,7 @@ bitflags! {
     // Note that these are strongly coupled with deps/freetype/src/lib.rs,
     // but we can't directly reference that from here without making config
     // depend on freetype.
-    #[derive(Default,  FromDynamic, ToDynamic)]
+    #[derive(FromDynamic, ToDynamic)]
     #[dynamic(try_from="String", into="String")]
     pub struct FreeTypeLoadFlags: u32 {
         /// FT_LOAD_DEFAULT
@@ -266,6 +266,20 @@ bitflags! {
         const MONOCHROME = 4096;
         /// Disable auto-hinter.
         const NO_AUTOHINT = 32768;
+        const NO_SVG = 16777216;
+        const SVG_ONLY = 8388608;
+    }
+}
+
+impl FreeTypeLoadFlags {
+    pub fn default_hidpi() -> Self {
+        Self::NO_HINTING
+    }
+}
+
+impl Default for FreeTypeLoadFlags {
+    fn default() -> Self {
+        Self::DEFAULT
     }
 }
 
@@ -293,6 +307,12 @@ impl ToString for FreeTypeLoadFlags {
         if self.contains(Self::NO_BITMAP) {
             s.push("NO_BITMAP");
         }
+        if self.contains(Self::NO_SVG) {
+            s.push("NO_SVG");
+        }
+        if self.contains(Self::SVG_ONLY) {
+            s.push("SVG_ONLY");
+        }
         if self.contains(Self::FORCE_AUTOHINT) {
             s.push("FORCE_AUTOHINT");
         }
@@ -309,7 +329,7 @@ impl ToString for FreeTypeLoadFlags {
 impl TryFrom<String> for FreeTypeLoadFlags {
     type Error = String;
     fn try_from(s: String) -> Result<Self, String> {
-        let mut flags = FreeTypeLoadFlags::default();
+        let mut flags = FreeTypeLoadFlags::empty();
 
         for ele in s.split('|') {
             let ele = ele.trim();
@@ -317,6 +337,8 @@ impl TryFrom<String> for FreeTypeLoadFlags {
                 "DEFAULT" => flags |= Self::DEFAULT,
                 "NO_HINTING" => flags |= Self::NO_HINTING,
                 "NO_BITMAP" => flags |= Self::NO_BITMAP,
+                "NO_SVG" => flags |= Self::NO_SVG,
+                "SVG_ONLY" => flags |= Self::SVG_ONLY,
                 "FORCE_AUTOHINT" => flags |= Self::FORCE_AUTOHINT,
                 "MONOCHROME" => flags |= Self::MONOCHROME,
                 "NO_AUTOHINT" => flags |= Self::NO_AUTOHINT,
@@ -460,7 +482,7 @@ impl TextStyle {
     /// doesn't help us know anything about the name until
     /// we have a parsed font to compare with.
     ///
-    /// <https://github.com/wez/wezterm/issues/456>
+    /// <https://github.com/wezterm/wezterm/issues/456>
     pub fn reduce_first_font_to_family(&self) -> Self {
         fn reduce(mut family: &str) -> String {
             loop {
@@ -559,7 +581,7 @@ impl TextStyle {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::let_and_return))]
+    #[allow(clippy::let_and_return)]
     pub fn font_with_fallback(&self) -> Vec<FontAttributes> {
         let mut font = self.font.clone();
 
@@ -668,6 +690,7 @@ impl Default for FontLocatorSelection {
 pub enum FontRasterizerSelection {
     #[default]
     FreeType,
+    Harfbuzz,
 }
 
 #[derive(Debug, Clone, Copy, FromDynamic, ToDynamic, Default)]

@@ -1,7 +1,12 @@
 use crate::Value;
+use core::cmp::Ordering;
 use core::iter::FromIterator;
 use core::ops::{Deref, DerefMut};
-use std::cmp::Ordering;
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+use alloc::vec::Vec;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Array {

@@ -1,18 +1,23 @@
 #!/bin/sh
 
-case $1 in
-  --testing)
-    TESTING=0
-  ;;
-  '')
-    TESTING=1
-  ;;
-  *)
-    echo 'get-deps:'
-    echo '  --testing    include dependencies required for tests'
-    exit 1
-  ;;
-esac
+TESTING=0
+DOCS=0
+for arg in "$@"; do
+    case $arg in
+      --testing)
+        TESTING=1
+      ;;
+      --docs)
+        DOCS=1
+      ;;
+      *)
+        echo 'get-deps:'
+        echo '  --docs       include dependencies required for testing docs'
+        echo '  --testing    include dependencies required for tests'
+        exit 1
+      ;;
+    esac
+done
 
 NOTFOUND=0
 
@@ -21,7 +26,11 @@ test_cmd() {
 }
 
 test_flag() {
-  test $TESTING -eq 0
+  test $TESTING -eq 1
+}
+
+docs_flag() {
+  test $DOCS -eq 1
 }
 
 if test -z "$SUDO"; then
@@ -98,6 +107,13 @@ fedora_deps() {
   if test_flag; then
     $YUM install -y 'openssh-server'
   fi
+
+  # Fedora 41 and above split a part of openssl-devel into openssl-devel-engine.
+  # CentOS/RHEL 10 are doing the same thing.
+  if { [ "$VERSION_ID" -ge "41" ] && [ "$ID" == "fedora" ]; } \
+     || { [ "$VERSION_ID" -ge "10" ] && [ "$ID" != "fedora" ]; }; then
+    $YUM install -y 'openssl-devel-engine'
+  fi
 }
 
 suse_deps() {
@@ -106,7 +122,6 @@ suse_deps() {
   if [ "${CI}" == "yes" ] ; then
     RESOLVE="--allow-downgrade"
   fi
-  $ZYPPER install $RESOLVE -yl 'perl-FindBin' 'perl-File-Compare' || true
   $ZYPPER install $RESOLVE -yl \
     'make' \
     'gcc' \
@@ -164,6 +179,9 @@ debian_deps() {
   if test_flag; then
     $APT install -y 'openssh-server'
   fi
+  if docs_flag; then
+    $APT install -y 'python3-pip mkdocs'
+  fi
 }
 
 arch_deps() {
@@ -179,7 +197,6 @@ arch_deps() {
     'libxkbcommon-x11' \
     'pkgconf' \
     'python3' \
-    'rust' \
     'wayland' \
     'xcb-util' \
     'xcb-util-image' \
@@ -192,7 +209,7 @@ arch_deps() {
   fi
 }
 
-bsd_deps() {
+freebsd_deps() {
   PKG="$SUDO pkg"
   $PKG install -y \
     'cmake' \
@@ -221,6 +238,23 @@ bsd_deps() {
     'xcb-util-wm' \
     'z' \
     'zip'
+}
+
+netbsd_deps() {
+  PKG="$SUDO pkgin"
+  $PKG -y install \
+    'bash' \
+    'fontconfig' \
+    'git-base' \
+    'hicolor-icon-theme' \
+    'libX11' \
+    'libxkbcommon' \
+    'pkgconf' \
+    'rust' \
+    'wayland' \
+    'xcb-util' \
+    'xcb-util-image' \
+    'xorgproto'
 }
 
 gentoo_deps() {
@@ -305,11 +339,14 @@ fallback_method() {
       echo "skipping darwin*/msys"
     ;;
     freebsd*)
-      bsd_deps
+      freebsd_deps
     ;;
     ''|linux-gnu)
       # catch and known OSTYPE
       echo "\$OSTYPE is '$OSTYPE'"
+    ;;
+    netbsd*)
+      netbsd_deps
     ;;
     *)
       NOTFOUND=1
@@ -321,6 +358,8 @@ fallback_method() {
 
 if test -e /etc/os-release; then
   . /etc/os-release
+else
+  ID=$(uname -s | tr '[:upper:]' '[:lower:]')
 fi
 
 set -e
@@ -335,11 +374,14 @@ case $ID in
   *suse*)
     suse_deps
   ;;
-  debian|ubuntu)
+  debian|ubuntu|pop)
     debian_deps
   ;;
   freebsd) # available since 13.0
-    bsd_deps
+    freebsd_deps
+  ;;
+  netbsd*)
+    netbsd_deps
   ;;
   arch|artix)
     arch_deps
@@ -380,7 +422,7 @@ fi
 
 if ! test_cmd 'rustc'; then
   echo "Rust is not installed!"
-  echo "Please see https://wezfurlong.org/wezterm/install/source.html for installation instructions"
+  echo "Please see https://wezterm.org/install/source.html for installation instructions"
   exit 1
 fi
 

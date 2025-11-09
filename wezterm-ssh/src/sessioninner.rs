@@ -20,7 +20,7 @@ use socket2::{Domain, Socket, Type};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::ToSocketAddrs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub(crate) struct DescriptorState {
@@ -50,6 +50,8 @@ pub(crate) struct SessionInner {
     pub sender_read: FileDescriptor,
     pub session_was_dropped: bool,
     pub shown_accept_env_error: bool,
+    pub last_keep_alive: Instant,
+    pub keep_alive: Option<Duration>,
 }
 
 impl Drop for SessionInner {
@@ -201,9 +203,11 @@ impl SessionInner {
         if let Some(bind_addr) = self.config.get("bindaddress") {
             sess.set_option(libssh_rs::SshOption::BindAddress(bind_addr.to_string()))?;
         }
+        if let Some(host_key) = self.config.get("hostkeyalgorithms") {
+            sess.set_option(libssh_rs::SshOption::HostKeys(host_key.to_string()))?;
+        }
 
-        let sock =
-            self.connect_to_host(&hostname, port, verbose, self.config.get("proxycommand"))?;
+        let (sock, _child) = self.connect_to_host(&hostname, port, verbose)?;
         let raw = {
             #[cfg(unix)]
             {
@@ -240,6 +244,13 @@ impl SessionInner {
             .try_send(SessionEvent::Authenticated)
             .context("notifying user that session is authenticated")?;
 
+        if let Some("yes") = self.config.get("forwardagent").map(|s| s.as_str()) {
+            if self.identity_agent().is_some() {
+                sess.enable_accept_agent_forward(true);
+            } else {
+                log::error!("ForwardAgent is set to yes, but IdentityAgent is not set");
+            }
+        }
         sess.set_blocking(false);
         let mut sess = SessionWrap::with_libssh(sess);
         self.request_loop(&mut sess)
@@ -278,8 +289,7 @@ impl SessionInner {
             ))))
             .context("notifying user of banner")?;
 
-        let sock =
-            self.connect_to_host(&hostname, port, verbose, self.config.get("proxycommand"))?;
+        let (sock, _child) = self.connect_to_host(&hostname, port, verbose)?;
 
         let mut sess = ssh2::Session::new()?;
         if verbose {
@@ -321,19 +331,18 @@ impl SessionInner {
         hostname: &str,
         port: u16,
         verbose: bool,
-        proxy_command: Option<&String>,
-    ) -> anyhow::Result<Socket> {
-        match proxy_command.map(|s| s.as_str()) {
+    ) -> anyhow::Result<(Socket, Option<KillOnDropChild>)> {
+        match self.config.get("proxycommand").map(|s| s.as_str()) {
             Some("none") | None => {}
             Some(proxy_command) => {
                 let mut cmd;
                 if cfg!(windows) {
                     let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".to_string());
                     cmd = std::process::Command::new(comspec);
-                    cmd.args(&["/c", proxy_command]);
+                    cmd.args(["/c", proxy_command]);
                 } else {
                     cmd = std::process::Command::new("sh");
-                    cmd.args(&["-c", &format!("exec {}", proxy_command)]);
+                    cmd.args(["-c", &format!("exec {}", proxy_command)]);
                 }
 
                 let (a, b) = socketpair()?;
@@ -341,27 +350,37 @@ impl SessionInner {
                 cmd.stdin(b.as_stdio()?);
                 cmd.stdout(b.as_stdio()?);
                 cmd.stderr(std::process::Stdio::inherit());
-                let _child = cmd
+                let child = cmd
                     .spawn()
                     .with_context(|| format!("spawning ProxyCommand {}", proxy_command))?;
 
                 #[cfg(unix)]
                 unsafe {
+                    use passfd::FdPassingExt;
                     use std::os::unix::io::{FromRawFd, IntoRawFd};
-                    return Ok(Socket::from_raw_fd(a.into_raw_fd()));
+
+                    let raw = a.into_raw_fd();
+                    let dest = match self.config.get("proxyusefdpass").map(|s| s.as_str()) {
+                        Some("yes") => raw.recv_fd()?,
+                        _ => raw,
+                    };
+
+                    return Ok((Socket::from_raw_fd(dest), Some(KillOnDropChild(child))));
                 }
                 #[cfg(windows)]
                 unsafe {
                     use std::os::windows::io::{FromRawSocket, IntoRawSocket};
-                    return Ok(Socket::from_raw_socket(a.into_raw_socket()));
+                    return Ok((
+                        Socket::from_raw_socket(a.into_raw_socket()),
+                        Some(KillOnDropChild(child)),
+                    ));
                 }
             }
         }
 
         let addr = (hostname, port)
             .to_socket_addrs()?
-            .filter(|addr| self.filter_sock_addr(addr))
-            .next()
+            .find(|addr| self.filter_sock_addr(addr))
             .with_context(|| format!("resolving address for {}", hostname))?;
         if verbose {
             log::info!("resolved {hostname}:{port} -> {addr:?}");
@@ -370,8 +389,7 @@ impl SessionInner {
         if let Some(bind_addr) = self.config.get("bindaddress") {
             let bind_addr = (bind_addr.as_str(), 0)
                 .to_socket_addrs()?
-                .filter(|addr| self.filter_sock_addr(addr))
-                .next()
+                .find(|addr| self.filter_sock_addr(addr))
                 .with_context(|| format!("resolving bind address {bind_addr:?}"))?;
             if verbose {
                 log::info!("binding to {bind_addr:?}");
@@ -382,7 +400,7 @@ impl SessionInner {
 
         sock.connect(&addr.into())
             .with_context(|| format!("Connecting to {hostname}:{port} ({addr:?})"))?;
-        Ok(sock)
+        Ok((sock, None))
     }
 
     /// Used to restrict to_socket_addrs results to the address
@@ -395,13 +413,46 @@ impl SessionInner {
         }
     }
 
+    fn do_keepalive(&mut self, sess: &mut SessionWrap) -> anyhow::Result<()> {
+        match sess {
+            #[cfg(feature = "ssh2")]
+            SessionWrap::Ssh2(_sess) => Ok(()),
+            #[cfg(feature = "libssh-rs")]
+            SessionWrap::LibSsh(sess) => {
+                // We implement a very basic keep alive mechanism here;
+                // every ServerAliveInterval seconds (if non-zero), we will
+                // send an ignore packet.
+                // Unlike the openssh client, we do not have a ServerAliveCountMax
+                // limit (because it is not clear how we could correctly implement
+                // that based on what we can see here in this crate), nor do we
+                // explicitly trigger a disconnect if there is an error with
+                // the ignore packet.
+                if let Some(duration) = self.keep_alive {
+                    if self.last_keep_alive.elapsed() >= duration {
+                        log::trace!("sending keep alive");
+                        self.last_keep_alive = Instant::now();
+                        let ignore_me = [0x42; 128];
+                        if let Err(err) = sess.sess.send_ignore(&ignore_me) {
+                            log::warn!(
+                                "Error sending IGNORE packet: {err:#}. Is peer disconnected?"
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     fn request_loop(&mut self, sess: &mut SessionWrap) -> anyhow::Result<()> {
         let mut sleep_delay = Duration::from_millis(100);
 
         loop {
+            self.do_keepalive(sess)?;
             self.tick_io()?;
             self.drain_request_pipe();
             self.dispatch_pending_requests(sess)?;
+            self.connect_pending_agent_forward_channels(sess);
 
             if self.channels.is_empty() && self.session_was_dropped {
                 log::trace!(
@@ -514,8 +565,16 @@ impl SessionInner {
 
             let stdin = &mut chan.descriptors[0];
             if stdin.fd.is_some() && !stdin.buf.is_empty() {
-                write_from_buf(&mut chan.channel.writer(), &mut stdin.buf)
-                    .context("writing to channel")?;
+                if let Err(err) = write_from_buf(&mut chan.channel.writer(), &mut stdin.buf)
+                    .context("writing to channel")
+                {
+                    log::trace!(
+                        "Failed to write data to channel {} stdin: {:#}, closing pipe",
+                        id,
+                        err
+                    );
+                    stdin.fd.take();
+                }
             }
 
             for (idx, out) in chan
@@ -802,6 +861,61 @@ impl SessionInner {
         }
     }
 
+    fn connect_pending_agent_forward_channels(&mut self, sess: &mut SessionWrap) {
+        fn process_one(sess: &mut SessionInner, channel: ChannelWrap) -> anyhow::Result<()> {
+            let identity_agent = sess
+                .identity_agent()
+                .ok_or_else(|| anyhow!("no identity agent in config"))?;
+            let mut fd = {
+                use wezterm_uds::UnixStream;
+                #[cfg(unix)]
+                {
+                    FileDescriptor::new(UnixStream::connect(&identity_agent)?)
+                }
+                #[cfg(windows)]
+                unsafe {
+                    use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+                    FileDescriptor::from_raw_socket(
+                        UnixStream::connect(&identity_agent)?.into_raw_socket(),
+                    )
+                }
+            };
+            fd.set_non_blocking(true)?;
+
+            let read_from_agent = fd;
+            let write_to_agent = read_from_agent.try_clone()?;
+            let channel_id = sess.next_channel_id;
+            sess.next_channel_id += 1;
+            let info = ChannelInfo {
+                channel_id,
+                channel,
+                exit: None,
+                exited: false,
+                descriptors: [
+                    DescriptorState {
+                        fd: Some(read_from_agent),
+                        buf: VecDeque::with_capacity(8192),
+                    },
+                    DescriptorState {
+                        fd: Some(write_to_agent),
+                        buf: VecDeque::with_capacity(8192),
+                    },
+                    DescriptorState {
+                        fd: None,
+                        buf: VecDeque::with_capacity(8192),
+                    },
+                ],
+            };
+            sess.channels.insert(channel_id, info);
+            Ok(())
+        }
+        while let Some(channel) = sess.accept_agent_forward() {
+            if let Err(err) = process_one(self, channel) {
+                log::error!("error connecting agent forward: {:#}", err);
+            }
+        }
+    }
+
     pub fn signal_channel(&mut self, info: &SignalChannel) -> anyhow::Result<()> {
         let chan_info = self
             .channels
@@ -814,6 +928,14 @@ impl SessionInner {
 
     pub fn exec(&mut self, sess: &mut SessionWrap, exec: Exec) -> anyhow::Result<ExecResult> {
         let mut channel = sess.open_session()?;
+
+        if let Some("yes") = self.config.get("forwardagent").map(|s| s.as_str()) {
+            if self.identity_agent().is_some() {
+                if let Err(err) = channel.request_auth_agent_forwarding() {
+                    log::error!("Failed to request agent forwarding: {:#}", err);
+                }
+            }
+        }
 
         if let Some(env) = &exec.env {
             for (key, val) in env {
@@ -941,6 +1063,13 @@ impl SessionInner {
             }
         }
     }
+
+    pub fn identity_agent(&self) -> Option<String> {
+        self.config
+            .get("identityagent")
+            .map(|s| s.to_owned())
+            .or_else(|| std::env::var("SSH_AUTH_SOCK").ok())
+    }
 }
 
 fn write_from_buf<W: Write>(w: &mut W, buf: &mut VecDeque<u8>) -> std::io::Result<()> {
@@ -996,4 +1125,18 @@ where
         log::error!("{}: {:#}", what, err);
     }
     Ok(true)
+}
+
+/// A little helper to ensure the Child process is killed on Drop.
+struct KillOnDropChild(std::process::Child);
+
+impl Drop for KillOnDropChild {
+    fn drop(&mut self) {
+        if let Err(err) = self.0.kill() {
+            log::error!("Error killing ProxyCommand: {}", err);
+        }
+        if let Err(err) = self.0.wait() {
+            log::error!("Error waiting for ProxyCommand to finish: {}", err);
+        }
+    }
 }

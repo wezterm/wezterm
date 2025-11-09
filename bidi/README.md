@@ -8,6 +8,8 @@ other code in wezterm.
 
 The focus for this crate is conformance.
 
+This crate is `no_std`, but does require `alloc`.
+
 ## Status
 
 This crate resolves embedding levels and can reorder line ranges.

@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use luahelper::{from_lua_value_dynamic, lua_value_to_dynamic, to_lua};
-use mlua::{FromLua, Lua, Table, ToLuaMulti, Value, Variadic};
+use mlua::{FromLua, IntoLuaMulti, Lua, Table, Value, Variadic};
 use ordered_float::NotNan;
 use portable_pty::CommandBuilder;
 use std::convert::TryFrom;
@@ -150,14 +150,11 @@ fn config_builder_new_index<'lua>(
                     for i in 1.. {
                         if let Some(debug) = lua.inspect_stack(i) {
                             let names = debug.names();
-                            let name = names.name.map(String::from_utf8_lossy);
-                            let name_what = names.name_what.map(String::from_utf8_lossy);
+                            let name = names.name;
+                            let name_what = names.name_what;
 
                             let dbg_source = debug.source();
-                            let source = dbg_source
-                                .source
-                                .and_then(|b| String::from_utf8(b.to_vec()).ok())
-                                .unwrap_or_default();
+                            let source = dbg_source.source.unwrap_or_default();
                             let func_name = match (name, name_what) {
                                 (Some(name), Some(name_what)) => {
                                     format!("{name_what} {name}")
@@ -236,7 +233,7 @@ pub fn make_lua_context(config_file: &Path) -> anyhow::Result<Lua> {
         }
         path_array.insert(
             2,
-            format!("{}/plugins/?/plugin/init.lua", crate::RUNTIME_DIR.display()),
+            format!("{}/plugins/?/plugin/init.lua", crate::DATA_DIR.display()),
         );
 
         if let Ok(exe) = std::env::current_exe() {
@@ -278,8 +275,8 @@ package.searchers[2] = function(module)
 end
         "#,
         )
-        .set_name("=searcher")?
-        .eval()
+        .set_name("=searcher")
+        .eval::<()>()
         .context("replace package.searchers")?;
 
         wezterm_mod.set(
@@ -415,11 +412,13 @@ fn shell_split<'lua>(_: &'lua Lua, line: String) -> mlua::Result<Vec<String>> {
 }
 
 fn shell_join_args<'lua>(_: &'lua Lua, args: Vec<String>) -> mlua::Result<String> {
-    Ok(shlex::join(args.iter().map(|arg| arg.as_ref())))
+    Ok(shlex::try_join(args.iter().map(|arg| arg.as_ref())).map_err(mlua::Error::external)?)
 }
 
 fn shell_quote_arg<'lua>(_: &'lua Lua, arg: String) -> mlua::Result<String> {
-    Ok(shlex::quote(&arg).into_owned())
+    Ok(shlex::try_quote(&arg)
+        .map_err(mlua::Error::external)?
+        .into_owned())
 }
 
 /// Returns the system hostname.
@@ -528,8 +527,8 @@ impl<'lua> FromLua<'lua> for LuaFontAttributes {
 /// confusion/annoyance and issues filed on Github.
 /// Let's default to disabling ligatures for these fonts unless
 /// the user has explicitly specified harfbuzz_features.
-/// <https://github.com/wez/wezterm/issues/1736>
-/// <https://github.com/wez/wezterm/issues/1786>
+/// <https://github.com/wezterm/wezterm/issues/1736>
+/// <https://github.com/wezterm/wezterm/issues/1786>
 fn disable_ligatures_for_menlo_or_monaco(mut attrs: FontAttributes) -> FontAttributes {
     if attrs.harfbuzz_features.is_none() && (attrs.family == "Menlo" || attrs.family == "Monaco") {
         attrs.harfbuzz_features = Some(vec![
@@ -798,7 +797,7 @@ pub fn emit_sync_callback<'lua, A>(
     (name, args): (String, A),
 ) -> mlua::Result<mlua::Value<'lua>>
 where
-    A: ToLuaMulti<'lua>,
+    A: IntoLuaMulti<'lua>,
 {
     let decorated_name = format!("wezterm-event-{}", name);
     let tbl: mlua::Value = lua.named_registry_value(&decorated_name)?;
@@ -819,7 +818,7 @@ pub async fn emit_async_callback<'lua, A>(
     (name, args): (String, A),
 ) -> mlua::Result<mlua::Value<'lua>>
 where
-    A: ToLuaMulti<'lua>,
+    A: IntoLuaMulti<'lua>,
 {
     let decorated_name = format!("wezterm-event-{}", name);
     let tbl: mlua::Value = lua.named_registry_value(&decorated_name)?;

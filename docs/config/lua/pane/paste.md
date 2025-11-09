@@ -2,11 +2,6 @@
 
 {{since('20201031-154415-9614e117')}}
 
-Sends the supplied `text` string to the input of the pane as if it
-were pasted from the clipboard, except that the clipboard is not involved.
+!!! info "*Since: Version 20221119-145034-49b9839f*"
+    Alias of [`send_paste`](send_paste.md) for backwards compatibility with prior releases.
 
-If the terminal attached to the pane is set to bracketed paste mode then
-the text will be sent as a bracketed paste.
-
-Otherwise the string will be streamed into the input in chunks of
-approximately 1KB each.

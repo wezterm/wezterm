@@ -18,9 +18,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, UnknownFieldAction, Value};
+use wezterm_term::UnicodeVersion;
 
 mod background;
 mod bell;
+mod cell;
 mod color;
 mod config;
 mod daemon;
@@ -39,11 +41,13 @@ mod tls;
 mod units;
 mod unix;
 mod version;
+pub mod window;
 mod wsl;
 
 pub use crate::config::*;
 pub use background::*;
 pub use bell::*;
+pub use cell::*;
 pub use color::*;
 pub use daemon::*;
 pub use exec_domain::*;
@@ -65,6 +69,8 @@ lazy_static! {
     pub static ref HOME_DIR: PathBuf = dirs_next::home_dir().expect("can't find HOME dir");
     pub static ref CONFIG_DIRS: Vec<PathBuf> = config_dirs();
     pub static ref RUNTIME_DIR: PathBuf = compute_runtime_dir().unwrap();
+    pub static ref DATA_DIR: PathBuf = compute_data_dir().unwrap();
+    pub static ref CACHE_DIR: PathBuf = compute_cache_dir().unwrap();
     static ref CONFIG: Configuration = Configuration::new();
     static ref CONFIG_FILE_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
     static ref CONFIG_SKIP: AtomicBool = AtomicBool::new(false);
@@ -80,6 +86,10 @@ thread_local! {
 }
 
 fn toml_table_has_numeric_keys(t: &toml::value::Table) -> bool {
+    t.keys().all(|k| k.parse::<isize>().is_ok())
+}
+
+fn json_object_has_numeric_keys(t: &serde_json::Map<String, serde_json::Value>) -> bool {
     t.keys().all(|k| k.parse::<isize>().is_ok())
 }
 
@@ -105,6 +115,43 @@ fn toml_to_dynamic(value: &toml::Value) -> Value {
         toml::Value::Table(t) => Value::Object(
             t.iter()
                 .map(|(k, v)| (Value::String(k.to_string()), toml_to_dynamic(v)))
+                .collect::<BTreeMap<_, _>>()
+                .into(),
+        ),
+    }
+}
+
+fn json_to_dynamic(value: &serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => b.to_dynamic(),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.to_dynamic()
+            } else if let Some(i) = n.as_u64() {
+                i.to_dynamic()
+            } else if let Some(f) = n.as_f64() {
+                f.to_dynamic()
+            } else {
+                Value::Null
+            }
+        }
+        serde_json::Value::String(s) => s.to_dynamic(),
+        serde_json::Value::Array(a) => a
+            .iter()
+            .map(json_to_dynamic)
+            .collect::<Vec<_>>()
+            .to_dynamic(),
+        // Allow `colors.indexed` to be passed through with actual integer keys
+        serde_json::Value::Object(t) if json_object_has_numeric_keys(t) => Value::Object(
+            t.iter()
+                .map(|(k, v)| (k.parse::<isize>().unwrap().to_dynamic(), json_to_dynamic(v)))
+                .collect::<BTreeMap<_, _>>()
+                .into(),
+        ),
+        serde_json::Value::Object(t) => Value::Object(
+            t.iter()
+                .map(|(k, v)| (Value::String(k.to_string()), json_to_dynamic(v)))
                 .collect::<BTreeMap<_, _>>()
                 .into(),
         ),
@@ -548,7 +595,7 @@ impl ConfigInner {
                 // But avoid watching the home dir itself, so that we
                 // don't keep reloading every time something in the
                 // home dir changes!
-                // <https://github.com/wez/wezterm/issues/1895>
+                // <https://github.com/wezterm/wezterm/issues/1895>
                 if parent != &*HOME_DIR {
                     watch_paths.push(parent.to_path_buf());
                 }
@@ -748,6 +795,14 @@ impl ConfigHandle {
         Self {
             config: Arc::new(Config::default_config()),
             generation: 0,
+        }
+    }
+
+    pub fn unicode_version(&self) -> UnicodeVersion {
+        UnicodeVersion {
+            version: self.config.unicode_version,
+            ambiguous_are_wide: self.config.treat_east_asian_ambiguous_width_as_wide,
+            cell_widths: CellWidth::compile_to_map(self.config.cell_widths.clone()),
         }
     }
 }

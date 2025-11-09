@@ -20,7 +20,6 @@ use wezterm_term::TerminalSize;
 pub struct ClientInner {
     pub client: Client,
     pub local_domain_id: DomainId,
-    pub remote_domain_id: DomainId,
     pub local_echo_threshold_ms: Option<u64>,
     pub overlay_lag_indicator: bool,
     remote_to_local_window: Mutex<HashMap<WindowId, WindowId>>,
@@ -238,15 +237,9 @@ impl ClientInner {
         local_echo_threshold_ms: Option<u64>,
         overlay_lag_indicator: bool,
     ) -> Self {
-        // Assumption: that the domain id on the other end is
-        // always the first created default domain.  In the future
-        // we'll add a way to discover/enumerate domains to populate
-        // this a bit rigorously.
-        let remote_domain_id = 0;
         Self {
             client,
             local_domain_id,
-            remote_domain_id,
             local_echo_threshold_ms,
             overlay_lag_indicator,
             remote_to_local_window: Mutex::new(HashMap::new()),
@@ -311,7 +304,7 @@ fn mux_notify_client_domain(local_domain_id: DomainId, notif: MuxNotification) -
         MuxNotification::WindowWorkspaceChanged(window_id) => {
             // Mux::get_window() may trigger a borrow error if called
             // immediately; defer the bulk of this work.
-            // <https://github.com/wez/wezterm/issues/2638>
+            // <https://github.com/wezterm/wezterm/issues/2638>
             promise::spawn::spawn_into_main_thread(async move {
                 let mux = Mux::get();
                 let domain = match mux.get_domain(local_domain_id) {
@@ -837,7 +830,7 @@ impl Domain for ClientDomain {
         let result = inner
             .client
             .spawn_v2(SpawnV2 {
-                domain: SpawnTabDomain::DomainId(inner.remote_domain_id),
+                domain: SpawnTabDomain::DefaultDomain,
                 window_id: inner.local_to_remote_window(window),
                 size,
                 command,

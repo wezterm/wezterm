@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 use bitflags::bitflags;
+use config::window::WindowLevel;
 use config::{ConfigHandle, Dimension, GeometryOrigin};
 use promise::Future;
 use std::any::Any;
 use std::path::PathBuf;
 use std::rc::Rc;
 use thiserror::Error;
+use url::Url;
 pub mod bitmaps;
 pub use wezterm_color_types as color;
 mod configuration;
@@ -110,6 +112,10 @@ bitflags! {
         /// Minimized or in some kind of off-screen state. Cannot be repainted
         /// while in this state.
         const HIDDEN = 1<<3;
+        /// Always on top (floating) window
+        const ALWAYS_ON_TOP = 1<<4;
+        /// Always on bottom (docked) window
+        const ALWAYS_ON_BOTTOM = 1<<5;
     }
 }
 
@@ -120,6 +126,16 @@ impl WindowState {
 
     pub fn can_paint(self) -> bool {
         !self.contains(Self::HIDDEN)
+    }
+
+    pub fn as_window_level(self) -> WindowLevel {
+        if self.contains(Self::ALWAYS_ON_TOP) {
+            WindowLevel::AlwaysOnTop
+        } else if self.contains(Self::ALWAYS_ON_BOTTOM) {
+            WindowLevel::AlwaysOnBottom
+        } else {
+            WindowLevel::Normal
+        }
     }
 }
 
@@ -156,6 +172,9 @@ pub enum WindowEvent {
         live_resizing: bool,
     },
 
+    /// Called when a program-requested set_inner_size() has finished
+    SetInnerSizeCompleted,
+
     /// Called when the window has been invalidated and needs to
     /// be repainted
     NeedRepaint,
@@ -186,6 +205,12 @@ pub enum WindowEvent {
 
     // Called when the files are dropped into the window
     DroppedFile(Vec<PathBuf>),
+
+    // Called when urls are dropped into the window
+    DroppedUrl(Vec<Url>),
+
+    // Called when text is dropped into the window
+    DroppedString(String),
 
     /// Called by menubar dispatching stuff on some systems
     PerformKeyAssignment(config::keyassignment::KeyAssignment),
@@ -294,6 +319,9 @@ pub trait WindowOps {
     /// Set some text in the clipboard
     fn set_clipboard(&self, clipboard: Clipboard, text: String);
 
+    /// Set window level. Depending on the environment and user preferences
+    fn set_window_level(&self, _level: WindowLevel) {}
+
     /// Set the icon for the window.
     /// Depending on the system this may be shown in its titlebar
     /// and/or in the task manager/task switcher
@@ -312,7 +340,7 @@ pub trait WindowOps {
     /// the x and y values specified.
     /// This may not be supported or respected by the desktop
     /// environment.
-    fn set_resize_increments(&self, _x: u16, _y: u16) {}
+    fn set_resize_increments(&self, _incr: ResizeIncrement) {}
 
     fn get_os_parameters(
         &self,
@@ -340,4 +368,24 @@ pub struct ResolvedGeometry {
     pub y: Option<i32>,
     pub width: usize,
     pub height: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ResizeIncrement {
+    pub x: u16,
+    pub y: u16,
+    pub base_width: u16,
+    pub base_height: u16,
+}
+
+impl ResizeIncrement {
+    /// Use this as a readable shorthand for disabling the feature
+    pub fn disabled() -> Self {
+        Self {
+            x: 1,
+            y: 1,
+            base_width: 0,
+            base_height: 0,
+        }
+    }
 }

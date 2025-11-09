@@ -1,9 +1,9 @@
 #![macro_use]
 
 pub use mlua;
-use mlua::{ToLua, Value as LuaValue};
+use mlua::{IntoLua, Value as LuaValue};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 use wezterm_dynamic::{FromDynamic, ToDynamic, Value as DynValue};
 
@@ -40,8 +40,8 @@ pub fn from_lua<'lua, T: FromDynamic>(value: mlua::Value<'lua>) -> Result<T, mlu
 #[macro_export]
 macro_rules! impl_lua_conversion_dynamic {
     ($struct:ident) => {
-        impl<'lua> $crate::mlua::ToLua<'lua> for $struct {
-            fn to_lua(
+        impl<'lua> $crate::mlua::IntoLua<'lua> for $struct {
+            fn into_lua(
                 self,
                 lua: &'lua $crate::mlua::Lua,
             ) -> Result<$crate::mlua::Value<'lua>, $crate::mlua::Error> {
@@ -63,14 +63,14 @@ macro_rules! impl_lua_conversion_dynamic {
 pub fn dynamic_to_lua_value<'lua>(
     lua: &'lua mlua::Lua,
     value: DynValue,
-) -> mlua::Result<mlua::Value> {
+) -> mlua::Result<mlua::Value<'lua>> {
     Ok(match value {
         DynValue::Null => LuaValue::Nil,
         DynValue::Bool(b) => LuaValue::Boolean(b),
-        DynValue::String(s) => s.to_lua(lua)?,
-        DynValue::U64(u) => u.to_lua(lua)?,
-        DynValue::F64(u) => u.to_lua(lua)?,
-        DynValue::I64(u) => u.to_lua(lua)?,
+        DynValue::String(s) => s.into_lua(lua)?,
+        DynValue::U64(u) => u.into_lua(lua)?,
+        DynValue::F64(u) => u.into_lua(lua)?,
+        DynValue::I64(u) => u.into_lua(lua)?,
         DynValue::Array(array) => {
             let table = lua.create_table()?;
             for (idx, value) in array.into_iter().enumerate() {
@@ -126,9 +126,7 @@ fn lua_value_to_dynamic_impl(
         }
         LuaValue::UserData(ud) => match ud.get_metatable() {
             Ok(mt) => {
-                if let Ok(to_dynamic) = mt.get::<mlua::MetaMethod, mlua::Function>(
-                    mlua::MetaMethod::Custom("__wezterm_to_dynamic".to_string()),
-                ) {
+                if let Ok(to_dynamic) = mt.get::<mlua::Function>("__wezterm_to_dynamic") {
                     match to_dynamic.call(LuaValue::UserData(ud.clone())) {
                         Ok(value) => {
                             return lua_value_to_dynamic_impl(value, visited);
@@ -145,7 +143,7 @@ fn lua_value_to_dynamic_impl(
                     }
                 }
 
-                match mt.get::<mlua::MetaMethod, mlua::Function>(mlua::MetaMethod::ToString) {
+                match mt.get::<mlua::Function>(mlua::MetaMethod::ToString) {
                     Ok(to_string) => match to_string.call(LuaValue::UserData(ud.clone())) {
                         Ok(value) => {
                             return lua_value_to_dynamic_impl(value, visited);
@@ -264,6 +262,7 @@ impl<'lua> std::fmt::Debug for ValuePrinter<'lua> {
         ValuePrinterHelper {
             visited,
             value: self.0.clone(),
+            is_cycle: false,
         }
         .fmt(fmt)
     }
@@ -272,6 +271,7 @@ impl<'lua> std::fmt::Debug for ValuePrinter<'lua> {
 struct ValuePrinterHelper<'lua> {
     visited: Rc<RefCell<HashSet<usize>>>,
     value: LuaValue<'lua>,
+    is_cycle: bool,
 }
 
 impl<'lua> PartialEq for ValuePrinterHelper<'lua> {
@@ -306,35 +306,55 @@ impl<'lua> ValuePrinterHelper<'lua> {
     }
 }
 
+fn is_array_style_table(t: &mlua::Table) -> bool {
+    let mut keys = BTreeSet::new();
+    for pair in t.clone().pairs::<LuaValue, LuaValue>() {
+        match pair {
+            Ok((key, _)) => match key {
+                LuaValue::Integer(i) if i >= 1 => {
+                    keys.insert(i);
+                }
+                _ => return false,
+            },
+            Err(_) => return false,
+        }
+    }
+
+    // Now see if we have contiguous keys.
+    // The BTreeSet will iterate the keys in ascending order.
+    let mut expect = 1;
+    for key in keys {
+        if key != expect {
+            return false;
+        }
+        expect += 1;
+    }
+
+    true
+}
+
 impl<'lua> std::fmt::Debug for ValuePrinterHelper<'lua> {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         match &self.value {
-            LuaValue::Nil => fmt.write_str("nil"),
-            LuaValue::Boolean(b) => fmt.write_str(if *b { "true" } else { "false" }),
-            LuaValue::Integer(i) => fmt.write_fmt(format_args!("{}", i)),
-            LuaValue::Number(i) => fmt.write_fmt(format_args!("{}", i)),
-            LuaValue::String(s) => match s.to_str() {
-                Ok(s) => fmt.write_fmt(format_args!("{:?}", s)),
-                Err(_) => fmt.write_fmt(format_args!("{:?}", s.as_bytes())),
-            },
+            LuaValue::Table(_) if self.is_cycle => {
+                fmt.write_fmt(format_args!("table: {:?}", self.value.to_pointer()))
+            }
             LuaValue::Table(t) => {
                 self.visited
                     .borrow_mut()
                     .insert(self.value.to_pointer() as usize);
-                if let Ok(true) = t.contains_key(1) {
+                if is_array_style_table(&t) {
                     // Treat as list
                     let mut list = fmt.debug_list();
-                    for (idx, value) in t.clone().sequence_values().enumerate() {
+                    for value in t.clone().sequence_values() {
                         match value {
                             Ok(value) => {
-                                if !self.has_cycle(&value) {
-                                    list.entry(&Self {
-                                        visited: Rc::clone(&self.visited),
-                                        value,
-                                    });
-                                } else {
-                                    log::warn!("Ignoring value at ordinal position {} which has cyclical reference", idx);
-                                }
+                                let is_cycle = self.has_cycle(&value);
+                                list.entry(&Self {
+                                    visited: Rc::clone(&self.visited),
+                                    value,
+                                    is_cycle,
+                                });
                             }
                             Err(err) => {
                                 list.entry(&err);
@@ -351,26 +371,19 @@ impl<'lua> std::fmt::Debug for ValuePrinterHelper<'lua> {
                     for pair in t.clone().pairs::<LuaValue, LuaValue>() {
                         match pair {
                             Ok(pair) => {
-                                if !self.has_cycle(&pair.1) {
-                                    map.insert(
-                                        Self {
-                                            visited: Rc::clone(&self.visited),
-                                            value: pair.0,
-                                        },
-                                        Self {
-                                            visited: Rc::clone(&self.visited),
-                                            value: pair.1,
-                                        },
-                                    );
-                                } else {
-                                    log::warn!(
-                                        "Ignoring field {:?} which has cyclical reference",
-                                        Self {
-                                            visited: Rc::clone(&self.visited),
-                                            value: pair.0
-                                        }
-                                    );
-                                }
+                                let is_cycle = self.has_cycle(&pair.1);
+                                map.insert(
+                                    Self {
+                                        visited: Rc::clone(&self.visited),
+                                        value: pair.0,
+                                        is_cycle: false,
+                                    },
+                                    Self {
+                                        visited: Rc::clone(&self.visited),
+                                        value: pair.1,
+                                        is_cycle,
+                                    },
+                                );
                             }
                             Err(err) => {
                                 log::error!("error while retrieving map entry: {}", err);
@@ -381,44 +394,50 @@ impl<'lua> std::fmt::Debug for ValuePrinterHelper<'lua> {
                     fmt.debug_map().entries(&map).finish()
                 }
             }
-            LuaValue::UserData(ud) => match ud.get_metatable() {
-                Ok(mt) => {
-                    if let Ok(to_dynamic) = mt.get::<mlua::MetaMethod, mlua::Function>(
-                        mlua::MetaMethod::Custom("__wezterm_to_dynamic".to_string()),
-                    ) {
+            LuaValue::UserData(_) if self.is_cycle => {
+                fmt.write_fmt(format_args!("userdata: {:?}", self.value.to_pointer()))
+            }
+            LuaValue::UserData(ud) => {
+                if let Ok(mt) = ud.get_metatable() {
+                    if let Ok(to_dynamic) = mt.get::<mlua::Function>("__wezterm_to_dynamic") {
                         return match to_dynamic.call(LuaValue::UserData(ud.clone())) {
                             Ok(value) => Self {
                                 visited: Rc::clone(&self.visited),
                                 value,
+                                is_cycle: false,
                             }
                             .fmt(fmt),
                             Err(err) => write!(fmt, "Error calling __wezterm_to_dynamic: {err}"),
                         };
                     }
-                    match mt.get::<mlua::MetaMethod, mlua::Function>(mlua::MetaMethod::ToString) {
-                        Ok(to_string) => match to_string.call(LuaValue::UserData(ud.clone())) {
-                            Ok(value) => Self {
-                                visited: Rc::clone(&self.visited),
-                                value,
-                            }
-                            .fmt(fmt),
-                            Err(err) => {
-                                write!(fmt, "Error calling tostring: {err:#}")
-                            }
-                        },
-                        Err(err) => {
-                            write!(fmt, "Error getting tostring: {err:#}")
-                        }
-                    }
                 }
-                Err(err) => {
-                    write!(fmt, "Error getting metatable: {err:#}")
+                match self.value.to_string() {
+                    Ok(s) => fmt.write_str(&s),
+                    Err(err) => write!(fmt, "userdata ({err:#})"),
+                }
+            }
+            LuaValue::Error(e) => fmt.write_fmt(format_args!("error {}", e)),
+            LuaValue::String(s) => match s.to_str() {
+                Ok(s) => fmt.write_fmt(format_args!("\"{}\"", s.escape_default())),
+                Err(_) => {
+                    let mut binary_string = "b\"".to_string();
+                    for &b in s.as_bytes() {
+                        if let Some(c) = char::from_u32(b as u32) {
+                            if c.is_ascii_alphanumeric() || c.is_ascii_punctuation() || c == ' ' {
+                                binary_string.push(c);
+                                continue;
+                            }
+                        }
+                        binary_string.push_str(&format!("\\x{b:02x}"));
+                    }
+                    binary_string.push('"');
+                    fmt.write_str(&binary_string)
                 }
             },
-            LuaValue::LightUserData(_) => fmt.write_str("userdata"),
-            LuaValue::Thread(_) => fmt.write_str("thread"),
-            LuaValue::Function(_) => fmt.write_str("function"),
-            LuaValue::Error(e) => fmt.write_fmt(format_args!("error {}", e)),
+            _ => match self.value.to_string() {
+                Ok(s) => fmt.write_str(&s),
+                Err(err) => write!(fmt, "({err:#})"),
+            },
         }
     }
 }

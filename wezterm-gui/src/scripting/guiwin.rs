@@ -4,7 +4,7 @@ use crate::termwindow::TermWindowNotif;
 use crate::TermWindow;
 use config::keyassignment::{ClipboardCopyDestination, KeyAssignment};
 use luahelper::*;
-use mlua::{UserData, UserDataMethods};
+use mlua::{UserData, UserDataMethods, UserDataRef};
 use mux::pane::PaneId;
 use mux::window::WindowId as MuxWindowId;
 use mux::Mux;
@@ -56,7 +56,8 @@ impl UserData for GuiWin {
         methods.add_method(
             "set_inner_size",
             |_, this, (width, height): (usize, usize)| {
-                this.window.set_inner_size(width, height);
+                this.window
+                    .notify(TermWindowNotif::SetInnerSize { width, height });
                 Ok(())
             },
         );
@@ -132,7 +133,7 @@ impl UserData for GuiWin {
         });
         methods.add_async_method(
             "get_selection_text_for_pane",
-            |_, this, pane: MuxPane| async move {
+            |_, this, pane: UserDataRef<MuxPane>| async move {
                 let (tx, rx) = smol::channel::bounded(1);
                 this.window.notify(TermWindowNotif::GetSelectionForPane {
                     pane_id: pane.0,
@@ -158,7 +159,7 @@ impl UserData for GuiWin {
         });
         methods.add_async_method(
             "perform_action",
-            |_, this, (assignment, pane): (KeyAssignment, MuxPane)| async move {
+            |_, this, (assignment, pane): (KeyAssignment, UserDataRef<MuxPane>)| async move {
                 let (tx, rx) = smol::channel::bounded(1);
                 this.window.notify(TermWindowNotif::PerformAssignment {
                     pane_id: pane.0,
@@ -310,7 +311,7 @@ impl UserData for GuiWin {
         );
         methods.add_async_method(
             "get_selection_escapes_for_pane",
-            |_, this, pane: MuxPane| async move {
+            |_, this, pane: UserDataRef<MuxPane>| async move {
                 let (tx, rx) = smol::channel::bounded(1);
                 let pane_id = pane.0;
                 this.window

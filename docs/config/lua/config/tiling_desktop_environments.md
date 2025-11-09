@@ -1,6 +1,6 @@
 # `tiling_desktop_environments = {}`
 
-{{since('nightly')}}
+{{since('20230712-072601-f4abf8fd')}}
 
 Contains a list of Window Environments that are known to be tiling
 window managers. A tiling window manager is one that automatically
@@ -13,9 +13,17 @@ The default value for this option is:
 config.tiling_desktop_environments = {
   'X11 LG3D',
   'X11 bspwm',
+  'X11 i3',
   'X11 dwm',
 }
 ```
+
+{{since('dev')}}
+
+The following additional entries are now part of the default value of
+`tiling_desktop_environments`:
+
+ *  '"X11 awesome"'
 
 The environment name can be found in the debug overlay which you can show via
 the [ShowDebugOverlay](../keyassignment/ShowDebugOverlay.md) key assignment.

@@ -7,6 +7,7 @@ use libc::{self, winsize};
 use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
+use std::os::fd::AsFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
@@ -31,7 +32,7 @@ fn openpty(size: PtySize) -> anyhow::Result<(UnixMasterPty, UnixSlavePty)> {
 
     let result = unsafe {
         // BSDish systems may require mut pointers to some args
-        #[cfg_attr(feature = "cargo-clippy", allow(clippy::unnecessary_mut_passed))]
+        #[allow(clippy::unnecessary_mut_passed)]
         libc::openpty(
             &mut master,
             &mut slave,
@@ -261,7 +262,7 @@ impl PtyFd {
                     // type::from(), but the size and potentially signedness
                     // are system dependent, which is why we're using `as _`.
                     // Suppress this lint for this section of code.
-                    #[cfg_attr(feature = "cargo-clippy", allow(clippy::cast_lossless))]
+                    #[allow(clippy::cast_lossless)]
                     if controlling_tty {
                         // Set the pty as the controlling terminal.
                         // Failure to do this means that delivery of
@@ -378,7 +379,7 @@ impl MasterPty for UnixMasterPty {
     }
 
     fn get_termios(&self) -> Option<nix::sys::termios::Termios> {
-        nix::sys::termios::tcgetattr(self.fd.0.as_raw_fd()).ok()
+        nix::sys::termios::tcgetattr(self.fd.0.as_fd()).ok()
     }
 }
 

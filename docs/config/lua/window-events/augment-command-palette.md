@@ -1,10 +1,10 @@
 # `augment-command-palette`
 
-{{since('nightly')}}
+{{since('20230712-072601-f4abf8fd')}}
 
 This event is emitted when the [Command Palette](../keyassignment/ActivateCommandPalette.md) is shown.
 
-It's purpose is to enable you to add additional entries to the list of commands
+Its purpose is to enable you to add additional entries to the list of commands
 shown in the palette.
 
 This hook is synchronous; calling asynchronous functions will not succeed.
@@ -14,7 +14,7 @@ returned table may have the following fields:
 
 * `brief` - required: the brief description for the entry
 * `doc` - optional: a long description that may be shown after the entry, or that
-  may be used in future wezterms of wezterm to provide more information about the
+  may be used in future versions of wezterm to provide more information about the
   command.
 * `action` - the action to take when the item is activated. Can be any key assignment
   action.
@@ -35,10 +35,11 @@ wezterm.on('augment-command-palette', function(window, pane)
   return {
     {
       brief = 'Rename tab',
-      icon = 'mdi_rename_box',
+      icon = 'md_rename_box',
 
       action = act.PromptInputLine {
         description = 'Enter new name for tab',
+        initial_value = 'My Tab Name',
         action = wezterm.action_callback(function(window, pane, line)
           if line then
             window:active_tab():set_title(line)

@@ -5,7 +5,8 @@
 
 use crate::domain::{alloc_domain_id, Domain, DomainId, DomainState};
 use crate::pane::{
-    alloc_pane_id, CloseReason, ForEachPaneLogicalLine, LogicalLine, Pane, PaneId, WithPaneLines,
+    alloc_pane_id, CachePolicy, CloseReason, ForEachPaneLogicalLine, LogicalLine, Pane, PaneId,
+    WithPaneLines,
 };
 use crate::renderable::*;
 use crate::tab::Tab;
@@ -191,7 +192,7 @@ impl Pane for TermWizTerminalPane {
         Ok(Some(Box::new(self.render_rx.try_clone()?)))
     }
 
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
         MutexGuard::map(self.writer.lock(), |writer| {
             let w: &mut dyn std::io::Write = writer;
             w
@@ -210,7 +211,10 @@ impl Pane for TermWizTerminalPane {
     }
 
     fn key_down(&self, key: KeyCode, modifiers: KeyModifiers) -> anyhow::Result<()> {
-        let event = InputEvent::Key(KeyEvent { key, modifiers });
+        let event = InputEvent::Key(KeyEvent {
+            key,
+            modifiers: modifiers.remove_positional_mods(),
+        });
         if let Err(e) = self.input_tx.send(event) {
             *self.dead.lock() = true;
             return Err(e.into());
@@ -232,6 +236,8 @@ impl Pane for TermWizTerminalPane {
             MouseButton::Right => Buttons::RIGHT,
             MouseButton::WheelUp(_) => Buttons::VERT_WHEEL | Buttons::WHEEL_POSITIVE,
             MouseButton::WheelDown(_) => Buttons::VERT_WHEEL,
+            MouseButton::WheelLeft(_) => Buttons::HORZ_WHEEL | Buttons::WHEEL_POSITIVE,
+            MouseButton::WheelRight(_) => Buttons::HORZ_WHEEL,
             MouseButton::None => Buttons::NONE,
         };
 
@@ -284,7 +290,7 @@ impl Pane for TermWizTerminalPane {
         self.terminal.lock().is_alt_screen_active()
     }
 
-    fn get_current_working_dir(&self) -> Option<Url> {
+    fn get_current_working_dir(&self, _policy: CachePolicy) -> Option<Url> {
         self.terminal.lock().get_current_dir().cloned()
     }
 

@@ -1,6 +1,7 @@
+use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::utilsprites::RenderMetrics;
-use ::window::{Dimensions, Window, WindowOps, WindowState};
-use config::{configuration, ConfigHandle, DimensionContext};
+use ::window::{Dimensions, ResizeIncrement, Window, WindowOps, WindowState};
+use config::{ConfigHandle, DimensionContext};
 use mux::Mux;
 use std::rc::Rc;
 use wezterm_font::FontConfiguration;
@@ -12,18 +13,20 @@ pub struct RowsAndCols {
     pub cols: usize,
 }
 
+#[derive(Debug)]
+pub enum ScaleChange {
+    Absolute(f64),
+    Relative(f64),
+}
+
 impl super::TermWindow {
     pub fn resize(
         &mut self,
-        mut dimensions: Dimensions,
+        dimensions: Dimensions,
         window_state: WindowState,
         window: &Window,
         live_resizing: bool,
     ) {
-        // ignore dpi changes if there is a fixed dpi set in configuration
-        if let Some(dpi) = configuration().dpi {
-            dimensions.dpi = dpi as usize;
-        }
         log::trace!(
             "resize event, live={} current cells: {:?}, current dims: {:?}, new dims: {:?} window_state:{:?}",
             live_resizing,
@@ -67,12 +70,25 @@ impl super::TermWindow {
         self.emit_window_event("window-resized", None);
     }
 
-    pub fn apply_scale_change(
-        &mut self,
-        dimensions: &Dimensions,
-        font_scale: f64,
-        window: &Window,
-    ) {
+    pub fn apply_pending_scale_changes(&mut self) {
+        while self.resizes_pending == 0 {
+            match self.pending_scale_changes.pop_front() {
+                Some(ScaleChange::Relative(change)) => {
+                    if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
+                        self.adjust_font_scale(self.fonts.get_font_scale() * change, &window);
+                    }
+                }
+                Some(ScaleChange::Absolute(change)) => {
+                    if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
+                        self.adjust_font_scale(change, &window);
+                    }
+                }
+                None => break,
+            }
+        }
+    }
+
+    pub fn apply_scale_change(&mut self, dimensions: &Dimensions, font_scale: f64) {
         let config = &self.config;
         let font_size = config.font_size * font_scale;
         let theoretical_height = font_size * dimensions.dpi as f64 / 72.0;
@@ -104,19 +120,6 @@ impl super::TermWindow {
                 self.fonts.change_scaling(prior_font, prior_dpi);
             }
         }
-
-        window.set_resize_increments(
-            if self.config.use_resize_increments {
-                self.render_metrics.cell_size.width as u16
-            } else {
-                1
-            },
-            if self.config.use_resize_increments {
-                self.render_metrics.cell_size.height as u16
-            } else {
-                1
-            },
-        );
 
         if let Err(err) = self.recreate_texture_atlas(None) {
             log::error!("recreate_texture_atlas: {:#}", err);
@@ -168,7 +171,7 @@ impl super::TermWindow {
 
         let border = self.get_os_border();
 
-        let (size, dims) = if let Some(cell_dims) = scale_changed_cells {
+        let (size, dims, ri_calc) = if let Some(cell_dims) = scale_changed_cells {
             // Scaling preserves existing terminal dimensions, yielding a new
             // overall set of window dimensions
             let size = TerminalSize {
@@ -213,7 +216,18 @@ impl super::TermWindow {
                 dpi: dimensions.dpi,
             };
 
-            (size, dims)
+            let ri_calc = ResizeIncrementCalculator {
+                x: self.render_metrics.cell_size.width as u16,
+                y: self.render_metrics.cell_size.height as u16,
+                padding_left: padding_left,
+                padding_top: padding_top,
+                padding_right: padding_right,
+                padding_bottom: padding_bottom,
+                border: border,
+                tab_bar_height: tab_bar_height as usize,
+            };
+
+            (size, dims, ri_calc)
         } else {
             // Resize of the window dimensions may result in changed terminal dimensions
 
@@ -254,13 +268,24 @@ impl super::TermWindow {
                 // Take care to use the exact pixel dimensions of the cells, rather
                 // than the available space, so that apps that are sensitive to
                 // the pixels-per-cell have consistent values at a given font size.
-                // https://github.com/wez/wezterm/issues/535
+                // https://github.com/wezterm/wezterm/issues/535
                 pixel_height: rows * self.render_metrics.cell_size.height as usize,
                 pixel_width: cols * self.render_metrics.cell_size.width as usize,
                 dpi: dimensions.dpi as u32,
             };
 
-            (size, *dimensions)
+            let ri_calc = ResizeIncrementCalculator {
+                x: self.render_metrics.cell_size.width as u16,
+                y: self.render_metrics.cell_size.height as u16,
+                padding_left: padding_left,
+                padding_top: padding_top,
+                padding_right: padding_right,
+                padding_bottom: padding_bottom,
+                border: border,
+                tab_bar_height: tab_bar_height as usize,
+            };
+
+            (size, *dimensions, ri_calc)
         };
 
         log::trace!("apply_dimensions computed size {:?}, dims {:?}", size, dims);
@@ -276,6 +301,12 @@ impl super::TermWindow {
         self.resize_overlays();
         self.invalidate_fancy_tab_bar();
         self.update_title();
+
+        window.set_resize_increments(if self.config.use_resize_increments {
+            ri_calc.into()
+        } else {
+            ResizeIncrement::disabled()
+        });
 
         // Queue up a speculative resize in order to preserve the number of rows+cols
         if let Some(cell_dims) = scale_changed_cells {
@@ -306,7 +337,7 @@ impl super::TermWindow {
                 // pixel geometry which is considered to be a user-driven resize.
                 // Stashing the dimensions here avoids that misconception.
                 self.dimensions = dims;
-                window.set_inner_size(dims.pixel_width, dims.pixel_height);
+                self.set_inner_size(window, dims.pixel_width, dims.pixel_height);
             }
         }
     }
@@ -360,7 +391,7 @@ impl super::TermWindow {
             // in adjust_font_scale will not block us from adapting to the new
             // DPI. This is gross and it would be better handled at the macOS
             // layer.
-            // <https://github.com/wez/wezterm/issues/3503>
+            // <https://github.com/wezterm/wezterm/issues/3503>
             self.window_state -= WindowState::MAXIMIZED;
         }
 
@@ -379,7 +410,7 @@ impl super::TermWindow {
         let cell_dims = self.current_cell_dimensions();
 
         if scale_changed {
-            self.apply_scale_change(&dimensions, font_scale, window);
+            self.apply_scale_change(&dimensions, font_scale);
         }
 
         let scale_changed_cells = if font_scale_changed || simple_dpi_change {
@@ -417,22 +448,28 @@ impl super::TermWindow {
         } else {
             let dimensions = self.dimensions;
             // Compute new font metrics
-            self.apply_scale_change(&dimensions, font_scale, window);
+            self.apply_scale_change(&dimensions, font_scale);
             // Now revise the pty size to fit the window
             self.apply_dimensions(&dimensions, None, window);
         }
     }
 
-    pub fn decrease_font_size(&mut self, window: &Window) {
-        self.adjust_font_scale(self.fonts.get_font_scale() / 1.1, window);
+    pub fn decrease_font_size(&mut self) {
+        self.pending_scale_changes
+            .push_back(ScaleChange::Relative(1.0 / 1.1));
+        self.apply_pending_scale_changes();
     }
 
-    pub fn increase_font_size(&mut self, window: &Window) {
-        self.adjust_font_scale(self.fonts.get_font_scale() * 1.1, window);
+    pub fn increase_font_size(&mut self) {
+        self.pending_scale_changes
+            .push_back(ScaleChange::Relative(1.1));
+        self.apply_pending_scale_changes();
     }
 
-    pub fn reset_font_size(&mut self, window: &Window) {
-        self.adjust_font_scale(1.0, window);
+    pub fn reset_font_size(&mut self) {
+        self.pending_scale_changes
+            .push_back(ScaleChange::Absolute(1.0));
+        self.apply_pending_scale_changes();
     }
 
     pub fn set_window_size(&mut self, size: TerminalSize, window: &Window) -> anyhow::Result<()> {
@@ -483,7 +520,7 @@ impl super::TermWindow {
             dpi: self.dimensions.dpi,
         };
 
-        self.apply_scale_change(&dimensions, 1.0, window);
+        self.apply_scale_change(&dimensions, 1.0);
         self.apply_dimensions(
             &dimensions,
             Some(RowsAndCols {
@@ -496,7 +533,13 @@ impl super::TermWindow {
     }
 
     pub fn reset_font_and_window_size(&mut self, window: &Window) -> anyhow::Result<()> {
-        let size = self.config.initial_size(self.dimensions.dpi as u32);
+        let size = self.config.initial_size(
+            self.dimensions.dpi as u32,
+            Some(crate::cell_pixel_dims(
+                &self.config,
+                self.dimensions.dpi as f64,
+            )?),
+        );
         self.set_window_size(size, window)
     }
 

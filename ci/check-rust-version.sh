@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-min_rust="1.67.0"
+min_rust="1.71.0"
 rust_ver="$(rustc --version | cut -d' ' -f2)"
 
 check_rust_version() {
@@ -19,7 +19,7 @@ if ! check_rust_version ; then
   echo "use rustup to manage installed versions of Rust"
   echo "https://www.rust-lang.org/en-US/install.html"
   echo
-  echo "See https://wezfurlong.org/wezterm/install/source.html for complete"
+  echo "See https://wezterm.org/install/source.html for complete"
   echo "installation instructions for wezterm"
   exit 1
 fi

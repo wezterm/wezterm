@@ -1,5 +1,6 @@
 //! An abstraction over a terminal device
 
+use crate::caps::probed::ProbeCapabilities;
 use crate::caps::Capabilities;
 use crate::input::InputEvent;
 use crate::surface::Change;
@@ -7,6 +8,11 @@ use crate::{format_err, Result};
 use num_traits::NumCast;
 use std::fmt::Display;
 use std::time::Duration;
+
+#[cfg(feature = "use_serde")]
+use serde::Deserialize;
+#[cfg(feature = "use_serde")]
+use serde::Serialize;
 
 #[cfg(unix)]
 pub mod unix;
@@ -26,6 +32,7 @@ pub use self::windows::{WindowsTerminal, WindowsTerminalWaker as TerminalWaker};
 // On Windows, GetConsoleFontSize() can return the size of a cell in
 // logical units and we can probably use this to populate xpixel, ypixel.
 // GetConsoleScreenBufferInfo() can return the rows and cols.
+#[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreenSize {
     /// The number of rows of text
@@ -40,6 +47,7 @@ pub struct ScreenSize {
     pub ypixel: usize,
 }
 
+#[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Blocking {
     DoNotWait,
@@ -67,6 +75,12 @@ pub trait Terminal {
 
     /// Queries the current screen size, returning width, height.
     fn get_screen_size(&mut self) -> Result<ScreenSize>;
+
+    /// Returns a capability probing helper that will use escape
+    /// sequences to attempt to probe information from the terminal
+    fn probe_capabilities(&mut self) -> Option<ProbeCapabilities<'_>> {
+        None
+    }
 
     /// Sets the current screen size
     fn set_screen_size(&mut self, size: ScreenSize) -> Result<()>;

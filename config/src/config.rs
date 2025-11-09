@@ -22,10 +22,10 @@ use crate::unix::UnixDomain;
 use crate::wsl::WslDomain;
 use crate::{
     default_config_with_overrides_applied, default_one_point_oh, default_one_point_oh_f64,
-    default_true, default_win32_acrylic_accent_color, GpuInfo, IntegratedTitleButtonColor,
-    KeyMapPreference, LoadedConfig, MouseEventTriggerMods, RgbaColor, SerialDomain, SystemBackdrop,
-    WebGpuPowerPreference, CONFIG_DIRS, CONFIG_FILE_OVERRIDE, CONFIG_OVERRIDES, CONFIG_SKIP,
-    HOME_DIR,
+    default_true, default_win32_acrylic_accent_color, CellWidth, GpuInfo,
+    IntegratedTitleButtonColor, KeyMapPreference, LoadedConfig, MouseEventTriggerMods, RgbaColor,
+    SerialDomain, SystemBackdrop, WebGpuPowerPreference, CONFIG_DIRS, CONFIG_FILE_OVERRIDE,
+    CONFIG_OVERRIDES, CONFIG_SKIP, HOME_DIR,
 };
 use anyhow::Context;
 use luahelper::impl_lua_conversion_dynamic;
@@ -109,6 +109,9 @@ pub struct Config {
     /// The DPI to assume
     pub dpi: Option<f64>,
 
+    #[dynamic(default)]
+    pub dpi_by_screen: HashMap<String, f64>,
+
     /// The baseline font to use
     #[dynamic(default)]
     pub font: TextStyle,
@@ -130,20 +133,45 @@ pub struct Config {
     #[dynamic(default)]
     pub switch_to_last_active_tab_when_closing_tab: bool,
 
+    /// When true, launching a new wezterm instance will prefer
+    /// to spawn a new tab into an existing instance.
+    /// Otherwise, it will spawn a new window.
+    #[dynamic(default)]
+    pub prefer_to_spawn_tabs: bool,
+
     #[dynamic(default)]
     pub window_frame: WindowFrameConfig,
+
+    /// Font to use for CharSelect
+    #[dynamic(default)]
+    pub char_select_font: Option<TextStyle>,
 
     #[dynamic(default = "default_char_select_font_size")]
     pub char_select_font_size: f64,
 
+    #[dynamic(default = "default_char_select_fg_color")]
+    pub char_select_fg_color: RgbaColor,
+
+    #[dynamic(default = "default_char_select_bg_color")]
+    pub char_select_bg_color: RgbaColor,
+
+    /// Font to use for ActivateCommandPalette
+    #[dynamic(default)]
+    pub command_palette_font: Option<TextStyle>,
+
     #[dynamic(default = "default_command_palette_font_size")]
     pub command_palette_font_size: f64,
 
+    pub command_palette_rows: Option<usize>,
     #[dynamic(default = "default_command_palette_fg_color")]
     pub command_palette_fg_color: RgbaColor,
 
     #[dynamic(default = "default_command_palette_bg_color")]
     pub command_palette_bg_color: RgbaColor,
+
+    /// Font to use for PaneSelect
+    #[dynamic(default)]
+    pub pane_select_font: Option<TextStyle>,
 
     #[dynamic(default = "default_pane_select_font_size")]
     pub pane_select_font_size: f64,
@@ -169,7 +197,10 @@ pub struct Config {
     pub color_schemes: HashMap<String, Palette>,
 
     /// How many lines of scrollback you want to retain
-    #[dynamic(default = "default_scrollback_lines")]
+    #[dynamic(
+        default = "default_scrollback_lines",
+        validate = "validate_scrollback_lines"
+    )]
     pub scrollback_lines: usize,
 
     /// If no `prog` is specified on the command line, use this
@@ -196,6 +227,9 @@ pub struct Config {
 
     #[dynamic(default)]
     pub exit_behavior: ExitBehavior,
+
+    #[dynamic(default)]
+    pub exit_behavior_messaging: ExitBehaviorMessaging,
 
     #[dynamic(default = "default_clean_exits")]
     pub clean_exit_codes: Vec<u32>,
@@ -241,6 +275,8 @@ pub struct Config {
     pub font_locator: FontLocatorSelection,
     #[dynamic(default)]
     pub font_rasterizer: FontRasterizerSelection,
+    #[dynamic(default = "default_colr_rasterizer")]
+    pub font_colr_rasterizer: FontRasterizerSelection,
     #[dynamic(default)]
     pub font_shaper: FontShaperSelection,
 
@@ -251,7 +287,7 @@ pub struct Config {
     #[dynamic(default)]
     pub freetype_render_target: Option<FreeTypeLoadTarget>,
     #[dynamic(default)]
-    pub freetype_load_flags: FreeTypeLoadFlags,
+    pub freetype_load_flags: Option<FreeTypeLoadFlags>,
 
     /// Selects the freetype interpret version to use.
     /// Likely values are 35, 38 and 40 which have different
@@ -356,6 +392,12 @@ pub struct Config {
     #[dynamic(default = "default_mux_output_parser_buffer_size")]
     pub mux_output_parser_buffer_size: usize,
 
+    #[dynamic(default = "default_true")]
+    pub mux_enable_ssh_agent: bool,
+
+    #[dynamic(default)]
+    pub default_ssh_auth_sock: Option<String>,
+
     /// How many ms to delay after reading a chunk of output
     /// in order to try to coalesce fragmented writes into
     /// a single bigger chunk of output and reduce the chances
@@ -384,12 +426,17 @@ pub struct Config {
     pub disable_default_key_bindings: bool,
     pub leader: Option<LeaderKey>,
 
+    #[dynamic(default = "default_num_alphabet")]
+    pub launcher_alphabet: String,
+
     #[dynamic(default)]
     pub disable_default_quick_select_patterns: bool,
     #[dynamic(default)]
     pub quick_select_patterns: Vec<String>,
     #[dynamic(default = "default_alphabet")]
     pub quick_select_alphabet: String,
+    #[dynamic(default)]
+    pub quick_select_remove_styling: bool,
 
     #[dynamic(default)]
     pub mouse_bindings: Vec<Mouse>,
@@ -442,6 +489,9 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub show_new_tab_button_in_tab_bar: bool,
 
+    #[dynamic(default = "default_true")]
+    pub show_close_tab_button_in_tabs: bool,
+
     /// If true, show_tab_index_in_tab_bar uses a zero-based index.
     /// The default is false and the tab shows a one-based index.
     #[dynamic(default)]
@@ -488,6 +538,9 @@ pub struct Config {
     #[dynamic(default)]
     pub window_padding: WindowPadding,
 
+    #[dynamic(default)]
+    pub window_content_alignment: WindowContentAlignment,
+
     /// Specifies the path to a background image attachment file.
     /// The file can be any image format that the rust `image`
     /// crate is able to identify and load.
@@ -510,6 +563,10 @@ pub struct Config {
     /// Only works on MacOS
     #[dynamic(default)]
     pub macos_window_background_blur: i64,
+
+    /// Only works on KDE Wayland
+    #[dynamic(default)]
+    pub kde_window_background_blur: bool,
 
     /// Only works on Windows
     #[dynamic(default)]
@@ -583,7 +640,12 @@ pub struct Config {
     pub animation_fps: u8,
 
     #[dynamic(default)]
+    pub text_min_contrast_ratio: Option<f32>,
+
+    #[dynamic(default)]
     pub force_reverse_video_cursor: bool,
+    #[dynamic(default = "default_reverse_video_cursor_min_contrast")]
+    pub reverse_video_cursor_min_contrast: f32,
 
     /// Specifies the default cursor style.  various escape sequences
     /// can override the default style in different situations (eg:
@@ -653,6 +715,9 @@ pub struct Config {
     #[dynamic(default)]
     pub ime_preedit_rendering: ImePreeditRendering,
 
+    #[dynamic(default)]
+    pub notification_handling: NotificationHandling,
+
     #[dynamic(default = "default_true")]
     pub use_dead_keys: bool,
 
@@ -669,7 +734,10 @@ pub struct Config {
 
     #[dynamic(default = "default_check_for_updates")]
     pub check_for_updates: bool,
-    #[dynamic(default)]
+    #[dynamic(
+        default,
+        deprecated = "this option no longer does anything and will be removed in a future release"
+    )]
     pub show_update_window: bool,
 
     #[dynamic(default = "default_update_interval")]
@@ -687,6 +755,9 @@ pub struct Config {
 
     #[dynamic(default)]
     pub native_macos_fullscreen_mode: bool,
+
+    #[dynamic(default)]
+    pub macos_fullscreen_extend_behind_notch: bool,
 
     #[dynamic(default = "default_word_boundary")]
     pub selection_word_boundary: String,
@@ -711,6 +782,9 @@ pub struct Config {
 
     #[dynamic(default)]
     pub experimental_pixel_positioning: bool,
+
+    #[dynamic(default)]
+    pub ignore_svg_fonts: bool,
 
     #[dynamic(default)]
     pub bidi_enabled: bool,
@@ -777,6 +851,9 @@ pub struct Config {
     #[dynamic(default)]
     pub treat_east_asian_ambiguous_width_as_wide: bool,
 
+    #[dynamic(default)]
+    pub cell_widths: Option<Vec<CellWidth>>,
+
     #[dynamic(default = "default_true")]
     pub allow_download_protocols: bool,
 
@@ -785,6 +862,9 @@ pub struct Config {
 
     #[dynamic(default)]
     pub default_domain: Option<String>,
+
+    #[dynamic(default)]
+    pub default_mux_server_domain: Option<String>,
 
     #[dynamic(default)]
     pub default_workspace: Option<String>,
@@ -1039,7 +1119,7 @@ impl Config {
                     // file. Note that we can't catch this happening for files that are
                     // imported via the lua require function.
                     lua.load(s.trim_start_matches('\u{FEFF}'))
-                        .set_name(p.to_string_lossy())?
+                        .set_name(p.to_string_lossy())
                         .eval_async(),
                 )?;
                 let config = Config::apply_overrides_to(&lua, config)?;
@@ -1132,7 +1212,7 @@ impl Config {
                 "#,
             );
             let chunk = lua.load(&code);
-            let chunk = chunk.set_name(&format!("--config {}={}", key, value))?;
+            let chunk = chunk.set_name(format!("--config {}={}", key, value));
             lua.globals().set("config", config.clone())?;
             log::debug!("Apply {}={} to config", key, value);
             config = chunk.eval()?;
@@ -1417,21 +1497,24 @@ impl Config {
         }
     }
 
-    pub fn initial_size(&self, dpi: u32) -> TerminalSize {
+    pub fn initial_size(&self, dpi: u32, cell_pixel_dims: Option<(usize, usize)>) -> TerminalSize {
+        // If we aren't passed the actual values, guess at a plausible
+        // default set of pixel dimensions.
+        // This is based on "typical" 10 point font at "normal"
+        // pixel density.
+        // This will get filled in by the gui layer, but there is
+        // an edge case where we emit an iTerm image escape in
+        // the software update banner through the mux layer before
+        // the GUI has had a chance to update the pixel dimensions
+        // when running under X11.
+        // This is a bit gross.
+        let (cell_pixel_width, cell_pixel_height) = cell_pixel_dims.unwrap_or((8, 16));
+
         TerminalSize {
             rows: self.initial_rows as usize,
             cols: self.initial_cols as usize,
-            // Guess at a plausible default set of pixel dimensions.
-            // This is based on "typical" 10 point font at "normal"
-            // pixel density.
-            // This will get filled in by the gui layer, but there is
-            // an edge case where we emit an iTerm image escape in
-            // the software update banner through the mux layer before
-            // the GUI has had a chance to update the pixel dimensions
-            // when running under X11.
-            // This is a bit gross.
-            pixel_width: 8 * self.initial_cols as usize,
-            pixel_height: 16 * self.initial_rows as usize,
+            pixel_width: cell_pixel_width * self.initial_cols as usize,
+            pixel_height: cell_pixel_height * self.initial_rows as usize,
             dpi,
         }
     }
@@ -1461,16 +1544,27 @@ impl Config {
             }
         };
 
-        self.apply_cmd_defaults(&mut cmd, default_cwd);
+        self.apply_cmd_defaults(&mut cmd, None, default_cwd);
 
         Ok(cmd)
     }
 
-    pub fn apply_cmd_defaults(&self, cmd: &mut CommandBuilder, default_cwd: Option<&PathBuf>) {
+    pub fn apply_cmd_defaults(
+        &self,
+        cmd: &mut CommandBuilder,
+        default_prog: Option<&Vec<String>>,
+        default_cwd: Option<&PathBuf>,
+    ) {
         // Apply `default_cwd` only if `cwd` is not already set, allows `--cwd`
         // option to take precedence
         if let (None, Some(cwd)) = (cmd.get_cwd(), default_cwd) {
             cmd.cwd(cwd);
+        }
+
+        if let Some(default_prog) = default_prog {
+            if cmd.is_default_prog() {
+                cmd.replace_default_prog(default_prog);
+            }
         }
 
         // Augment WSLENV so that TERM related environment propagates
@@ -1541,6 +1635,14 @@ fn default_char_select_font_size() -> f64 {
     18.0
 }
 
+fn default_char_select_fg_color() -> RgbaColor {
+    SrgbaTuple(0.75, 0.75, 0.75, 1.0).into()
+}
+
+fn default_char_select_bg_color() -> RgbaColor {
+    (0x33, 0x33, 0x33).into()
+}
+
 fn default_command_palette_font_size() -> f64 {
     14.0
 }
@@ -1583,12 +1685,22 @@ fn default_text_blink_rate_rapid() -> u64 {
 
 fn default_swap_backspace_and_delete() -> bool {
     // cfg!(target_os = "macos")
-    // See: https://github.com/wez/wezterm/issues/88
+    // See: https://github.com/wezterm/wezterm/issues/88
     false
 }
 
 fn default_scrollback_lines() -> usize {
     3500
+}
+
+const MAX_SCROLLBACK_LINES: usize = 999_999_999;
+fn validate_scrollback_lines(value: &usize) -> Result<(), String> {
+    if *value > MAX_SCROLLBACK_LINES {
+        return Err(format!(
+            "Illegal value {value} for scrollback_lines; it must be <= {MAX_SCROLLBACK_LINES}!"
+        ));
+    }
+    Ok(())
 }
 
 fn default_initial_rows() -> u16 {
@@ -1606,9 +1718,11 @@ pub fn default_hyperlink_rules() -> Vec<hyperlink::Rule> {
         hyperlink::Rule::with_highlight(r"\((\w+://\S+)\)", "$1", 1).unwrap(),
         hyperlink::Rule::with_highlight(r"\[(\w+://\S+)\]", "$1", 1).unwrap(),
         hyperlink::Rule::with_highlight(r"<(\w+://\S+)>", "$1", 1).unwrap(),
-        // Then handle URLs not wrapped in brackets
-        // and include terminating ), / or - characters, if any
-        hyperlink::Rule::new(r"\b\w+://\S+[)/a-zA-Z0-9-]+", "$0").unwrap(),
+        // Then handle URLs not wrapped in brackets that
+        // 1) have a balanced ending parenthesis or
+        hyperlink::Rule::new(hyperlink::CLOSING_PARENTHESIS_HYPERLINK_PATTERN, "$0").unwrap(),
+        // 2) include terminating _, / or - characters, if any
+        hyperlink::Rule::new(hyperlink::GENERIC_HYPERLINK_PATTERN, "$0").unwrap(),
         // implicit mailto link
         hyperlink::Rule::new(r"\b\w+@[\w-]+(\.[\w-]+)+\b", "mailto:$0").unwrap(),
     ]
@@ -1627,6 +1741,22 @@ fn default_term() -> String {
 
 fn default_font_size() -> f64 {
     12.0
+}
+
+pub(crate) fn compute_cache_dir() -> anyhow::Result<PathBuf> {
+    if let Some(runtime) = dirs_next::cache_dir() {
+        return Ok(runtime.join("wezterm"));
+    }
+
+    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
+}
+
+pub(crate) fn compute_data_dir() -> anyhow::Result<PathBuf> {
+    if let Some(runtime) = dirs_next::data_dir() {
+        return Ok(runtime.join("wezterm"));
+    }
+
+    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
 }
 
 pub(crate) fn compute_runtime_dir() -> anyhow::Result<PathBuf> {
@@ -1683,10 +1813,18 @@ fn default_max_fps() -> u8 {
 }
 
 fn default_tiling_desktop_environments() -> Vec<String> {
-    ["X11 LG3D", "X11 bspwm", "X11 dwm"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    [
+        "X11 LG3D",
+        "X11 Qtile",
+        "X11 awesome",
+        "X11 bspwm",
+        "X11 dwm",
+        "X11 i3",
+        "X11 xmonad",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 fn default_stateless_process_list() -> Vec<String> {
@@ -1713,6 +1851,11 @@ fn default_status_update_interval() -> u64 {
 
 fn default_alternate_buffer_wheel_scroll_speed() -> u8 {
     3
+}
+
+fn default_num_alphabet() -> String {
+    // Note: vi motion keys are intentionally excluded from this alphabet
+    "1234567890abcdefghilmnopqrstuvwxyz".to_string()
 }
 
 fn default_alphabet() -> String {
@@ -1790,6 +1933,10 @@ const fn default_half_cell() -> Dimension {
     Dimension::Cells(0.5)
 }
 
+const fn default_reverse_video_cursor_min_contrast() -> f32 {
+    2.5
+}
+
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug)]
 pub struct WindowPadding {
     #[dynamic(try_from = "crate::units::PixelUnit", default = "default_one_cell")]
@@ -1811,6 +1958,28 @@ impl Default for WindowPadding {
             bottom: default_half_cell(),
         }
     }
+}
+
+#[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default)]
+pub struct WindowContentAlignment {
+    pub horizontal: HorizontalWindowContentAlignment,
+    pub vertical: VerticalWindowContentAlignment,
+}
+
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HorizontalWindowContentAlignment {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VerticalWindowContentAlignment {
+    #[default]
+    Top,
+    Center,
+    Bottom,
 }
 
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1862,6 +2031,15 @@ pub enum ExitBehavior {
     Hold,
 }
 
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExitBehaviorMessaging {
+    #[default]
+    Verbose,
+    Brief,
+    Terse,
+    None,
+}
+
 #[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq)]
 pub enum DroppedFileQuoting {
     /// No quoting is performed, the file name is passed through as-is
@@ -1892,7 +2070,9 @@ impl DroppedFileQuoting {
             Self::None => s.to_string(),
             Self::SpacesOnly => s.replace(" ", "\\ "),
             // https://docs.rs/shlex/latest/shlex/fn.quote.html
-            Self::Posix => shlex::quote(s).into_owned(),
+            Self::Posix => shlex::try_quote(s)
+                .unwrap_or_else(|_| "".into())
+                .into_owned(),
             Self::Windows => {
                 let chars_need_quoting = [' ', '\t', '\n', '\x0b', '\"'];
                 if s.chars().any(|c| chars_need_quoting.contains(&c)) {
@@ -1969,6 +2149,16 @@ pub enum ImePreeditRendering {
     System,
 }
 
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NotificationHandling {
+    #[default]
+    AlwaysShow,
+    NeverShow,
+    SuppressFromFocusedPane,
+    SuppressFromFocusedTab,
+    SuppressFromFocusedWindow,
+}
+
 fn validate_row_or_col(value: &u16) -> Result<(), String> {
     if *value < 1 {
         Err("initial_cols and initial_rows must be non-zero".to_string())
@@ -1999,9 +2189,13 @@ pub(crate) fn validate_domain_name(name: &str) -> Result<(), String> {
     }
 }
 
-/// <https://github.com/wez/wezterm/pull/2435>
-/// <https://github.com/wez/wezterm/issues/2771>
-/// <https://github.com/wez/wezterm/issues/2630>
+/// <https://github.com/wezterm/wezterm/pull/2435>
+/// <https://github.com/wezterm/wezterm/issues/2771>
+/// <https://github.com/wezterm/wezterm/issues/2630>
 fn default_macos_forward_mods() -> Modifiers {
     Modifiers::SHIFT
+}
+
+fn default_colr_rasterizer() -> FontRasterizerSelection {
+    FontRasterizerSelection::Harfbuzz
 }

@@ -254,7 +254,7 @@ fn pane_tree(
         }
         Tree::Leaf(pane) => {
             let dims = pane.get_dimensions();
-            let working_dir = pane.get_current_working_dir();
+            let working_dir = pane.get_current_working_dir(CachePolicy::AllowStale);
             let cursor_pos = pane.get_cursor_position();
 
             PaneNode::Leaf(PaneEntry {
@@ -714,8 +714,10 @@ impl Tab {
     }
 
     /// Swap the active pane with the specified pane_index
-    pub fn swap_active_with_index(&self, pane_index: usize) -> Option<()> {
-        self.inner.lock().swap_active_with_index(pane_index)
+    pub fn swap_active_with_index(&self, pane_index: usize, keep_focus: bool) -> Option<()> {
+        self.inner
+            .lock()
+            .swap_active_with_index(pane_index, keep_focus)
     }
 
     /// Computes the size of the pane that would result if the specified
@@ -744,6 +746,10 @@ impl Tab {
         self.inner
             .lock()
             .split_and_insert(pane_index, request, pane)
+    }
+
+    pub fn get_zoomed_pane(&self) -> Option<Arc<dyn Pane>> {
+        self.inner.lock().get_zoomed_pane()
     }
 }
 
@@ -1177,8 +1183,14 @@ impl TabInner {
     }
 
     fn apply_pane_size(&mut self, pane_size: TerminalSize, cursor: &mut Cursor) {
-        let cell_width = pane_size.pixel_width / pane_size.cols;
-        let cell_height = pane_size.pixel_height / pane_size.rows;
+        let cell_width = pane_size
+            .pixel_width
+            .checked_div(pane_size.cols)
+            .unwrap_or(1);
+        let cell_height = pane_size
+            .pixel_height
+            .checked_div(pane_size.rows)
+            .unwrap_or(1);
         if let Ok(Some(node)) = cursor.node_mut() {
             // Adjust the size of the node; we preserve the size of the first
             // child and adjust the second, so if we are split down the middle
@@ -1538,7 +1550,6 @@ impl TabInner {
                 best.replace(target);
             }
         }
-        drop(recency);
 
         if let Some((_, target)) = best.take() {
             return Some(target.index);
@@ -1547,8 +1558,26 @@ impl TabInner {
     }
 
     fn prune_dead_panes(&mut self) -> bool {
+        let mux = Mux::get();
         !self
-            .remove_pane_if(|_, pane| pane.is_dead(), true)
+            .remove_pane_if(
+                |_, pane| {
+                    // If the pane is no longer known to the mux, then its liveness
+                    // state isn't guaranteed to be monitored or updated, so let's
+                    // consider the pane effectively dead if it isn't in the mux.
+                    // <https://github.com/wezterm/wezterm/issues/4030>
+                    let in_mux = mux.get_pane(pane.pane_id()).is_some();
+                    let dead = pane.is_dead();
+                    log::trace!(
+                        "prune_dead_panes: pane_id={} dead={} in_mux={}",
+                        pane.pane_id(),
+                        dead,
+                        in_mux
+                    );
+                    dead || !in_mux
+                },
+                true,
+            )
             .is_empty()
     }
 
@@ -1719,12 +1748,24 @@ impl TabInner {
     }
 
     fn set_active_pane(&mut self, pane: &Arc<dyn Pane>) {
+        let prior = self.get_active_pane();
+
+        if is_pane(pane, &prior.as_ref()) {
+            return;
+        }
+
+        if self.zoomed.is_some() {
+            if !configuration().unzoom_on_switch_pane {
+                return;
+            }
+            self.toggle_zoom();
+        }
+
         if let Some(item) = self
             .iter_panes_ignoring_zoom()
             .iter()
             .find(|p| p.pane.pane_id() == pane.pane_id())
         {
-            let prior = self.get_active_pane();
             self.active = item.index;
             self.recency.tag(item.index);
             self.advise_focus_change(prior);
@@ -1771,7 +1812,7 @@ impl TabInner {
         cell_dimensions(&self.size)
     }
 
-    fn swap_active_with_index(&mut self, pane_index: usize) -> Option<()> {
+    fn swap_active_with_index(&mut self, pane_index: usize, keep_focus: bool) -> Option<()> {
         let active_idx = self.get_active_idx();
         let mut pane = self.get_active_pane()?;
         log::trace!(
@@ -1817,7 +1858,11 @@ impl TabInner {
         }
 
         // And update focus
-        self.advise_focus_change(Some(pane));
+        if keep_focus {
+            self.set_active_idx(pane_index);
+        } else {
+            self.advise_focus_change(Some(pane));
+        }
         None
     }
 
@@ -1878,7 +1923,7 @@ impl TabInner {
         }
 
         // Ensure that we're not zoomed, otherwise we'll end up in
-        // a bogus split state (https://github.com/wez/wezterm/issues/723)
+        // a bogus split state (https://github.com/wezterm/wezterm/issues/723)
         self.set_zoomed(false);
 
         self.iter_panes().iter().nth(pane_index).map(|pos| {
@@ -2045,6 +2090,10 @@ impl TabInner {
         } else {
             pane_index
         })
+    }
+
+    fn get_zoomed_pane(&self) -> Option<Arc<dyn Pane>> {
+        self.zoomed.clone()
     }
 }
 
@@ -2262,7 +2311,7 @@ mod test {
         fn is_alt_screen_active(&self) -> bool {
             false
         }
-        fn get_current_working_dir(&self) -> Option<Url> {
+        fn get_current_working_dir(&self, _policy: CachePolicy) -> Option<Url> {
             None
         }
     }

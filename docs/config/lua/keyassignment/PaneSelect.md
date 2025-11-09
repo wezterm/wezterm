@@ -15,16 +15,33 @@ action.
 The available actions are:
 
 * `mode="Activate"` - activate the selected pane. This is the default mode.
-* `mode="SwapWithActive"` - swap the position of the active pane with the selected pane
+* `mode="SwapWithActive"` - swap the position of the active pane with the
+  selected pane, switching focus to the selected pane
 
-The selection alphabet defaults to the same value as [quick_select_alphabet](../config/quick_select_alphabet.md), but can be explicitly via the `alphabet` field:
+The selection alphabet defaults to the same value as
+[quick_select_alphabet](../config/quick_select_alphabet.md), but can be
+explicitly via the `alphabet` field:
+
+{{since('20240127-113634-bbcac864')}}
+
+Additional modes are now supported:
+
+* `mode="MoveToNewTab"` - moves the selected pane into a new tab in the same
+  window, and activates it
+* `mode="MoveToNewWindow"` - moves the selected pane into a new window, and
+  activates it
+* `mode="SwapWithActiveKeepFocus"` - swap the position of the active pane with
+  the selected pane, retaining focus on the currently active pane but in its
+  new position
+
+You may now also set `show_pane_ids=true` to show the pane id alongside the label.
 
 ```lua
 local wezterm = require 'wezterm'
 local act = wezterm.action
 
 -- 36 is the default, but you can choose a different size.
--- Uses the same font as window_frame.font
+-- Uses the same font as window_frame.font if pane_select_font option is not set
 -- config.pane_select_font_size=36,
 
 config.keys = {

@@ -106,7 +106,7 @@ impl WglWrapper {
             }
         }
 
-        let lib = libloading::Library::new("opengl32.dll").map_err(|e| {
+        let lib = unsafe { libloading::Library::new("opengl32.dll") }.map_err(|e| {
             log::error!("{:?}", e);
             e
         })?;
@@ -402,6 +402,10 @@ impl Drop for GlState {
 }
 
 unsafe impl glium::backend::Backend for GlState {
+    fn resize(&self, _: (u32, u32)) {
+        todo!()
+    }
+
     fn swap_buffers(&self) -> Result<(), glium::SwapBuffersError> {
         unsafe {
             SwapBuffers(self.hdc);

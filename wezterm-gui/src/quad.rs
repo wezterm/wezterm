@@ -208,12 +208,12 @@ impl<'a> QuadTrait for Quad<'a> {
 }
 
 pub trait QuadAllocator {
-    fn allocate(&mut self) -> anyhow::Result<QuadImpl>;
+    fn allocate(&mut self) -> anyhow::Result<QuadImpl<'_>>;
     fn extend_with(&mut self, vertices: &[Vertex]);
 }
 
 pub trait TripleLayerQuadAllocatorTrait {
-    fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl>;
+    fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl<'_>>;
     fn extend_with(&mut self, layer_num: usize, vertices: &[Vertex]);
 }
 
@@ -329,13 +329,13 @@ impl HeapQuadAllocator {
                 other.extend_with(layer_num, &quad.to_vertices());
             }
         }
-        metrics::histogram!("quad_buffer_apply", start.elapsed());
+        metrics::histogram!("quad_buffer_apply").record(start.elapsed());
         Ok(())
     }
 }
 
 impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
-    fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl> {
+    fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl<'_>> {
         let quads = match layer_num {
             0 => &mut self.layer0,
             1 => &mut self.layer1,
@@ -380,7 +380,7 @@ pub enum TripleLayerQuadAllocator<'a> {
 }
 
 impl<'a> TripleLayerQuadAllocatorTrait for TripleLayerQuadAllocator<'a> {
-    fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl> {
+    fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl<'_>> {
         match self {
             Self::Gpu(b) => b.allocate(layer_num),
             Self::Heap(h) => h.allocate(layer_num),

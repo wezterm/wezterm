@@ -62,12 +62,12 @@ impl portable_pty::MasterPty for SshPty {
         Ok(*self.size.lock().unwrap())
     }
 
-    fn try_clone_reader(&self) -> anyhow::Result<Box<(dyn Read + Send + 'static)>> {
+    fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send + 'static>> {
         let reader = self.reader.try_clone()?;
         Ok(Box::new(reader))
     }
 
-    fn take_writer(&self) -> anyhow::Result<Box<(dyn Write + Send + 'static)>> {
+    fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send + 'static>> {
         let writer = self.writer.try_clone()?;
         Ok(Box::new(writer))
     }
@@ -218,17 +218,13 @@ impl crate::sessioninner::SessionInner {
 
         let mut channel = sess.open_session()?;
 
-        /* libssh2 doesn't properly support agent forwarding
-         * at this time:
-         * <https://github.com/libssh2/libssh2/issues/535>
         if let Some("yes") = self.config.get("forwardagent").map(|s| s.as_str()) {
-            log::info!("requesting agent forwarding");
-            if let Err(err) = channel.request_auth_agent_forwarding() {
-                log::error!("Failed to establish agent forwarding: {:#}", err);
+            if self.identity_agent().is_some() {
+                if let Err(err) = channel.request_auth_agent_forwarding() {
+                    log::error!("Failed to request agent forwarding: {:#}", err);
+                }
             }
-            log::info!("agent forwarding OK!");
         }
-        */
 
         channel.request_pty(&newpty)?;
 

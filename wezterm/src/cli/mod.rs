@@ -1,6 +1,5 @@
 use anyhow::anyhow;
 use clap::Parser;
-use mux::pane::PaneId;
 use std::ffi::OsString;
 use wezterm_client::client::Client;
 
@@ -22,6 +21,7 @@ mod set_window_title;
 mod spawn_command;
 mod split_pane;
 mod tls_creds;
+mod zoom_pane;
 
 #[derive(Debug, Parser, Clone, Copy)]
 enum CliOutputFormatKind {
@@ -159,6 +159,10 @@ Outputs the pane-id for the newly created pane on success"
     /// Rename a workspace
     #[command(name = "rename-workspace", rename_all = "kebab")]
     RenameWorkspace(rename_workspace::RenameWorkspace),
+
+    /// Zoom, unzoom, or toggle zoom state
+    #[command(name = "zoom-pane", rename_all = "kebab")]
+    ZoomPane(zoom_pane::ZoomPane),
 }
 
 async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()> {
@@ -194,6 +198,7 @@ async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()>
         CliSubCommand::SetTabTitle(cmd) => cmd.run(client).await,
         CliSubCommand::SetWindowTitle(cmd) => cmd.run(client).await,
         CliSubCommand::RenameWorkspace(cmd) => cmd.run(client).await,
+        CliSubCommand::ZoomPane(cmd) => cmd.run(client).await,
     }
 }
 
@@ -203,33 +208,6 @@ pub fn run_cli(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()> {
         Ok(_) => Ok(()),
         Err(err) => crate::terminate_with_error(err),
     }
-}
-
-pub async fn resolve_pane_id(client: &Client, pane_id: Option<PaneId>) -> anyhow::Result<PaneId> {
-    let pane_id: PaneId = match pane_id {
-        Some(p) => p,
-        None => {
-            if let Ok(pane) = std::env::var("WEZTERM_PANE") {
-                pane.parse()?
-            } else {
-                let mut clients = client.list_clients(codec::GetClientList).await?.clients;
-                clients.retain(|client| client.focused_pane_id.is_some());
-                clients.sort_by(|a, b| b.last_input.cmp(&a.last_input));
-                if clients.is_empty() {
-                    anyhow::bail!(
-                        "--pane-id was not specified and $WEZTERM_PANE
-                         is not set in the environment, and I couldn't
-                         determine which pane was currently focused"
-                    );
-                }
-
-                clients[0]
-                    .focused_pane_id
-                    .expect("to have filtered out above")
-            }
-        }
-    };
-    Ok(pane_id)
 }
 
 pub fn resolve_relative_cwd(cwd: Option<OsString>) -> anyhow::Result<Option<String>> {

@@ -9,14 +9,14 @@ use crate::os::x11::connection::XConnection;
 use crate::os::x11::window::XWindow;
 use crate::screen::Screens;
 use crate::{
-    Appearance, Clipboard, MouseCursor, Rect, RequestedWindowGeometry, ScreenPoint, WindowEvent,
-    WindowOps,
+    Appearance, Clipboard, MouseCursor, Rect, RequestedWindowGeometry, ResizeIncrement,
+    ScreenPoint, WindowEvent, WindowOps,
 };
 use async_trait::async_trait;
 use config::ConfigHandle;
 use promise::*;
 use raw_window_handle::{
-    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
 use std::any::Any;
 use std::rc::Rc;
@@ -202,22 +202,22 @@ impl Window {
     }
 }
 
-unsafe impl HasRawDisplayHandle for Window {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
+impl HasDisplayHandle for Window {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         match self {
-            Self::X11(x) => x.raw_display_handle(),
+            Self::X11(x) => x.display_handle(),
             #[cfg(feature = "wayland")]
-            Self::Wayland(w) => w.raw_display_handle(),
+            Self::Wayland(w) => w.display_handle(),
         }
     }
 }
 
-unsafe impl HasRawWindowHandle for Window {
-    fn raw_window_handle(&self) -> RawWindowHandle {
+impl HasWindowHandle for Window {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
         match self {
-            Self::X11(x) => x.raw_window_handle(),
+            Self::X11(x) => x.window_handle(),
             #[cfg(feature = "wayland")]
-            Self::Wayland(w) => w.raw_window_handle(),
+            Self::Wayland(w) => w.window_handle(),
         }
     }
 }
@@ -314,11 +314,11 @@ impl WindowOps for Window {
         }
     }
 
-    fn set_resize_increments(&self, x: u16, y: u16) {
+    fn set_resize_increments(&self, incr: ResizeIncrement) {
         match self {
-            Self::X11(x11) => x11.set_resize_increments(x, y),
+            Self::X11(x11) => x11.set_resize_increments(incr),
             #[cfg(feature = "wayland")]
-            Self::Wayland(w) => w.set_resize_increments(x, y),
+            Self::Wayland(w) => w.set_resize_increments(incr),
         }
     }
 

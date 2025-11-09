@@ -3,8 +3,8 @@ use crate::termwindow::{
     GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
 };
 use ::window::{
-    MouseButtons as WMB, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress, WindowOps,
-    WindowState,
+    MouseButtons as WMB, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
+    WindowDecorations, WindowOps, WindowState,
 };
 use config::keyassignment::{KeyAssignment, MouseEventTrigger, SpawnTabDomain};
 use config::MouseEventAltScreen;
@@ -468,11 +468,24 @@ impl super::TermWindow {
                     self.do_new_tab_button_click(MousePress::Left);
                 }
                 TabBarItem::None | TabBarItem::LeftStatus | TabBarItem::RightStatus => {
-                    // Potentially starting a drag by the tab bar
-                    if !self
+                    let maximized = self
                         .window_state
-                        .intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN)
-                    {
+                        .intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN);
+                    if let Some(ref window) = self.window {
+                        if self.config.window_decorations
+                            == WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE
+                        {
+                            if self.last_mouse_click.as_ref().map(|c| c.streak) == Some(2) {
+                                if maximized {
+                                    window.restore();
+                                } else {
+                                    window.maximize();
+                                }
+                            }
+                        }
+                    }
+                    // Potentially starting a drag by the tab bar
+                    if !maximized {
                         self.window_drag_position.replace(event.clone());
                     }
                     context.request_drag_move();
@@ -890,7 +903,17 @@ impl super::TermWindow {
                     button: MouseButton::WheelDown(-amount as usize),
                 },
             }),
-            WMEK::HorzWheel(_) => None,
+            WMEK::HorzWheel(amount) => Some(match *amount {
+                0 => return,
+                1.. => MouseEventTrigger::Down {
+                    streak: 1,
+                    button: MouseButton::WheelLeft(*amount as usize),
+                },
+                _ => MouseEventTrigger::Down {
+                    streak: 1,
+                    button: MouseButton::WheelRight(-amount as usize),
+                },
+            }),
         };
 
         if allow_action {
@@ -923,17 +946,26 @@ impl super::TermWindow {
                     MouseEventTrigger::Down {
                         ref mut streak,
                         button:
-                            MouseButton::WheelUp(ref mut delta) | MouseButton::WheelDown(ref mut delta),
+                            MouseButton::WheelUp(ref mut delta)
+                            | MouseButton::WheelDown(ref mut delta)
+                            | MouseButton::WheelLeft(ref mut delta)
+                            | MouseButton::WheelRight(ref mut delta),
                     }
                     | MouseEventTrigger::Up {
                         ref mut streak,
                         button:
-                            MouseButton::WheelUp(ref mut delta) | MouseButton::WheelDown(ref mut delta),
+                            MouseButton::WheelUp(ref mut delta)
+                            | MouseButton::WheelDown(ref mut delta)
+                            | MouseButton::WheelLeft(ref mut delta)
+                            | MouseButton::WheelRight(ref mut delta),
                     }
                     | MouseEventTrigger::Drag {
                         ref mut streak,
                         button:
-                            MouseButton::WheelUp(ref mut delta) | MouseButton::WheelDown(ref mut delta),
+                            MouseButton::WheelUp(ref mut delta)
+                            | MouseButton::WheelDown(ref mut delta)
+                            | MouseButton::WheelLeft(ref mut delta)
+                            | MouseButton::WheelRight(ref mut delta),
                     } => {
                         *streak = 1;
                         *delta = 1;
@@ -984,7 +1016,13 @@ impl super::TermWindow {
                         TMB::WheelDown((-amount) as usize)
                     }
                 }
-                WMEK::HorzWheel(_) => TMB::None,
+                WMEK::HorzWheel(amount) => {
+                    if amount > 0 {
+                        TMB::WheelLeft(amount as usize)
+                    } else {
+                        TMB::WheelRight((-amount) as usize)
+                    }
+                }
             },
             x: column,
             y: row,

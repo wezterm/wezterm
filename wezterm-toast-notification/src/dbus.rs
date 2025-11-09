@@ -5,10 +5,11 @@ use crate::ToastNotification;
 use futures_util::stream::{abortable, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use zbus::dbus_proxy;
+use zbus::proxy;
 use zvariant::{Type, Value};
 
 #[derive(Debug, Type, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ServerInformation {
     /// The product name of the server.
     pub name: String,
@@ -23,7 +24,7 @@ pub struct ServerInformation {
     pub spec_version: String,
 }
 
-#[dbus_proxy(
+#[proxy(
     interface = "org.freedesktop.Notifications",
     default_service = "org.freedesktop.Notifications",
     default_path = "/org/freedesktop/Notifications"
@@ -52,11 +53,11 @@ trait Notifications {
         expire_timeout: i32,
     ) -> zbus::Result<u32>;
 
-    #[dbus_proxy(signal)]
-    fn action_invoked(&self, nid: u32, action_key: String) -> Result<()>;
+    #[zbus(signal)]
+    fn action_invoked(&self, nid: u32, action_key: String) -> zbus::Result<()>;
 
-    #[dbus_proxy(signal)]
-    fn notification_closed(&self, nid: u32, reason: u32) -> Result<()>;
+    #[zbus(signal)]
+    fn notification_closed(&self, nid: u32, reason: u32) -> zbus::Result<()>;
 }
 
 /// Timeout/expiration was reached
@@ -71,6 +72,7 @@ enum Reason {
     Expired,
     Dismissed,
     Closed,
+    #[allow(dead_code)]
     Unknown(u32),
 }
 

@@ -15,12 +15,12 @@
 #                                about running programs
 
 # shellcheck disable=SC2166
-if [ -z "${BASH_VERSION}" -a -z "${ZSH_NAME}" ] ; then
+if [ -z "${BASH_VERSION-}" -a -z "${ZSH_NAME-}" ] ; then
   # Only for bash or zsh
   return 0
 fi
 
-if [ "${WEZTERM_SHELL_SKIP_ALL}" = "1" ] ; then
+if [ "${WEZTERM_SHELL_SKIP_ALL-}" = "1" ] ; then
   return 0
 fi
 
@@ -43,6 +43,7 @@ __wezterm_install_bash_prexec() {
 # bash-preexec.sh -- Bash support for ZSH-like 'preexec' and 'precmd' functions.
 # https://github.com/rcaloras/bash-preexec
 #
+#
 # 'preexec' functions are executed before each interactive command is
 # executed, with the interactive command as its argument. The 'precmd'
 # function is executed before each prompt is displayed.
@@ -50,7 +51,7 @@ __wezterm_install_bash_prexec() {
 # Author: Ryan Caloras (ryan@bashhub.com)
 # Forked from Original Author: Glyph Lefkowitz
 #
-# V0.4.1
+# V0.5.0
 #
 
 # General Usage:
@@ -73,16 +74,31 @@ __wezterm_install_bash_prexec() {
 #  using: the "DEBUG" trap, and the "PROMPT_COMMAND" variable. If you override
 #  either of these after bash-preexec has been installed it will most likely break.
 
+# Tell shellcheck what kind of file this is.
+# shellcheck shell=bash
+
 # Make sure this is bash that's running and return otherwise.
-if [[ -z "${BASH_VERSION:-}" ]]; then
+# Use POSIX syntax for this line:
+if [ -z "${BASH_VERSION-}" ]; then
     return 1;
 fi
 
+# We only support Bash 3.1+.
+# Note: BASH_VERSINFO is first available in Bash-2.0.
+if [[ -z "${BASH_VERSINFO-}" ]] || (( BASH_VERSINFO[0] < 3 || (BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 1) )); then
+    return 1
+fi
+
 # Avoid duplicate inclusion
-if [[ "${__bp_imported:-}" == "defined" ]]; then
+if [[ -n "${bash_preexec_imported:-}" ]]; then
     return 0
 fi
-__bp_imported="defined"
+bash_preexec_imported="defined"
+
+# WARNING: This variable is no longer used and should not be relied upon.
+# Use ${bash_preexec_imported} instead.
+# shellcheck disable=SC2034
+__bp_imported="${bash_preexec_imported}"
 
 # Should be available to each precmd and preexec
 # functions, should they want it. $? and $_ are available as $? and $_, but
@@ -116,7 +132,8 @@ __bp_require_not_readonly() {
 # history even if it starts with a space.
 __bp_adjust_histcontrol() {
     local histcontrol
-    histcontrol="${HISTCONTROL//ignorespace}"
+    histcontrol="${HISTCONTROL:-}"
+    histcontrol="${histcontrol//ignorespace}"
     # Replace ignoreboth with ignoredups
     if [[ "$histcontrol" == *"ignoreboth"* ]]; then
         histcontrol="ignoredups:${histcontrol//ignoreboth}"
@@ -130,6 +147,10 @@ __bp_adjust_histcontrol() {
 # run interactively by the user; it's set immediately after the prompt hook,
 # and unset as soon as the trace hook is run.
 __bp_preexec_interactive_mode=""
+
+# These arrays are used to add functions to be run before, or after, prompts.
+declare -a precmd_functions
+declare -a preexec_functions
 
 # Trims leading and trailing whitespace from $2 and writes it to the variable
 # name passed as $1
@@ -166,6 +187,9 @@ __bp_interactive_mode() {
 __bp_precmd_invoke_cmd() {
     # Save the returned value from our last command, and from each process in
     # its pipeline. Note: this MUST be the first thing done in this function.
+    # BP_PIPESTATUS may be unused, ignore
+    # shellcheck disable=SC2034
+
     __bp_last_ret_value="$?" BP_PIPESTATUS=("${PIPESTATUS[@]}")
 
     # Don't invoke precmds if we are inside an execution of an "original
@@ -189,20 +213,20 @@ __bp_precmd_invoke_cmd() {
         fi
     done
 
-    return $__bp_last_ret_value
+    __bp_set_ret_value "$__bp_last_ret_value"
 }
 
 # Sets a return value in $?. We may want to get access to the $? variable in our
 # precmd functions. This is available for instance in zsh. We can simulate it in bash
 # by setting the value here.
 __bp_set_ret_value() {
-    return ${1:-}
+    return ${1:+"$1"}
 }
 
 __bp_in_prompt_command() {
 
-    local prompt_command_array
-    IFS=$'\n;' read -rd '' -a prompt_command_array <<< "$PROMPT_COMMAND"
+    local prompt_command_array IFS=$'\n;'
+    read -rd '' -a prompt_command_array <<< "${PROMPT_COMMAND[*]:-}"
 
     local trimmed_arg
     __bp_trim_whitespace trimmed_arg "${1:-}"
@@ -270,7 +294,7 @@ __bp_preexec_invoke_exec() {
     local this_command
     this_command=$(
         export LC_ALL=C
-        HISTTIMEFORMAT= builtin history 1 | sed '1 s/^ *[0-9][0-9]*[* ] //'
+        HISTTIMEFORMAT='' builtin history 1 | sed '1 s/^ *[0-9][0-9]*[* ] //'
     )
 
     # Sanity check to make sure we have something to invoke our function with.
@@ -287,7 +311,7 @@ __bp_preexec_invoke_exec() {
         # Only execute each function if it actually exists.
         # Test existence of function with: declare -[fF]
         if type -t "$preexec_function" 1>/dev/null; then
-            __bp_set_ret_value ${__bp_last_ret_value:-}
+            __bp_set_ret_value "${__bp_last_ret_value:-}"
             # Quote our function invocation to prevent issues with IFS
             "$preexec_function" "$this_command"
             preexec_function_ret_value="$?"
@@ -308,14 +332,17 @@ __bp_preexec_invoke_exec() {
 
 __bp_install() {
     # Exit if we already have this installed.
-    if [[ "${PROMPT_COMMAND:-}" == *"__bp_precmd_invoke_cmd"* ]]; then
+    if [[ "${PROMPT_COMMAND[*]:-}" == *"__bp_precmd_invoke_cmd"* ]]; then
         return 1;
     fi
 
     trap '__bp_preexec_invoke_exec "$_"' DEBUG
 
     # Preserve any prior DEBUG trap as a preexec function
-    local prior_trap=$(sed "s/[^']*'\(.*\)'[^']*/\1/" <<<"${__bp_trap_string:-}")
+    local prior_trap
+    # we can't easily do this with variable expansion. Leaving as sed command.
+    # shellcheck disable=SC2001
+    prior_trap=$(sed "s/[^']*'\(.*\)'[^']*/\1/" <<<"${__bp_trap_string:-}")
     unset __bp_trap_string
     if [[ -n "$prior_trap" ]]; then
         eval '__bp_original_debug_trap() {
@@ -340,17 +367,26 @@ __bp_install() {
 
     local existing_prompt_command
     # Remove setting our trap install string and sanitize the existing prompt command string
-    existing_prompt_command="${PROMPT_COMMAND//$__bp_install_string[;$'\n']}" # Edge case of appending to PROMPT_COMMAND
-    existing_prompt_command="${existing_prompt_command//$__bp_install_string}"
+    existing_prompt_command="${PROMPT_COMMAND:-}"
+    # Edge case of appending to PROMPT_COMMAND
+    existing_prompt_command="${existing_prompt_command//$__bp_install_string/:}" # no-op
+    existing_prompt_command="${existing_prompt_command//$'\n':$'\n'/$'\n'}" # remove known-token only
+    existing_prompt_command="${existing_prompt_command//$'\n':;/$'\n'}" # remove known-token only
     __bp_sanitize_string existing_prompt_command "$existing_prompt_command"
+    if [[ "${existing_prompt_command:-:}" == ":" ]]; then
+        existing_prompt_command=
+    fi
 
     # Install our hooks in PROMPT_COMMAND to allow our trap to know when we've
     # actually entered something.
-    PROMPT_COMMAND=$'__bp_precmd_invoke_cmd\n'
-    if [[ -n "$existing_prompt_command" ]]; then
-        PROMPT_COMMAND+=${existing_prompt_command}$'\n'
-    fi;
-    PROMPT_COMMAND+='__bp_interactive_mode'
+    PROMPT_COMMAND='__bp_precmd_invoke_cmd'
+    PROMPT_COMMAND+=${existing_prompt_command:+$'\n'$existing_prompt_command}
+    if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+        PROMPT_COMMAND+=('__bp_interactive_mode')
+    else
+        # shellcheck disable=SC2179 # PROMPT_COMMAND is not an array in bash <= 5.0
+        PROMPT_COMMAND+=$'\n__bp_interactive_mode'
+    fi
 
     # Add two functions to our arrays for convenience
     # of definition.
@@ -371,10 +407,12 @@ __bp_install_after_session_init() {
     __bp_require_not_readonly PROMPT_COMMAND HISTCONTROL HISTTIMEFORMAT || return
 
     local sanitized_prompt_command
-    __bp_sanitize_string sanitized_prompt_command "$PROMPT_COMMAND"
+    __bp_sanitize_string sanitized_prompt_command "${PROMPT_COMMAND:-}"
     if [[ -n "$sanitized_prompt_command" ]]; then
+        # shellcheck disable=SC2178 # PROMPT_COMMAND is not an array in bash <= 5.0
         PROMPT_COMMAND=${sanitized_prompt_command}$'\n'
     fi;
+    # shellcheck disable=SC2179 # PROMPT_COMMAND is not an array in bash <= 5.0
     PROMPT_COMMAND+=${__bp_install_string}
 }
 
@@ -387,7 +425,7 @@ fi;
 
 # blesh provides it's own preexec mechanism which is recommended over bash-preexec
 # See https://github.com/akinomyoga/ble.sh/wiki/Manual-%C2%A71-Introduction#user-content-fn-blehook for more details
-if [[ ! -n "$BLE_VERSION" ]]; then
+if [[ ! -n "${BLE_VERSION-}" ]]; then
   __wezterm_install_bash_prexec
 fi
 
@@ -396,7 +434,7 @@ fi
 # It requires the `base64` utility to be available in the path.
 __wezterm_set_user_var() {
   if hash base64 2>/dev/null ; then
-    if [[ -z "${TMUX}" ]] ; then
+    if [[ -z "${TMUX-}" ]] ; then
       printf "\033]1337;SetUserVar=%s=%s\007" "$1" `echo -n "$2" | base64`
     else
       # <https://github.com/tmux/tmux/wiki/FAQ#what-is-the-passthrough-escape-sequence-and-how-do-i-use-it>
@@ -437,20 +475,31 @@ __wezterm_semantic_precmd() {
       PS1='\[\e]133;P;k=i\a\]'$PS1'\[\e]133;B\a\]'
       PS2='\[\e]133;P;k=s\a\]'$PS2'\[\e]133;B\a\]'
     fi
+    __wezterm_check_ps1="$PS1"
   fi
   if [[ "$__wezterm_semantic_precmd_executing" != "" ]] ; then
     # Report last command status
     printf "\033]133;D;%s;aid=%s\007" "$ret" "$$"
   fi
   # Fresh line and start the prompt
-  printf "\033]133;A;cl=m;aid=%s\007" "$$"
+  if [[ -n "${BLE_VERSION-}" ]]; then
+    # FreshLine breaks ble.sh's cursor position tracking.  Also, the cursor
+    # position adjustment is already performed ble.sh so unnecessary here.  We
+    # here only perform StartPrompt.
+    printf "\033]133;P\007"
+  else
+    printf "\033]133;A;cl=m;aid=%s\007" "$$"
+  fi
   __wezterm_semantic_precmd_executing=0
 }
 
 function __wezterm_semantic_preexec() {
-  # Restore the original PS1/PS2
-  PS1="$__wezterm_save_ps1"
-  PS2="$__wezterm_save_ps2"
+  # Restore the original PS1/PS2 if set
+  if [[ -n "${__wezterm_save_ps1+1}" && "${__wezterm_check_ps1-}" == "${PS1}" ]]; then
+	  PS1="$__wezterm_save_ps1"
+	  PS2="$__wezterm_save_ps2"
+	  unset __wezterm_save_ps1
+  fi
   # Indicate that the command output begins here
   printf "\033]133;C;\007"
   __wezterm_semantic_precmd_executing=1
@@ -461,7 +510,7 @@ __wezterm_user_vars_precmd() {
   __wezterm_set_user_var "WEZTERM_USER" "$(id -un)"
 
   # Indicate whether this pane is running inside tmux or not
-  if [[ -n "${TMUX}" ]] ; then
+  if [[ -n "${TMUX-}" ]] ; then
     __wezterm_set_user_var "WEZTERM_IN_TMUX" "1"
   else
     __wezterm_set_user_var "WEZTERM_IN_TMUX" "0"
@@ -469,15 +518,20 @@ __wezterm_user_vars_precmd() {
 
   # You may set WEZTERM_HOSTNAME to a name you want to use instead
   # of calling out to the hostname executable on every prompt print.
-  if [[ -z "${WEZTERM_HOSTNAME}" ]] ; then
-    if hash hostname 2>/dev/null ; then
-      __wezterm_set_user_var "WEZTERM_HOST" "$(hostname)"
-    elif hash hostnamectl 2>/dev/null ; then
-      __wezterm_set_user_var "WEZTERM_HOST" "$(hostnamectl hostname)"
-    fi
+if [[ -z "${WEZTERM_HOSTNAME}" ]]; then
+  if [[ -r /proc/sys/kernel/hostname ]]; then
+    __wezterm_set_user_var "WEZTERM_HOST" "$(cat /proc/sys/kernel/hostname)"
+  elif hash hostname 2>/dev/null; then
+    __wezterm_set_user_var "WEZTERM_HOST" "$(hostname)"
+  elif hash hostnamectl 2>/dev/null; then
+    __wezterm_set_user_var "WEZTERM_HOST" "$(hostnamectl hostname)"
   else
-    __wezterm_set_user_var "WEZTERM_HOST" "${WEZTERM_HOSTNAME}"
+    __wezterm_set_user_var "WEZTERM_HOST" "unknown"
   fi
+else
+  __wezterm_set_user_var "WEZTERM_HOST" "${WEZTERM_HOSTNAME}"
+fi
+
 }
 
 __wezterm_user_vars_preexec() {
@@ -488,8 +542,8 @@ __wezterm_user_vars_preexec() {
 # Register the various functions; take care to perform osc7 after
 # the semantic zones as we don't want to perturb the last command
 # status before we've had a chance to report it to the terminal
-if [[ -z "${WEZTERM_SHELL_SKIP_SEMANTIC_ZONES}" ]]; then
-  if [[ -n "$BLE_VERSION" ]]; then
+if [[ -z "${WEZTERM_SHELL_SKIP_SEMANTIC_ZONES-}" ]]; then
+  if [[ -n "${BLE_VERSION-}" ]]; then
     blehook PRECMD+=__wezterm_semantic_precmd
     blehook PREEXEC+=__wezterm_semantic_preexec
   else
@@ -498,8 +552,8 @@ if [[ -z "${WEZTERM_SHELL_SKIP_SEMANTIC_ZONES}" ]]; then
   fi
 fi
 
-if [[ -z "${WEZTERM_SHELL_SKIP_USER_VARS}" ]]; then
-  if [[ -n "$BLE_VERSION" ]]; then
+if [[ -z "${WEZTERM_SHELL_SKIP_USER_VARS-}" ]]; then
+  if [[ -n "${BLE_VERSION-}" ]]; then
     blehook PRECMD+=__wezterm_user_vars_precmd
     blehook PREEXEC+=__wezterm_user_vars_preexec
   else
@@ -508,8 +562,8 @@ if [[ -z "${WEZTERM_SHELL_SKIP_USER_VARS}" ]]; then
   fi
 fi
 
-if [[ -z "${WEZTERM_SHELL_SKIP_CWD}" ]] ; then
-  if [[ -n "$BLE_VERSION" ]]; then
+if [[ -z "${WEZTERM_SHELL_SKIP_CWD-}" ]] ; then
+  if [[ -n "${BLE_VERSION-}" ]]; then
     blehook PRECMD+=__wezterm_osc7
   else
     precmd_functions+=(__wezterm_osc7)

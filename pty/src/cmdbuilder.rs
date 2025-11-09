@@ -1,11 +1,14 @@
 #[cfg(unix)]
 use anyhow::Context;
 #[cfg(feature = "serde_support")]
-use serde_derive::*;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
+#[cfg(unix)]
+use std::path::Component;
+use std::path::Path;
 
 /// Used to deal with Windows having case-insensitive environment variables.
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
@@ -40,7 +43,6 @@ impl EnvEntry {
 fn get_shell() -> String {
     use nix::unistd::{access, AccessFlags};
     use std::ffi::CStr;
-    use std::path::Path;
     use std::str;
 
     let ent = unsafe { libc::getpwuid(libc::getuid()) };
@@ -85,14 +87,18 @@ fn get_base_env() -> BTreeMap<OsString, EnvEntry> {
 
     #[cfg(unix)]
     {
-        env.insert(
-            EnvEntry::map_key("SHELL".into()),
-            EnvEntry {
-                is_from_base_env: true,
-                preferred_key: "SHELL".into(),
-                value: get_shell().into(),
-            },
-        );
+        let key = EnvEntry::map_key("SHELL".into());
+        // Only set the value of SHELL if it isn't already set
+        if !env.contains_key(&key) {
+            env.insert(
+                EnvEntry::map_key("SHELL".into()),
+                EnvEntry {
+                    is_from_base_env: true,
+                    preferred_key: "SHELL".into(),
+                    value: get_shell().into(),
+                },
+            );
+        }
     }
 
     #[cfg(windows)]
@@ -204,7 +210,7 @@ pub struct CommandBuilder {
 }
 
 impl CommandBuilder {
-    /// Create a new builder instance with argv[0] set to the specified
+    /// Create a new builder instance with argv\[0\] set to the specified
     /// program.
     pub fn new<S: AsRef<OsStr>>(program: S) -> Self {
         Self {
@@ -268,6 +274,22 @@ impl CommandBuilder {
             panic!("attempted to add args to a default_prog builder");
         }
         self.args.push(arg.as_ref().to_owned());
+    }
+
+    /// If a builder is_default_prog, then this function can be used to
+    /// set the actual prog that should be used.
+    /// This is intended to facilitate plumbing through the handling
+    /// of the underlying default prog when merging together supplemental
+    /// env and cwd information.
+    /// You will not typically use this method in your own code.
+    pub fn replace_default_prog(&mut self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) {
+        if !self.is_default_prog() {
+            panic!("attempted to replace_default_prog on a non-default_prog builder");
+        }
+
+        for arg in args {
+            self.args.push(arg.as_ref().to_owned());
+        }
     }
 
     /// Append a sequence of arguments to the current command line
@@ -409,36 +431,79 @@ impl CommandBuilder {
 
     fn search_path(&self, exe: &OsStr, cwd: &OsStr) -> anyhow::Result<OsString> {
         use nix::unistd::{access, AccessFlags};
-        use std::path::Path;
 
         let exe_path: &Path = exe.as_ref();
         if exe_path.is_relative() {
             let cwd: &Path = cwd.as_ref();
-            let abs_path = cwd.join(exe_path);
-            if abs_path.exists() {
-                return Ok(abs_path.into_os_string());
+            let mut errors = vec![];
+
+            // If the requested executable is explicitly relative to cwd,
+            // then check only there.
+            if is_cwd_relative_path(exe_path) {
+                let abs_path = cwd.join(exe_path);
+
+                if abs_path.is_dir() {
+                    anyhow::bail!(
+                        "Unable to spawn {} because it is a directory",
+                        abs_path.display()
+                    );
+                } else if access(&abs_path, AccessFlags::X_OK).is_ok() {
+                    return Ok(abs_path.into_os_string());
+                } else if access(&abs_path, AccessFlags::F_OK).is_ok() {
+                    anyhow::bail!(
+                        "Unable to spawn {} because it is not executable",
+                        abs_path.display()
+                    );
+                }
+
+                anyhow::bail!(
+                    "Unable to spawn {} because it does not exist",
+                    abs_path.display()
+                );
             }
 
             if let Some(path) = self.resolve_path() {
                 for path in std::env::split_paths(&path) {
-                    let candidate = path.join(&exe);
-                    if access(&candidate, AccessFlags::X_OK).is_ok() {
+                    let candidate = cwd.join(&path).join(&exe);
+
+                    if candidate.is_dir() {
+                        errors.push(format!("{} exists but is a directory", candidate.display()));
+                    } else if access(&candidate, AccessFlags::X_OK).is_ok() {
                         return Ok(candidate.into_os_string());
+                    } else if access(&candidate, AccessFlags::F_OK).is_ok() {
+                        errors.push(format!(
+                            "{} exists but is not executable",
+                            candidate.display()
+                        ));
                     }
                 }
+                errors.push(format!("No viable candidates found in PATH {path:?}"));
+            } else {
+                errors.push("Unable to resolve the PATH".to_string());
             }
             anyhow::bail!(
-                "Unable to spawn {} because it doesn't exist on the filesystem \
-                and was not found in PATH",
+                "Unable to spawn {} because:\n{}",
+                exe_path.display(),
+                errors.join(".\n")
+            );
+        } else if exe_path.is_dir() {
+            anyhow::bail!(
+                "Unable to spawn {} because it is a directory",
                 exe_path.display()
             );
         } else {
             if let Err(err) = access(exe_path, AccessFlags::X_OK) {
-                anyhow::bail!(
-                    "Unable to spawn {} because it doesn't exist on the filesystem \
-                    or is not executable ({err:#})",
-                    exe_path.display()
-                );
+                if access(exe_path, AccessFlags::F_OK).is_ok() {
+                    anyhow::bail!(
+                        "Unable to spawn {} because it is not executable ({err:#})",
+                        exe_path.display()
+                    );
+                } else {
+                    anyhow::bail!(
+                        "Unable to spawn {} because it doesn't exist on the filesystem ({err:#})",
+                        exe_path.display()
+                    );
+                }
             }
 
             Ok(exe.to_owned())
@@ -558,8 +623,6 @@ impl CommandBuilder {
     }
 
     pub(crate) fn current_directory(&self) -> Option<Vec<u16>> {
-        use std::path::Path;
-
         let home: Option<&OsStr> = self
             .get_env("USERPROFILE")
             .filter(|path| Path::new(path).is_dir());
@@ -698,9 +761,28 @@ impl CommandBuilder {
     }
 }
 
+#[cfg(unix)]
+/// Returns true if the path begins with `./` or `../`
+fn is_cwd_relative_path<P: AsRef<Path>>(p: P) -> bool {
+    matches!(
+        p.as_ref().components().next(),
+        Some(Component::CurDir | Component::ParentDir)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_cwd_relative() {
+        assert!(is_cwd_relative_path("."));
+        assert!(is_cwd_relative_path("./foo"));
+        assert!(is_cwd_relative_path("../foo"));
+        assert!(!is_cwd_relative_path("foo"));
+        assert!(!is_cwd_relative_path("/foo"));
+    }
 
     #[test]
     fn test_env() {

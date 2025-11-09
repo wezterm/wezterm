@@ -69,6 +69,7 @@ struct FontPair {
     shaped_any: bool,
     presentation: Presentation,
     features: Vec<harfbuzz::hb_feature_t>,
+    last_size_and_dpi: RefCell<Option<(f64, u32)>>,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
@@ -141,7 +142,11 @@ impl HarfbuzzShaper {
         })
     }
 
-    fn load_fallback(&self, font_idx: FallbackIdx) -> anyhow::Result<Option<RefMut<FontPair>>> {
+    fn load_fallback(
+        &self,
+        font_idx: FallbackIdx,
+        dpi: u32,
+    ) -> anyhow::Result<Option<RefMut<'_, FontPair>>> {
         if font_idx >= self.handles.len() {
             return Ok(None);
         }
@@ -161,6 +166,7 @@ impl HarfbuzzShaper {
                             handle.freetype_load_flags,
                             handle.freetype_load_target,
                             handle.freetype_render_target,
+                            Some(dpi),
                         );
                         let mut font = harfbuzz::Font::new(face.face);
                         font.set_load_flags(load_flags);
@@ -185,6 +191,7 @@ impl HarfbuzzShaper {
                             Presentation::Text
                         },
                         features,
+                        last_size_and_dpi: RefCell::new(None),
                     });
                 }
 
@@ -211,8 +218,8 @@ impl HarfbuzzShaper {
         // We deliberately omit setting the script and leave it to harfbuzz
         // to infer from the buffer contents so that it can correctly
         // enable appropriate preprocessing for eg: Hangul.
-        // <https://github.com/wez/wezterm/issues/1474> and
-        // <https://github.com/wez/wezterm/issues/1573>
+        // <https://github.com/wezterm/wezterm/issues/1474> and
+        // <https://github.com/wezterm/wezterm/issues/1573>
         // buf.set_script(harfbuzz::hb_script_t::HB_SCRIPT_LATIN);
         buf.set_direction(match direction {
             Direction::LeftToRight => harfbuzz::hb_direction_t::HB_DIRECTION_LTR,
@@ -234,7 +241,7 @@ impl HarfbuzzShaper {
         let mut no_more_fallbacks = false;
 
         loop {
-            match self.load_fallback(font_idx).context("load_fallback")? {
+            match self.load_fallback(font_idx, dpi).context("load_fallback")? {
                 Some(mut pair) => {
                     if let Some(p) = presentation {
                         if pair.presentation != p {
@@ -249,24 +256,37 @@ impl HarfbuzzShaper {
                         }
                     }
                     let point_size = font_size * self.handles[font_idx].scale.unwrap_or(1.);
-                    pair.face.set_font_size(point_size, dpi)?;
 
                     // Tell harfbuzz to recompute important font metrics!
+                    if *pair.last_size_and_dpi.borrow() != Some((point_size, dpi)) {
+                        let selected_font_size = pair.face.set_font_size(point_size, dpi)?;
+
+                        let pixel_size = if selected_font_size.is_scaled {
+                            (point_size * dpi as f64 / 72.) as u32
+                        } else {
+                            selected_font_size.height as u32
+                        };
+
+                        let mut font = pair.font.borrow_mut();
+
+                        if USE_OT_FACE {
+                            font.set_ppem(pixel_size, pixel_size);
+                            font.set_ptem(point_size as f32);
+                            let scale = pixel_size as i32 * 64;
+                            font.set_font_scale(scale, scale);
+                        }
+
+                        font.font_changed();
+
+                        if USE_OT_FUNCS {
+                            font.set_ot_funcs();
+                        }
+                        pair.last_size_and_dpi
+                            .borrow_mut()
+                            .replace((point_size, dpi));
+                    }
+
                     let mut font = pair.font.borrow_mut();
-
-                    if USE_OT_FACE {
-                        font.set_ppem(0, 0);
-                        font.set_ptem(0.);
-                        let scale = (point_size * 2f64.powf(6.)) as i32;
-                        font.set_font_scale(scale, scale);
-                    }
-
-                    font.font_changed();
-
-                    if USE_OT_FUNCS {
-                        font.set_ot_funcs();
-                    }
-
                     shaped_any = pair.shaped_any;
                     font.shape(&mut buf, pair.features.as_slice());
                     log::trace!(
@@ -353,110 +373,7 @@ impl HarfbuzzShaper {
         // In situations where we know better (eg: when we have presentation_width)
         // we can fixup the cluster information to be based on the cell index for
         // the harfbuzz byte start.
-        // <https://github.com/wez/wezterm/issues/2572>
-
-        #[derive(Debug)]
-        struct ClusterInfo {
-            start: usize,
-            byte_len: usize,
-            cell_width: u8,
-            incomplete: bool,
-        }
-
-        #[derive(Default, Debug)]
-        struct ClusterResolver<'a> {
-            map: HashMap<usize, ClusterInfo>,
-            presentation_width: Option<&'a PresentationWidth<'a>>,
-            start_by_cell_idx: HashMap<usize, usize>,
-        }
-
-        impl<'a> ClusterResolver<'a> {
-            pub fn build(
-                &mut self,
-                hb_infos: &[harfbuzz::hb_glyph_info_t],
-                s: &str,
-                range: &Range<usize>,
-            ) {
-                #[derive(PartialOrd, Ord, Eq, PartialEq, Copy, Clone)]
-                struct Item {
-                    cell_idx: Option<usize>,
-                    start: usize,
-                }
-
-                let mut map = HashMap::new();
-
-                for info in hb_infos.iter() {
-                    let start = info.cluster as usize;
-
-                    // Collect the cell index, which is the "true cluster"
-                    // position from our perspective: the start of the grapheme
-                    let cell_idx = match self.presentation_width {
-                        Some(pw) => {
-                            let cell_idx = pw.byte_to_cell_idx(start);
-
-                            let entry = self.start_by_cell_idx.entry(cell_idx).or_insert(start);
-                            *entry = (*entry).min(start);
-
-                            Some(cell_idx)
-                        }
-                        None => None,
-                    };
-
-                    map.entry(start).or_insert_with(|| Item { start, cell_idx });
-                }
-
-                let mut cluster_starts: Vec<Item> = map.into_values().collect();
-                cluster_starts.sort();
-
-                // If we have multiple entries with the same starting cell index,
-                // remove the duplicates.  Don't do this for `None` as that will
-                // falsely remove valid cluster locations in the case where
-                // we have no presentation_width information.
-                cluster_starts.dedup_by(|a, b| match (a.cell_idx, b.cell_idx) {
-                    (Some(a), Some(b)) => a == b,
-                    _ => false,
-                });
-
-                let mut iter = cluster_starts.iter().peekable();
-                while let Some(item) = iter.next().copied() {
-                    let start = item.start;
-                    let next_start = iter.peek().map(|&&s| s.start).unwrap_or(range.end);
-                    let byte_len = next_start - start;
-                    let cell_width = match self.presentation_width {
-                        Some(p) => p.num_cells(start..next_start),
-                        None => unicode_column_width(&s[start..next_start], None) as u8,
-                    };
-                    self.map.entry(start).or_insert_with(|| ClusterInfo {
-                        start,
-                        byte_len,
-                        cell_width,
-                        incomplete: false,
-                    });
-                }
-            }
-
-            pub fn get_mut(&mut self, start: usize) -> Option<&mut ClusterInfo> {
-                match self.presentation_width {
-                    Some(pw) => {
-                        let cell_idx = pw.byte_to_cell_idx(start);
-                        let actual_start = self.start_by_cell_idx.get(&cell_idx)?;
-                        self.map.get_mut(&actual_start)
-                    }
-                    None => self.map.get_mut(&start),
-                }
-            }
-
-            pub fn get(&self, start: usize) -> Option<&ClusterInfo> {
-                match self.presentation_width {
-                    Some(pw) => {
-                        let cell_idx = pw.byte_to_cell_idx(start);
-                        let actual_start = self.start_by_cell_idx.get(&cell_idx)?;
-                        self.map.get(&actual_start)
-                    }
-                    None => self.map.get(&start),
-                }
-            }
-        }
+        // <https://github.com/wezterm/wezterm/issues/2572>
 
         let mut cluster_resolver = ClusterResolver {
             presentation_width,
@@ -520,7 +437,7 @@ impl HarfbuzzShaper {
                         } else if info.cluster + info.len == prior.cluster + prior.len {
                             // Overlaps and coincide with the end of prior; this one folds away.
                             // This can happen with NFD rather than NFC text.
-                            // <https://github.com/wez/wezterm/issues/2032>
+                            // <https://github.com/wezterm/wezterm/issues/2032>
                             continue;
                         }
                         // log::info!("prior={:#?}, info={:#?}", prior, info);
@@ -530,7 +447,7 @@ impl HarfbuzzShaper {
                 // It is important that this bit happens after we've had the
                 // opportunity to coalesce runs of unresolved codepoints,
                 // otherwise we can produce incorrect shaping
-                // <https://github.com/wez/wezterm/issues/2482>
+                // <https://github.com/wezterm/wezterm/issues/2482>
                 if cluster.last().unwrap().cluster == info.cluster {
                     cluster.push(info);
                     continue;
@@ -606,7 +523,7 @@ impl HarfbuzzShaper {
                 // However, some symbol fonts have broken advance metrics and we don't
                 // want those glyphs to end up with zero width, so if this run is zero
                 // width then we round up to 1 cell.
-                // <https://github.com/wez/wezterm/issues/1787>
+                // <https://github.com/wezterm/wezterm/issues/1787>
                 let weighted_cell_width = if total_width == 0. {
                     1
                 } else {
@@ -676,7 +593,7 @@ impl FontShaper for HarfbuzzShaper {
             range,
             presentation_width,
         );
-        metrics::histogram!("shape.harfbuzz", start.elapsed());
+        metrics::histogram!("shape.harfbuzz").record(start.elapsed());
         /*
         if let Ok(glyphs) = &result {
             for g in glyphs {
@@ -692,7 +609,7 @@ impl FontShaper for HarfbuzzShaper {
 
     fn metrics_for_idx(&self, font_idx: usize, size: f64, dpi: u32) -> anyhow::Result<FontMetrics> {
         let mut pair = self
-            .load_fallback(font_idx)?
+            .load_fallback(font_idx, dpi)?
             .ok_or_else(|| anyhow!("metrics_for_idx: there is no font with idx={font_idx}!?"))?;
 
         let key = MetricsKey {
@@ -707,15 +624,15 @@ impl FontShaper for HarfbuzzShaper {
         let scale = self.handles[font_idx].scale.unwrap_or(1.);
 
         let selected_size = pair.face.set_font_size(size * scale, dpi)?;
-        let y_scale = unsafe { (*(*pair.face.face).size).metrics.y_scale as f64 / 65536.0 };
+        let y_scale = unsafe { (*(*pair.face.face).size).metrics.y_scale.to_num::<f64>() };
         let mut metrics = FontMetrics {
             cell_height: PixelLength::new(selected_size.height),
             cell_width: PixelLength::new(selected_size.width),
             // Note: face.face.descender is useless, we have to go through
             // face.face.size.metrics to get to the real descender!
-            descender: PixelLength::new(
-                unsafe { (*(*pair.face.face).size).metrics.descender as f64 } / 64.0,
-            ),
+            descender: PixelLength::new(unsafe {
+                (*(*pair.face.face).size).metrics.descender.f26d6().to_num()
+            }),
             underline_thickness: PixelLength::new(
                 unsafe { (*pair.face.face).underline_thickness as f64 } * y_scale / 64.,
             ),
@@ -731,7 +648,7 @@ impl FontShaper for HarfbuzzShaper {
 
         // When the user has overridden the scale, we need to stash a y-adjustment
         // so that the glyphs are better vertically aligned
-        // <https://github.com/wez/wezterm/issues/1803>
+        // <https://github.com/wezterm/wezterm/issues/1803>
         if scale != 1.0 && metrics.is_scaled {
             let diff = metrics.descender - (metrics.descender / scale);
             metrics.force_y_adjust = diff;
@@ -771,7 +688,7 @@ impl FontShaper for HarfbuzzShaper {
             theoretical_height,
             self.handles
         );
-        while let Ok(Some(mut pair)) = self.load_fallback(metrics_idx) {
+        while let Ok(Some(mut pair)) = self.load_fallback(metrics_idx, dpi) {
             let selected_size = pair
                 .face
                 .set_font_size(size * self.handles[metrics_idx].scale.unwrap_or(1.), dpi)?;
@@ -815,6 +732,104 @@ impl FontShaper for HarfbuzzShaper {
         }
 
         self.metrics_for_idx(metrics_idx, size, dpi)
+    }
+}
+
+#[derive(Debug)]
+struct ClusterInfo {
+    start: usize,
+    byte_len: usize,
+    cell_width: u8,
+    incomplete: bool,
+}
+
+#[derive(Default, Debug)]
+struct ClusterResolver<'a> {
+    map: HashMap<usize, ClusterInfo>,
+    presentation_width: Option<&'a PresentationWidth<'a>>,
+    start_by_cell_idx: HashMap<usize, usize>,
+}
+
+impl<'a> ClusterResolver<'a> {
+    pub fn build(&mut self, hb_infos: &[harfbuzz::hb_glyph_info_t], s: &str, range: &Range<usize>) {
+        #[derive(PartialOrd, Ord, Eq, PartialEq, Copy, Clone)]
+        struct Item {
+            cell_idx: Option<usize>,
+            start: usize,
+        }
+
+        let mut map = HashMap::new();
+
+        for info in hb_infos.iter() {
+            let start = info.cluster as usize;
+
+            // Collect the cell index, which is the "true cluster"
+            // position from our perspective: the start of the grapheme
+            let cell_idx = match self.presentation_width {
+                Some(pw) => {
+                    let cell_idx = pw.byte_to_cell_idx(start);
+
+                    let entry = self.start_by_cell_idx.entry(cell_idx).or_insert(start);
+                    *entry = (*entry).min(start);
+
+                    Some(cell_idx)
+                }
+                None => None,
+            };
+
+            map.entry(start).or_insert_with(|| Item { start, cell_idx });
+        }
+
+        let mut cluster_starts: Vec<Item> = map.into_values().collect();
+        cluster_starts.sort();
+
+        // If we have multiple entries with the same starting cell index,
+        // remove the duplicates.  Don't do this for `None` as that will
+        // falsely remove valid cluster locations in the case where
+        // we have no presentation_width information.
+        cluster_starts.dedup_by(|a, b| match (a.cell_idx, b.cell_idx) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        });
+
+        let mut iter = cluster_starts.iter().peekable();
+        while let Some(item) = iter.next().copied() {
+            let start = item.start;
+            let next_start = iter.peek().map(|&&s| s.start).unwrap_or(range.end);
+            let byte_len = next_start - start;
+            let cell_width = match self.presentation_width {
+                Some(p) => p.num_cells(start..next_start),
+                None => unicode_column_width(&s[start..next_start], None) as u8,
+            };
+            self.map.entry(start).or_insert_with(|| ClusterInfo {
+                start,
+                byte_len,
+                cell_width,
+                incomplete: false,
+            });
+        }
+    }
+
+    pub fn get_mut(&mut self, start: usize) -> Option<&mut ClusterInfo> {
+        match self.presentation_width {
+            Some(pw) => {
+                let cell_idx = pw.byte_to_cell_idx(start);
+                let actual_start = self.start_by_cell_idx.get(&cell_idx)?;
+                self.map.get_mut(&actual_start)
+            }
+            None => self.map.get_mut(&start),
+        }
+    }
+
+    pub fn get(&self, start: usize) -> Option<&ClusterInfo> {
+        match self.presentation_width {
+            Some(pw) => {
+                let cell_idx = pw.byte_to_cell_idx(start);
+                let actual_start = self.start_by_cell_idx.get(&cell_idx)?;
+                self.map.get(&actual_start)
+            }
+            None => self.map.get(&start),
+        }
     }
 }
 

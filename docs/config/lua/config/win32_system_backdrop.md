@@ -5,7 +5,7 @@ tags:
 
 # `win32_system_backdrop = SETTING`
 
-{{since('nightly')}}
+{{since('20230712-072601-f4abf8fd')}}
 
 When combined with `window_background_opacity`, chooses from available
 window background effects provided by Windows.
@@ -31,6 +31,9 @@ for the backdrop effect to work.  For best results with both `"Mica"` and
 
 See also [macos_window_background_blur](macos_window_background_blur.md) for
 a similar effect on macOS.
+
+See also [kde_window_background_blur](kde_window_background_blur.md) for a similar
+effect on KDE Wayland.
 
 ## Acrylic
 

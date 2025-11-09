@@ -8,8 +8,8 @@ use config::configuration;
 use config::keyassignment::ScrollbackEraseMode;
 use mux::domain::DomainId;
 use mux::pane::{
-    alloc_pane_id, CloseReason, ForEachPaneLogicalLine, LogicalLine, Pane, PaneId, Pattern,
-    SearchResult, WithPaneLines,
+    alloc_pane_id, CachePolicy, CloseReason, ForEachPaneLogicalLine, LogicalLine, Pane, PaneId,
+    Pattern, SearchResult, WithPaneLines,
 };
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::TabId;
@@ -27,7 +27,7 @@ use url::Url;
 use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Alert, Clipboard, KeyCode, KeyModifiers, Line, MouseEvent, StableRowIndex,
+    Alert, Clipboard, KeyCode, KeyModifiers, Line, MouseEvent, Progress, StableRowIndex,
     TerminalConfiguration, TerminalSize,
 };
 
@@ -48,6 +48,7 @@ pub struct ClientPane {
     user_vars: Mutex<HashMap<String, String>>,
     config: Mutex<Option<Arc<dyn TerminalConfiguration>>>,
     unseen_output: Mutex<bool>,
+    progress: Mutex<Progress>,
 }
 
 impl ClientPane {
@@ -129,6 +130,7 @@ impl ClientPane {
             unseen_output: Mutex::new(false),
             user_vars: Mutex::new(HashMap::new()),
             config: Mutex::new(None),
+            progress: Mutex::new(Progress::default()),
         }
     }
 
@@ -188,6 +190,13 @@ impl ClientPane {
                         mux.notify(MuxNotification::Alert {
                             pane_id: self.local_pane_id,
                             alert: Alert::OutputSinceFocusLost,
+                        });
+                    }
+                    Alert::Progress(progress) => {
+                        *self.progress.lock() = progress.clone();
+                        mux.notify(MuxNotification::Alert {
+                            pane_id: self.local_pane_id,
+                            alert: Alert::Progress(progress.clone()),
                         });
                     }
                     _ => {}
@@ -316,6 +325,10 @@ impl Pane for ClientPane {
         inner.title.clone()
     }
 
+    fn get_progress(&self) -> Progress {
+        self.progress.lock().clone()
+    }
+
     fn send_paste(&self, text: &str) -> anyhow::Result<()> {
         let client = Arc::clone(&self.client);
         let remote_pane_id = self.remote_pane_id;
@@ -344,7 +357,7 @@ impl Pane for ClientPane {
         Ok(None)
     }
 
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
         MutexGuard::map(self.writer.lock(), |writer| {
             let w: &mut dyn std::io::Write = writer;
             w
@@ -537,7 +550,7 @@ impl Pane for ClientPane {
         false
     }
 
-    fn get_current_working_dir(&self) -> Option<Url> {
+    fn get_current_working_dir(&self, _policy: CachePolicy) -> Option<Url> {
         self.renderable.lock().inner.borrow().working_dir.clone()
     }
 

@@ -141,7 +141,7 @@ impl<'a> FieldInfo<'a> {
                     quote!(
                         #ident: match obj.get_by_str(#name) {
                             Some(v) => {
-                                use std::convert::TryFrom;
+                                use core::convert::TryFrom;
                                 #check_deprecated
                                 let target = <#try_from>::from_dynamic(v, options)
                                     .map_err(|source| source.field_context(
@@ -168,7 +168,7 @@ impl<'a> FieldInfo<'a> {
                     quote!(
                         #ident: match obj.get_by_str(&#name) {
                             Some(v) => {
-                                use std::convert::TryFrom;
+                                use core::convert::TryFrom;
                                 #check_deprecated
                                 let target = <#try_from>::from_dynamic(v, options)
                                     .map_err(|source| source.field_context(
@@ -194,7 +194,7 @@ impl<'a> FieldInfo<'a> {
                 DefValue::None => {
                     quote!(
                         #ident: {
-                            use std::convert::TryFrom;
+                            use core::convert::TryFrom;
                             let target = <#try_from>::from_dynamic(obj.get_by_str(#name).map(|v| {
                                 #check_deprecated
                                 v
@@ -280,7 +280,7 @@ impl<'a> FieldInfo<'a> {
     }
 }
 
-pub fn field_info(field: &Field) -> Result<FieldInfo> {
+pub fn field_info(field: &Field) -> Result<FieldInfo<'_>> {
     let mut name = field.ident.as_ref().unwrap().to_string();
     let mut skip = false;
     let mut flatten = false;

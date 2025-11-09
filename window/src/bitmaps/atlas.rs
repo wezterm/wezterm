@@ -56,15 +56,25 @@ impl Atlas {
 
     /// Reserve space for a sprite of the given size
     pub fn allocate(&mut self, im: &dyn BitmapImage) -> Result<Sprite, OutOfTextureSpace> {
-        self.allocate_with_padding(im, None)
+        self.allocate_with_padding(im, None, None)
     }
 
     pub fn allocate_with_padding(
         &mut self,
         im: &dyn BitmapImage,
         padding: Option<usize>,
+        scale_down: Option<usize>,
     ) -> Result<Sprite, OutOfTextureSpace> {
         let (width, height) = im.image_dimensions();
+
+        if let Some(scale_down) = scale_down {
+            let mut copied = crate::Image::new(width, height);
+            copied.draw_image(Point::new(0, 0), None, im);
+
+            let scaled = copied.resize(width / scale_down, height / scale_down);
+
+            return self.allocate_with_padding(&scaled, padding, None);
+        }
 
         // If we can't convert the sizes to i32, then we'll never
         // be able to store this image
@@ -97,7 +107,7 @@ impl Atlas {
 
             self.texture.write(rect, im);
 
-            metrics::histogram!("window.atlas.allocate.success.rate", 1.);
+            metrics::histogram!("window.atlas.allocate.success.rate").record(1.);
             Ok(Sprite {
                 texture: Rc::clone(&self.texture),
                 coords: rect,
@@ -105,13 +115,13 @@ impl Atlas {
         } else {
             // It's not possible to satisfy that request
             let size = (reserve_width.max(reserve_height) as usize).next_power_of_two();
-            metrics::histogram!("window.atlas.allocate.failure.rate", 1.);
+            metrics::histogram!("window.atlas.allocate.failure.rate").record(1.);
             Err(OutOfTextureSpace {
                 size: Some((self.side * 2).max(size)),
                 current_size: self.side,
             })
         };
-        metrics::histogram!("window.atlas.allocate.latency", start.elapsed());
+        metrics::histogram!("window.atlas.allocate.latency").record(start.elapsed());
 
         res
     }

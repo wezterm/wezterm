@@ -98,15 +98,15 @@ impl<'a> std::borrow::Borrow<dyn ShapeCacheKeyTrait + 'a> for ShapeCacheKey {
     }
 }
 
-impl<'a> PartialEq for (dyn ShapeCacheKeyTrait + 'a) {
+impl<'a> PartialEq for dyn ShapeCacheKeyTrait + 'a {
     fn eq(&self, other: &Self) -> bool {
         self.key().eq(&other.key())
     }
 }
 
-impl<'a> Eq for (dyn ShapeCacheKeyTrait + 'a) {}
+impl<'a> Eq for dyn ShapeCacheKeyTrait + 'a {}
 
-impl<'a> std::hash::Hash for (dyn ShapeCacheKeyTrait + 'a) {
+impl<'a> std::hash::Hash for dyn ShapeCacheKeyTrait + 'a {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.key().hash(state)
     }
@@ -600,10 +600,10 @@ mod test {
             "
 [
     GlyphPosition {
-        glyph_idx: 51,
+        glyph_idx: 58,
         num_cells: 1,
         x_offset: 0.0,
-        bearing_x: -0.7352941,
+        bearing_x: -0.8333333,
         bitmap_pixel_width: 12,
     },
 ]
@@ -662,11 +662,11 @@ mod test {
             "
 [
     GlyphPosition {
-        glyph_idx: 3249,
+        glyph_idx: 2712,
         num_cells: 2,
         x_offset: 0.0,
         bearing_x: 0.0,
-        bitmap_pixel_width: 17,
+        bitmap_pixel_width: 16,
     },
 ]
 "
@@ -685,7 +685,7 @@ mod test {
             "
 [
     GlyphPosition {
-        glyph_idx: 1857,
+        glyph_idx: 3855,
         num_cells: 2,
         x_offset: 0.0,
         bearing_x: 0.0,

@@ -29,10 +29,10 @@ typically strongly associated with a physical serial communication device
 installed in the system.
 
 The kernel doesn't know any details of the connected device as there isn't
-a defined way for it do that; it only knows how to transmit data over that
+a defined way for it to do that; it only knows how to transmit data over that
 serial line.
 
-To accomodate this the TTY interface in the kernel allows for some basic
+To accommodate this the TTY interface in the kernel allows for some basic
 stream operations such as line-buffering and canonicalization of unix newlines
 to carriage-return-line-feed as was needed for printer style output to
 correctly move to the first column and move down a line.
@@ -54,11 +54,17 @@ A shell indirectly communicates with the terminal via the TTY interface to the
 kernel, which manages the actual communication with the terminal.
 
 ```mermaid
-graph TD
-   TTY[TTY device in the kernel, such as /dev/tty0] -- input --> SHELL[Shell Program]
-   TERM[Terminal Device] -- input --> TTY
-   SHELL -- output --> TTY
-   TTY -- output --> TERM
+flowchart LR
+    subgraph Kernel
+        direction LR
+        TTY["TTY device\n(e.g. /dev/tty/0)"] 
+    end
+    
+    subgraph Userspace
+    SHELL["Shell Program (e.g. zsh)"] <-- "input\noutput" --> TTY
+    end
+    TTY  <-- "input\noutput" -->  TE["Terminal Device"]:::td
+    classDef td stroke:#00F,stroke-width:2px
 ```
 
 Again, the TTY interface doesn't provide a way for the shell program to know
@@ -93,7 +99,7 @@ Association) as the freely available
 
 Even though ANSI/ECMA provided information on standardizing communication,
 there are devices that either pre-date the standards or that aren't fully
-comformant, or that have more flexibility than the standards could forsee.
+comformant, or that have more flexibility than the standards could foresee.
 
 A database of terminal capabilities (termcap) was created that is essentially a
 mapping of the kind of function (eg: "switch to bold rendering") to the
@@ -128,13 +134,20 @@ on the associated terminal also needs to respect the setting of `TERM` and use
 an appropriate library to resolve the correct escape sequences.
 
 ```mermaid
-graph TD
-   TTY[TTY device in the kernel, such as /dev/tty0] -- input --> SHELL[Shell Program]
-   SHELL -- output --> TTY
-   APP[Application, such as vim] -- output --> TTY
-   TTY -- input --> APP
-   TTY -- output --> TERM
-   TERM[Terminal Device] -- input --> TTY
+flowchart 
+    subgraph Kernel
+        direction TB
+        TTY["TTY device\n(e.g. /dev/tty/0)"] 
+    end
+    
+    subgraph Userspace
+    SHELL["Shell Program (e.g. zsh)"] <-- input/output --> TTY
+    SHELL -. "starts" .-> APP
+    APP["Application\n(e.g. vim)"] <-- input/output --> TTY
+
+    end
+    TTY  <-- input/output -->  TE["Terminal Device"]:::td
+    classDef td stroke:#00F,stroke-width:2px
 ```
 
 ## What about stdin, stdout and stderr?
@@ -187,7 +200,7 @@ and continue.
 
 If your shell supports job control, the suspend signal that is typically
 associated with `CTRL-Z` will cause the foreground process to suspend which
-in turn will wakup the shell in a similar way to that of the child getting
+in turn will wakeup the shell in a similar way to that of the child getting
 terminated, but it can tell that it was suspended rather than terminated.
 
 ## Terminal Emulators and PTYs
@@ -198,7 +211,7 @@ the desktop and it became necessary to expand the interface to allow for a TTY
 that wasn't strongly coupled with a physical communication device, and to
 provide a mechanism for communicating the window size changing.
 
-The *Psuedo Terminal teletYpe* (PTY) is that evolution of the TTY interface; it
+The *Pseudo Terminal teletYpe* (PTY) is that evolution of the TTY interface; it
 allows a userspace application to define additional virtual TTY interfaces as
 needed.
 
@@ -208,11 +221,21 @@ side allowing for passing information about the window size, and the client side
 essentially just being the I/O stream.
 
 ```mermaid
-graph TD
-   PTY[PTY device in the kernel, such as /dev/pts/0] -- input --> SHELL[Shell Program]
-   TE[Terminal Emulator] -- input --> PTY
-   SHELL -- output --> PTY
-   PTY -- output --> TE
+flowchart 
+    subgraph Kernel
+        direction TB
+        PTYC["PTY client\n(e.g. /dev/pts/0)"] 
+        PTYM[PTY master]
+        PTYC <--> PTYM
+    end
+    
+    subgraph Userspace
+    SHELL["Shell Program (e.g. zsh)"] <-- input/output --> PTYC
+    SHELL -. "starts" .-> APP
+    APP["Application\n(e.g. vim)"] <-- input/output --> PTYC
+    PTYM  <-- input/output -->  TE["Terminal Emulator\n(e.g. wezterm)"]:::wezterm
+    classDef wezterm stroke:#00F,stroke-width:2px
+    end
 ```
 
 A *Terminal Emulator* is a program that creates a PTY and then spawns a child
@@ -265,4 +288,3 @@ but what it means for wezterm users is that they may wish to bypass ConPTY in
 some cases by using `wezterm ssh` to directly communicate with a "real" unix
 pty either on a remote system or inside a WSL or VM running on the local
 machine.
-

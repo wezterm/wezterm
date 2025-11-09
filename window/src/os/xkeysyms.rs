@@ -25,7 +25,7 @@ pub fn modifiers_from_state(state: u32) -> Modifiers {
 /// for missing keys, look into `/usr/include/X11/keysymdef.h`
 /// and/or define them in KeyCode.
 pub fn keysym_to_keycode(keysym: u32) -> Option<KeyCode> {
-    let utf32 = xkbcommon::xkb::keysym_to_utf32(keysym);
+    let utf32 = xkbcommon::xkb::keysym_to_utf32(keysym.into());
     if utf32 >= 0x20 {
         // Unsafety: this is ok because we trust that keysym_to_utf32
         // is only going to return valid utf32 codepoints.
@@ -81,7 +81,7 @@ pub fn keysym_to_keycode(keysym: u32) -> Option<KeyCode> {
 
         KEY_VoidSymbol => KeyCode::VoidSymbol,
 
-        i @ KEY_F1..=KEY_F12 => KeyCode::Function((1 + i - KEY_F1) as u8),
+        i @ KEY_F1..=KEY_F24 => KeyCode::Function((1 + i - KEY_F1) as u8),
 
         // numeric and function keypad keys
         KEY_KP_Enter => KeyCode::Char(0xdu8 as char),

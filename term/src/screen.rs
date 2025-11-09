@@ -1,11 +1,11 @@
-#![cfg_attr(feature = "cargo-clippy", allow(clippy::range_plus_one))]
+#![allow(clippy::range_plus_one)]
 use super::*;
 use crate::config::BidiMode;
 use log::debug;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use termwiz::input::KeyboardEncoding;
-use termwiz::surface::SequenceNo;
+use wezterm_surface::SequenceNo;
 
 /// Holds the model of a screen.  This can either be the primary screen
 /// which includes lines of scrollback text, or the alternate screen
@@ -42,6 +42,8 @@ pub struct Screen {
     /// Physical, visible width of the screen
     pub physical_cols: usize,
     pub dpi: u32,
+
+    pub(crate) saved_cursor: Option<SavedCursor>,
 }
 
 fn scrollback_size(config: &Arc<dyn TerminalConfiguration>, allow_scrollback: bool) -> usize {
@@ -83,6 +85,7 @@ impl Screen {
             stable_row_index_offset: 0,
             dpi: size.dpi,
             keyboard_stack: vec![],
+            saved_cursor: None,
         }
     }
 
@@ -649,6 +652,8 @@ impl Screen {
     ) {
         let phys_scroll = self.phys_range(scroll_region);
         let num_rows = num_rows.min(phys_scroll.end - phys_scroll.start);
+        let scrollback_ok = scroll_region.start == 0 && self.allow_scrollback;
+        let insert_at_end = scroll_region.end as usize == self.physical_rows;
 
         debug!(
             "scroll_up {:?} num_rows={} phys_scroll={:?}",
@@ -660,7 +665,7 @@ impl Screen {
         // changed by the scroll operation.  For normal newline at the bottom
         // of the screen based scrolling, the StableRowIndex does not change,
         // so we use the scroll region bounds to gate the invalidation.
-        if scroll_region.start != 0 || scroll_region.end as usize != self.physical_rows {
+        if !scrollback_ok {
             for y in phys_scroll.clone() {
                 self.line_mut(y).update_last_change_seqno(seqno);
             }
@@ -668,7 +673,7 @@ impl Screen {
 
         // if we're going to remove lines due to lack of scrollback capacity,
         // remember how many so that we can adjust our insertion point later.
-        let lines_removed = if scroll_region.start > 0 {
+        let lines_removed = if !scrollback_ok {
             // No scrollback available for these;
             // Remove the scrolled lines
             num_rows
@@ -708,7 +713,7 @@ impl Screen {
                     line.update_last_change_seqno(seqno);
                     line
                 };
-                if scroll_region.end as usize == self.physical_rows {
+                if insert_at_end {
                     self.lines.push_back(line);
                 } else {
                     self.lines.insert(phys_scroll.end - 1, line);
@@ -724,12 +729,10 @@ impl Screen {
             self.lines.remove(remove_idx);
         }
 
-        if remove_idx == 0 {
+        if remove_idx == 0 && scrollback_ok {
             self.stable_row_index_offset += lines_removed;
         }
 
-        // It's cheaper to push() than it is insert() at the end
-        let push = scroll_region.end as usize == self.physical_rows;
         for _ in 0..to_add {
             let mut line = if default_blank == blank_attr {
                 Line::new(seqno)
@@ -741,10 +744,17 @@ impl Screen {
                 )
             };
             bidi_mode.apply_to_line(&mut line, seqno);
-            if push {
+            if insert_at_end {
                 self.lines.push_back(line);
             } else {
                 self.lines.insert(phys_scroll.end, line);
+            }
+        }
+
+        // If we have invalidated the StableRowIndex, mark all subsequent lines as dirty
+        if to_remove > 0 || (to_add > 0 && !insert_at_end) {
+            for y in self.phys_range(&(scroll_region.end..self.physical_rows as VisibleRowIndex)) {
+                self.line_mut(y).update_last_change_seqno(seqno);
             }
         }
     }
@@ -754,7 +764,9 @@ impl Screen {
         let to_clear = len - self.physical_rows;
         for _ in 0..to_clear {
             self.lines.pop_front();
-            self.stable_row_index_offset += 1;
+            if self.allow_scrollback {
+                self.stable_row_index_offset += 1;
+            }
         }
     }
 

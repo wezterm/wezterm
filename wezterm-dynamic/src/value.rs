@@ -1,6 +1,14 @@
 use crate::array::Array;
 use crate::object::Object;
+#[allow(unused)]
+#[cfg(not(feature = "std"))]
+use ordered_float::FloatCore;
 use ordered_float::OrderedFloat;
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+use alloc::string::String;
 
 /// Represents values of various possible other types.
 /// Value is intended to be convertible to the same set
@@ -24,8 +32,8 @@ impl Default for Value {
     }
 }
 
-impl std::fmt::Debug for Value {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for Value {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             Self::String(s) => fmt.write_fmt(format_args!("{:?}", s)),
             Self::Null => fmt.write_str("nil"),

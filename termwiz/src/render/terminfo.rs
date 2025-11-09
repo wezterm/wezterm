@@ -3,11 +3,15 @@ use crate::caps::{Capabilities, ColorLevel};
 use crate::cell::{AttributeChange, Blink, CellAttributes, Intensity, Underline};
 use crate::color::{ColorAttribute, ColorSpec};
 use crate::escape::csi::{Cursor, Edit, EraseInDisplay, EraseInLine, Sgr, CSI};
-use crate::escape::osc::{ITermDimension, ITermFileData, ITermProprietary, OperatingSystemCommand};
-use crate::escape::OneBased;
+use crate::escape::esc::EscCode;
+use crate::escape::osc::OperatingSystemCommand;
+#[cfg(feature = "use_image")]
+use crate::escape::osc::{ITermDimension, ITermFileData, ITermProprietary};
+use crate::escape::{Esc, OneBased};
+#[cfg(feature = "use_image")]
 use crate::image::{ImageDataType, TextureCoordinate};
 use crate::render::RenderTty;
-use crate::surface::{Change, CursorShape, CursorVisibility, Position};
+use crate::surface::{Change, CursorShape, CursorVisibility, LineAttribute, Position};
 use crate::Result;
 use std::io::Write;
 use terminfo::{capability as cap, Capability as TermInfoCapability};
@@ -47,7 +51,7 @@ impl TerminfoRenderer {
         });
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::cognitive_complexity))]
+    #[allow(clippy::cognitive_complexity)]
     fn flush_pending_attr<W: RenderTty + Write>(&mut self, out: &mut W) -> Result<()> {
         macro_rules! attr_on {
             ($cap:ident, $sgr:expr) => {{
@@ -135,12 +139,22 @@ impl TerminfoRenderer {
             }
 
             let has_true_color = self.caps.color_level() == ColorLevel::TrueColor;
-            let terminfo_color: i32 = match self.get_capability::<cap::MaxColors>() {
-                Some(cap::MaxColors(n)) => n,
+            // Whether to use terminfo to render 256 colors. If this is too large (ex. 16777216 from xterm-direct),
+            // then setaf expects the index to be true color, in which case we cannot use it to render 256 (or even 16) colors.
+            let terminfo_256_color: i32 = match self.get_capability::<cap::MaxColors>() {
+                Some(cap::MaxColors(n)) => {
+                    if n > 256 {
+                        0
+                    } else {
+                        n
+                    }
+                }
                 None => 0,
             };
 
-            if attr.foreground() != current_foreground {
+            if attr.foreground() != current_foreground
+                && self.caps.color_level() != ColorLevel::MonoChrome
+            {
                 match (has_true_color, attr.foreground()) {
                     (true, ColorAttribute::TrueColorWithPaletteFallback(tc, _))
                     | (true, ColorAttribute::TrueColorWithDefaultFallback(tc)) => {
@@ -159,7 +173,7 @@ impl TerminfoRenderer {
                     (false, ColorAttribute::TrueColorWithPaletteFallback(_, idx))
                     | (_, ColorAttribute::PaletteIndex(idx)) => {
                         match self.get_capability::<cap::SetAForeground>() {
-                            Some(set) if (idx as i32) < terminfo_color => {
+                            Some(set) if (idx as i32) < terminfo_256_color => {
                                 set.expand().color(idx).to(out.by_ref())?;
                             }
                             _ => {
@@ -174,7 +188,9 @@ impl TerminfoRenderer {
                 }
             }
 
-            if attr.background() != current_background {
+            if attr.background() != current_background
+                && self.caps.color_level() != ColorLevel::MonoChrome
+            {
                 match (has_true_color, attr.background()) {
                     (true, ColorAttribute::TrueColorWithPaletteFallback(tc, _))
                     | (true, ColorAttribute::TrueColorWithDefaultFallback(tc)) => {
@@ -193,7 +209,7 @@ impl TerminfoRenderer {
                     (false, ColorAttribute::TrueColorWithPaletteFallback(_, idx))
                     | (_, ColorAttribute::PaletteIndex(idx)) => {
                         match self.get_capability::<cap::SetABackground>() {
-                            Some(set) if (idx as i32) < terminfo_color => {
+                            Some(set) if (idx as i32) < terminfo_256_color => {
                                 set.expand().color(idx).to(out.by_ref())?;
                             }
                             _ => {
@@ -317,10 +333,7 @@ impl TerminfoRenderer {
         Ok(())
     }
 
-    #[cfg_attr(
-        feature = "cargo-clippy",
-        allow(clippy::cyclomatic_complexity, clippy::cognitive_complexity)
-    )]
+    #[allow(clippy::cyclomatic_complexity, clippy::cognitive_complexity)]
     pub fn render_to<W: RenderTty + Write>(
         &mut self,
         changes: &[Change],
@@ -570,6 +583,7 @@ impl TerminfoRenderer {
                         }
                     }
                 },
+                #[cfg(feature = "use_image")]
                 Change::Image(image) => {
                     if self.caps.iterm2_image() {
                         let data = if image.top_left == TextureCoordinate::new_f32(0.0, 0.0)
@@ -687,6 +701,20 @@ impl TerminfoRenderer {
                 Change::Title(text) => {
                     let osc = OperatingSystemCommand::SetWindowTitle(text.to_string());
                     write!(out, "{}", osc)?;
+                }
+
+                Change::LineAttribute(attr) => {
+                    let esc = Esc::Code(match attr {
+                        LineAttribute::DoubleHeightTopHalfLine => {
+                            EscCode::DecDoubleHeightTopHalfLine
+                        }
+                        LineAttribute::DoubleHeightBottomHalfLine => {
+                            EscCode::DecDoubleHeightBottomHalfLine
+                        }
+                        LineAttribute::DoubleWidthLine => EscCode::DecDoubleWidthLine,
+                        LineAttribute::SingleWidthLine => EscCode::DecSingleWidthLine,
+                    });
+                    write!(out, "{esc}")?;
                 }
             }
         }

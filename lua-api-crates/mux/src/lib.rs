@@ -2,6 +2,7 @@ use config::keyassignment::SpawnTabDomain;
 use config::lua::mlua::{self, Lua, UserData, UserDataMethods, Value as LuaValue};
 use config::lua::{get_or_create_module, get_or_create_sub_module};
 use luahelper::impl_lua_conversion_dynamic;
+use mlua::UserDataRef;
 use mux::domain::{DomainId, SplitSource};
 use mux::pane::{Pane, PaneId};
 use mux::tab::{SplitDirection, SplitRequest, SplitSize, Tab, TabId};
@@ -159,7 +160,7 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
 
     mux_mod.set(
         "set_default_domain",
-        lua.create_function(|_, domain: MuxDomain| {
+        lua.create_function(|_, domain: UserDataRef<MuxDomain>| {
             let mux = get_mux()?;
             let domain = domain.resolve(&mux)?;
             mux.set_default_domain(&domain);
@@ -179,8 +180,8 @@ struct CommandBuilderFrag {
 }
 
 impl CommandBuilderFrag {
-    fn to_command_builder(self) -> (Option<CommandBuilder>, Option<String>) {
-        if let Some(args) = self.args {
+    fn to_command_builder(&self) -> (Option<CommandBuilder>, Option<String>) {
+        if let Some(args) = &self.args {
             let mut builder = CommandBuilder::from_argv(args.iter().map(Into::into).collect());
             for (k, v) in self.set_environment_variables.iter() {
                 builder.env(k, v);
@@ -190,7 +191,7 @@ impl CommandBuilderFrag {
             }
             (Some(builder), None)
         } else {
-            (None, self.cwd)
+            (None, self.cwd.clone())
         }
     }
 }
@@ -237,7 +238,7 @@ impl SpawnWindow {
                 cols,
                 ..Default::default()
             },
-            _ => config::configuration().initial_size(0),
+            _ => config::configuration().initial_size(0, None),
         };
 
         let (cmd_builder, cwd) = self.cmd_builder.to_command_builder();
@@ -273,7 +274,7 @@ struct SpawnTab {
 impl_lua_conversion_dynamic!(SpawnTab);
 
 impl SpawnTab {
-    async fn spawn(self, window: MuxWindow) -> mlua::Result<(MuxTab, MuxPane, MuxWindow)> {
+    async fn spawn(self, window: &MuxWindow) -> mlua::Result<(MuxTab, MuxPane, MuxWindow)> {
         let mux = get_mux()?;
         let size;
         let pane;
@@ -283,7 +284,7 @@ impl SpawnTab {
             size = window
                 .get_by_idx(0)
                 .map(|tab| tab.get_size())
-                .unwrap_or_else(|| config::configuration().initial_size(0));
+                .unwrap_or_else(|| config::configuration().initial_size(0, None));
 
             pane = window
                 .get_active()

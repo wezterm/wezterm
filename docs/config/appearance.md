@@ -130,6 +130,12 @@ config.colors = {
   quick_select_label_fg = { Color = '#ffffff' },
   quick_select_match_bg = { AnsiColor = 'Navy' },
   quick_select_match_fg = { Color = '#ffffff' },
+
+  input_selector_label_bg = { AnsiColor = 'Black' }, -- {{since('nightly', inline=True)}}
+  input_selector_label_fg = { Color = '#ffffff' }, -- {{since('nightly', inline=True)}}
+
+  launcher_label_bg = { AnsiColor = 'Black' }, -- {{since('nightly', inline=True)}}
+  launcher_label_fg = { Color = '#ffffff' }, -- {{since('nightly', inline=True)}}
 }
 
 return config
@@ -222,8 +228,8 @@ builting color scheme.
 ### Defining a Color Scheme in a separate file
 
 If you'd like to factor your color schemes out into separate files, you
-can create a file with a `[colors]` section; take a look at [one of
-the available color schemes for an example](https://github.com/wez/wezterm/blob/main/assets/colors/Builtin%20Dark.toml).
+can create a [TOML format](https://toml.io/en/) file with a `[colors]` section; take a look at [one of
+the available color schemes for an example](https://github.com/wezterm/wezterm/tree/main/config/src/scheme_data.rs).
 
 It is recommended that you place your custom scheme in a directory
 named `$HOME/.config/wezterm/colors` if you're on a POSIX system.
@@ -263,7 +269,7 @@ $ for scheme in *.sh ; do ; echo $scheme ; \
 ### Tab Bar Appearance & Colors
 
 The tab bar has two modes; the default is a native looking style, but
-is is also possible to enable a retro aesthetic.  The configuration
+it is also possible to enable a retro aesthetic.  The configuration
 for the two styles is broadly similar, but there are a few different
 details.
 
@@ -293,7 +299,7 @@ config.window_frame = {
   font = wezterm.font { family = 'Roboto', weight = 'Bold' },
 
   -- The size of the font in the tab bar.
-  -- Default to 10. on Windows but 12.0 on other systems
+  -- Default to 10.0 on Windows but 12.0 on other systems
   font_size = 12.0,
 
   -- The overall background color of the tab bar when
@@ -410,7 +416,7 @@ To make it easier to see which pane is active, the inactive panes are dimmed
 and de-saturated slightly.
 
 You can specify your own transformation to the pane colors with a hue,
-saturation, brightness (HSB) multipler.
+saturation, brightness (HSB) multiplier.
 
 In this example, inactive panes will be slightly de-saturated and dimmed;
 this is the default configuration:
@@ -481,11 +487,11 @@ config.window_background_image_hsb = {
 }
 ```
 
-See [Styling Inactive Panes](#style-inactive-panes) for more information
-on hue, saturation, brigthness transformations.
+See [Styling Inactive Panes](#styling-inactive-panes) for more information
+on hue, saturation, brightness transformations.
 
 If you'd like to have control over scaling, tiling/repeating, scrolling
-behavior and more, take a look at the more power
+behavior and more, take a look at the more powerful
 [background](lua/config/background.md) configuration option.
 
 ## Window Background Gradient

@@ -1,10 +1,10 @@
 use crate::domain::DomainId;
 use crate::renderable::*;
-use crate::Mux;
+use crate::ExitBehavior;
 use async_trait::async_trait;
 use config::keyassignment::{KeyAssignment, ScrollbackEraseMode};
 use downcast_rs::{impl_downcast, Downcast};
-use parking_lot::{MappedMutexGuard, Mutex};
+use parking_lot::MappedMutexGuard;
 use rangeset::RangeSet;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -17,8 +17,8 @@ use url::Url;
 use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, SemanticZone, StableRowIndex,
-    TerminalConfiguration, TerminalSize,
+    Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, Progress, SemanticZone,
+    StableRowIndex, TerminalConfiguration, TerminalSize,
 };
 
 static PANE_ID: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
@@ -87,6 +87,23 @@ impl std::ops::DerefMut for Pattern {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub enum PatternType {
+    CaseSensitiveString,
+    CaseInSensitiveString,
+    Regex,
+}
+
+impl From<&Pattern> for PatternType {
+    fn from(value: &Pattern) -> Self {
+        match value {
+            Pattern::CaseSensitiveString(_) => PatternType::CaseSensitiveString,
+            Pattern::CaseInSensitiveString(_) => PatternType::CaseInSensitiveString,
+            Pattern::Regex(_) => PatternType::Regex,
+        }
+    }
+}
+
 /// Why a close request is being made
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CloseReason {
@@ -96,45 +113,6 @@ pub enum CloseReason {
     Tab,
     /// Just this tab is being closed
     Pane,
-}
-
-const PASTE_CHUNK_SIZE: usize = 1024;
-
-struct Paste {
-    pane_id: PaneId,
-    text: String,
-    offset: usize,
-}
-
-fn paste_next_chunk(paste: &Arc<Mutex<Paste>>) {
-    let mut locked = paste.lock();
-    let mux = Mux::get();
-    let pane = mux.get_pane(locked.pane_id).unwrap();
-
-    let remain = locked.text.len() - locked.offset;
-    let mut chunk = remain.min(PASTE_CHUNK_SIZE);
-
-    // Make sure we chunk at a char boundary, otherwise the
-    // slice operation below will panic
-    while !locked.text.is_char_boundary(locked.offset + chunk) && chunk < remain {
-        chunk += 1;
-    }
-    let text_slice = &locked.text[locked.offset..locked.offset + chunk];
-    pane.send_paste(text_slice).unwrap();
-
-    if chunk < remain {
-        // There is more to send
-        locked.offset += chunk;
-        schedule_next_paste(paste);
-    }
-}
-
-fn schedule_next_paste(paste: &Arc<Mutex<Paste>>) {
-    let paste = Arc::clone(paste);
-    promise::spawn::spawn(async move {
-        paste_next_chunk(&paste);
-    })
-    .detach();
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -254,9 +232,12 @@ pub trait Pane: Downcast + Send + Sync {
     fn get_dimensions(&self) -> RenderableDimensions;
 
     fn get_title(&self) -> String;
+    fn get_progress(&self) -> Progress {
+        Progress::None
+    }
     fn send_paste(&self, text: &str) -> anyhow::Result<()>;
     fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>>;
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write>;
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write>;
     fn resize(&self, size: TerminalSize) -> anyhow::Result<()>;
     /// Called as a hint that the pane is being resized as part of
     /// a zoom-to-fill-all-the-tab-space operation.
@@ -337,11 +318,14 @@ pub trait Pane: Downcast + Send + Sync {
         None
     }
 
-    fn get_current_working_dir(&self) -> Option<Url>;
-    fn get_foreground_process_name(&self) -> Option<String> {
+    fn get_current_working_dir(&self, policy: CachePolicy) -> Option<Url>;
+    fn get_foreground_process_name(&self, _policy: CachePolicy) -> Option<String> {
         None
     }
-    fn get_foreground_process_info(&self) -> Option<procinfo::LocalProcessInfo> {
+    fn get_foreground_process_info(
+        &self,
+        _policy: CachePolicy,
+    ) -> Option<procinfo::LocalProcessInfo> {
         None
     }
 
@@ -349,23 +333,17 @@ pub trait Pane: Downcast + Send + Sync {
         None
     }
 
-    fn trickle_paste(&self, text: String) -> anyhow::Result<()> {
-        if text.len() <= PASTE_CHUNK_SIZE {
-            // Send it all now
-            self.send_paste(&text)?;
-        } else {
-            // It's pretty heavy, so we trickle it into the pty
-            let paste = Arc::new(Mutex::new(Paste {
-                pane_id: self.pane_id(),
-                text,
-                offset: 0,
-            }));
-            paste_next_chunk(&paste);
-        }
-        Ok(())
+    fn exit_behavior(&self) -> Option<ExitBehavior> {
+        None
     }
 }
 impl_downcast!(Pane);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CachePolicy {
+    FetchImmediate,
+    AllowStale,
+}
 
 /// This trait is used to implement/provide a callback that is used together
 /// with the Pane::with_lines_mut method.
@@ -649,7 +627,7 @@ mod test {
         fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>> {
             Ok(None)
         }
-        fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+        fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
             unimplemented!()
         }
         fn resize(&self, _: TerminalSize) -> anyhow::Result<()> {
@@ -675,7 +653,7 @@ mod test {
         fn is_alt_screen_active(&self) -> bool {
             false
         }
-        fn get_current_working_dir(&self) -> Option<Url> {
+        fn get_current_working_dir(&self, _policy: CachePolicy) -> Option<Url> {
             None
         }
         fn key_down(&self, _: KeyCode, _: KeyModifiers) -> anyhow::Result<()> {
@@ -707,7 +685,7 @@ mod test {
         physical_lines
     }
 
-    fn summarize_logical_lines(lines: &[LogicalLine]) -> Vec<(StableRowIndex, Cow<str>)> {
+    fn summarize_logical_lines(lines: &[LogicalLine]) -> Vec<(StableRowIndex, Cow<'_, str>)> {
         lines
             .iter()
             .map(|l| (l.first_row, l.logical.as_str()))
@@ -720,7 +698,7 @@ mod test {
         let width = 20;
         let physical_lines = physical_lines_from_text(text, width);
 
-        fn text_from_lines(lines: &[Line]) -> Vec<Cow<str>> {
+        fn text_from_lines(lines: &[Line]) -> Vec<Cow<'_, str>> {
             lines.iter().map(|l| l.as_str()).collect::<Vec<_>>()
         }
 

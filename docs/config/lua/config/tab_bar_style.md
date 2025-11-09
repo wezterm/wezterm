@@ -19,7 +19,7 @@ have been removed and replaced by the more flexible
 {{since('20210314-114017-04b7cedd')}}
 
 This config option allows styling the elements that appear in the tab bar.
-This configuration supplements the [tab bar color](../../appearance.md#tab-bar-appearance--colors)
+This configuration supplements the [tab bar color](../../appearance.md#tab-bar-appearance-colors)
 options.
 
 Styling in this context refers to how the edges of the tabs and the new tab button are rendered.
@@ -43,6 +43,8 @@ This example changes the tab edges to the PowerLine arrow symbols:
 
 ```lua
 local wezterm = require 'wezterm'
+
+local config = wezterm.config_builder()
 
 -- The filled in variant of the < symbol
 local SOLID_LEFT_ARROW = wezterm.nerdfonts.pl_right_hard_divider

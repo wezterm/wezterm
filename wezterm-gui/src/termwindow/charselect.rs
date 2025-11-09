@@ -1,3 +1,4 @@
+use crate::overlay::selector::{matcher_pattern, matcher_score};
 use crate::termwindow::box_model::*;
 use crate::termwindow::modal::Modal;
 use crate::termwindow::render::corners::{
@@ -13,11 +14,11 @@ use config::keyassignment::{
 use config::Dimension;
 use emojis::{Emoji, Group};
 use frecency::Frecency;
-use fuzzy_matcher::skim::SkimMatcherV2;
-use fuzzy_matcher::FuzzyMatcher;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use termwiz::input::Modifiers;
 use wezterm_term::{KeyCode, KeyModifiers, MouseEvent};
@@ -94,7 +95,7 @@ struct Recent {
 }
 
 fn recent_file_name() -> PathBuf {
-    config::RUNTIME_DIR.join("recent-emoji.json")
+    config::DATA_DIR.join("recent-emoji.json")
 }
 
 fn load_recents() -> anyhow::Result<Vec<Recent>> {
@@ -166,25 +167,39 @@ fn build_aliases() -> Vec<Alias> {
             Group::Symbols => CharSelectGroup::Symbols,
             Group::Flags => CharSelectGroup::Flags,
         };
-        push(
-            &mut aliases,
-            Alias {
-                name: Cow::Borrowed(emoji.name()),
-                character: Character::Emoji(emoji),
-                group,
-            },
-        );
-        if let Some(short) = emoji.shortcode() {
-            if short != emoji.name() {
+        match emoji.skin_tones() {
+            Some(iter) => {
+                for entry in iter {
+                    push(
+                        &mut aliases,
+                        Alias {
+                            name: Cow::Borrowed(entry.name()),
+                            character: Character::Emoji(entry),
+                            group,
+                        },
+                    );
+                }
+            }
+            None => {
                 push(
                     &mut aliases,
                     Alias {
-                        name: Cow::Borrowed(short),
+                        name: Cow::Borrowed(emoji.name()),
                         character: Character::Emoji(emoji),
                         group,
                     },
                 );
             }
+        }
+        for short in emoji.shortcodes() {
+            push(
+                &mut aliases,
+                Alias {
+                    name: Cow::Borrowed(short),
+                    character: Character::Emoji(emoji),
+                    group: CharSelectGroup::ShortCodes,
+                },
+            );
         }
     }
 
@@ -225,21 +240,21 @@ fn build_aliases() -> Vec<Alias> {
     aliases
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 struct MatchResult {
     row_idx: usize,
-    score: i64,
+    score: u32,
 }
 
 impl MatchResult {
-    fn new(row_idx: usize, score: i64, selection: &str, aliases: &[Alias]) -> Self {
+    fn new(row_idx: usize, score: u32, selection: &str, aliases: &[Alias]) -> Self {
         Self {
             row_idx,
             score: if aliases[row_idx].name == selection {
                 // Pump up the score for an exact match, otherwise
                 // the order may be undesirable if there are a lot
                 // of candidates with the same score
-                i64::max_value()
+                u32::max_value()
             } else {
                 score
             },
@@ -256,59 +271,80 @@ fn compute_matches(selection: &str, aliases: &[Alias], group: CharSelectGroup) -
             .map(|(idx, _a)| idx)
             .collect()
     } else {
-        let matcher = SkimMatcherV2::default();
+        let pattern = matcher_pattern(selection);
 
         let numeric_selection = if selection.chars().all(|c| c.is_ascii_hexdigit()) {
             // Make this uppercase so that eg: `e1` matches `U+E1` rather
             // than HENTAIGANA LETTER E-1.
-            // <https://github.com/wez/wezterm/issues/2581#issuecomment-1267662040>
+            // <https://github.com/wezterm/wezterm/issues/2581#issuecomment-1267662040>
             Some(format!("U+{}", selection.to_ascii_uppercase()))
         } else if selection.starts_with("U+") {
             Some(selection.to_string())
         } else {
             None
         };
-
         let start = std::time::Instant::now();
-        let mut scores: Vec<MatchResult> = aliases
-            .iter()
+
+        let all_matches: Vec<(String, MatchResult)> = aliases
+            .par_iter()
             .enumerate()
             .filter_map(|(row_idx, entry)| {
-                let alias_result = matcher
-                    .fuzzy_match(&entry.name, selection)
+                let glyph = entry.glyph();
+
+                let alias_result = matcher_score(&pattern, &entry.name)
                     .map(|score| MatchResult::new(row_idx, score, selection, aliases));
+
                 match &numeric_selection {
                     Some(sel) => {
                         let codepoints = entry.codepoints();
                         if codepoints == *sel {
-                            Some(MatchResult {
-                                row_idx,
-                                score: i64::max_value(),
-                            })
+                            Some((
+                                glyph,
+                                MatchResult {
+                                    row_idx,
+                                    score: u32::max_value(),
+                                },
+                            ))
                         } else {
-                            let number_result = matcher
-                                .fuzzy_match(&codepoints, &sel)
-                                .map(|score| MatchResult::new(row_idx, score, sel, aliases));
+                            let number_result = matcher_score(&pattern, &codepoints)
+                                .map(|score| MatchResult::new(row_idx, score, selection, aliases));
 
                             match (alias_result, number_result) {
                                 (
                                     Some(MatchResult { score: a, .. }),
                                     Some(MatchResult { score: b, .. }),
-                                ) => Some(MatchResult {
-                                    row_idx,
-                                    score: a.max(b),
-                                }),
-                                (Some(a), None) | (None, Some(a)) => Some(a),
+                                ) => Some((
+                                    glyph,
+                                    MatchResult {
+                                        row_idx,
+                                        score: a.max(b),
+                                    },
+                                )),
+                                (Some(a), None) | (None, Some(a)) => Some((glyph, a)),
                                 (None, None) => None,
                             }
                         }
                     }
-                    None => alias_result,
+                    None => alias_result.map(|a| (glyph, a)),
                 }
             })
             .collect();
+
+        let mut matches = HashMap::<String, MatchResult>::new();
+        for (glyph, value) in all_matches {
+            let entry = matches.entry(glyph).or_insert(value);
+            // Retain the best scoring match for a given glyph
+            if entry.score < value.score {
+                *entry = value;
+            }
+        }
+        let mut scores: Vec<MatchResult> = matches.into_values().collect();
         scores.sort_by(|a, b| a.score.cmp(&b.score).reverse());
-        log::trace!("matching took {:?}", start.elapsed());
+        log::trace!(
+            "matching took {:?} for {} entries",
+            start.elapsed(),
+            scores.len()
+        );
 
         scores.iter().map(|result| result.row_idx).collect()
     }
@@ -378,6 +414,7 @@ impl CharSelector {
             CharSelectGroup::Flags => "Flags",
             CharSelectGroup::NerdFonts => "NerdFonts",
             CharSelectGroup::UnicodeNames => "Unicode",
+            CharSelectGroup::ShortCodes => "Short Codes",
         };
 
         let mut elements = vec![Element::new(
@@ -387,7 +424,7 @@ impl CharSelector {
         .colors(ElementColors {
             border: BorderColor::default(),
             bg: LinearRgba::TRANSPARENT.into(),
-            text: term_window.config.pane_select_fg_color.to_linear().into(),
+            text: term_window.config.char_select_fg_color.to_linear().into(),
         })
         .display(DisplayType::Block)];
 
@@ -401,13 +438,13 @@ impl CharSelector {
         {
             let (bg, text) = if display_idx == selected_row {
                 (
-                    term_window.config.pane_select_fg_color.to_linear().into(),
-                    term_window.config.pane_select_bg_color.to_linear().into(),
+                    term_window.config.char_select_fg_color.to_linear().into(),
+                    term_window.config.char_select_bg_color.to_linear().into(),
                 )
             } else {
                 (
                     LinearRgba::TRANSPARENT.into(),
-                    term_window.config.pane_select_fg_color.to_linear().into(),
+                    term_window.config.char_select_fg_color.to_linear().into(),
                 )
             };
             elements.push(
@@ -438,10 +475,10 @@ impl CharSelector {
         let element = Element::new(&font, ElementContent::Children(elements))
             .colors(ElementColors {
                 border: BorderColor::new(
-                    term_window.config.pane_select_bg_color.to_linear().into(),
+                    term_window.config.char_select_bg_color.to_linear().into(),
                 ),
-                bg: term_window.config.pane_select_bg_color.to_linear().into(),
-                text: term_window.config.pane_select_fg_color.to_linear().into(),
+                bg: term_window.config.char_select_bg_color.to_linear().into(),
+                text: term_window.config.char_select_fg_color.to_linear().into(),
             })
             .margin(BoxDimension {
                 left: Dimension::Cells(1.25),
@@ -659,7 +696,7 @@ impl Modal for CharSelector {
     fn computed_element(
         &self,
         term_window: &mut TermWindow,
-    ) -> anyhow::Result<Ref<[ComputedElement]>> {
+    ) -> anyhow::Result<Ref<'_, [ComputedElement]>> {
         let selection = self.selection.borrow();
         let selection = selection.as_str();
 

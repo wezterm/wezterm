@@ -4,21 +4,26 @@ use crate::connection::ConnectionOps;
 use crate::os::{xkeysyms, Connection, Window};
 use crate::{
     Appearance, Clipboard, DeadKeyStatus, Dimensions, MouseButtons, MouseCursor, MouseEvent,
-    MouseEventKind, MousePress, Point, Rect, RequestedWindowGeometry, ResolvedGeometry,
-    ScreenPoint, WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
+    MouseEventKind, MousePress, Point, Rect, RequestedWindowGeometry, ResizeIncrement,
+    ResolvedGeometry, ScreenPoint, ScreenRect, WindowDecorations, WindowEvent, WindowEventSender,
+    WindowOps, WindowState,
 };
 use anyhow::{anyhow, Context as _};
 use async_trait::async_trait;
 use config::ConfigHandle;
 use promise::{Future, Promise};
 use raw_window_handle::{
-    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle, XcbDisplayHandle,
-    XcbWindowHandle,
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
+    RawWindowHandle, WindowHandle, XcbDisplayHandle, XcbWindowHandle,
 };
 use std::any::Any;
 use std::convert::TryInto;
+use std::num::NonZeroU32;
+use std::path::PathBuf;
+use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, Mutex};
+use url::Url;
 use wezterm_font::FontConfiguration;
 use wezterm_input_types::{KeyCode, KeyEvent, KeyboardLedStatus, Modifiers};
 use xcb::x::{Atom, PropMode};
@@ -56,8 +61,31 @@ impl CopyAndPaste {
     }
 }
 
+struct DragAndDrop {
+    src_window: Option<xcb::x::Window>,
+    src_types: Vec<Atom>,
+    src_action: Atom,
+    time: u32,
+    target_type: Atom,
+    target_action: Atom,
+}
+
+impl Default for DragAndDrop {
+    fn default() -> DragAndDrop {
+        DragAndDrop {
+            src_window: None,
+            src_types: Vec::new(),
+            src_action: xcb::x::ATOM_NONE,
+            time: 0,
+            target_type: xcb::x::ATOM_NONE,
+            target_action: xcb::x::ATOM_NONE,
+        }
+    }
+}
+
 pub(crate) struct XWindowInner {
     pub window_id: xcb::x::Window,
+    pub child_id: xcb::x::Window,
     conn: Weak<XConnection>,
     pub events: WindowEventSender,
     width: u16,
@@ -66,6 +94,7 @@ pub(crate) struct XWindowInner {
     dpi: f64,
     cursors: CursorInfo,
     copy_and_paste: CopyAndPaste,
+    drag_and_drop: DragAndDrop,
     config: ConfigHandle,
     appearance: Appearance,
     title: String,
@@ -79,6 +108,8 @@ pub(crate) struct XWindowInner {
     current_mouse_event: Option<MouseEvent>,
     window_drag_position: Option<ScreenPoint>,
     dragging: bool,
+    outstanding_configure_requests: usize,
+    pending_finished_resizes: usize,
 }
 
 /// <https://specifications.freedesktop.org/wm-spec/wm-spec-latest.html#idm46409506331616>
@@ -95,6 +126,9 @@ impl Drop for XWindowInner {
                     .context("flush pending requests prior to issuing DestroyWindow")
                     .ok();
                 conn.send_request_no_reply_log(&xcb::x::DestroyWindow {
+                    window: self.child_id,
+                });
+                conn.send_request_no_reply_log(&xcb::x::DestroyWindow {
                     window: self.window_id,
                 });
             }
@@ -102,24 +136,24 @@ impl Drop for XWindowInner {
     }
 }
 
-unsafe impl HasRawDisplayHandle for XWindowInner {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
-        let mut handle = XcbDisplayHandle::empty();
+impl HasDisplayHandle for XWindowInner {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         if let Some(conn) = self.conn.upgrade() {
-            handle.connection = conn.conn.get_raw_conn() as _;
-            handle.screen = conn.screen_num;
+            let handle =
+                XcbDisplayHandle::new(NonNull::new(conn.conn.get_raw_conn() as _), conn.screen_num);
+            unsafe { Ok(DisplayHandle::borrow_raw(RawDisplayHandle::Xcb(handle))) }
+        } else {
+            Err(HandleError::Unavailable)
         }
-
-        RawDisplayHandle::Xcb(handle)
     }
 }
 
-unsafe impl HasRawWindowHandle for XWindowInner {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        let mut handle = XcbWindowHandle::empty();
-        handle.window = self.window_id.resource_id();
-        handle.visual_id = self.conn.upgrade().unwrap().visual.visual_id();
-        RawWindowHandle::Xcb(handle)
+impl HasWindowHandle for XWindowInner {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        let mut handle =
+            XcbWindowHandle::new(NonZeroU32::new(self.child_id.resource_id()).expect("non-zero"));
+        handle.visual_id = NonZeroU32::new(self.conn.upgrade().unwrap().visual.visual_id());
+        unsafe { Ok(WindowHandle::borrow_raw(RawWindowHandle::Xcb(handle))) }
     }
 }
 
@@ -130,11 +164,11 @@ impl XWindowInner {
         let gl_state = match conn.gl_connection.borrow().as_ref() {
             None => crate::egl::GlState::create(
                 Some(conn.conn.get_raw_dpy() as *const _),
-                self.window_id.resource_id() as *mut _,
+                self.child_id.resource_id() as *mut _,
             ),
             Some(glconn) => crate::egl::GlState::create_with_existing_connection(
                 glconn,
-                self.window_id.resource_id() as *mut _,
+                self.child_id.resource_id() as *mut _,
             ),
         };
 
@@ -233,6 +267,18 @@ impl XWindowInner {
         self.pending.push(event);
     }
 
+    fn resize_child(&self, width: u32, height: u32) {
+        self.conn()
+            .send_request_no_reply_log(&xcb::x::ConfigureWindow {
+                window: self.child_id,
+                value_list: &[
+                    xcb::x::ConfigWindow::Width(width as u32),
+                    xcb::x::ConfigWindow::Height(height as u32),
+                ],
+            });
+        // send_request_no_reply_log() is synchronous, so no further synchronization required
+    }
+
     pub fn dispatch_pending_events(&mut self) -> anyhow::Result<()> {
         if self.pending.is_empty() {
             return Ok(());
@@ -264,6 +310,13 @@ impl XWindowInner {
         if let Some(resize) = resize.take() {
             self.sure_about_geometry = true;
             self.events.dispatch(resize);
+        }
+
+        // These SetInnerSizeCompleted events need to be dispatched after the
+        // above Resized events because a resize cannot finish before it occurs.
+        while self.pending_finished_resizes > 0 {
+            self.events.dispatch(WindowEvent::SetInnerSizeCompleted);
+            self.pending_finished_resizes -= 1;
         }
 
         if need_paint {
@@ -320,6 +373,8 @@ impl XWindowInner {
                         || self.height != geom.height()
                         || self.last_wm_state != window_state
                     {
+                        self.resize_child(geom.width() as u32, geom.height() as u32);
+
                         self.width = geom.width();
                         self.height = geom.height();
                         self.last_wm_state = window_state;
@@ -425,9 +480,46 @@ impl XWindowInner {
 
     fn configure_notify(&mut self, source: &str, width: u16, height: u16) -> anyhow::Result<()> {
         let conn = self.conn();
+
         self.update_ime_position();
 
-        let dpi = conn.default_dpi();
+        let mut dpi = conn.default_dpi();
+
+        if !self.config.dpi_by_screen.is_empty() {
+            let coords = conn
+                .send_and_wait_request(&xcb::x::TranslateCoordinates {
+                    src_window: self.window_id,
+                    dst_window: conn.root,
+                    src_x: 0,
+                    src_y: 0,
+                })
+                .context("querying window coordinates")?;
+            let screens = conn.get_cached_screens()?;
+            let window_rect: ScreenRect = euclid::rect(
+                coords.dst_x().into(),
+                coords.dst_y().into(),
+                width as isize,
+                height as isize,
+            );
+            let screen = screens
+                .by_name
+                .values()
+                .filter_map(|screen| {
+                    screen
+                        .rect
+                        .intersection(&window_rect)
+                        .map(|r| (screen, r.area()))
+                })
+                .max_by_key(|s| s.1)
+                .ok_or_else(|| anyhow::anyhow!("window is not in any screen"))?
+                .0;
+
+            if let Some(value) = self.config.dpi_by_screen.get(&screen.name).copied() {
+                dpi = value;
+            } else if let Some(value) = self.config.dpi {
+                dpi = value;
+            }
+        }
 
         if width == self.width && height == self.height && dpi == self.dpi {
             // Effectively unchanged; perhaps it was simply moved?
@@ -438,6 +530,8 @@ impl XWindowInner {
             );
             return Ok(());
         }
+
+        self.resize_child(width as u32, height as u32);
 
         log::trace!(
             "{source}: width {} -> {}, height {} -> {}, dpi {} -> {}",
@@ -470,6 +564,128 @@ impl XWindowInner {
         Ok(())
     }
 
+    fn xdnd_event(&mut self, msgtype: Atom, data: &[u32]) -> anyhow::Result<()> {
+        use xcb::XidNew;
+        let conn = self.conn();
+        let msgtype_name = conn.atom_name(msgtype);
+        let srcwin = unsafe { xcb::x::Window::new(data[0]) };
+        if msgtype == conn.atom_xdndenter {
+            self.drag_and_drop.src_window = Some(srcwin);
+            let moretypes = data[1] & 0x01 != 0;
+            let xdndversion = data[1] >> 24 as u8;
+            log::trace!("ClientMessage {msgtype_name}, Version {xdndversion}, more than 3 types: {moretypes}");
+            if !moretypes {
+                self.drag_and_drop.src_types = data[2..]
+                    .into_iter()
+                    .filter(|&&x| x != 0)
+                    .map(|&x| unsafe { Atom::new(x) })
+                    .collect();
+            } else {
+                self.drag_and_drop.src_types =
+                    match conn.send_and_wait_request(&xcb::x::GetProperty {
+                        delete: false,
+                        window: srcwin,
+                        property: conn.atom_xdndtypelist,
+                        r#type: xcb::x::ATOM_ATOM,
+                        long_offset: 0,
+                        long_length: u32::max_value(),
+                    }) {
+                        Ok(prop) => prop.value::<Atom>().to_vec(),
+                        Err(err) => {
+                            log::error!(
+                                "xdnd: unable to get type list from source window: {:?}",
+                                err
+                            );
+                            Vec::<Atom>::new()
+                        }
+                    };
+            }
+            self.drag_and_drop.target_type = xcb::x::ATOM_NONE;
+            for t in [
+                conn.atom_texturilist,
+                conn.atom_xmozurl,
+                conn.atom_utf8_string,
+            ] {
+                if self.drag_and_drop.src_types.contains(&t) {
+                    self.drag_and_drop.target_type = t;
+                    break;
+                }
+            }
+            for t in &self.drag_and_drop.src_types {
+                log::trace!("types offered: {}", conn.atom_name(*t));
+            }
+            log::trace!(
+                "selected: {}",
+                conn.atom_name(self.drag_and_drop.target_type)
+            );
+        } else if self.drag_and_drop.src_window != Some(srcwin) {
+            log::error!("ClientMessage {msgtype_name} received, but no Xdnd in progress or source window mismatch");
+        } else if msgtype == conn.atom_xdndposition {
+            self.drag_and_drop.time = data[3];
+            let (x, y) = (data[2] >> 16 as u16, data[2] as u16);
+            self.drag_and_drop.src_action = unsafe { Atom::new(data[4]) };
+            self.drag_and_drop.target_action = conn.atom_xdndactioncopy;
+            log::trace!(
+                "ClientMessage {msgtype_name}, ({x}, {y}), timestamp: {}, action: {}",
+                self.drag_and_drop.time,
+                conn.atom_name(self.drag_and_drop.src_action)
+            );
+            conn.send_request_no_reply_log(&xcb::x::SendEvent {
+                propagate: false,
+                destination: xcb::x::SendEventDest::Window(srcwin),
+                event_mask: xcb::x::EventMask::empty(),
+                event: &xcb::x::ClientMessageEvent::new(
+                    srcwin,
+                    conn.atom_xdndstatus,
+                    xcb::x::ClientMessageData::Data32([
+                        self.window_id.resource_id(),
+                        2 | (self.drag_and_drop.target_type != xcb::x::ATOM_NONE) as u32,
+                        0,
+                        0,
+                        self.drag_and_drop.target_action.resource_id(),
+                    ]),
+                ),
+            });
+        } else if msgtype == conn.atom_xdndleave {
+            self.drag_and_drop.src_window = None;
+            log::trace!("ClientMessage {msgtype_name}");
+        } else if msgtype == conn.atom_xdnddrop {
+            self.drag_and_drop.time = data[2];
+            log::trace!(
+                "ClientMessage {msgtype_name}, timestamp: {}",
+                self.drag_and_drop.time
+            );
+            if self.drag_and_drop.target_type != xcb::x::ATOM_NONE {
+                conn.send_request_no_reply_log(&xcb::x::ConvertSelection {
+                    requestor: self.window_id,
+                    selection: conn.atom_xdndselection,
+                    target: self.drag_and_drop.target_type,
+                    property: conn.atom_xsel_data,
+                    time: self.drag_and_drop.time,
+                });
+            } else {
+                log::warn!("XdndDrop received, but no target type selected. Ignoring.");
+                conn.send_request_no_reply_log(&xcb::x::SendEvent {
+                    propagate: false,
+                    destination: xcb::x::SendEventDest::Window(srcwin),
+                    event_mask: xcb::x::EventMask::empty(),
+                    event: &xcb::x::ClientMessageEvent::new(
+                        srcwin,
+                        conn.atom_xdndfinished,
+                        xcb::x::ClientMessageData::Data32([
+                            self.window_id.resource_id(),
+                            0,
+                            0,
+                            0,
+                            0,
+                        ]),
+                    ),
+                });
+            }
+        }
+        return Ok(());
+    }
+
     pub fn dispatch_event(&mut self, event: &Event) -> anyhow::Result<()> {
         let conn = self.conn();
         match event {
@@ -487,6 +703,10 @@ impl XWindowInner {
             }
             Event::X(xcb::x::Event::ConfigureNotify(cfg)) => {
                 self.configure_notify("X::ConfigureNotify", cfg.width(), cfg.height())?;
+                if self.outstanding_configure_requests > 0 {
+                    self.outstanding_configure_requests -= 1;
+                    self.pending_finished_resizes += 1;
+                }
             }
             Event::X(xcb::x::Event::KeyPress(key_press)) => {
                 self.copy_and_paste.time = key_press.time();
@@ -539,28 +759,59 @@ impl XWindowInner {
                 )?;
             }
             Event::X(xcb::x::Event::ClientMessage(msg)) => {
+                let type_atom_name = conn.atom_name(msg.r#type());
                 use xcb::x::ClientMessageData;
-                match msg.data() {
-                    ClientMessageData::Data32(data) => {
-                        if data[0] == conn.atom_delete().resource_id() {
+                use xcb::XidNew;
+                let xdnd_msgtype_atoms = [
+                    conn.atom_xdndenter,
+                    conn.atom_xdndposition,
+                    conn.atom_xdndstatus,
+                    conn.atom_xdndleave,
+                    conn.atom_xdnddrop,
+                    conn.atom_xdndfinished,
+                ];
+                if xdnd_msgtype_atoms.contains(&msg.r#type()) {
+                    if let ClientMessageData::Data32(data) = msg.data() {
+                        self.xdnd_event(msg.r#type(), &data)?;
+                    } else {
+                        log::warn!("Received ClientMessage {type_atom_name} with wrong format");
+                    }
+                } else if msg.r#type() == conn.atom_protocols {
+                    if let ClientMessageData::Data32(data) = msg.data() {
+                        let protocol_atom = unsafe { Atom::new(data[0]) };
+                        log::trace!(
+                            "ClientMessage {type_atom_name}/{}",
+                            conn.atom_name(protocol_atom)
+                        );
+                        if protocol_atom == conn.atom_delete {
                             self.events.dispatch(WindowEvent::CloseRequested);
                         }
+                    } else {
+                        log::warn!("Received ClientMessage {type_atom_name} with wrong format");
                     }
-                    ClientMessageData::Data8(_) | ClientMessageData::Data16(_) => {}
                 }
             }
             Event::X(xcb::x::Event::DestroyNotify(_)) => {
                 self.events.dispatch(WindowEvent::Destroyed);
                 conn.windows.borrow_mut().remove(&self.window_id);
+                conn.child_to_parent_id.borrow_mut().remove(&self.child_id);
             }
             Event::X(xcb::x::Event::SelectionClear(e)) => {
-                self.selection_clear(e)?;
+                if let Err(err) = self.selection_clear(e) {
+                    log::error!("Error handling SelectionClear: {err:#}");
+                }
             }
             Event::X(xcb::x::Event::SelectionRequest(e)) => {
-                self.selection_request(e)?;
+                if let Err(err) = self.selection_request(e) {
+                    // Don't propagate this, as it is not worth exiting the program over it.
+                    // <https://github.com/wezterm/wezterm/pull/6135>
+                    log::error!("Error handling SelectionRequest: {err:#}");
+                }
             }
             Event::X(xcb::x::Event::SelectionNotify(e)) => {
-                self.selection_notify(e)?;
+                if let Err(err) = self.selection_notify(e) {
+                    log::error!("Error handling SelectionNotify: {err:#}");
+                }
             }
             Event::X(xcb::x::Event::PropertyNotify(msg)) => {
                 let atom_name = conn.atom_name(msg.atom());
@@ -642,6 +893,12 @@ impl XWindowInner {
         .normalize_shift()
         .resurface_positional_modifier_key();
         self.events.dispatch(WindowEvent::KeyEvent(key_event));
+        // Since we just composed, synthesize a cleared status, as we
+        // are not guaranteed to receive an event notification to
+        // trigger dispatch_ime_compose_status() above.
+        // <https://github.com/wezterm/wezterm/issues/4841>
+        self.events
+            .dispatch(WindowEvent::AdviseDeadKeyStatus(DeadKeyStatus::None));
     }
 
     /// If we own the selection, make sure that the X server reflects
@@ -806,43 +1063,123 @@ impl XWindowInner {
         );
 
         if let Some(clipboard) = self.selection_atom_to_clipboard(selection.selection()) {
-            if selection.property() != xcb::x::ATOM_NONE
-                // Restrict to strictly UTF-8 to avoid crashing; see
-                // <https://github.com/meh/rust-xcb-util/issues/21>
-                && selection.target() == conn.atom_utf8_string
-            {
+            if selection.property() == xcb::x::ATOM_NONE {
+                if selection.target() == conn.atom_utf8_string {
+                    log::trace!(
+                        "SEL: window_id={window_id:?} -> UTF-8 selection data \
+                         available, requesting STRING instead"
+                    );
+                    conn.send_request_no_reply_log(&xcb::x::ConvertSelection {
+                        requestor: window_id,
+                        selection: selection.selection(),
+                        target: xcb::x::ATOM_STRING,
+                        property: conn.atom_xsel_data,
+                        time: self.copy_and_paste.time,
+                    });
+                    return Ok(());
+                }
+
+                if let Some(mut promise) = self.copy_and_paste.request_mut(clipboard).take() {
+                    log::trace!(
+                        "SEL: window_id={window_id:?} -> no compatible selection data \
+                         available, fulfil promise with empty string"
+                    );
+                    promise.ok("".to_owned());
+                    return Ok(());
+                }
                 log::trace!(
-                    "SEL: window_id={window_id:?} requesting selection from window {:?}",
-                    selection.requestor()
+                    "SEL: window_id={window_id:?} -> no compatible selection data \
+                     available, and no promise. weird!"
                 );
 
+                return Ok(());
+            }
+
+            match conn.send_and_wait_request(&xcb::x::GetProperty {
+                delete: false,
+                window: selection.requestor(),
+                property: selection.property(),
+                r#type: selection.target(),
+                long_offset: 0,
+                long_length: u32::max_value(),
+            }) {
+                Ok(prop) => {
+                    if let Some(mut promise) = self.copy_and_paste.request_mut(clipboard).take() {
+                        fn latin1_to_string(s: &[u8]) -> String {
+                            s.iter().map(|&c| c as char).collect()
+                        }
+
+                        let data = if selection.target() == xcb::x::ATOM_STRING {
+                            latin1_to_string(prop.value())
+                        } else {
+                            // selection.target() is probably == conn.atom_utf8_string,
+                            // because we only ever ask for either STRING or UTF8_STRING.
+                            // If it isn't, we'll just try to convert it anyway.
+                            String::from_utf8_lossy(prop.value()).to_string()
+                        };
+
+                        promise.ok(data);
+                    }
+
+                    conn.send_request_no_reply(&xcb::x::DeleteProperty {
+                        window: self.window_id,
+                        property: conn.atom_xsel_data,
+                    })?;
+                }
+                Err(err) => {
+                    log::error!("clipboard: err while getting clipboard property: {:?}", err);
+                    if let Some(mut promise) = self.copy_and_paste.request_mut(clipboard).take() {
+                        promise.ok("".to_owned());
+                    }
+                }
+            }
+        } else if selection.selection() == conn.atom_xdndselection
+            && selection.property() == conn.atom_xsel_data
+        {
+            if let Some(srcwin) = self.drag_and_drop.src_window {
                 match conn.send_and_wait_request(&xcb::x::GetProperty {
-                    delete: false,
+                    delete: true,
                     window: selection.requestor(),
                     property: selection.property(),
-                    r#type: conn.atom_utf8_string,
+                    r#type: selection.target(),
                     long_offset: 0,
                     long_length: u32::max_value(),
                 }) {
                     Ok(prop) => {
-                        if let Some(mut promise) = self.copy_and_paste.request_mut(clipboard).take()
-                        {
-                            promise.ok(String::from_utf8_lossy(prop.value()).to_string());
+                        if selection.target() == conn.atom_utf8_string {
+                            let text = String::from_utf8_lossy(prop.value()).to_string();
+                            self.events.dispatch(WindowEvent::DroppedString(text));
+                        } else if selection.target() == conn.atom_xmozurl {
+                            let data = decode_dropped_url_string(prop.value());
+                            let urls = parse_xmozurl_list(&data);
+                            self.events.dispatch(WindowEvent::DroppedUrl(urls));
+                        } else if selection.target() == conn.atom_texturilist {
+                            let paths = parse_texturi_list(prop.value());
+                            self.events.dispatch(WindowEvent::DroppedFile(paths));
                         }
-                        conn.send_request_no_reply(&xcb::x::DeleteProperty {
-                            window: self.window_id,
-                            property: conn.atom_xsel_data,
-                        })?;
                     }
                     Err(err) => {
-                        log::error!("clipboard: err while getting clipboard property: {:?}", err);
+                        log::error!("clipboard: err while getting clipboard property: {err:#}");
                     }
                 }
-            } else if let Some(mut promise) = self.copy_and_paste.request_mut(clipboard).take() {
-                log::trace!(
-                    "SEL: window_id={window_id:?} weird state, fulfil promise with empty string"
-                );
-                promise.ok("".to_owned());
+                conn.send_request_no_reply_log(&xcb::x::SendEvent {
+                    propagate: false,
+                    destination: xcb::x::SendEventDest::Window(srcwin),
+                    event_mask: xcb::x::EventMask::empty(),
+                    event: &xcb::x::ClientMessageEvent::new(
+                        srcwin,
+                        conn.atom_xdndfinished,
+                        xcb::x::ClientMessageData::Data32([
+                            window_id.resource_id(),
+                            1,
+                            self.drag_and_drop.target_action.resource_id(),
+                            0,
+                            0,
+                        ]),
+                    ),
+                });
+            } else {
+                log::warn!("No Xdnd in progress, but received Xdnd selection. Ignoring.");
             }
         } else {
             log::trace!("SEL: window_id={window_id:?} unknown selection {selection_name}");
@@ -1050,6 +1387,7 @@ impl XWindow {
         let mut events = WindowEventSender::new(event_handler);
 
         let window_id;
+        let child_id;
         let window = {
             let setup = conn.conn().get_setup();
             let screen = setup
@@ -1058,6 +1396,7 @@ impl XWindow {
                 .ok_or_else(|| anyhow!("no screen?"))?;
 
             window_id = conn.conn().generate_id();
+            child_id = conn.conn().generate_id();
 
             let color_map_id = conn.conn().generate_id();
             conn.send_request_no_reply(&xcb::x::CreateColormap {
@@ -1083,10 +1422,10 @@ impl XWindow {
                     // We have to specify both a border pixel color and a colormap
                     // when specifying a depth that doesn't match the root window in
                     // order to avoid a BadMatch
-                    xcb::x::Cw::BorderPixel(0),
+                    xcb::x::Cw::BackPixel(0), // transparent background
+                    xcb::x::Cw::BorderPixel(screen.black_pixel()),
                     xcb::x::Cw::EventMask(
-                        xcb::x::EventMask::EXPOSURE
-                            | xcb::x::EventMask::FOCUS_CHANGE
+                        xcb::x::EventMask::FOCUS_CHANGE
                             | xcb::x::EventMask::KEY_PRESS
                             | xcb::x::EventMask::BUTTON_PRESS
                             | xcb::x::EventMask::BUTTON_RELEASE
@@ -1102,6 +1441,33 @@ impl XWindow {
             })
             .context("xcb::create_window_checked")?;
 
+            conn.send_request_no_reply(&xcb::x::CreateWindow {
+                depth: conn.depth,
+                wid: child_id,
+                parent: window_id,
+                x: 0,
+                y: 0,
+                width: width.try_into()?,
+                height: height.try_into()?,
+                border_width: 0,
+                class: xcb::x::WindowClass::InputOutput,
+                visual: conn.visual.visual_id(),
+                value_list: &[
+                    // We have to specify both a border pixel color and a colormap
+                    // when specifying a depth that doesn't match the root window in
+                    // order to avoid a BadMatch
+                    xcb::x::Cw::BackPixel(0), // transparent background
+                    xcb::x::Cw::BorderPixel(screen.black_pixel()),
+                    xcb::x::Cw::BitGravity(xcb::x::Gravity::NorthWest),
+                    xcb::x::Cw::EventMask(xcb::x::EventMask::EXPOSURE),
+                    xcb::x::Cw::Colormap(color_map_id),
+                ],
+            })
+            .context("xcb::create_window_checked")?;
+
+            conn.send_request_no_reply(&xcb::x::MapWindow { window: child_id })
+                .context("xcb::map_window")?;
+
             events.assign_window(Window::X11(XWindow::from_id(window_id)));
 
             let appearance = conn.get_appearance();
@@ -1110,12 +1476,14 @@ impl XWindow {
                 title: String::new(),
                 appearance,
                 window_id,
+                child_id,
                 conn: Rc::downgrade(&conn),
                 events,
                 width: width.try_into()?,
                 height: height.try_into()?,
                 dpi: conn.default_dpi(),
                 copy_and_paste: CopyAndPaste::default(),
+                drag_and_drop: DragAndDrop::default(),
                 cursors: CursorInfo::new(&config, &conn),
                 config: config.clone(),
                 has_focus: None,
@@ -1129,6 +1497,8 @@ impl XWindow {
                 current_mouse_event: None,
                 window_drag_position: None,
                 dragging: false,
+                outstanding_configure_requests: 0,
+                pending_finished_resizes: 0,
             }))
         };
 
@@ -1163,6 +1533,14 @@ impl XWindow {
             data: &[conn.atom_delete],
         })?;
 
+        conn.send_request_no_reply(&xcb::x::ChangeProperty {
+            mode: PropMode::Replace,
+            window: window_id,
+            property: conn.atom_xdndaware,
+            r#type: xcb::x::ATOM_ATOM,
+            data: &[5u32],
+        })?;
+
         window
             .lock()
             .unwrap()
@@ -1171,12 +1549,15 @@ impl XWindow {
         let window_handle = Window::X11(XWindow::from_id(window_id));
 
         conn.windows.borrow_mut().insert(window_id, window);
+        conn.child_to_parent_id
+            .borrow_mut()
+            .insert(child_id, window_id);
 
         window_handle.set_title(name);
         // Before we map the window, flush to ensure that all of the other properties
         // have been applied to it.
         // This is a speculative fix for this race condition issue:
-        // <https://github.com/wez/wezterm/issues/2155>
+        // <https://github.com/wezterm/wezterm/issues/2155>
         conn.flush().context("flushing before mapping window")?;
         window_handle.show();
 
@@ -1214,6 +1595,10 @@ impl XWindowInner {
         // Drop impl, and that cannot succeed after we've
         // destroyed the window at the X11 level.
         self.conn().windows.borrow_mut().remove(&self.window_id);
+        self.conn()
+            .child_to_parent_id
+            .borrow_mut()
+            .remove(&self.child_id);
 
         // Unmap the window first: calling DestroyWindow here may race
         // with some requests made either by EGL or the IME, but I haven't
@@ -1223,11 +1608,15 @@ impl XWindowInner {
             window: self.window_id,
         });
 
+        conn.send_request_no_reply_log(&xcb::x::DestroyWindow {
+            window: self.child_id,
+        });
+
         // Arrange to destroy the window after a couple of seconds; that
         // should give whatever stuff is still referencing the window
         // to finish and avoid triggering a protocol error.
         // I don't really like this as a solution :-/
-        // <https://github.com/wez/wezterm/issues/2198>
+        // <https://github.com/wezterm/wezterm/issues/2198>
         let window = self.window_id;
         promise::spawn::spawn(async move {
             async_io::Timer::after(std::time::Duration::from_secs(2)).await;
@@ -1306,8 +1695,14 @@ impl XWindowInner {
     }
 
     fn config_did_change(&mut self, config: &ConfigHandle) {
+        let dpi_changed =
+            self.config.dpi != config.dpi || self.config.dpi_by_screen != config.dpi_by_screen;
         self.config = config.clone();
         let _ = self.adjust_decorations(config.window_decorations);
+
+        if dpi_changed {
+            let _ = self.configure_notify("config reload", self.width, self.height);
+        }
     }
 
     fn net_wm_moveresize(&mut self, x_root: u32, y_root: u32, direction: u32, button: u32) {
@@ -1480,26 +1875,28 @@ impl XWindowInner {
             });
     }
 
-    fn set_resize_increments(&mut self, x: u16, y: u16) -> anyhow::Result<()> {
+    fn set_resize_increments(&mut self, incr: ResizeIncrement) -> anyhow::Result<()> {
         use xcb_util::*;
         let hints = xcb_size_hints_t {
-            flags: XCB_ICCCM_SIZE_HINT_P_RESIZE_INC,
+            flags: XCB_ICCCM_SIZE_HINT_P_MIN_SIZE
+                | XCB_ICCCM_SIZE_HINT_P_RESIZE_INC
+                | XCB_ICCCM_SIZE_HINT_BASE_SIZE,
             x: 0,
             y: 0,
             width: 0,
             height: 0,
-            min_width: 0,
-            min_height: 0,
+            min_width: (incr.base_width + incr.x).into(),
+            min_height: (incr.base_height + incr.y).into(),
             max_width: 0,
             max_height: 0,
-            width_inc: x.into(),
-            height_inc: y.into(),
+            width_inc: incr.x.into(),
+            height_inc: incr.y.into(),
             min_aspect_num: 0,
             min_aspect_den: 0,
             max_aspect_num: 0,
             max_aspect_den: 0,
-            base_width: 0,
-            base_height: 0,
+            base_width: incr.base_width.into(),
+            base_height: incr.base_height.into(),
             win_gravity: 0,
         };
 
@@ -1513,8 +1910,8 @@ impl XWindowInner {
         self.conn().send_request_no_reply(&xcb::x::ChangeProperty {
             mode: PropMode::Replace,
             window: self.window_id,
-            property: xcb::x::ATOM_WM_SIZE_HINTS,
-            r#type: xcb::x::ATOM_CARDINAL,
+            property: xcb::x::ATOM_WM_NORMAL_HINTS,
+            r#type: xcb::x::ATOM_WM_SIZE_HINTS,
             data,
         })?;
 
@@ -1522,29 +1919,28 @@ impl XWindowInner {
     }
 }
 
-unsafe impl HasRawDisplayHandle for XWindow {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
+impl HasDisplayHandle for XWindow {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         let conn = Connection::get()
-            .expect("raw_window_handle only callable on main thread")
+            .expect("display_handle only callable on main thread")
             .x11();
-        let mut handle = XcbDisplayHandle::empty();
-        handle.connection = conn.get_raw_conn() as _;
-        handle.screen = conn.screen_num;
+        let handle = XcbDisplayHandle::new(NonNull::new(conn.get_raw_conn() as _), conn.screen_num);
 
-        RawDisplayHandle::Xcb(handle)
+        unsafe { Ok(DisplayHandle::borrow_raw(RawDisplayHandle::Xcb(handle))) }
     }
 }
 
-unsafe impl HasRawWindowHandle for XWindow {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        let conn = Connection::get().expect("raw_window_handle only callable on main thread");
+impl HasWindowHandle for XWindow {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        let conn = Connection::get().expect("window_handle only callable on main thread");
         let handle = conn
             .x11()
             .window_by_id(self.0)
             .expect("window handle invalid!?");
 
         let inner = handle.lock().unwrap();
-        inner.raw_window_handle()
+        let handle = inner.window_handle()?;
+        unsafe { Ok(WindowHandle::borrow_raw(handle.as_raw())) }
     }
 }
 
@@ -1665,6 +2061,8 @@ impl WindowOps for XWindow {
                         xcb::x::ConfigWindow::Height(height as u32),
                     ],
                 });
+            inner.resize_child(width as u32, height as u32);
+            inner.outstanding_configure_requests += 1;
             Ok(())
         });
     }
@@ -1704,9 +2102,9 @@ impl WindowOps for XWindow {
         });
     }
 
-    fn set_resize_increments(&self, x: u16, y: u16) {
+    fn set_resize_increments(&self, incr: ResizeIncrement) {
         XConnection::with_window_inner(self.0, move |inner| {
-            if let Err(err) = inner.set_resize_increments(x, y) {
+            if let Err(err) = inner.set_resize_increments(incr) {
                 log::error!("set_resize_increments failed: {:#}", err);
             }
             Ok(())
@@ -1728,7 +2126,7 @@ impl WindowOps for XWindow {
             // where we don't receive a SELECTION_NOTIFY in time to correctly
             // invalidate that state, so we always ask the X server to for
             // the selection, even if it is a little slower.
-            // <https://github.com/wez/wezterm/issues/2110>
+            // <https://github.com/wezterm/wezterm/issues/2110>
             let promise = promise.take().unwrap();
             log::debug!(
                 "SEL: window_id={window_id:?} Window::get_clipboard: \
@@ -1769,6 +2167,67 @@ impl WindowOps for XWindow {
             inner.update_selection_owner(clipboard)?;
             Ok(())
         });
+    }
+}
+
+fn parse_texturi_list(url_list: &[u8]) -> Vec<PathBuf> {
+    String::from_utf8_lossy(url_list)
+        .lines()
+        .filter_map(|line| {
+            if line.starts_with('#') || line.trim().is_empty() {
+                // text/uri-list: Any lines beginning with the '#' character
+                // are comment lines and are ignored during processing
+                return None;
+            }
+            let url = Url::parse(line)
+                .map_err(|err| {
+                    log::error!("Error parsing dropped file line {line} as url: {err:#}");
+                })
+                .ok()?;
+            url.to_file_path()
+                .map_err(|_| {
+                    log::error!("Error converting url {url:?} from line {line} to pathbuf");
+                })
+                .ok()
+        })
+        .collect()
+}
+
+fn parse_xmozurl_list(url_list: &str) -> Vec<Url> {
+    url_list
+        .lines()
+        .step_by(2)
+        .filter_map(|line| {
+            // the lines alternate between the urls and their titles
+            Url::parse(line)
+                .map_err(|err| {
+                    log::error!("Error parsing dropped file line {line} as url: {err:#}");
+                })
+                .ok()
+        })
+        .collect()
+}
+
+/// Data may be UTF16 in either byte order, or UTF8
+fn decode_dropped_url_string(raw: &[u8]) -> String {
+    if raw.len() >= 2 && ((raw[0], raw[1]) == (0xfe, 0xff) || (raw[0] != 0x00 && raw[1] == 0x00)) {
+        String::from_utf16_lossy(
+            raw.chunks_exact(2)
+                .map(|x: &[u8]| u16::from(x[1]) << 8 | u16::from(x[0]))
+                .collect::<Vec<u16>>()
+                .as_slice(),
+        )
+    } else if raw.len() >= 2
+        && ((raw[0], raw[1]) == (0xff, 0xfe) || (raw[0] == 0x00 && raw[1] != 0x00))
+    {
+        String::from_utf16_lossy(
+            raw.chunks_exact(2)
+                .map(|x: &[u8]| u16::from(x[0]) << 8 | u16::from(x[1]))
+                .collect::<Vec<u16>>()
+                .as_slice(),
+        )
+    } else {
+        String::from_utf8_lossy(raw).to_string()
     }
 }
 

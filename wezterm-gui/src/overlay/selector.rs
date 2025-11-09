@@ -1,9 +1,13 @@
+use crate::overlay::quickselect;
 use crate::scripting::guiwin::GuiWin;
+use config::configuration;
 use config::keyassignment::{InputSelector, InputSelectorEntry, KeyAssignment};
-use fuzzy_matcher::skim::SkimMatcherV2;
-use fuzzy_matcher::FuzzyMatcher;
 use mux::termwiztermtab::TermWizTerminal;
 use mux_lua::MuxPane;
+use nucleo_matcher::pattern::Pattern;
+use nucleo_matcher::{Matcher, Utf32Str};
+use rayon::prelude::*;
+use std::cell::RefCell;
 use std::rc::Rc;
 use termwiz::cell::{AttributeChange, CellAttributes};
 use termwiz::color::ColorAttribute;
@@ -13,6 +17,25 @@ use termwiz::terminal::Terminal;
 use termwiz_funcs::truncate_right;
 
 const ROW_OVERHEAD: usize = 3;
+
+thread_local! {
+    pub static MATCHER: RefCell<Matcher> = RefCell::new(Matcher::new(nucleo_matcher::Config::DEFAULT));
+}
+
+pub fn matcher_score(pattern: &Pattern, s: &str) -> Option<u32> {
+    MATCHER.with_borrow_mut(|matcher| {
+        let mut buf = vec![];
+        pattern.score(Utf32Str::new(s, &mut buf), matcher)
+    })
+}
+
+pub fn matcher_pattern(s: &str) -> Pattern {
+    nucleo_matcher::pattern::Pattern::parse(
+        s,
+        nucleo_matcher::pattern::CaseMatching::Ignore,
+        nucleo_matcher::pattern::Normalization::Smart,
+    )
+}
 
 struct SelectorState {
     active_idx: usize,
@@ -26,6 +49,8 @@ struct SelectorState {
     always_fuzzy: bool,
     args: InputSelector,
     event_name: String,
+    selection: String,
+    labels: Vec<String>,
 }
 
 impl SelectorState {
@@ -37,20 +62,20 @@ impl SelectorState {
 
         self.filtered_entries.clear();
 
-        let matcher = SkimMatcherV2::default();
-
         struct MatchResult {
             row_idx: usize,
-            score: i64,
+            score: u32,
         }
+
+        let pattern = matcher_pattern(&self.filter_term);
 
         let mut scores: Vec<MatchResult> = self
             .args
             .choices
-            .iter()
+            .par_iter()
             .enumerate()
             .filter_map(|(row_idx, entry)| {
-                let score = matcher.fuzzy_match(&entry.label, &self.filter_term)?;
+                let score = matcher_score(&pattern, &entry.label)?;
                 Some(MatchResult { row_idx, score })
             })
             .collect();
@@ -69,6 +94,14 @@ impl SelectorState {
     fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
         let size = term.get_screen_size()?;
         let max_width = size.cols.saturating_sub(6);
+        let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
+        if max_items != self.max_items {
+            self.labels = quickselect::compute_labels_for_alphabet_with_preserved_case(
+                &self.args.alphabet,
+                self.filtered_entries.len().min(max_items + 1),
+            );
+            self.max_items = max_items;
+        }
 
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
@@ -78,16 +111,19 @@ impl SelectorState {
             },
             Change::Text(format!(
                 "{}\r\n",
-                truncate_right(
-                    "Select an item and press Enter=accept  \
-                     Esc=cancel  /=filter",
-                    max_width
-                )
+                truncate_right(&self.args.description, max_width)
             )),
             Change::AllAttributes(CellAttributes::default()),
         ];
 
-        let max_items = self.max_items;
+        let labels = &self.labels;
+        let max_label_len = labels.iter().map(|s| s.len()).max().unwrap_or(0);
+        let mut labels_iter = labels.into_iter();
+
+        let config = configuration();
+        let colors = &config.resolved_palette;
+        let input_selector_label_fg = colors.input_selector_label_fg;
+        let input_selector_label_bg = colors.input_selector_label_bg;
 
         for (row_num, (entry_idx, entry)) in self
             .filtered_entries
@@ -107,8 +143,33 @@ impl SelectorState {
                 attr.set_reverse(true);
             }
 
-            if row_num < 9 && !self.filtering {
-                changes.push(Change::Text(format!(" {}. ", row_num + 1)));
+            // from above we know that row_num <= max_items
+            // show labels as long as we have more labels left
+            // and we are not filtering
+            if !self.filtering {
+                if let Some(label) = labels_iter.next() {
+                    if let Some(input_selector_label_bg) = input_selector_label_bg {
+                        changes.push(
+                            AttributeChange::Background(input_selector_label_bg.into()).into(),
+                        );
+                    }
+                    if let Some(input_selector_label_fg) = input_selector_label_fg {
+                        changes.push(
+                            AttributeChange::Foreground(input_selector_label_fg.into()).into(),
+                        );
+                    }
+                    changes.push(Change::Text(format!(" {label:>max_label_len$}. ")));
+                    if input_selector_label_bg.is_some() {
+                        changes.push(AttributeChange::Background(ColorAttribute::Default).into());
+                    }
+                    if input_selector_label_fg.is_some() {
+                        changes.push(AttributeChange::Foreground(ColorAttribute::Default).into());
+                    }
+                } else {
+                    changes.push(Change::Text(" ".repeat(max_label_len + 3)));
+                }
+            } else if !self.always_fuzzy {
+                changes.push(Change::Text(" ".repeat(max_label_len + 3)));
             } else {
                 changes.push(Change::Text("    ".to_string()));
             }
@@ -118,11 +179,12 @@ impl SelectorState {
                 line.resize(max_width, termwiz::surface::SEQ_ZERO);
             }
             changes.append(&mut line.changes(&attr));
+            changes.push(Change::Text(" ".to_string()));
             if entry_idx == self.active_idx {
                 changes.push(AttributeChange::Reverse(false).into());
             }
             changes.push(Change::AllAttributes(CellAttributes::default()));
-            changes.push(Change::Text(" \r\n".to_string()));
+            changes.push(Change::Text("\r\n".to_string()));
         }
 
         if self.filtering || !self.filter_term.is_empty() {
@@ -133,7 +195,7 @@ impl SelectorState {
                 },
                 Change::ClearToEndOfLine(ColorAttribute::Default),
                 Change::Text(truncate_right(
-                    &format!("Fuzzy matching: {}", self.filter_term),
+                    &format!("{}{}", self.args.fuzzy_description, self.filter_term),
                     max_width,
                 )),
             ]);
@@ -172,7 +234,7 @@ impl SelectorState {
 
     fn move_down(&mut self) {
         self.active_idx = (self.active_idx + 1).min(self.filtered_entries.len() - 1);
-        if self.active_idx + self.top_row > self.max_items {
+        if self.active_idx > self.top_row + self.max_items {
             self.top_row = self.active_idx.saturating_sub(self.max_items);
         }
     }
@@ -182,10 +244,17 @@ impl SelectorState {
             match event {
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
-                    ..
-                }) if !self.filtering && c >= '1' && c <= '9' => {
-                    if self.launch(self.top_row + (c as u32 - '1' as u32) as usize) {
-                        break;
+                    modifiers: Modifiers::NONE,
+                }) if !self.filtering && self.args.alphabet.contains(c) => {
+                    self.selection.push(c);
+                    if let Some(pos) = self.labels.iter().position(|x| *x == self.selection) {
+                        // since the number of labels is always <= self.max_items
+                        // by construction, we have pos as usize <= self.max_items
+                        // for free
+                        self.active_idx = self.top_row + pos as usize;
+                        if self.launch(self.active_idx) {
+                            break;
+                        }
                     }
                 }
                 InputEvent::Key(KeyEvent {
@@ -201,13 +270,13 @@ impl SelectorState {
                     self.move_up();
                 }
                 InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('P'),
+                    key: KeyCode::Char('P' | 'K'),
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.move_up();
                 }
                 InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('N'),
+                    key: KeyCode::Char('N' | 'J'),
                     modifiers: Modifiers::CTRL,
                 }) => {
                     self.move_down();
@@ -222,13 +291,17 @@ impl SelectorState {
                     key: KeyCode::Backspace,
                     ..
                 }) => {
-                    if self.filter_term.pop().is_none() && !self.always_fuzzy {
-                        self.filtering = false;
+                    if !self.filtering {
+                        self.selection.pop();
+                    } else {
+                        if self.filter_term.pop().is_none() && !self.always_fuzzy {
+                            self.filtering = false;
+                        }
+                        self.update_filter();
                     }
-                    self.update_filter();
                 }
                 InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('G'),
+                    key: KeyCode::Char('G' | 'C'),
                     modifiers: Modifiers::CTRL,
                 })
                 | InputEvent::Key(KeyEvent {
@@ -301,9 +374,6 @@ impl SelectorState {
                         break;
                     }
                 }
-                InputEvent::Resized { rows, .. } => {
-                    self.max_items = rows.saturating_sub(ROW_OVERHEAD);
-                }
                 _ => {}
             }
             self.render(term)?;
@@ -354,11 +424,9 @@ pub fn selector(
             anyhow::bail!("InputSelector requires action to be defined by wezterm.action_callback")
         }
     };
-    let size = term.get_screen_size()?;
-    let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
     let mut state = SelectorState {
         active_idx: 0,
-        max_items,
+        max_items: 0,
         pane,
         top_row: 0,
         filter_term: String::new(),
@@ -368,6 +436,8 @@ pub fn selector(
         always_fuzzy: args.fuzzy,
         args,
         event_name,
+        selection: String::new(),
+        labels: vec![],
     };
 
     term.set_raw_mode()?;

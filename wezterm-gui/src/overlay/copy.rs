@@ -1,4 +1,5 @@
 use crate::selection::{SelectionCoordinate, SelectionRange, SelectionX};
+use crate::termwindow::keyevent::KeyTableArgs;
 use crate::termwindow::{TermWindow, TermWindowNotif};
 use config::keyassignment::{
     ClipboardCopyDestination, CopyModeAssignment, KeyAssignment, KeyTable, KeyTableEntry,
@@ -6,13 +7,13 @@ use config::keyassignment::{
 };
 use mux::domain::DomainId;
 use mux::pane::{
-    ForEachPaneLogicalLine, LogicalLine, Pane, PaneId, Pattern, PerformAssignmentResult,
-    SearchResult, WithPaneLines,
+    CachePolicy, ForEachPaneLogicalLine, LogicalLine, Pane, PaneId, Pattern, PatternType,
+    PerformAssignmentResult, SearchResult, WithPaneLines,
 };
 use mux::renderable::*;
 use mux::tab::TabId;
 use ordered_float::NotNan;
-use parking_lot::{MappedMutexGuard, Mutex};
+use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use rangeset::RangeSet;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use termwiz::cell::{Cell, CellAttributes};
 use termwiz::color::AnsiColor;
+use termwiz::lineedit::{LineEditBuffer, Movement};
 use termwiz::surface::{CursorVisibility, SequenceNo, SEQ_ZERO};
 use unicode_segmentation::*;
 use url::Url;
@@ -38,7 +40,8 @@ const SEARCH_CHUNK_SIZE: StableRowIndex = 1000;
 
 pub struct CopyOverlay {
     delegate: Arc<dyn Pane>,
-    render: Mutex<CopyRenderable>,
+    render: Arc<Mutex<CopyRenderable>>,
+    writer: Mutex<SearchOverlayPatternWriter>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -64,7 +67,8 @@ struct CopyRenderable {
     window: ::window::Window,
 
     /// The text that the user entered
-    pattern: Pattern,
+    pattern_type: PatternType,
+    search_line: LineEditBuffer,
     /// The most recently queried set of matches
     results: Vec<SearchResult>,
     by_line: HashMap<StableRowIndex, Vec<MatchResult>>,
@@ -124,6 +128,17 @@ impl CopyOverlay {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("failed to clone window handle"))?;
         let dims = pane.get_dimensions();
+        let pattern = if params.pattern.is_empty() {
+            SAVED_PATTERN
+                .lock()
+                .get(&tab_id)
+                .map(|p| p.clone())
+                .unwrap_or(params.pattern)
+        } else {
+            params.pattern
+        };
+        let search_line = LineEditBuffer::new(&pattern, pattern.len());
+
         let mut render = CopyRenderable {
             cursor,
             window,
@@ -138,15 +153,8 @@ impl CopyOverlay {
             last_result_seqno: SEQ_ZERO,
             last_bar_pos: None,
             tab_id,
-            pattern: if params.pattern.is_empty() {
-                SAVED_PATTERN
-                    .lock()
-                    .get(&tab_id)
-                    .map(|p| p.clone())
-                    .unwrap_or(params.pattern)
-            } else {
-                params.pattern
-            },
+            pattern_type: PatternType::from(&pattern),
+            search_line,
             editing_search: params.editing_search,
             result_pos: None,
             selection_mode: SelectionMode::Cell,
@@ -160,16 +168,22 @@ impl CopyOverlay {
         render.dirty_results.add(search_row);
         render.update_search();
 
+        let shared_render = Arc::new(Mutex::new(render));
+        let writer = SearchOverlayPatternWriter {
+            render: Arc::clone(&shared_render),
+        };
+
         Ok(Arc::new(CopyOverlay {
             delegate: Arc::clone(pane),
-            render: Mutex::new(render),
+            render: shared_render,
+            writer: Mutex::new(writer),
         }))
     }
 
     pub fn get_params(&self) -> CopyModeParams {
         let render = self.render.lock();
         CopyModeParams {
-            pattern: render.pattern.clone(),
+            pattern: render.get_pattern(),
             editing_search: render.editing_search,
         }
     }
@@ -177,8 +191,11 @@ impl CopyOverlay {
     pub fn apply_params(&self, params: CopyModeParams) {
         let mut render = self.render.lock();
         render.editing_search = params.editing_search;
-        if render.pattern != params.pattern {
-            render.pattern = params.pattern;
+        if render.get_pattern() != params.pattern {
+            render.pattern_type = PatternType::from(&params.pattern);
+            render
+                .search_line
+                .set_line_and_cursor(&params.pattern, params.pattern.len());
             render.schedule_update_search();
         }
         let search_row = render.compute_search_row();
@@ -292,18 +309,16 @@ impl CopyRenderable {
         self.by_line.clear();
         self.result_pos.take();
 
-        SAVED_PATTERN
-            .lock()
-            .insert(self.tab_id, self.pattern.clone());
+        SAVED_PATTERN.lock().insert(self.tab_id, self.get_pattern());
 
         let bar_pos = self.compute_search_row();
         self.dirty_results.add(bar_pos);
         self.last_result_seqno = self.delegate.get_current_seqno();
 
-        if !self.pattern.is_empty() {
+        let pattern = self.get_pattern();
+        if !pattern.is_empty() {
             let pane: Arc<dyn Pane> = self.delegate.clone();
             let window = self.window.clone();
-            let pattern = self.pattern.clone();
             let dims = pane.get_dimensions();
 
             let end = dims.scrollback_top + dims.scrollback_rows as StableRowIndex;
@@ -349,7 +364,7 @@ impl CopyRenderable {
         range: Range<StableRowIndex>,
     ) {
         self.window.invalidate();
-        if pattern != self.pattern {
+        if pattern != self.get_pattern() {
             return;
         }
         let is_first = self.results.is_empty();
@@ -556,7 +571,6 @@ impl CopyRenderable {
     }
 
     fn close(&self) {
-        self.set_viewport(None);
         TermWindow::schedule_cancel_overlay_for_pane(self.window.clone(), self.delegate.pane_id());
     }
 
@@ -626,26 +640,64 @@ impl CopyRenderable {
         }
     }
 
+    fn get_pattern(&self) -> Pattern {
+        let pattern = self.search_line.get_line().to_string();
+        match self.pattern_type {
+            PatternType::CaseSensitiveString => Pattern::CaseSensitiveString(pattern),
+            PatternType::CaseInSensitiveString => Pattern::CaseInSensitiveString(pattern),
+            PatternType::Regex => Pattern::Regex(pattern),
+        }
+    }
+
     fn clear_pattern(&mut self) {
-        self.pattern.clear();
+        self.search_line.clear();
         self.update_search();
     }
 
     fn edit_pattern(&mut self) {
         self.editing_search = true;
+        self.update_key_table();
     }
 
     fn accept_pattern(&mut self) {
         self.editing_search = false;
+        self.update_key_table();
+    }
+
+    fn update_key_table(&mut self) {
+        let window = self.window.clone();
+        let pane_id = self.delegate.pane_id();
+
+        window.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+            let mut state = term_window.pane_state(pane_id);
+            if let Some(overlay) = state.overlay.as_mut() {
+                if let Some(copy_overlay) = overlay.pane.downcast_ref::<CopyOverlay>() {
+                    let editing_search = copy_overlay.render.lock().editing_search;
+
+                    overlay.key_table_state.activate(KeyTableArgs {
+                        name: if editing_search {
+                            "search_mode"
+                        } else {
+                            "copy_mode"
+                        },
+                        timeout_milliseconds: None,
+                        replace_current: true,
+                        one_shot: false,
+                        until_unknown: false,
+                        prevent_fallback: false,
+                    });
+                }
+            }
+        })));
     }
 
     fn cycle_match_type(&mut self) {
-        let pattern = match &self.pattern {
-            Pattern::CaseSensitiveString(s) => Pattern::CaseInSensitiveString(s.clone()),
-            Pattern::CaseInSensitiveString(s) => Pattern::Regex(s.clone()),
-            Pattern::Regex(s) => Pattern::CaseSensitiveString(s.clone()),
+        let pattern_type = match &self.pattern_type {
+            PatternType::CaseSensitiveString => PatternType::CaseInSensitiveString,
+            PatternType::CaseInSensitiveString => PatternType::Regex,
+            PatternType::Regex => PatternType::CaseSensitiveString,
         };
-        self.pattern = pattern;
+        self.pattern_type = pattern_type;
         self.schedule_update_search();
     }
 
@@ -1060,7 +1112,7 @@ impl Pane for CopyOverlay {
     fn send_paste(&self, text: &str) -> anyhow::Result<()> {
         // paste into the search bar
         let mut r = self.render.lock();
-        r.pattern.push_str(text);
+        r.search_line.insert_text(text);
         r.schedule_update_search();
         Ok(())
     }
@@ -1069,8 +1121,11 @@ impl Pane for CopyOverlay {
         Ok(None)
     }
 
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
-        self.delegate.writer()
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
+        MutexGuard::map(self.writer.lock(), |writer| {
+            let w: &mut dyn std::io::Write = writer;
+            w
+        })
     }
 
     fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
@@ -1083,6 +1138,7 @@ impl Pane for CopyOverlay {
 
     fn key_down(&self, key: KeyCode, mods: KeyModifiers) -> anyhow::Result<()> {
         let mut render = self.render.lock();
+        let mods = mods.remove_positional_mods();
         if let Some(jump) = render.pending_jump.take() {
             match (key, mods) {
                 (KeyCode::Char(c), KeyModifiers::NONE)
@@ -1110,13 +1166,70 @@ impl Pane for CopyOverlay {
                 (KeyCode::Char(c), KeyModifiers::NONE)
                 | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
                     // Type to add to the pattern
-                    render.pattern.push(c);
+                    render.search_line.insert_char(c);
+
                     render.schedule_update_search();
                 }
-                (KeyCode::Backspace, KeyModifiers::NONE) => {
-                    // Backspace to edit the pattern
-                    render.pattern.pop();
+                (KeyCode::Char('H'), KeyModifiers::CTRL)
+                | (KeyCode::Backspace, KeyModifiers::NONE) => {
+                    render
+                        .search_line
+                        .kill_text(Movement::BackwardChar(1), Movement::BackwardChar(1));
+
                     render.schedule_update_search();
+                }
+                (KeyCode::Delete, KeyModifiers::NONE) => {
+                    render
+                        .search_line
+                        .kill_text(Movement::ForwardChar(1), Movement::None);
+
+                    render.schedule_update_search();
+                }
+                (KeyCode::Backspace, KeyModifiers::ALT)
+                | (KeyCode::Char('W'), KeyModifiers::CTRL) => {
+                    render
+                        .search_line
+                        .kill_text(Movement::BackwardWord(1), Movement::BackwardWord(1));
+
+                    render.schedule_update_search();
+                }
+                (KeyCode::Backspace, KeyModifiers::SUPER) => {
+                    render
+                        .search_line
+                        .kill_text(Movement::StartOfLine, Movement::StartOfLine);
+
+                    render.schedule_update_search();
+                }
+                (KeyCode::Char('K'), KeyModifiers::CTRL) => {
+                    render
+                        .search_line
+                        .kill_text(Movement::EndOfLine, Movement::EndOfLine);
+
+                    render.schedule_update_search();
+                }
+                (KeyCode::Char('B'), KeyModifiers::CTRL)
+                | (KeyCode::ApplicationLeftArrow, KeyModifiers::NONE)
+                | (KeyCode::LeftArrow, KeyModifiers::NONE) => {
+                    render.search_line.exec_movement(Movement::BackwardChar(1));
+                }
+                (KeyCode::Char('F'), KeyModifiers::CTRL)
+                | (KeyCode::ApplicationRightArrow, KeyModifiers::NONE)
+                | (KeyCode::RightArrow, KeyModifiers::NONE) => {
+                    render.search_line.exec_movement(Movement::ForwardChar(1));
+                }
+                (KeyCode::ApplicationLeftArrow, KeyModifiers::CTRL)
+                | (KeyCode::LeftArrow, KeyModifiers::CTRL) => {
+                    render.search_line.exec_movement(Movement::BackwardWord(1));
+                }
+                (KeyCode::ApplicationRightArrow, KeyModifiers::CTRL)
+                | (KeyCode::RightArrow, KeyModifiers::CTRL) => {
+                    render.search_line.exec_movement(Movement::ForwardWord(1));
+                }
+                (KeyCode::Char('A'), KeyModifiers::CTRL) | (KeyCode::Home, KeyModifiers::NONE) => {
+                    render.search_line.exec_movement(Movement::StartOfLine);
+                }
+                (KeyCode::Char('E'), KeyModifiers::CTRL) | (KeyCode::End, KeyModifiers::NONE) => {
+                    render.search_line.exec_movement(Movement::EndOfLine);
                 }
                 _ => {}
             }
@@ -1220,16 +1333,22 @@ impl Pane for CopyOverlay {
         self.delegate.set_clipboard(clipboard)
     }
 
-    fn get_current_working_dir(&self) -> Option<Url> {
-        self.delegate.get_current_working_dir()
+    fn get_current_working_dir(&self, policy: CachePolicy) -> Option<Url> {
+        self.delegate.get_current_working_dir(policy)
     }
 
     fn get_cursor_position(&self) -> StableCursorPosition {
         let renderer = self.render.lock();
         if renderer.editing_search {
             // place in the search box
+            // Padding between the start of the editable line and the left side of the terminal
+            const SEARCH_CURSOR_PADDING: usize = 8;
+            let cursor = unicode_column_width(
+                &renderer.search_line.get_line()[0..renderer.search_line.get_cursor()],
+                None,
+            );
             StableCursorPosition {
-                x: 8 + wezterm_term::unicode_column_width(&renderer.pattern, None),
+                x: SEARCH_CURSOR_PADDING + cursor,
                 y: renderer.compute_search_row(),
                 shape: termwiz::surface::CursorShape::SteadyBlock,
                 visibility: termwiz::surface::CursorVisibility::Visible,
@@ -1304,13 +1423,14 @@ impl Pane for CopyOverlay {
 
                     let stable_idx = idx as StableRowIndex + first_row;
                     self.renderer.dirty_results.remove(stable_idx);
+                    let pattern = self.renderer.get_pattern();
                     if stable_idx == self.search_row
-                        && (self.renderer.editing_search || !self.renderer.pattern.is_empty())
+                        && (self.renderer.editing_search || !pattern.is_empty())
                     {
                         // Replace with search UI
                         let rev = CellAttributes::default().set_reverse(true).clone();
                         line.fill_range(0..self.dims.cols, &Cell::new(' ', rev.clone()), SEQ_ZERO);
-                        let mode = &match self.renderer.pattern {
+                        let mode = &match pattern {
                             Pattern::CaseSensitiveString(_) => "case-sensitive",
                             Pattern::CaseInSensitiveString(_) => "ignore-case",
                             Pattern::Regex(_) => "regex",
@@ -1327,7 +1447,7 @@ impl Pane for CopyOverlay {
                             0,
                             &format!(
                                 "Search: {} ({}/{} matches. {}{remain})",
-                                *self.renderer.pattern,
+                                *pattern,
                                 self.renderer.result_pos.map(|x| x + 1).unwrap_or(0),
                                 self.renderer.results.len(),
                                 mode
@@ -1406,12 +1526,12 @@ impl Pane for CopyOverlay {
         for (idx, line) in lines.iter_mut().enumerate() {
             let stable_idx = idx as StableRowIndex + top;
             renderer.dirty_results.remove(stable_idx);
-            if stable_idx == search_row && (renderer.editing_search || !renderer.pattern.is_empty())
-            {
+            let pattern = renderer.get_pattern();
+            if stable_idx == search_row && (renderer.editing_search || !pattern.is_empty()) {
                 // Replace with search UI
                 let rev = CellAttributes::default().set_reverse(true).clone();
                 line.fill_range(0..dims.cols, &Cell::new(' ', rev.clone()), SEQ_ZERO);
-                let mode = &match renderer.pattern {
+                let mode = &match pattern {
                     Pattern::CaseSensitiveString(_) => "case-sensitive",
                     Pattern::CaseInSensitiveString(_) => "ignore-case",
                     Pattern::Regex(_) => "regex",
@@ -1420,7 +1540,7 @@ impl Pane for CopyOverlay {
                     0,
                     &format!(
                         "Search: {} ({}/{} matches. {})",
-                        *renderer.pattern,
+                        *pattern,
                         renderer.result_pos.map(|x| x + 1).unwrap_or(0),
                         renderer.results.len(),
                         mode
@@ -1473,6 +1593,26 @@ impl Pane for CopyOverlay {
 
     fn get_dimensions(&self) -> RenderableDimensions {
         self.delegate.get_dimensions()
+    }
+}
+
+pub struct SearchOverlayPatternWriter {
+    render: Arc<Mutex<CopyRenderable>>,
+}
+
+impl std::io::Write for SearchOverlayPatternWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut render = self.render.lock();
+        let s = std::str::from_utf8(buf).map_err(|err| {
+            std::io::Error::new(std::io::ErrorKind::Other, format!("invalid UTF-8: {err:#}"))
+        })?;
+        render.search_line.insert_text(s);
+        render.schedule_update_search();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -1543,28 +1683,35 @@ pub fn search_key_table() -> KeyTable {
     table
 }
 
+fn scroll_to_bottom_and_close() -> KeyAssignment {
+    KeyAssignment::Multiple(vec![
+        KeyAssignment::ScrollToBottom,
+        KeyAssignment::CopyMode(CopyModeAssignment::Close),
+    ])
+}
+
 pub fn copy_key_table() -> KeyTable {
     let mut table = KeyTable::default();
     for (key, mods, action) in [
         (
             WKeyCode::Char('c'),
             Modifiers::CTRL,
-            KeyAssignment::CopyMode(CopyModeAssignment::Close),
+            scroll_to_bottom_and_close(),
         ),
         (
             WKeyCode::Char('g'),
             Modifiers::CTRL,
-            KeyAssignment::CopyMode(CopyModeAssignment::Close),
+            scroll_to_bottom_and_close(),
         ),
         (
             WKeyCode::Char('q'),
             Modifiers::NONE,
-            KeyAssignment::CopyMode(CopyModeAssignment::Close),
+            scroll_to_bottom_and_close(),
         ),
         (
             WKeyCode::Char('\x1b'),
             Modifiers::NONE,
-            KeyAssignment::CopyMode(CopyModeAssignment::Close),
+            scroll_to_bottom_and_close(),
         ),
         (
             WKeyCode::Char('h'),
@@ -1816,7 +1963,7 @@ pub fn copy_key_table() -> KeyTable {
             Modifiers::NONE,
             KeyAssignment::Multiple(vec![
                 KeyAssignment::CopyTo(ClipboardCopyDestination::ClipboardAndPrimarySelection),
-                KeyAssignment::CopyMode(CopyModeAssignment::Close),
+                scroll_to_bottom_and_close(),
             ]),
         ),
         (

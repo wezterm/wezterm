@@ -1,11 +1,11 @@
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
-use once_cell::sync::Lazy;
 use rstest::*;
 use std::collections::HashMap;
 use std::io::Result as IoResult;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::sync::LazyLock;
 use std::time::Duration;
 use wezterm_ssh::{Config, Session, SessionEvent};
 
@@ -14,6 +14,10 @@ use std::os::unix::fs::PermissionsExt;
 
 /// NOTE: OpenSSH's sshd requires absolute path
 const BIN_PATH_STR: &str = "/usr/sbin/sshd";
+
+pub fn sshd_available() -> bool {
+    Path::new(BIN_PATH_STR).exists()
+}
 
 /// Ask the kernel to assign a free port.
 /// We pass this to sshd and tell it to listen on that port.
@@ -24,7 +28,7 @@ fn allocate_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
-const USERNAME: Lazy<String> = Lazy::new(whoami::username);
+const USERNAME: LazyLock<String> = LazyLock::new(whoami::username);
 
 pub struct SshKeygen;
 
@@ -55,37 +59,24 @@ impl SshKeygen {
     }
 }
 
-pub struct SshAgent;
+pub struct SshAgent {
+    child: Child,
+}
+
+impl Drop for SshAgent {
+    fn drop(&mut self) {
+        self.child.kill().ok();
+    }
+}
 
 impl SshAgent {
-    pub fn generate_shell_env() -> IoResult<HashMap<String, String>> {
-        let output = Command::new("ssh-agent").arg("-s").output()?;
-        let stdout = String::from_utf8(output.stdout)
-            .map_err(|x| std::io::Error::new(std::io::ErrorKind::InvalidData, x))?;
-        Ok(stdout
-            .split(";")
-            .map(str::trim)
-            .filter(|s| s.contains("="))
-            .map(|s| {
-                let mut tokens = s.split("=");
-                let key = tokens.next().unwrap().trim().to_string();
-                let rest = tokens
-                    .map(str::trim)
-                    .map(ToString::to_string)
-                    .collect::<Vec<String>>()
-                    .join("=");
-                (key, rest)
-            })
-            .collect::<HashMap<String, String>>())
-    }
-
-    pub fn update_tests_with_shell_env() -> IoResult<()> {
-        let env_map = Self::generate_shell_env()?;
-        for (key, value) in env_map {
-            std::env::set_var(key, value);
-        }
-
-        Ok(())
+    fn with_sock(path: &Path) -> IoResult<Self> {
+        let child = Command::new("ssh-agent")
+            .arg("-a")
+            .arg(path)
+            .arg("-D")
+            .spawn()?;
+        Ok(Self { child })
     }
 }
 
@@ -257,6 +248,9 @@ pub struct Sshd {
 
     /// Temporary directory used to hold resources for sshd such as its config, keys, and log
     pub tmp: TempDir,
+
+    agent_sock: PathBuf,
+    _agent: SshAgent,
 }
 
 impl Sshd {
@@ -268,8 +262,11 @@ impl Sshd {
 
         let tmp = TempDir::new()?;
 
-        // Ensure that everything needed for interacting with ssh-agent is set
-        SshAgent::update_tests_with_shell_env()?;
+        // Spawn an agent. It doesn't strictly belong to the daemon in normal
+        // operation, but we take care of it together here in the test context
+        // because this is where we know the temp dir for the test-specific fixture
+        let agent_sock = tmp.join("agent.sock");
+        let agent = SshAgent::with_sock(&agent_sock)?;
 
         // ssh-keygen -t rsa -f $ROOT/id_rsa -N "" -q
         let id_rsa_file = tmp.child("id_rsa");
@@ -309,7 +306,13 @@ impl Sshd {
         let (child, port) = Self::try_spawn_next(sshd_config_file.path(), sshd_log_file.path())
             .expect("No open port available for sshd");
 
-        Ok(Self { child, port, tmp })
+        Ok(Self {
+            child,
+            port,
+            tmp,
+            _agent: agent,
+            agent_sock,
+        })
     }
 
     fn try_spawn_next(
@@ -431,11 +434,13 @@ impl std::ops::DerefMut for SessionWithSshd {
 
 #[fixture]
 /// Stand up an sshd instance and then connect to it and perform authentication
-pub async fn session(sshd: Sshd) -> SessionWithSshd {
+pub async fn session(#[default(Config::new())] config: Config, sshd: Sshd) -> SessionWithSshd {
     let port = sshd.port;
 
-    let mut config = Config::new();
-    config.add_default_config_files();
+    // Do not add the default config files; they take the config of the
+    // user that is running the tests which can vary wildly and have
+    // inappropriate configuration that disrupts the tests.
+    // NO: config.add_default_config_files();
 
     // Load our config to point to ourselves, using current sshd instance's port,
     // generated identity file, and host file
@@ -446,6 +451,11 @@ pub async fn session(sshd: Sshd) -> SessionWithSshd {
     // If libssh-rs is not loaded (but ssh2 is), then we use ssh2 as the backend
     #[cfg(not(feature = "libssh-rs"))]
     config.insert("wezterm_ssh_backend".to_string(), "ssh2".to_string());
+
+    config.insert(
+        "identityagent".to_string(),
+        format!("{}", sshd.agent_sock.display()),
+    );
 
     config.insert("user".to_string(), USERNAME.to_string());
     config.insert("identitiesonly".to_string(), "yes".to_string());
@@ -510,6 +520,9 @@ pub async fn session(sshd: Sshd) -> SessionWithSshd {
                 auth.answer(answers)
                     .await
                     .expect("Failed to send authenticate response");
+            }
+            SessionEvent::HostVerificationFailed(failed) => {
+                panic!("{}", failed);
             }
             SessionEvent::Error(err) => {
                 panic!("{}", err);

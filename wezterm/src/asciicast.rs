@@ -161,8 +161,8 @@ mod win {
             let mut saved_output = 0;
             let saved_cp;
             unsafe {
-                GetConsoleMode(read.as_raw_file_descriptor(), &mut saved_input);
-                GetConsoleMode(write.as_raw_file_descriptor(), &mut saved_output);
+                GetConsoleMode(read.as_raw_file_descriptor() as *mut _, &mut saved_input);
+                GetConsoleMode(write.as_raw_file_descriptor() as *mut _, &mut saved_output);
                 saved_cp = GetConsoleOutputCP();
                 SetConsoleOutputCP(CP_UTF8);
             }
@@ -179,8 +179,8 @@ mod win {
         pub fn set_cooked(&mut self) -> anyhow::Result<()> {
             unsafe {
                 SetConsoleOutputCP(self.saved_cp);
-                SetConsoleMode(self.read.as_raw_handle(), self.saved_input);
-                SetConsoleMode(self.write.as_raw_handle(), self.saved_output);
+                SetConsoleMode(self.read.as_raw_handle() as *mut _, self.saved_input);
+                SetConsoleMode(self.write.as_raw_handle() as *mut _, self.saved_output);
             }
             Ok(())
         }
@@ -188,11 +188,11 @@ mod win {
         pub fn set_raw(&mut self) -> anyhow::Result<()> {
             unsafe {
                 SetConsoleMode(
-                    self.read.as_raw_file_descriptor(),
+                    self.read.as_raw_file_descriptor() as *mut _,
                     ENABLE_VIRTUAL_TERMINAL_INPUT,
                 );
                 SetConsoleMode(
-                    self.write.as_raw_file_descriptor(),
+                    self.write.as_raw_file_descriptor() as *mut _,
                     ENABLE_PROCESSED_OUTPUT
                         | ENABLE_WRAP_AT_EOL_OUTPUT
                         | ENABLE_VIRTUAL_TERMINAL_PROCESSING
@@ -337,6 +337,18 @@ enum Message {
 
 #[derive(Debug, Parser, Clone)]
 pub struct RecordCommand {
+    /// Start in the specified directory, instead of
+    /// the default_cwd defined by your wezterm configuration
+    #[arg(long)]
+    cwd: Option<std::path::PathBuf>,
+
+    /// Save asciicast to the specified file, instead of
+    /// using a random file name in the temp directory
+    #[arg(short)]
+    outfile: Option<std::path::PathBuf>,
+
+    /// Start prog instead of the default_prog defined by your
+    /// wezterm configuration
     #[arg(value_parser)]
     prog: Vec<OsString>,
 }
@@ -350,12 +362,24 @@ impl RecordCommand {
 
         let header = Header::new(&config, size, &prog);
 
-        let (cast_file, cast_file_name) = tempfile::Builder::new()
-            .prefix("wezterm-recording-")
-            // We use a .txt suffix for convenice when uploading to GH
-            .suffix(".cast.txt")
-            .tempfile()?
-            .keep()?;
+        let (cast_file, cast_file_name) = match self.outfile.as_ref() {
+            Some(outfile) => (
+                std::fs::File::options()
+                    .write(true)
+                    .truncate(true)
+                    .create(true)
+                    .open(outfile)?,
+                outfile.clone(),
+            ),
+            None => {
+                tempfile::Builder::new()
+                    .prefix("wezterm-recording-")
+                    // We use a .txt suffix for convenice when uploading to GH
+                    .suffix(".cast.txt")
+                    .tempfile()?
+                    .keep()?
+            }
+        };
         let mut cast_file = BufWriter::new(cast_file);
         writeln!(cast_file, "{}", serde_json::to_string(&header)?)?;
 
@@ -369,7 +393,7 @@ impl RecordCommand {
                 Some(prog)
             },
             config.default_prog.as_ref(),
-            config.default_cwd.as_ref(),
+            self.cwd.as_ref().or(config.default_cwd.as_ref()),
         )?;
 
         let mut child = pair.slave.spawn_command(cmd)?;
@@ -619,6 +643,7 @@ impl PlayCommand {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum Summarized {
     Action(Action),

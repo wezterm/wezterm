@@ -1,12 +1,24 @@
-use bitflags::*;
+#![cfg_attr(not(feature = "std"), no_std)]
+
 #[cfg(feature = "serde")]
-use serde::*;
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::fmt::Write;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use ::serde::*;
+use alloc::sync::Arc;
+use bitflags::*;
+use core::convert::TryFrom;
+use core::fmt::Write;
+use core::sync::atomic::AtomicBool;
+#[cfg(feature = "std")]
+use std::sync::LazyLock;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
+
+extern crate alloc;
+
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
+
+#[cfg(feature = "std")]
+use std::collections::HashMap;
 
 pub struct PixelUnit;
 pub struct ScreenPixelUnit;
@@ -317,12 +329,12 @@ impl KeyCode {
 
 impl TryFrom<&str> for KeyCode {
     type Error = String;
-    fn try_from(s: &str) -> std::result::Result<Self, String> {
+    fn try_from(s: &str) -> core::result::Result<Self, String> {
         macro_rules! m {
             ($($val:ident),* $(,)?) => {
                 match s {
                 $(
-                    stringify!($val) => return Ok(Self::$val),
+                    core::stringify!($val) => return Ok(Self::$val),
                 )*
                     _ => {}
                 }
@@ -558,6 +570,7 @@ impl Modifiers {
         number
     }
 
+    #[allow(non_upper_case_globals)]
     pub fn to_string_with_separator(&self, args: ModifierToStringArgs) -> String {
         let mut s = String::new();
         if args.want_none && *self == Self::NONE {
@@ -567,6 +580,11 @@ impl Modifiers {
         // The unicode escapes here are nerdfont symbols; we use those because
         // we're guaranteed to have them available, and the symbols are
         // very legible
+        const md_apple_keyboard_command: &str = "\u{f0633}"; // 󰘳
+        const md_apple_keyboard_control: &str = "\u{f0634}"; // 󰘴
+        const md_apple_keyboard_option: &str = "\u{f0635}"; // 󰘵
+        const md_apple_keyboard_shift: &str = "\u{f0636}"; // 󰘶
+        const md_microsoft_windows: &str = "\u{f05b3}"; // 󰖳
 
         for (value, label, unix, emacs, apple, windows, win_sym) in [
             (
@@ -574,27 +592,43 @@ impl Modifiers {
                 "SHIFT",
                 "Shift",
                 "S",
-                "\u{fb35}",
+                md_apple_keyboard_shift,
                 "Shift",
                 "Shift",
             ),
-            (Self::ALT, "ALT", "Alt", "M", "\u{fb34}", "Alt", "Alt"),
-            (Self::CTRL, "CTRL", "Ctrl", "C", "\u{fb33}", "Ctrl", "Ctrl"),
+            (
+                Self::ALT,
+                "ALT",
+                "Alt",
+                "M",
+                md_apple_keyboard_option,
+                "Alt",
+                "Alt",
+            ),
+            (
+                Self::CTRL,
+                "CTRL",
+                "Ctrl",
+                "C",
+                md_apple_keyboard_control,
+                "Ctrl",
+                "Ctrl",
+            ),
             (
                 Self::SUPER,
                 "SUPER",
                 "Super",
                 "Super",
-                "\u{fb32}",
+                md_apple_keyboard_command,
                 "Win",
-                "\u{fab2}",
+                md_microsoft_windows,
             ),
             (
                 Self::LEFT_ALT,
                 "LEFT_ALT",
                 "Alt",
                 "M",
-                "\u{fb34}",
+                md_apple_keyboard_option,
                 "Alt",
                 "Alt",
             ),
@@ -603,7 +637,7 @@ impl Modifiers {
                 "RIGHT_ALT",
                 "Alt",
                 "M",
-                "\u{fb34}",
+                md_apple_keyboard_option,
                 "Alt",
                 "Alt",
             ),
@@ -621,7 +655,7 @@ impl Modifiers {
                 "LEFT_CTRL",
                 "Ctrl",
                 "C",
-                "\u{fb33}",
+                md_apple_keyboard_control,
                 "Ctrl",
                 "Ctrl",
             ),
@@ -630,7 +664,7 @@ impl Modifiers {
                 "RIGHT_CTRL",
                 "Ctrl",
                 "C",
-                "\u{fb33}",
+                md_apple_keyboard_control,
                 "Ctrl",
                 "Ctrl",
             ),
@@ -639,7 +673,7 @@ impl Modifiers {
                 "LEFT_SHIFT",
                 "Shift",
                 "S",
-                "\u{fb35}",
+                md_apple_keyboard_shift,
                 "Shift",
                 "Shift",
             ),
@@ -648,7 +682,7 @@ impl Modifiers {
                 "RIGHT_SHIFT",
                 "Shift",
                 "S",
-                "\u{fb35}",
+                md_apple_keyboard_shift,
                 "Shift",
                 "Shift",
             ),
@@ -740,6 +774,10 @@ pub enum PhysKeyCode {
     F19,
     F2,
     F20,
+    F21,
+    F22,
+    F23,
+    F24,
     F3,
     F4,
     F5,
@@ -881,6 +919,10 @@ impl PhysKeyCode {
             Self::F18 => KeyCode::Function(18),
             Self::F19 => KeyCode::Function(19),
             Self::F20 => KeyCode::Function(20),
+            Self::F21 => KeyCode::Function(21),
+            Self::F22 => KeyCode::Function(22),
+            Self::F23 => KeyCode::Function(23),
+            Self::F24 => KeyCode::Function(24),
             Self::Keypad0 => KeyCode::Numpad(0),
             Self::Keypad1 => KeyCode::Numpad(1),
             Self::Keypad2 => KeyCode::Numpad(2),
@@ -964,17 +1006,19 @@ impl PhysKeyCode {
         }
     }
 
-    fn make_map() -> HashMap<String, Self> {
-        let mut map = HashMap::new();
-
+    fn for_each_code(mut func: impl FnMut(&str, Self) -> bool) {
         macro_rules! m {
             ($($val:ident),* $(,)?) => {
                 $(
-                    let key = stringify!($val).to_string();
+                    let key = stringify!($val);
                     if key.len() == 1 {
-                        map.insert(key.to_ascii_lowercase(), PhysKeyCode::$val);
+                        if (func)(&key.to_ascii_lowercase(), PhysKeyCode::$val) {
+                            return;
+                        }
                     }
-                    map.insert(key, PhysKeyCode::$val);
+                    if (func)(key, PhysKeyCode::$val) {
+                        return;
+                    }
                 )*
             }
         }
@@ -1088,20 +1132,37 @@ impl PhysKeyCode {
             Z,
         );
 
-        map.insert("0".to_string(), PhysKeyCode::K0);
-        map.insert("1".to_string(), PhysKeyCode::K1);
-        map.insert("2".to_string(), PhysKeyCode::K2);
-        map.insert("3".to_string(), PhysKeyCode::K3);
-        map.insert("4".to_string(), PhysKeyCode::K4);
-        map.insert("5".to_string(), PhysKeyCode::K5);
-        map.insert("6".to_string(), PhysKeyCode::K6);
-        map.insert("7".to_string(), PhysKeyCode::K7);
-        map.insert("8".to_string(), PhysKeyCode::K8);
-        map.insert("9".to_string(), PhysKeyCode::K9);
+        for (label, value) in [
+            ("0", PhysKeyCode::K0),
+            ("1", PhysKeyCode::K1),
+            ("2", PhysKeyCode::K2),
+            ("3", PhysKeyCode::K3),
+            ("4", PhysKeyCode::K4),
+            ("5", PhysKeyCode::K5),
+            ("6", PhysKeyCode::K6),
+            ("7", PhysKeyCode::K7),
+            ("8", PhysKeyCode::K8),
+            ("9", PhysKeyCode::K9),
+        ] {
+            if (func)(label, value) {
+                return;
+            }
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn make_map() -> HashMap<String, Self> {
+        let mut map = HashMap::new();
+
+        Self::for_each_code(|label, code| {
+            map.insert(label.to_string(), code);
+            false
+        });
 
         map
     }
 
+    #[cfg(feature = "std")]
     fn make_inv_map() -> HashMap<Self, String> {
         let mut map = HashMap::new();
         for (k, v) in PHYSKEYCODE_MAP.iter() {
@@ -1109,18 +1170,60 @@ impl PhysKeyCode {
         }
         map
     }
+
+    fn name_to_code(name: &str) -> Option<Self> {
+        #[cfg(feature = "std")]
+        {
+            return PHYSKEYCODE_MAP.get(name).copied();
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let mut result = None;
+            Self::for_each_code(|label, code| {
+                if label == name {
+                    result.replace(code);
+                    true
+                } else {
+                    false
+                }
+            });
+            result
+        }
+    }
+
+    fn to_name(&self) -> Option<String> {
+        #[cfg(feature = "std")]
+        {
+            return INV_PHYSKEYCODE_MAP.get(self).cloned();
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let mut result = None;
+            Self::for_each_code(|label, code| {
+                if code == *self {
+                    result.replace(label.to_string());
+                    true
+                } else {
+                    false
+                }
+            });
+            result
+        }
+    }
 }
 
-lazy_static::lazy_static! {
-    static ref PHYSKEYCODE_MAP: HashMap<String, PhysKeyCode> = PhysKeyCode::make_map();
-    static ref INV_PHYSKEYCODE_MAP: HashMap<PhysKeyCode, String> = PhysKeyCode::make_inv_map();
-}
+#[cfg(feature = "std")]
+static PHYSKEYCODE_MAP: LazyLock<HashMap<String, PhysKeyCode>> =
+    LazyLock::new(PhysKeyCode::make_map);
+#[cfg(feature = "std")]
+static INV_PHYSKEYCODE_MAP: LazyLock<HashMap<PhysKeyCode, String>> =
+    LazyLock::new(PhysKeyCode::make_inv_map);
 
 impl TryFrom<&str> for PhysKeyCode {
     type Error = String;
-    fn try_from(s: &str) -> std::result::Result<PhysKeyCode, String> {
-        if let Some(code) = PHYSKEYCODE_MAP.get(s) {
-            Ok(*code)
+    fn try_from(s: &str) -> core::result::Result<PhysKeyCode, String> {
+        if let Some(code) = Self::name_to_code(s) {
+            Ok(code)
         } else {
             Err(format!("invalid PhysKeyCode '{}'", s))
         }
@@ -1129,7 +1232,7 @@ impl TryFrom<&str> for PhysKeyCode {
 
 impl ToString for PhysKeyCode {
     fn to_string(&self) -> String {
-        if let Some(s) = INV_PHYSKEYCODE_MAP.get(self) {
+        if let Some(s) = self.to_name() {
             s.to_string()
         } else {
             format!("{:?}", self)
@@ -1186,11 +1289,11 @@ impl Handled {
     }
 
     pub fn set_handled(&self) {
-        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.0.store(true, core::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn is_handled(&self) -> bool {
-        self.0.load(std::sync::atomic::Ordering::Relaxed)
+        self.0.load(core::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -1234,6 +1337,7 @@ impl RawKeyEvent {
     }
 
     /// <https://sw.kovidgoyal.net/kitty/keyboard-protocol/#functional-key-definitions>
+    #[deny(warnings)]
     fn kitty_function_code(&self) -> Option<u32> {
         use KeyCode::*;
         Some(match self.key {
@@ -1304,11 +1408,11 @@ impl RawKeyEvent {
                         F18 => 57381,
                         F19 => 57382,
                         F20 => 57383,
-                        /*
                         F21 => 57384,
                         F22 => 57385,
                         F23 => 57386,
                         F24 => 57387,
+                        /*
                         F25 => 57388,
                         F26 => 57389,
                         F27 => 57390,
@@ -1643,6 +1747,9 @@ impl KeyEvent {
         if raw_modifiers.contains(Modifiers::SUPER) {
             modifiers |= 8;
         }
+        // TODO: Hyper and Meta are not handled yet.
+        // We should somehow detect this?
+        // See: https://github.com/wezterm/wezterm/pull/4605#issuecomment-1823604708
         if self.leds.contains(KeyboardLedStatus::CAPS_LOCK) {
             modifiers |= 64;
         }
@@ -1769,7 +1876,6 @@ impl KeyEvent {
                 format!("\x1b[{c};{modifiers}{event_type}~")
             }
             Char(shifted_key) => {
-                let mut use_legacy = false;
                 let shifted_key = if *shifted_key == '\x08' {
                     // Backspace is really VERASE -> ASCII DEL
                     '\x7f'
@@ -1777,22 +1883,24 @@ impl KeyEvent {
                     *shifted_key
                 };
 
-                if !flags.contains(KittyKeyboardFlags::REPORT_ALTERNATE_KEYS)
+                let use_legacy = !flags.contains(KittyKeyboardFlags::REPORT_ALTERNATE_KEYS)
                     && event_type.is_empty()
                     && is_legacy_key
                     && !(flags.contains(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
                         && (self.modifiers.contains(Modifiers::CTRL)
                             || self.modifiers.contains(Modifiers::ALT)))
-                {
-                    use_legacy = true;
-                }
+                    && !self.modifiers.intersects(
+                        Modifiers::SUPER, /* TODO: Hyper and Meta should be added here. */
+                    );
 
                 if use_legacy {
                     // Legacy text key
+                    // https://sw.kovidgoyal.net/kitty/keyboard-protocol/#legacy-text-keys
                     let mut output = String::new();
                     if self.modifiers.contains(Modifiers::ALT) {
                         output.push('\x1b');
                     }
+
                     if self.modifiers.contains(Modifiers::CTRL) {
                         csi_u_encode(
                             &mut output,
@@ -1802,6 +1910,7 @@ impl KeyEvent {
                     } else {
                         output.push(shifted_key);
                     }
+
                     return output;
                 }
 
@@ -1847,7 +1956,7 @@ impl KeyEvent {
                 };
                 format!("\x1b[1;{modifiers}{event_type}{c}")
             }
-            Function(n) if *n < 13 => {
+            Function(n) if *n < 25 => {
                 // The spec says that kitty prefers an SS3 form for F1-F4,
                 // but then has some variance in the encoding and cites a
                 // compatibility issue with a cursor position report.
@@ -1866,10 +1975,25 @@ impl KeyEvent {
                     10 => "\x1b[21",
                     11 => "\x1b[23",
                     12 => "\x1b[24",
+                    13 => "\x1b[57376",
+                    14 => "\x1b[57377",
+                    15 => "\x1b[57378",
+                    16 => "\x1b[57379",
+                    17 => "\x1b[57380",
+                    18 => "\x1b[57381",
+                    19 => "\x1b[57382",
+                    20 => "\x1b[57383",
+                    21 => "\x1b[57384",
+                    22 => "\x1b[57385",
+                    23 => "\x1b[57386",
+                    24 => "\x1b[57387",
                     _ => unreachable!(),
                 };
+                // for F1-F12 the spec says we should terminate with ~
+                // for F13 and up the spec says we should terminate with u
+                let end_char = if *n < 13 { '~' } else { 'u' };
 
-                format!("{intro};{modifiers}{event_type}~")
+                format!("{intro};{modifiers}{event_type}{end_char}")
             }
 
             _ => {
@@ -1925,6 +2049,8 @@ bitflags! {
         const MACOS_FORCE_DISABLE_SHADOW = 4;
         const MACOS_FORCE_ENABLE_SHADOW = 4|8;
         const INTEGRATED_BUTTONS = 16;
+        const MACOS_FORCE_SQUARE_CORNERS = 32;
+        const MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR = 64;
     }
 }
 
@@ -1940,10 +2066,15 @@ impl Into<String> for &WindowDecorations {
         if self.contains(WindowDecorations::INTEGRATED_BUTTONS) {
             s.push("INTEGRATED_BUTTONS");
         }
+        if self.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR) {
+            s.push("MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR")
+        }
         if self.contains(WindowDecorations::MACOS_FORCE_ENABLE_SHADOW) {
             s.push("MACOS_FORCE_ENABLE_SHADOW");
         } else if self.contains(WindowDecorations::MACOS_FORCE_DISABLE_SHADOW) {
             s.push("MACOS_FORCE_DISABLE_SHADOW");
+        } else if self.contains(WindowDecorations::MACOS_FORCE_SQUARE_CORNERS) {
+            s.push("MACOS_FORCE_SQUARE_CORNERS");
         }
         if s.is_empty() {
             "NONE".to_string()
@@ -1955,7 +2086,7 @@ impl Into<String> for &WindowDecorations {
 
 impl TryFrom<String> for WindowDecorations {
     type Error = String;
-    fn try_from(s: String) -> std::result::Result<WindowDecorations, String> {
+    fn try_from(s: String) -> core::result::Result<WindowDecorations, String> {
         let mut flags = Self::NONE;
         for ele in s.split('|') {
             let ele = ele.trim();
@@ -1965,10 +2096,14 @@ impl TryFrom<String> for WindowDecorations {
                 flags = Self::NONE;
             } else if ele == "RESIZE" {
                 flags |= Self::RESIZE;
+            } else if ele == "MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR" {
+                flags |= Self::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR;
             } else if ele == "MACOS_FORCE_DISABLE_SHADOW" {
                 flags |= Self::MACOS_FORCE_DISABLE_SHADOW;
             } else if ele == "MACOS_FORCE_ENABLE_SHADOW" {
                 flags |= Self::MACOS_FORCE_ENABLE_SHADOW;
+            } else if ele == "MACOS_FORCE_SQUARE_CORNERS" {
+                flags |= Self::MACOS_FORCE_SQUARE_CORNERS;
             } else if ele == "INTEGRATED_BUTTONS" {
                 flags |= Self::INTEGRATED_BUTTONS;
             } else {
@@ -3006,6 +3141,71 @@ mod test {
             )
             .encode_kitty(flags),
             "".to_string()
+        );
+    }
+
+    #[test]
+    fn encode_issue_4436() {
+        let flags = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
+
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::Char('q'),
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags),
+            "q".to_string()
+        );
+
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::Char('f'),
+                modifiers: Modifiers::SUPER,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags),
+            "\u{1b}[102;9u".to_string()
+        );
+
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::Char('f'),
+                modifiers: Modifiers::SUPER | Modifiers::SHIFT,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags),
+            "\u{1b}[102;10u".to_string()
+        );
+
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::Char('f'),
+                modifiers: Modifiers::SUPER | Modifiers::SHIFT | Modifiers::CTRL,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags),
+            "\u{1b}[102;14u".to_string()
         );
     }
 }

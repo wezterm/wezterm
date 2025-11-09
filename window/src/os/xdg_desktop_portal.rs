@@ -9,10 +9,10 @@ use futures_util::stream::StreamExt;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
-use zbus::dbus_proxy;
+use zbus::proxy;
 use zvariant::OwnedValue;
 
-#[dbus_proxy(
+#[proxy(
     interface = "org.freedesktop.portal.Settings",
     default_service = "org.freedesktop.portal.Desktop",
     default_path = "/org/freedesktop/portal/desktop"
@@ -25,8 +25,8 @@ trait PortalSettings {
 
     fn Read(&self, namespace: &str, key: &str) -> zbus::Result<OwnedValue>;
 
-    #[dbus_proxy(signal)]
-    fn SettingChanged(&self, namespace: &str, key: &str, value: OwnedValue) -> Result<()>;
+    #[zbus(signal)]
+    fn SettingChanged(&self, namespace: &str, key: &str, value: OwnedValue) -> zbus::Result<()>;
 }
 
 #[derive(PartialEq)]
@@ -89,12 +89,12 @@ pub async fn read_setting(namespace: &str, key: &str) -> anyhow::Result<OwnedVal
 
 fn value_to_appearance(value: OwnedValue) -> anyhow::Result<Appearance> {
     Ok(match value.downcast_ref::<u32>() {
-        Some(1) => Appearance::Dark,
-        Some(_) => Appearance::Light,
-        None => {
+        Ok(1) => Appearance::Dark,
+        Ok(_) => Appearance::Light,
+        Err(err) => {
             anyhow::bail!(
                 "Unable to resolve appearance \
-                 using xdg-desktop-portal: expected a u32 value but got {value:#?}"
+                 using xdg-desktop-portal: {err:#?}"
             );
         }
     })
@@ -122,7 +122,7 @@ pub async fn get_appearance() -> anyhow::Result<Option<Appearance>> {
 
     match read_setting("org.freedesktop.appearance", "color-scheme").await {
         Ok(value) => {
-            let appearance = value_to_appearance(value)?;
+            let appearance = value_to_appearance(value).context("value_to_appearance")?;
             state.appearance = CachedAppearance::Some(appearance);
             state.last_update = Instant::now();
             Ok(Some(appearance))
@@ -134,7 +134,7 @@ pub async fn get_appearance() -> anyhow::Result<Option<Appearance>> {
             state.last_update = Instant::now();
             // but bubble up the underlying message so that we can
             // log a warning elsewhere
-            Err(err)
+            Err(err).context("get_appearance.read_setting")
         }
     }
 }

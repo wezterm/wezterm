@@ -10,12 +10,14 @@ use smol::channel::{bounded, Receiver, Sender};
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub enum SessionEvent {
     Banner(Option<String>),
     HostVerify(HostVerificationEvent),
     Authenticate(AuthenticationEvent),
+    HostVerificationFailed(HostVerificationFailed),
     Error(String),
     Authenticated,
 }
@@ -96,6 +98,17 @@ impl Session {
             pipe: Arc::new(Mutex::new(sender_write)),
         };
 
+        let keep_alive = config.get("serveraliveinterval").and_then(|value| {
+            let seconds: u64 = value.parse().ok()?;
+            if seconds == 0 {
+                None
+            } else {
+                Some(Duration::from_secs(seconds))
+            }
+        });
+
+        let now = Instant::now();
+
         let mut inner = SessionInner {
             config,
             tx_event,
@@ -108,6 +121,8 @@ impl Session {
             sender_read,
             session_was_dropped: false,
             shown_accept_env_error: false,
+            last_keep_alive: now,
+            keep_alive,
         };
         std::thread::spawn(move || inner.run());
         Ok((Self { tx: session_sender }, rx_event))

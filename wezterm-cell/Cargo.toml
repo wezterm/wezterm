@@ -1,0 +1,32 @@
+[package]
+authors = ["Wez Furlong"]
+name = "wezterm-cell"
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/wezterm/wezterm"
+description = "Model a Cell in a Terminal display"
+license = "MIT"
+documentation = "https://docs.rs/wezterm-cell"
+keywords = ["terminal", "cell"]
+
+[dependencies]
+finl_unicode.workspace = true
+image = {workspace=true, optional=true}
+log = {workspace = true, optional=true}
+ordered-float = {workspace = true, optional=true}
+sha2 = {workspace=true, optional=true}
+serde = {workspace=true, optional=true}
+thiserror = {workspace=true, optional=true}
+wezterm-blob-leases = {workspace = true, optional=true}
+wezterm-char-props.workspace = true
+wezterm-color-types.workspace = true
+wezterm-escape-parser.workspace = true
+wezterm-dynamic.workspace = true
+
+[features]
+std = ["serde/std", "wezterm-char-props/std", "wezterm-color-types/std", "wezterm-escape-parser/std", "wezterm-dynamic/std", "finl_unicode/std"]
+use_serde = ["dep:serde", "wezterm-color-types/use_serde"]
+use_image = ["dep:image", "dep:wezterm-blob-leases", "dep:log", "dep:ordered-float", "dep:sha2", "dep:thiserror"]
+
+[dev-dependencies]
+

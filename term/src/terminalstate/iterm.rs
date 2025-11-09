@@ -3,8 +3,8 @@ use crate::TerminalState;
 use ::image::imageops::FilterType;
 use ::image::ImageFormat;
 use log::error;
-use termwiz::escape::osc::ITermFileData;
-use termwiz::image::ImageDataType;
+use wezterm_cell::image::ImageDataType;
+use wezterm_escape_parser::osc::ITermFileData;
 
 impl TerminalState {
     pub(crate) fn set_image(&mut self, image: ITermFileData) {
@@ -132,12 +132,12 @@ impl TerminalState {
         if let Err(err) = self.assign_image_to_cells(ImageAttachParams {
             image_width: width as u32,
             image_height: height as u32,
-            source_width: width as u32,
-            source_height: height as u32,
+            source_width: None,
+            source_height: None,
             source_origin_x: 0,
             source_origin_y: 0,
-            padding_left: 0,
-            padding_top: 0,
+            cell_padding_left: 0,
+            cell_padding_top: 0,
             z_index: 0,
             columns: None,
             rows: None,

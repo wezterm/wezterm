@@ -68,17 +68,26 @@ pub async fn spawn_command_internal(
         None
     };
 
-    let cmd_builder = if let Some(args) = spawn.args {
-        let mut builder = CommandBuilder::from_argv(args.iter().map(Into::into).collect());
-        for (k, v) in spawn.set_environment_variables.iter() {
-            builder.env(k, v);
+    let cmd_builder = match (
+        spawn.args.as_ref(),
+        spawn.cwd.as_ref(),
+        spawn.set_environment_variables.is_empty(),
+    ) {
+        (None, None, true) => None,
+        _ => {
+            let mut builder = spawn
+                .args
+                .as_ref()
+                .map(|args| CommandBuilder::from_argv(args.iter().map(Into::into).collect()))
+                .unwrap_or_else(CommandBuilder::new_default_prog);
+            for (k, v) in spawn.set_environment_variables.iter() {
+                builder.env(k, v);
+            }
+            if let Some(cwd) = &spawn.cwd {
+                builder.cwd(cwd);
+            }
+            Some(builder)
         }
-        if let Some(cwd) = spawn.cwd {
-            builder.cwd(cwd);
-        }
-        Some(builder)
-    } else {
-        None
     };
 
     let workspace = mux.active_workspace().clone();

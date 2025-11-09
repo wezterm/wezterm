@@ -40,32 +40,29 @@
 //! * `widgets` - enables the widget layout and related traits
 //! * `use_serde` - makes a number of structs serde serializable
 
-mod emoji;
-mod emoji_presentation;
-mod emoji_variation;
-mod widechar_width;
-
 pub mod caps;
-pub mod cell;
-pub mod cellcluster;
-pub mod color;
+pub use wezterm_cell as cell;
+pub use wezterm_cell::color;
+pub use wezterm_surface::cellcluster;
 pub mod error;
-pub mod escape;
-pub mod hyperlink;
-pub mod image;
+#[cfg(feature = "use_image")]
+pub use wezterm_cell::image;
+pub use wezterm_surface::hyperlink;
 pub mod input;
 pub mod istty;
 pub mod keymap;
 pub mod lineedit;
 mod macros;
-pub mod nerdfonts;
-mod nerdfonts_data;
+pub use wezterm_char_props::nerdfonts;
 mod readbuf;
 pub mod render;
-pub mod surface;
+pub use wezterm_surface as surface;
 pub mod terminal;
-pub mod tmux_cc;
+#[cfg(feature = "tmux_cc")]
+pub use wezterm_escape_parser::tmux_cc;
 #[cfg(feature = "widgets")]
 pub mod widgets;
 
 pub use error::{Context, Error, Result};
+
+pub use wezterm_escape_parser as escape;

@@ -1,4 +1,5 @@
 use crate::color::LinearRgba;
+use crate::glyphcache::LoadState;
 use crate::quad::{QuadAllocator, QuadTrait};
 use crate::termwindow::RenderState;
 use crate::utilsprites::RenderMetrics;
@@ -49,7 +50,7 @@ impl CachedGradient {
 
         let (dmin, dmax) = grad.domain();
 
-        let rng = fastrand::Rng::new();
+        let mut rng = fastrand::Rng::new();
 
         // We add some randomness to the position that we use to
         // index into the color gradient, so that we can avoid
@@ -64,7 +65,7 @@ impl CachedGradient {
             }
         });
 
-        fn noise(rng: &fastrand::Rng, noise_amount: usize) -> f64 {
+        fn noise(rng: &mut fastrand::Rng, noise_amount: usize) -> f64 {
             if noise_amount == 0 {
                 0.
             } else {
@@ -76,7 +77,7 @@ impl CachedGradient {
             GradientOrientation::Horizontal => {
                 for (x, _, pixel) in imgbuf.enumerate_pixels_mut() {
                     *pixel = to_pixel(grad.at(remap(
-                        x as f64 + noise(&rng, noise_amount),
+                        x as f64 + noise(&mut rng, noise_amount),
                         0.0,
                         fw,
                         dmin,
@@ -87,7 +88,7 @@ impl CachedGradient {
             GradientOrientation::Vertical => {
                 for (_, y, pixel) in imgbuf.enumerate_pixels_mut() {
                     *pixel = to_pixel(grad.at(remap(
-                        y as f64 + noise(&rng, noise_amount),
+                        y as f64 + noise(&mut rng, noise_amount),
                         0.0,
                         fh,
                         dmin,
@@ -102,7 +103,7 @@ impl CachedGradient {
                     let (x, y) = (x - fw / 2., y - fh / 2.);
                     let t = x * f64::cos(angle) - y * f64::sin(angle);
                     *pixel = to_pixel(grad.at(remap(
-                        t + noise(&rng, noise_amount),
+                        t + noise(&mut rng, noise_amount),
                         -fw / 2.,
                         fw / 2.,
                         dmin,
@@ -125,12 +126,12 @@ impl CachedGradient {
                     let nx = if ((cx - x).abs() as usize) < noise_amount {
                         0.
                     } else {
-                        noise(&rng, noise_amount)
+                        noise(&mut rng, noise_amount)
                     };
                     let ny = if ((cy - y).abs() as usize) < noise_amount {
                         0.
                     } else {
-                        noise(&rng, noise_amount)
+                        noise(&mut rng, noise_amount)
                     };
 
                     let t = (nx + (x - cx).powi(2) + (ny + y - cy).powi(2)).sqrt() / radius;
@@ -397,15 +398,17 @@ impl crate::TermWindow {
         &self,
         bg_color: LinearRgba,
         top: StableRowIndex,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let gl_state = self.render_state.as_ref().unwrap();
         let mut layer_idx = -127;
+        let mut loaded_any = false;
         for layer in self.window_background.iter() {
             if self.render_background(gl_state, bg_color, layer, layer_idx, top)? {
+                loaded_any = true;
                 layer_idx = layer_idx.saturating_add(1);
             }
         }
-        Ok(())
+        Ok(loaded_any)
     }
 
     fn render_background(
@@ -422,19 +425,24 @@ impl crate::TermWindow {
 
         let color = bg_color.mul_alpha(layer.def.opacity);
 
-        let (sprite, next_due) = gl_state
-            .glyph_cache
-            .borrow_mut()
-            .cached_image(&layer.source, None)?;
+        let (sprite, next_due, load_state) = gl_state.glyph_cache.borrow_mut().cached_image(
+            &layer.source,
+            None,
+            self.allow_images,
+        )?;
         self.update_next_frame_time(next_due);
+
+        if load_state == LoadState::Loading {
+            return Ok(false);
+        }
 
         let pixel_width = self.dimensions.pixel_width as f32;
         let pixel_height = self.dimensions.pixel_height as f32;
-        let pixel_aspect = pixel_width / pixel_height;
-
         let tex_width = sprite.coords.width() as f32;
         let tex_height = sprite.coords.height() as f32;
-        let aspect = tex_width as f32 / tex_height as f32;
+
+        let scale_width = pixel_width / tex_width as f32;
+        let scale_height = pixel_height / tex_height as f32;
 
         let h_context = DimensionContext {
             dpi: self.dimensions.dpi as f32,
@@ -449,47 +457,26 @@ impl crate::TermWindow {
 
         // log::info!("tex {tex_width}x{tex_height} aspect={aspect}");
 
-        // Compute the largest aspect-preserved size that will fill the space
-        let (max_aspect_width, max_aspect_height) = if aspect >= 1.0 {
-            // Width is the longest side
-            let target_height = pixel_width / aspect;
-            if target_height > pixel_height {
-                (
-                    (pixel_width * pixel_height / target_height).floor(),
-                    pixel_height,
-                )
-            } else {
-                (pixel_width, target_height)
-            }
-        } else {
-            // Height is the longest side
-            let target_width = pixel_height / aspect;
-            if target_width > pixel_width {
-                (
-                    pixel_width,
-                    (pixel_height * pixel_width / target_width).floor(),
-                )
-            } else {
-                (target_width, pixel_height)
-            }
-        };
-
         // Compute the smallest aspect-preserved size that will fit the space
-        let (min_aspect_width, min_aspect_height) = if pixel_aspect > aspect {
-            (pixel_width, (pixel_width / aspect).floor())
-        } else {
-            ((pixel_height * aspect).floor(), pixel_height)
+        let (min_aspect_width, min_aspect_height) = {
+            let scale = scale_width.min(scale_height);
+            (tex_width * scale, tex_height * scale)
+        };
+        // Compute the largest aspect-preserved size that will fill the space
+        let (max_aspect_width, max_aspect_height) = {
+            let scale = scale_width.max(scale_height);
+            (tex_width * scale, tex_height * scale)
         };
 
         let width = match layer.def.width {
-            BackgroundSize::Contain => max_aspect_width as f32,
-            BackgroundSize::Cover => min_aspect_width as f32,
+            BackgroundSize::Contain => min_aspect_width as f32,
+            BackgroundSize::Cover => max_aspect_width as f32,
             BackgroundSize::Dimension(n) => n.evaluate_as_pixels(h_context),
         };
 
         let height = match layer.def.height {
-            BackgroundSize::Contain => max_aspect_height as f32,
-            BackgroundSize::Cover => min_aspect_height as f32,
+            BackgroundSize::Contain => min_aspect_height as f32,
+            BackgroundSize::Cover => max_aspect_height as f32,
             BackgroundSize::Dimension(n) => n.evaluate_as_pixels(v_context),
         };
 

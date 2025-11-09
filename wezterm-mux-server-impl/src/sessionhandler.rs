@@ -4,7 +4,7 @@ use codec::*;
 use config::TermConfig;
 use mux::client::ClientId;
 use mux::domain::SplitSource;
-use mux::pane::{Pane, PaneId};
+use mux::pane::{CachePolicy, Pane, PaneId};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::TabId;
 use mux::{Mux, MuxNotification};
@@ -75,14 +75,16 @@ impl PerPane {
             changed = true;
         }
 
-        let working_dir = pane.get_current_working_dir();
+        let working_dir = pane.get_current_working_dir(CachePolicy::AllowStale);
         if working_dir != self.working_dir {
             changed = true;
         }
 
+        let old_seqno = self.seqno;
+        self.seqno = pane.get_current_seqno();
         let mut all_dirty_lines = pane.get_changed_since(
             0..dims.physical_top + dims.viewport_rows as StableRowIndex,
-            self.seqno,
+            old_seqno,
         );
         if !all_dirty_lines.is_empty() {
             changed = true;
@@ -124,7 +126,6 @@ impl PerPane {
         self.working_dir = working_dir.clone();
         self.dimensions = dims;
         self.mouse_grabbed = mouse_grabbed;
-        self.seqno = pane.get_current_seqno();
 
         let bonus_lines = bonus_lines.into();
         Some(GetPaneRenderChangesResponse {
@@ -199,6 +200,7 @@ pub struct SessionHandler {
     to_write_tx: PduSender,
     per_pane: HashMap<TabId, Arc<Mutex<PerPane>>>,
     client_id: Option<Arc<ClientId>>,
+    proxy_client_id: Option<ClientId>,
 }
 
 impl Drop for SessionHandler {
@@ -216,6 +218,7 @@ impl SessionHandler {
             to_write_tx,
             per_pane: HashMap::new(),
             client_id: None,
+            proxy_client_id: None,
         }
     }
 
@@ -292,14 +295,37 @@ impl SessionHandler {
                 })
                 .detach();
             }
-            Pdu::SetClientId(SetClientId { client_id }) => {
-                let client_id = Arc::new(client_id);
-                self.client_id.replace(client_id.clone());
-                spawn_into_main_thread(async move {
-                    let mux = Mux::get();
-                    mux.register_client(client_id);
-                })
-                .detach();
+            Pdu::SetClientId(SetClientId {
+                mut client_id,
+                is_proxy,
+            }) => {
+                if is_proxy {
+                    if self.proxy_client_id.is_none() {
+                        // Copy proxy identity, but don't assign it to the mux;
+                        // we'll use it to annotate the actual clients own
+                        // identity when they send it
+                        self.proxy_client_id.replace(client_id);
+                    }
+                } else {
+                    // If this session is a proxy, override the incoming id with
+                    // the proxy information so that it is clear what is going
+                    // on from the `wezterm cli list-clients` information
+                    if let Some(proxy_id) = &self.proxy_client_id {
+                        client_id.ssh_auth_sock = proxy_id.ssh_auth_sock.clone();
+                        // Note that this `via proxy pid` string is coupled
+                        // with the logic in mux/src/ssh_agent
+                        client_id.hostname =
+                            format!("{} (via proxy pid {})", client_id.hostname, proxy_id.pid);
+                    }
+
+                    let client_id = Arc::new(client_id);
+                    self.client_id.replace(client_id.clone());
+                    spawn_into_main_thread(async move {
+                        let mux = Mux::get();
+                        mux.register_client(client_id);
+                    })
+                    .detach();
+                }
                 send_response(Ok(Pdu::UnitResponse(UnitResponse {})))
             }
             Pdu::SetFocusedPane(SetFocusedPane { pane_id }) => {
@@ -532,8 +558,24 @@ impl SessionHandler {
                             let tab = mux
                                 .get_tab(containing_tab_id)
                                 .ok_or_else(|| anyhow!("no such tab {}", containing_tab_id))?;
-                            tab.set_active_pane(&pane);
-                            tab.set_zoomed(zoomed);
+                            match tab.get_zoomed_pane() {
+                                Some(p) => {
+                                    let is_zoomed = p.pane_id() == pane_id;
+                                    if is_zoomed != zoomed {
+                                        tab.set_zoomed(false);
+                                        if zoomed {
+                                            tab.set_active_pane(&pane);
+                                            tab.set_zoomed(zoomed);
+                                        }
+                                    }
+                                }
+                                None => {
+                                    if zoomed {
+                                        tab.set_active_pane(&pane);
+                                        tab.set_zoomed(zoomed);
+                                    }
+                                }
+                            }
                             Ok(Pdu::UnitResponse(UnitResponse {}))
                         },
                         send_response,
@@ -1021,7 +1063,7 @@ async fn split_pane(split: SplitPane, client_id: Option<Arc<ClientId>>) -> anyho
 
     Ok::<Pdu, anyhow::Error>(Pdu::SpawnResponse(SpawnResponse {
         pane_id: pane.pane_id(),
-        tab_id: tab_id,
+        tab_id,
         window_id,
         size,
     }))

@@ -79,6 +79,8 @@ def load_scheme(scheme):
         "[^a-z0-9_]", "_", scheme["metadata"]["name"].lower().replace("+", "plus")
     )
 
+    if "ansi" not in scheme["colors"]:
+        raise Exception(f"scheme {scheme} is missing ansi colors!!?")
     colors = scheme["colors"]["ansi"] + scheme["colors"]["brights"]
 
     data = {
@@ -345,6 +347,7 @@ TOC = [
             Page("macOS", "install/macos.md"),
             Page("Linux", "install/linux.md"),
             Page("FreeBSD", "install/freebsd.md"),
+            Page("NetBSD", "install/netbsd.md"),
             Page("Build from source", "install/source.md"),
         ],
     ),
@@ -362,6 +365,7 @@ TOC = [
             Page("Default Key Assignments", "config/default-keys.md"),
             Page("Keyboard Encoding", "config/key-encoding.md"),
             Page("Mouse Binding", "config/mouse.md"),
+            Page("Plugins", "config/plugins.md"),
             GenColorScheme("Color Schemes", "colorschemes"),
             Gen("Recipes", "recipes", extract_title=True),
         ],
@@ -391,12 +395,24 @@ TOC = [
                 "config/lua/wezterm.mux",
             ),
             Gen(
+                "module: wezterm.plugin",
+                "config/lua/wezterm.plugin",
+            ),
+            Gen(
                 "module: wezterm.procinfo",
                 "config/lua/wezterm.procinfo",
             ),
             Gen(
+                "module: wezterm.serde",
+                "config/lua/wezterm.serde",
+            ),
+            Gen(
                 "module: wezterm.time",
                 "config/lua/wezterm.time",
+            ),
+            Gen(
+                "module: wezterm.url",
+                "config/lua/wezterm.url",
             ),
             Gen(
                 "enum: KeyAssignment",

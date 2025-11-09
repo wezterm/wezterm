@@ -1,5 +1,6 @@
 use crate::default_true;
 use crate::keys::KeyNoAction;
+use crate::window::WindowLevel;
 use luahelper::impl_lua_conversion_dynamic;
 use ordered_float::NotNan;
 use portable_pty::CommandBuilder;
@@ -16,6 +17,9 @@ use wezterm_term::SemanticType;
 pub struct LauncherActionArgs {
     pub flags: LauncherFlags,
     pub title: Option<String>,
+    pub help_text: Option<String>,
+    pub fuzzy_help_text: Option<String>,
+    pub alphabet: Option<String>,
 }
 
 bitflags::bitflags! {
@@ -228,7 +232,7 @@ impl SpawnCommand {
         if let Some(label) = &self.label {
             Some(label.to_string())
         } else if let Some(args) = &self.args {
-            Some(shlex::join(args.iter().map(|s| s.as_str())))
+            Some(shlex::try_join(args.iter().map(|s| s.as_str())).ok()?)
         } else {
             None
         }
@@ -333,6 +337,9 @@ impl Default for ClipboardPasteSource {
 pub enum PaneSelectMode {
     Activate,
     SwapWithActive,
+    SwapWithActiveKeepFocus,
+    MoveToNewTab,
+    MoveToNewWindow,
 }
 
 impl Default for PaneSelectMode {
@@ -349,6 +356,9 @@ pub struct PaneSelectArguments {
 
     #[dynamic(default)]
     pub mode: PaneSelectMode,
+
+    #[dynamic(default)]
+    pub show_pane_ids: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
@@ -365,6 +375,7 @@ pub enum CharSelectGroup {
     Flags,
     NerdFonts,
     UnicodeNames,
+    ShortCodes,
 }
 
 // next is default, previous is the reverse
@@ -398,7 +409,8 @@ char_select_group_impl_next_prev! (
     Symbols => Flags,
     Flags => NerdFonts,
     NerdFonts => UnicodeNames,
-    UnicodeNames => RecentlyUsed,
+    UnicodeNames => ShortCodes,
+    ShortCodes => RecentlyUsed,
 );
 
 impl Default for CharSelectGroup {
@@ -437,10 +449,13 @@ pub struct QuickSelectArguments {
     pub patterns: Vec<String>,
     #[dynamic(default)]
     pub action: Option<Box<KeyAssignment>>,
+    /// Skip triggering `action` after paste is performed (capital selection)
+    #[dynamic(default)]
+    pub skip_action_on_paste: bool,
     /// Label to use in place of "copy" when `action` is set
     #[dynamic(default)]
     pub label: String,
-    /// How man lines before and how many lines after the viewport to
+    /// How many lines before and how many lines after the viewport to
     /// search to produce the quickselect results
     pub scope_lines: Option<usize>,
 }
@@ -448,9 +463,19 @@ pub struct QuickSelectArguments {
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct PromptInputLine {
     pub action: Box<KeyAssignment>,
+    /// Optional label to pre-fill the input line with
+    #[dynamic(default)]
+    pub initial_value: Option<String>,
     /// Descriptive text to show ahead of prompt
     #[dynamic(default)]
     pub description: String,
+    /// Text to show for prompt
+    #[dynamic(default = "default_prompt")]
+    pub prompt: String,
+}
+
+fn default_prompt() -> String {
+    "> ".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
@@ -469,6 +494,41 @@ pub struct InputSelector {
 
     #[dynamic(default)]
     pub fuzzy: bool,
+
+    #[dynamic(default = "default_num_alphabet")]
+    pub alphabet: String,
+
+    #[dynamic(default = "default_description")]
+    pub description: String,
+
+    #[dynamic(default = "default_fuzzy_description")]
+    pub fuzzy_description: String,
+}
+
+fn default_num_alphabet() -> String {
+    "1234567890abcdefghilmnopqrstuvwxyz".to_string()
+}
+
+fn default_description() -> String {
+    "Select an item and press Enter = accept,  Esc = cancel,  / = filter".to_string()
+}
+
+fn default_fuzzy_description() -> String {
+    "Fuzzy matching: ".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct Confirmation {
+    pub action: Box<KeyAssignment>,
+    #[dynamic(default)]
+    pub cancel: Option<Box<KeyAssignment>>,
+    /// Text to show for confirmation
+    #[dynamic(default = "default_message")]
+    pub message: String,
+}
+
+fn default_message() -> String {
+    "🛑 Really continue?".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
@@ -476,6 +536,9 @@ pub enum KeyAssignment {
     SpawnTab(SpawnTabDomain),
     SpawnWindow,
     ToggleFullScreen,
+    ToggleAlwaysOnTop,
+    ToggleAlwaysOnBottom,
+    SetWindowLevel(WindowLevel),
     CopyTo(ClipboardCopyDestination),
     CopyTextTo {
         text: String,
@@ -582,6 +645,7 @@ pub enum KeyAssignment {
     ActivateWindowRelativeNoWrap(isize),
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
+    Confirmation(Confirmation),
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

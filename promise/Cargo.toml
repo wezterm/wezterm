@@ -3,12 +3,13 @@ authors = ["Wez Furlong <wez@wezfurlong.org>"]
 name = "promise"
 version = "0.2.0"
 edition = "2018"
+publish = false
 
 [dependencies]
-async-task = "4.0"
-async-executor = "1.4"
-async-io = "1.10"
-anyhow = "1.0"
-thiserror = "1.0"
-lazy_static = "1.4"
-flume = "0.10"
+anyhow.workspace = true
+async-executor.workspace = true
+async-io.workspace = true
+async-task.workspace = true
+flume.workspace = true
+lazy_static.workspace = true
+thiserror.workspace =true

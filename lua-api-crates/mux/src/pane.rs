@@ -1,9 +1,13 @@
 use super::*;
+use luahelper::mlua::LuaSerdeExt;
 use luahelper::{dynamic_to_lua_value, from_lua, to_lua};
 use mlua::Value;
+use mux::pane::CachePolicy;
 use std::cmp::Ordering;
 use std::sync::Arc;
 use termwiz::cell::SemanticType;
+use termwiz_funcs::lines_to_escapes;
+use url_funcs::Url;
 use wezterm_term::{SemanticZone, StableRowIndex};
 
 #[derive(Clone, Copy, Debug)]
@@ -53,7 +57,7 @@ impl MuxPane {
             let last_idx = line.physical_lines.len().saturating_sub(1);
             for (idx, phys) in line.physical_lines.iter().enumerate() {
                 let this_row = line.first_row + idx as StableRowIndex;
-                if this_row >= first_row && this_row < last_row {
+                if this_row >= first_row && this_row <= last_row {
                     let last_phys_idx = phys.len().saturating_sub(1);
 
                     let cols = cols_for_row(&zone, this_row);
@@ -90,8 +94,7 @@ impl UserData for MuxPane {
         methods.add_method("pane_id", |_, this, _: ()| Ok(this.0));
 
         methods.add_async_method("split", |_, this, args: Option<SplitPane>| async move {
-            let args = args.unwrap_or_default();
-            args.run(this).await
+            args.unwrap_or_default().run(this).await
         });
 
         methods.add_method("send_paste", |_, this, text: String| {
@@ -143,10 +146,19 @@ impl UserData for MuxPane {
             Ok(pane.get_title())
         });
 
+        methods.add_method("get_progress", |lua, this, _: ()| {
+            let mux = get_mux()?;
+            let pane = this.resolve(&mux)?;
+            let progress = pane.get_progress();
+            lua.to_value(&progress)
+        });
+
         methods.add_method("get_current_working_dir", |_, this, _: ()| {
             let mux = get_mux()?;
             let pane = this.resolve(&mux)?;
-            Ok(pane.get_current_working_dir().map(|u| u.to_string()))
+            Ok(pane
+                .get_current_working_dir(CachePolicy::FetchImmediate)
+                .map(|url| Url { url }))
         });
 
         methods.add_method("get_metadata", |lua, this, _: ()| {
@@ -159,13 +171,13 @@ impl UserData for MuxPane {
         methods.add_method("get_foreground_process_name", |_, this, _: ()| {
             let mux = get_mux()?;
             let pane = this.resolve(&mux)?;
-            Ok(pane.get_foreground_process_name())
+            Ok(pane.get_foreground_process_name(CachePolicy::FetchImmediate))
         });
 
         methods.add_method("get_foreground_process_info", |_, this, _: ()| {
             let mux = get_mux()?;
             let pane = this.resolve(&mux)?;
-            Ok(pane.get_foreground_process_info())
+            Ok(pane.get_foreground_process_info(CachePolicy::AllowStale))
         });
 
         methods.add_method("get_cursor_position", |_, this, _: ()| {
@@ -222,6 +234,18 @@ impl UserData for MuxPane {
             }
             let trimmed = text.trim_end().len();
             text.truncate(trimmed);
+            Ok(text)
+        });
+
+        methods.add_method("get_lines_as_escapes", |_, this, nlines: Option<usize>| {
+            let mux = get_mux()?;
+            let pane = this.resolve(&mux)?;
+            let dims = pane.get_dimensions();
+            let nlines = nlines.unwrap_or(dims.viewport_rows);
+            let bottom_row = dims.physical_top + dims.viewport_rows as isize;
+            let top_row = bottom_row.saturating_sub(nlines as isize);
+            let (_first_row, lines) = pane.get_lines(top_row..bottom_row);
+            let text = lines_to_escapes(lines).map_err(mlua::Error::external)?;
             Ok(text)
         });
 
@@ -432,7 +456,7 @@ fn default_split_size() -> f32 {
 }
 
 impl SplitPane {
-    async fn run(self, pane: MuxPane) -> mlua::Result<MuxPane> {
+    async fn run(&self, pane: &MuxPane) -> mlua::Result<MuxPane> {
         let (command, command_dir) = self.cmd_builder.to_command_builder();
         let source = SplitSource::Spawn {
             command,
@@ -464,7 +488,7 @@ impl SplitPane {
 
         let mux = get_mux()?;
         let (pane, _size) = mux
-            .split_pane(pane.0, request, source, self.domain)
+            .split_pane(pane.0, request, source, self.domain.clone())
             .await
             .map_err(|e| mlua::Error::external(format!("{:#?}", e)))?;
 

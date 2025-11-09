@@ -1,6 +1,6 @@
 // The range_plus_one lint can't see when the LHS is not compatible with
 // and inclusive range
-#![cfg_attr(feature = "cargo-clippy", allow(clippy::range_plus_one))]
+#![allow(clippy::range_plus_one)]
 use super::*;
 use crate::color::{ColorPalette, RgbColor};
 use crate::config::{BidiMode, NewlineCanon};
@@ -8,21 +8,22 @@ use log::debug;
 use num_traits::ToPrimitive;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
+use std::num::NonZeroUsize;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use terminfo::{Database, Value};
-use termwiz::cell::UnicodeVersion;
-use termwiz::escape::csi::{
+use termwiz::input::KeyboardEncoding;
+use url::Url;
+use wezterm_bidi::ParagraphDirectionHint;
+use wezterm_cell::image::ImageData;
+use wezterm_cell::UnicodeVersion;
+use wezterm_escape_parser::csi::{
     Cursor, CursorStyle, DecPrivateMode, DecPrivateModeCode, Device, Edit, EraseInDisplay,
     EraseInLine, Mode, Sgr, TabulationClear, TerminalMode, TerminalModeCode, Window, XtSmGraphics,
     XtSmGraphicsAction, XtSmGraphicsItem, XtSmGraphicsStatus, XtermKeyModifierResource,
 };
-use termwiz::escape::{OneBased, OperatingSystemCommand, CSI};
-use termwiz::image::ImageData;
-use termwiz::input::KeyboardEncoding;
-use termwiz::surface::{CursorShape, CursorVisibility, SequenceNo};
-use url::Url;
-use wezterm_bidi::ParagraphDirectionHint;
+use wezterm_escape_parser::{OneBased, OperatingSystemCommand, CSI};
+use wezterm_surface::{CursorShape, CursorVisibility, SequenceNo};
 
 mod image;
 mod iterm;
@@ -130,7 +131,7 @@ impl TabStop {
 }
 
 #[derive(Debug, Clone)]
-struct SavedCursor {
+pub(crate) struct SavedCursor {
     position: CursorPosition,
     wrap_next: bool,
     pen: CellAttributes,
@@ -147,8 +148,6 @@ struct ScreenOrAlt {
     alt_screen: Screen,
     /// Tells us which screen is active
     alt_screen_is_active: bool,
-    saved_cursor: Option<SavedCursor>,
-    alt_saved_cursor: Option<SavedCursor>,
 }
 
 impl Deref for ScreenOrAlt {
@@ -187,8 +186,6 @@ impl ScreenOrAlt {
             screen,
             alt_screen,
             alt_screen_is_active: false,
-            saved_cursor: None,
-            alt_saved_cursor: None,
         }
     }
 
@@ -234,9 +231,9 @@ impl ScreenOrAlt {
 
     pub fn saved_cursor(&mut self) -> &mut Option<SavedCursor> {
         if self.alt_screen_is_active {
-            &mut self.alt_saved_cursor
+            &mut self.alt_screen.saved_cursor
         } else {
-            &mut self.saved_cursor
+            &mut self.screen.saved_cursor
         }
     }
 
@@ -338,6 +335,7 @@ pub struct TerminalState {
     title: String,
     /// The icon title string (OSC 1)
     icon_title: Option<String>,
+    progress: Progress,
 
     palette: Option<ColorPalette>,
 
@@ -378,7 +376,10 @@ pub struct TerminalState {
 
     accumulating_title: Option<String>,
 
+    /// seqno when we last lost focus
     lost_focus_seqno: SequenceNo,
+    /// seqno when we last emitted Alert::OutputSinceFocusLost
+    lost_focus_alerted_seqno: SequenceNo,
     focused: bool,
 
     /// True if lines should be marked as bidi-enabled, and thus
@@ -546,7 +547,7 @@ impl TerminalState {
             last_mouse_move: None,
             cursor_visible: true,
             g0_charset: CharSet::Ascii,
-            g1_charset: CharSet::DecLineDrawing,
+            g1_charset: CharSet::Ascii,
             shift_out: false,
             newline_mode: false,
             current_mouse_buttons: vec![],
@@ -565,7 +566,7 @@ impl TerminalState {
             term_program: term_program.to_string(),
             term_version: term_version.to_string(),
             writer,
-            image_cache: lru::LruCache::new(16),
+            image_cache: lru::LruCache::new(NonZeroUsize::new(16).unwrap()),
             user_vars: HashMap::new(),
             kitty_img: Default::default(),
             seqno,
@@ -575,9 +576,11 @@ impl TerminalState {
             enable_conpty_quirks: false,
             accumulating_title: None,
             lost_focus_seqno: seqno,
+            lost_focus_alerted_seqno: seqno,
             focused: true,
             bidi_enabled: None,
             bidi_hint: None,
+            progress: Progress::default(),
         }
     }
 
@@ -639,6 +642,10 @@ impl TerminalState {
         self.icon_title.as_ref().unwrap_or(&self.title)
     }
 
+    pub fn get_progress(&self) -> Progress {
+        self.progress.clone()
+    }
+
     /// Returns the current working directory associated with the
     /// terminal session.  The working directory can be changed by
     /// the applicaiton using the OSC 7 escape sequence.
@@ -668,6 +675,21 @@ impl TerminalState {
             self.palette.replace(self.config.color_palette());
         }
         self.palette.as_mut().unwrap()
+    }
+
+    /// If the current overridden palette is effectively the same as
+    /// the configured palette, remove the override and treat it as
+    /// being the same as the configured state.
+    /// This allows runtime changes to the configuration to take effect.
+    pub fn implicit_palette_reset_if_same_as_configured(&mut self) {
+        if self
+            .palette
+            .as_ref()
+            .map(|p| *p == self.config.color_palette())
+            .unwrap_or(false)
+        {
+            self.palette.take();
+        }
     }
 
     /// Returns a reference to the active screen (either the primary or
@@ -780,8 +802,15 @@ impl TerminalState {
 
     pub(crate) fn trigger_unseen_output_notif(&mut self) {
         if self.has_unseen_output() {
-            if let Some(handler) = self.alert_handler.as_mut() {
-                handler.alert(Alert::OutputSinceFocusLost);
+            // We want to avoid over-notifying about output events,
+            // so here we gate the notification to the case where
+            // we have lost the focus more recently than the last
+            // time we notified about it
+            if self.lost_focus_seqno > self.lost_focus_alerted_seqno {
+                self.lost_focus_alerted_seqno = self.seqno;
+                if let Some(handler) = self.alert_handler.as_mut() {
+                    handler.alert(Alert::OutputSinceFocusLost);
+                }
             }
         }
     }
@@ -789,6 +818,8 @@ impl TerminalState {
     /// Send text to the terminal that is the result of pasting.
     /// If bracketed paste mode is enabled, the paste is enclosed
     /// in the bracketing, otherwise it is fed to the writer as-is.
+    /// De-fang the text by removing any embedded bracketed paste
+    /// sequence that may be present.
     pub fn send_paste(&mut self, text: &str) -> Result<(), Error> {
         let mut buf = String::new();
         if self.bracketed_paste {
@@ -802,7 +833,8 @@ impl TerminalState {
         };
 
         let canon = canon.canonicalize(text);
-        buf.push_str(&canon);
+        let de_fanged = canon.replace("\x1b[200~", "").replace("\x1b[201~", "");
+        buf.push_str(&de_fanged);
 
         if self.bracketed_paste {
             buf.push_str("\x1b[201~");
@@ -818,9 +850,11 @@ impl TerminalState {
     /// We need to resize both the primary and alt screens, adjusting
     /// the cursor positions of both accordingly.
     pub fn resize(&mut self, size: TerminalSize) {
+        self.increment_seqno();
         let (cursor_main, cursor_alt) = if self.screen.alt_screen_is_active {
             (
                 self.screen
+                    .screen
                     .saved_cursor
                     .as_ref()
                     .map(|s| s.position)
@@ -831,7 +865,8 @@ impl TerminalState {
             (
                 self.cursor,
                 self.screen
-                    .alt_saved_cursor
+                    .alt_screen
+                    .saved_cursor
                     .as_ref()
                     .map(|s| s.position)
                     .unwrap_or_else(CursorPosition::default),
@@ -858,7 +893,7 @@ impl TerminalState {
                 &Position::Absolute(adjusted_cursor_alt.y),
             );
 
-            if let Some(saved) = self.screen.saved_cursor.as_mut() {
+            if let Some(saved) = self.screen.screen.saved_cursor.as_mut() {
                 saved.position.x = adjusted_cursor_main.x;
                 saved.position.y = adjusted_cursor_main.y;
                 saved.position.seqno = self.seqno;
@@ -869,7 +904,7 @@ impl TerminalState {
                 &Position::Absolute(adjusted_cursor_main.x as i64),
                 &Position::Absolute(adjusted_cursor_main.y),
             );
-            if let Some(saved) = self.screen.alt_saved_cursor.as_mut() {
+            if let Some(saved) = self.screen.alt_screen.saved_cursor.as_mut() {
                 saved.position.x = adjusted_cursor_alt.x;
                 saved.position.y = adjusted_cursor_alt.y;
                 saved.position.seqno = self.seqno;
@@ -886,6 +921,13 @@ impl TerminalState {
             pixel_height: self.pixel_height,
             rows: screen.physical_rows,
             cols: screen.physical_cols,
+        }
+    }
+
+    fn palette_did_change(&mut self) {
+        self.make_all_lines_dirty();
+        if let Some(handler) = self.alert_handler.as_mut() {
+            handler.alert(Alert::PaletteChanged);
         }
     }
 
@@ -912,6 +954,11 @@ impl TerminalState {
             },
             seqno: self.cursor.seqno,
         }
+    }
+
+    /// Returns the current cell attributes of the screen
+    pub fn pen(&self) -> CellAttributes {
+        self.pen.clone()
     }
 
     pub fn user_vars(&self) -> &HashMap<String, String> {
@@ -1233,6 +1280,9 @@ impl TerminalState {
                 self.reverse_video_mode = false;
                 self.bidi_enabled.take();
                 self.bidi_hint.take();
+
+                self.g0_charset = CharSet::Ascii;
+                self.g1_charset = CharSet::Ascii;
             }
             Device::RequestPrimaryDeviceAttributes => {
                 let mut ident = "\x1b[?65".to_string(); // Vt500
@@ -1240,6 +1290,7 @@ impl TerminalState {
                 ident.push_str(";6"); // Selective erase
                 ident.push_str(";18"); // windowing extensions
                 ident.push_str(";22"); // ANSI color, vt525
+                ident.push_str(";52"); // Clipboard access
                 ident.push('c');
 
                 self.writer.write(ident.as_bytes()).ok();
@@ -1328,6 +1379,22 @@ impl TerminalState {
                 self.writer.flush().ok();
             }
         }
+    }
+
+    /// Indicates that mode is permanently enabled
+    fn decqrm_response_permanent(&mut self, mode: Mode) {
+        let (is_dec, number) = match &mode {
+            Mode::QueryDecPrivateMode(DecPrivateMode::Code(code)) => (true, code.to_u16().unwrap()),
+            Mode::QueryDecPrivateMode(DecPrivateMode::Unspecified(code)) => (true, *code),
+            Mode::QueryMode(TerminalMode::Code(code)) => (false, code.to_u16().unwrap()),
+            Mode::QueryMode(TerminalMode::Unspecified(code)) => (false, *code),
+            _ => unreachable!(),
+        };
+
+        let prefix = if is_dec { "?" } else { "" };
+
+        write!(self.writer, "\x1b[{prefix}{number};3$y").ok();
+        self.writer.flush().ok();
     }
 
     fn decqrm_response(&mut self, mode: Mode, mut recognized: bool, enabled: bool) {
@@ -1432,6 +1499,21 @@ impl TerminalState {
                 DecPrivateModeCode::LeftRightMarginMode,
             )) => {
                 self.decqrm_response(mode, true, self.left_and_right_margin_mode);
+            }
+
+            Mode::SetDecPrivateMode(DecPrivateMode::Code(
+                DecPrivateModeCode::GraphemeClustering,
+            ))
+            | Mode::ResetDecPrivateMode(DecPrivateMode::Code(
+                DecPrivateModeCode::GraphemeClustering,
+            )) => {
+                // Permanently enabled
+            }
+
+            Mode::QueryDecPrivateMode(DecPrivateMode::Code(
+                DecPrivateModeCode::GraphemeClustering,
+            )) => {
+                self.decqrm_response_permanent(mode);
             }
 
             Mode::SetDecPrivateMode(DecPrivateMode::Code(DecPrivateModeCode::SaveCursor)) => {
@@ -1925,7 +2007,17 @@ impl TerminalState {
                 checksum += u16::from(ch as u8);
             }
         }
-        checksum
+
+        // Treat uninitialized cells as spaces.
+        // The concept of uninitialized cells in wezterm is not the same as that on VT520 or that
+        // on xterm, so, to prevent a lot of noise in esctest, treat them as spaces, at least when
+        // asking for the checksum of a single cell (which is what esctest does).
+        // See: https://github.com/wezterm/wezterm/pull/4565
+        if checksum == 0 {
+            32u16
+        } else {
+            checksum
+        }
     }
 
     fn perform_csi_window(&mut self, window: Window) {
@@ -2110,7 +2202,13 @@ impl TerminalState {
                 let cols = self.screen().physical_cols;
                 let bidi_mode = self.get_bidi_mode();
                 let range = match erase {
-                    EraseInLine::EraseToEndOfLine => cx..cols,
+                    // If wrap_next is true, then cx is effectively 1 column to the right.
+                    // It feels wrong to handle this here, but in trying to centralize
+                    // the logic for updating the cursor position, it causes regressions
+                    // in the test suite.
+                    // So this is here for now until a better solution is found.
+                    // <https://github.com/wezterm/wezterm/issues/3548>
+                    EraseInLine::EraseToEndOfLine => cx + if self.wrap_next { 1 } else { 0 }..cols,
                     EraseInLine::EraseToStartOfLine => 0..cx + 1,
                     EraseInLine::EraseLine => 0..cols,
                 };
@@ -2222,9 +2320,8 @@ impl TerminalState {
         // The terminal only recognizes this control function if vertical split
         // screen mode (DECLRMM) is set.
         if self.left_and_right_margin_mode {
-            let rows = self.screen().physical_rows as u32;
             let cols = self.screen().physical_cols as u32;
-            let left = left.as_zero_based().min(rows - 1).max(0) as usize;
+            let left = left.as_zero_based().min(cols - 1).max(0) as usize;
             let right = right.as_zero_based().min(cols - 1).max(0) as usize;
 
             // The value of the left margin (Pl) must be less than the right margin (Pr).
@@ -2453,11 +2550,15 @@ impl TerminalState {
                     })) as u32,
                 );
                 let col = OneBased::from_zero_based(
-                    (self.cursor.x.saturating_sub(if self.dec_origin_mode {
-                        self.left_and_right_margins.start
-                    } else {
-                        0
-                    })) as u32,
+                    (self
+                        .cursor
+                        .x
+                        .min(self.screen().physical_cols - 1)
+                        .saturating_sub(if self.dec_origin_mode {
+                            self.left_and_right_margins.start
+                        } else {
+                            0
+                        })) as u32,
                 );
                 let report = CSI::Cursor(Cursor::ActivePositionReport { line, col });
                 write!(self.writer, "{}", report).ok();
@@ -2524,7 +2625,7 @@ impl TerminalState {
                 pen: Default::default(),
                 dec_origin_mode: false,
                 g0_charset: CharSet::Ascii,
-                g1_charset: CharSet::DecLineDrawing,
+                g1_charset: CharSet::Ascii,
             });
         debug!(
             "restore cursor {:?} is_alt={}",

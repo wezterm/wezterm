@@ -186,7 +186,7 @@ impl log::Log for Logger {
                 // We use writeln! here rather than eprintln! so that we can ignore
                 // a failed log write in the case that stderr has been redirected
                 // to a device that is out of disk space.
-                // <https://github.com/wez/wezterm/issues/1839>
+                // <https://github.com/wezterm/wezterm/issues/1839>
                 let mut stderr = std::io::stderr();
                 let _ = writeln!(
                     stderr,
@@ -281,6 +281,8 @@ fn setup_pretty() -> (LevelFilter, Logger) {
         ("wgpu_core", LevelFilter::Error),
         ("wgpu_hal", LevelFilter::Error),
         ("gfx_backend_metal", LevelFilter::Error),
+        ("tracing", LevelFilter::Error),
+        ("zbus", LevelFilter::Error),
     ] {
         filters.filter_module(module, level);
     }

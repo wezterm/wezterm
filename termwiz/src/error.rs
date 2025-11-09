@@ -49,9 +49,6 @@ pub enum InternalError {
     Utf8(#[from] std::str::Utf8Error),
 
     #[error(transparent)]
-    Base64(#[from] base64::DecodeError),
-
-    #[error(transparent)]
     ParseFloat(#[from] std::num::ParseFloatError),
 
     #[error(transparent)]
@@ -72,12 +69,13 @@ pub enum InternalError {
     #[error(transparent)]
     FileDescriptor(#[from] filedescriptor::Error),
 
-    #[error(transparent)]
-    BlobLease(#[from] wezterm_blob_leases::Error),
-
     #[cfg(feature = "use_image")]
     #[error(transparent)]
-    ImageError(#[from] image::ImageError),
+    ImageCellError(#[from] wezterm_cell::image::ImageCellError),
+
+    #[cfg(feature = "image")]
+    #[error(transparent)]
+    BlobLease(#[from] wezterm_blob_leases::Error),
 
     #[error("{}", .context)]
     Context {
