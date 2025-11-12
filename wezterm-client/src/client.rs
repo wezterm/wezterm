@@ -43,17 +43,16 @@ struct Timeout;
 #[error("ChannelSendError")]
 struct ChannelSendError;
 
-enum ReaderMessage {
-    SendPdu {
-        pdu: Pdu,
-        promise: Sender<anyhow::Result<Pdu>>,
-    },
-    Readable,
+/// Message to send a PDU and get a response
+#[derive(Debug)]
+struct SendPduMessage {
+    pdu: Pdu,
+    promise: Sender<anyhow::Result<Pdu>>,
 }
 
 #[derive(Clone)]
 pub struct Client {
-    sender: Sender<ReaderMessage>,
+    sender: Sender<SendPduMessage>,
     local_domain_id: Option<DomainId>,
     pub client_id: ClientId,
     client_domain_config: ClientDomainConfig,
@@ -340,7 +339,7 @@ enum NotReconnectableError {
 fn client_thread(
     reconnectable: &mut Reconnectable,
     local_domain_id: Option<DomainId>,
-    rx: &mut Receiver<ReaderMessage>,
+    rx: &mut Receiver<SendPduMessage>,
 ) -> anyhow::Result<()> {
     block_on(client_thread_async(reconnectable, local_domain_id, rx))
 }
@@ -348,7 +347,7 @@ fn client_thread(
 async fn client_thread_async(
     reconnectable: &mut Reconnectable,
     local_domain_id: Option<DomainId>,
-    rx: &mut Receiver<ReaderMessage>,
+    rx: &mut Receiver<SendPduMessage>,
 ) -> anyhow::Result<()> {
     let mut next_serial = 1u64;
 
@@ -374,27 +373,28 @@ async fn client_thread_async(
         map: HashMap::new(),
     };
 
-    let mut stream = reconnectable.take_stream().unwrap();
+    let mut stream = StreamPeek::new(reconnectable.take_stream().unwrap());
 
     loop {
-        let rx_msg = rx.recv();
-        let wait_for_read = stream
-            .wait_for_readable()
-            .map(|_| Ok(ReaderMessage::Readable));
+        futures::select! {
+            msg = rx.recv().fuse() => {
+                match msg {
+                    Ok(SendPduMessage { pdu, promise }) => {
+                        let serial = next_serial;
+                        next_serial += 1;
+                        promises.map.insert(serial, promise);
 
-        match smol::future::or(rx_msg, wait_for_read).await {
-            Ok(ReaderMessage::SendPdu { pdu, promise }) => {
-                let serial = next_serial;
-                next_serial += 1;
-                promises.map.insert(serial, promise);
-
-                pdu.encode_async(&mut stream, serial)
-                    .await
-                    .context("encoding a PDU to send to the server")?;
-                stream.flush().await.context("flushing PDU to server")?;
+                        pdu.encode_async(&mut stream, serial)
+                            .await
+                            .context("encoding a PDU to send to the server")?;
+                        stream.flush().await.context("flushing PDU to server")?;
+                    }
+                    Err(_) => return Err(NotReconnectableError::ClientWasDestroyed.into()),
+                }
             }
-            Ok(ReaderMessage::Readable) => {
-                match Pdu::decode_async(&mut stream, Some(next_serial)).await {
+            _ = stream.peek().fuse() => {
+                let pdu = Pdu::decode_async(&mut stream, Some(next_serial)).await;
+                match pdu {
                     Ok(decoded) => {
                         log::debug!(
                             "decoded serial {} {}",
@@ -426,9 +426,6 @@ async fn client_thread_async(
                         return Err(err).context("Error while decoding response pdu");
                     }
                 }
-            }
-            Err(_) => {
-                return Err(NotReconnectableError::ClientWasDestroyed.into());
             }
         }
     }
@@ -517,9 +514,7 @@ pub fn unix_connect_with_retry(
 }
 
 #[async_trait(?Send)]
-pub trait AsyncReadAndWrite: Unpin + AsyncRead + AsyncWrite + std::fmt::Debug + Send {
-    async fn wait_for_readable(&self) -> anyhow::Result<()>;
-}
+pub trait AsyncReadAndWrite: Unpin + AsyncRead + AsyncWrite + std::fmt::Debug + Send {}
 
 #[async_trait(?Send)]
 impl<T> AsyncReadAndWrite for Async<T>
@@ -530,9 +525,6 @@ where
     T: Send,
     T: async_io::IoSafe,
 {
-    async fn wait_for_readable(&self) -> anyhow::Result<()> {
-        Ok(self.readable().await?)
-    }
 }
 
 #[derive(Debug)]
@@ -1304,7 +1296,7 @@ impl Client {
     pub async fn send_pdu(&self, pdu: Pdu) -> anyhow::Result<Pdu> {
         let (promise, rx) = bounded(1);
         self.sender
-            .send(ReaderMessage::SendPdu { pdu, promise })
+            .send(SendPduMessage { pdu, promise })
             .await
             .map_err(|_| ChannelSendError)
             .context("send_pdu send")?;
