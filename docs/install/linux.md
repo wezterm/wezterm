@@ -394,7 +394,15 @@ hide:
         };
     }
     ```
-    
+
+=== "Void"
+    ## Void Linux
+
+    ```console
+    $ sudo xbps-install -S wezterm
+    ```
+
+    Be sure to also install the `nerd-fonts-ttf` package!
 
 === "Raw"
     ## Raw Linux Binary
