@@ -42,7 +42,6 @@ config.keys = {
     mods = 'CTRL|SHIFT',
     action = act.PromptInputLine {
       description = 'Enter new name for tab',
-      initial_value = 'My Tab Name',
       action = wezterm.action_callback(function(window, pane, line)
         -- line will be `nil` if they hit escape without entering anything
         -- An empty string if they just hit enter
