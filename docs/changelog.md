@@ -249,6 +249,8 @@ As features stabilize some brief notes about them will accumulate here.
 * Incorrect boundary condition in renderstate. Thanks to @I-Info! #7274
 * MacOS: fix memory leak in macOS MetalLayer management. Thanks to @I-Info!
   #7283
+* [max_fps](config/lua/config/max_fps.md) can now be set to values larger than
+  `255`. Thanks to @beckend! #7366
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
