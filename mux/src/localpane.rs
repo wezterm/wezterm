@@ -664,6 +664,13 @@ impl Pane for LocalPane {
                 // normalize the case so we match everything lowercase
                 CompiledPattern::CaseInSensitiveString(s.to_lowercase())
             }
+            Pattern::CaseSmartString(s) => {
+                if s.chars().any(|c| c.is_uppercase()) {
+                    CompiledPattern::CaseSensitiveString(s)
+                } else {
+                    CompiledPattern::CaseInSensitiveString(s.to_lowercase())
+                }
+            }
             Pattern::Regex(r) => CompiledPattern::Regex(Regex::new(&r)?),
         };
 

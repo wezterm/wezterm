@@ -2,13 +2,12 @@
 
 {{since('20200607-144723-74889cd4')}}
 
-This action will trigger the search overlay for the current tab.
-It accepts a typed pattern string as its parameter, allowing for
-`Regex`, `CaseSensitiveString` and `CaseInSensitiveString` as
-pattern matching types.
+This action will trigger the search overlay for the current tab.  It accepts a
+typed pattern string as its parameter, allowing for `Regex`,
+`CaseSensitiveString`, `CaseInSensitiveString` and `CaseSmartString` as pattern
+matching types.
 
-The supported [regular expression syntax is described
-here](https://docs.rs/regex/1.3.9/regex/#syntax).
+The supported [regular expression syntax is described here](https://docs.rs/regex/1.3.9/regex/#syntax).
 
 
 ```lua
@@ -45,3 +44,9 @@ config.keys = {
 You may now use `wezterm.action.Search("CurrentSelectionOrEmptyString")` to have the search take the currently selected text as the item to search.
 
 The selection text is adjusted to be a single line.
+
+{{since('nightly')}}
+
+`CaseSmartString` was added. With this option, the search is case-_insensitive_
+until the search term includes any uppercase character, which triggers the
+search to become case-_sensitive_.
