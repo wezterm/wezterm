@@ -30,8 +30,8 @@ use ::wezterm_term::input::{ClickPosition, MouseButton as TMB};
 use ::window::*;
 use anyhow::{anyhow, ensure, Context};
 use config::keyassignment::{
-    Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
-    QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
+    Confirmation, ExtendedPattern, InnerPattern, KeyAssignment, LauncherActionArgs, PaneDirection,
+    Pattern, PromptInputLine, QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
 };
 use config::window::WindowLevel;
 use config::{
@@ -2850,58 +2850,21 @@ impl TermWindow {
             Search(pattern) => {
                 if let Some(pane) = self.get_active_pane_or_overlay() {
                     let mut replace_current = false;
-                    if let Some(existing) = pane.downcast_ref::<CopyOverlay>() {
-                        let mut params = existing.get_params();
-                        params.editing_search = true;
-                        params.activate_match_pos = ActivateMatchPosition::default();
-                        if !pattern.is_empty() {
-                            params.pattern = self.resolve_search_pattern(pattern.clone(), &pane);
+                    let activate_match_pos = match pattern {
+                        Pattern::Extended(extended_pattern) => {
+                            match &extended_pattern.activate_match {
+                                config::keyassignment::ActivateMatchPosition::AfterCursor => {
+                                    ActivateMatchPosition::AfterCursor
+                                }
+                                config::keyassignment::ActivateMatchPosition::BeforeCursor => {
+                                    ActivateMatchPosition::BeforeCursor
+                                }
+                                config::keyassignment::ActivateMatchPosition::First => {
+                                    ActivateMatchPosition::First
+                                }
+                            }
                         }
-                        existing.apply_params(params);
-                        replace_current = true;
-                    } else {
-                        let search = CopyOverlay::with_pane(
-                            self,
-                            &pane,
-                            CopyModeParams {
-                                pattern: self.resolve_search_pattern(pattern.clone(), &pane),
-                                editing_search: true,
-                                activate_match_pos: ActivateMatchPosition::default(),
-                            },
-                        )?;
-                        self.assign_overlay_for_pane(pane.pane_id(), search);
-                    }
-                    self.pane_state(pane.pane_id())
-                        .overlay
-                        .as_mut()
-                        .map(|overlay| {
-                            overlay.key_table_state.activate(KeyTableArgs {
-                                name: "search_mode",
-                                timeout_milliseconds: None,
-                                replace_current,
-                                one_shot: false,
-                                until_unknown: false,
-                                prevent_fallback: false,
-                            });
-                        });
-                }
-            }
-            ExtendedSearch {
-                pattern,
-                activate_match,
-            } => {
-                if let Some(pane) = self.get_active_pane_or_overlay() {
-                    let mut replace_current = false;
-                    let activate_match_pos = match activate_match {
-                        config::keyassignment::ActivateMatchPosition::AfterCursor => {
-                            ActivateMatchPosition::AfterCursor
-                        }
-                        config::keyassignment::ActivateMatchPosition::BeforeCursor => {
-                            ActivateMatchPosition::BeforeCursor
-                        }
-                        config::keyassignment::ActivateMatchPosition::First => {
-                            ActivateMatchPosition::First
-                        }
+                        _ => ActivateMatchPosition::First,
                     };
                     if let Some(existing) = pane.downcast_ref::<CopyOverlay>() {
                         let mut params = existing.get_params();
@@ -3650,16 +3613,26 @@ impl TermWindow {
             Pattern::CaseSensitiveString(s) => MuxPattern::CaseSensitiveString(s),
             Pattern::CaseInSensitiveString(s) => MuxPattern::CaseInSensitiveString(s),
             Pattern::Regex(s) => MuxPattern::Regex(s),
+            Pattern::Extended(extended_pattern) => match extended_pattern.pattern {
+                InnerPattern::CaseSensitiveString(s) => MuxPattern::CaseSensitiveString(s),
+                InnerPattern::CaseInSensitiveString(s) => MuxPattern::CaseInSensitiveString(s),
+                InnerPattern::Regex(s) => MuxPattern::Regex(s),
+                InnerPattern::CurrentSelectionOrEmptyString => {
+                    MuxPattern::CaseSensitiveString(self.get_selection_text_first_line(pane))
+                }
+            },
             Pattern::CurrentSelectionOrEmptyString => {
-                let text = self.selection_text(pane);
-                let first_line = text
-                    .lines()
-                    .next()
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-                MuxPattern::CaseSensitiveString(first_line)
+                MuxPattern::CaseSensitiveString(self.get_selection_text_first_line(pane))
             }
         }
+    }
+
+    fn get_selection_text_first_line(&self, pane: &Arc<dyn Pane>) -> String {
+        let text = self.selection_text(pane);
+        text.lines()
+            .next()
+            .map(|s| s.to_string())
+            .unwrap_or_default()
     }
 }
 

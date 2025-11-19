@@ -796,14 +796,6 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &[],
             icon: Some("oct_search"),
         },
-        ExtendedSearch { pattern: _, activate_match: _ } => CommandDef {
-            brief: "Search pane output with additional arguments".into(),
-            doc: "Enters the search mode UI for the current pane".into(),
-            keys: vec![],
-            args: &[ArgType::ActivePane],
-            menubar: &[],
-            icon: Some("oct_search"),
-        },
         ShowDebugOverlay => CommandDef {
             brief: "Show debug overlay".into(),
             doc: "Activates the debug overlay and Lua REPL".into(),
