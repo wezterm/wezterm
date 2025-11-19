@@ -29,6 +29,7 @@ use std::io::Cursor;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::task;
 use termwiz::hyperlink::Hyperlink;
 use termwiz::image::{ImageData, TextureCoordinate};
 use termwiz::surface::{Line, SequenceNo};
@@ -1140,6 +1141,101 @@ pub struct GetImageCell {
 pub struct GetImageCellResponse {
     pub pane_id: PaneId,
     pub data: Option<Arc<ImageData>>,
+}
+
+/// Wrapper that allows peeking at the next byte without consuming it from the
+/// stream. This is used to wait for the next user-level data to arrive on a
+/// stream, rather than using socket readability (which might just be protocol
+/// overhead which doesn't lead to readable data).
+#[derive(Debug)]
+pub struct StreamPeek<S> {
+    inner: S,
+    peeked: Option<u8>,
+}
+
+impl<S> StreamPeek<S>
+where
+    S: AsyncRead + Unpin,
+{
+    /// Construct a new StreamPeek wrapping the provided stream.
+    pub fn new(inner: S) -> Self {
+        Self {
+            inner,
+            peeked: None,
+        }
+    }
+
+    /// Peek at the next byte, blocking until available. If already peeked,
+    /// returns the cached byte immediately.
+    pub async fn peek(&mut self) -> std::io::Result<u8> {
+        if let Some(b) = self.peeked {
+            return Ok(b);
+        }
+
+        let mut buf = [0u8; 1];
+        let n = self.inner.read(&mut buf).await?;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "EOF while peeking",
+            ));
+        }
+        self.peeked = Some(buf[0]);
+        Ok(buf[0])
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for StreamPeek<S> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &mut [u8],
+    ) -> task::Poll<std::io::Result<usize>> {
+        if buf.is_empty() {
+            return task::Poll::Ready(Ok(0));
+        }
+
+        // If we have a peeked byte, return it first
+        if let Some(b) = self.peeked.take() {
+            buf[0] = b;
+            if buf.len() == 1 {
+                return task::Poll::Ready(Ok(1));
+            }
+            // Try to read additional bytes from inner stream
+            match std::pin::Pin::new(&mut self.inner).poll_read(cx, &mut buf[1..]) {
+                task::Poll::Ready(Ok(n)) => task::Poll::Ready(Ok(n + 1)),
+                task::Poll::Ready(Err(e)) => task::Poll::Ready(Err(e)),
+                task::Poll::Pending => task::Poll::Ready(Ok(1)), // Return the peeked byte at least
+            }
+        } else {
+            // No peeked byte, just forward to inner
+            std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+        }
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for StreamPeek<S> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &[u8],
+    ) -> task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_close(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_close(cx)
+    }
 }
 
 #[cfg(test)]
