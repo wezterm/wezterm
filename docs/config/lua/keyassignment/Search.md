@@ -50,3 +50,61 @@ config.keys = {
 You may now use `wezterm.action.Search("CurrentSelectionOrEmptyString")` to have the search take the currently selected text as the item to search.
 
 The selection text is adjusted to be a single line.
+
+{{since('nightly')}}
+
+You may now use `wezterm.action.Search { Extended = extended_search_entry }`
+where `extended_search_entry` is an instance of the
+[`ExtendedSearch`](../ExtendedSearch.md) object.
+
+
+```lua
+local act = wezterm.action
+
+config.keys = {
+  -- search for things that look like git hashes with activated match after the current cursor position
+  {
+    key = 'H',
+    mods = 'SHIFT|CTRL',
+    action = act.Search {
+      Extended = {
+        pattern = { Regex = '[a-f0-9]{6,}' },
+        activate_match = 'AfterCursor',
+      },
+    },
+  },
+  -- search for the lowercase string "hash" matching the case exactly and activate the match before the current cursor position
+  {
+    key = 'H',
+    mods = 'SHIFT|CTRL',
+    action = act.Search {
+      Extended = {
+        pattern = { CaseSensitiveString = 'hash' },
+        activate_match = 'BeforeCursor',
+      },
+    },
+  },
+  -- search for the string "hash" matching regardless of case and activate the first match
+  {
+    key = 'H',
+    mods = 'SHIFT|CTRL',
+    action = act.Search {
+      Extended = {
+        pattern = { CaseInSensitiveString = 'hash' },
+        activate_match = 'First',
+      },
+    },
+  },
+  -- search for the current selection and activate the match after the current cursor position
+  {
+    key = 'H',
+    mods = 'SHIFT|CTRL',
+    action = act.Search {
+      Extended = {
+        pattern = 'CurrentSelectionOrEmptyString',
+        activate_match = 'AfterCursor',
+      },
+    },
+  },
+}
+```
