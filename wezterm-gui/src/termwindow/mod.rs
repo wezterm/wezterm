@@ -30,8 +30,8 @@ use ::wezterm_term::input::{ClickPosition, MouseButton as TMB};
 use ::window::*;
 use anyhow::{anyhow, ensure, Context};
 use config::keyassignment::{
-    Confirmation, ExtendedPattern, InnerPattern, KeyAssignment, LauncherActionArgs, PaneDirection,
-    Pattern, PromptInputLine, QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
+    Confirmation, InnerPattern, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern,
+    PromptInputLine, QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
 };
 use config::window::WindowLevel;
 use config::{
