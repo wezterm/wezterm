@@ -127,7 +127,7 @@ pub enum InnerPattern {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, FromDynamic, ToDynamic)]
-pub struct ExtendedPattern {
+pub struct ExtendedSearch {
     pub pattern: InnerPattern,
     pub activate_match: ActivateMatchPosition,
 }
@@ -138,7 +138,7 @@ pub enum Pattern {
     CaseInSensitiveString(String),
     Regex(String),
     CurrentSelectionOrEmptyString,
-    Extended(ExtendedPattern),
+    Extended(ExtendedSearch),
 }
 
 impl Pattern {
@@ -147,7 +147,7 @@ impl Pattern {
             Self::CaseSensitiveString(s) | Self::CaseInSensitiveString(s) | Self::Regex(s) => {
                 s.is_empty()
             }
-            Self::Extended(extended_pattern) => match &extended_pattern.pattern {
+            Self::Extended(extended_search) => match &extended_search.pattern {
                 InnerPattern::CaseSensitiveString(s)
                 | InnerPattern::CaseInSensitiveString(s)
                 | InnerPattern::Regex(s) => s.is_empty(),

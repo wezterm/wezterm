@@ -2851,8 +2851,8 @@ impl TermWindow {
                 if let Some(pane) = self.get_active_pane_or_overlay() {
                     let mut replace_current = false;
                     let activate_match_pos = match pattern {
-                        Pattern::Extended(extended_pattern) => {
-                            match &extended_pattern.activate_match {
+                        Pattern::Extended(extended_search) => {
+                            match &extended_search.activate_match {
                                 config::keyassignment::ActivateMatchPosition::AfterCursor => {
                                     ActivateMatchPosition::AfterCursor
                                 }
@@ -3613,7 +3613,7 @@ impl TermWindow {
             Pattern::CaseSensitiveString(s) => MuxPattern::CaseSensitiveString(s),
             Pattern::CaseInSensitiveString(s) => MuxPattern::CaseInSensitiveString(s),
             Pattern::Regex(s) => MuxPattern::Regex(s),
-            Pattern::Extended(extended_pattern) => match extended_pattern.pattern {
+            Pattern::Extended(extended_search) => match extended_search.pattern {
                 InnerPattern::CaseSensitiveString(s) => MuxPattern::CaseSensitiveString(s),
                 InnerPattern::CaseInSensitiveString(s) => MuxPattern::CaseInSensitiveString(s),
                 InnerPattern::Regex(s) => MuxPattern::Regex(s),
