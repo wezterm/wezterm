@@ -651,7 +651,7 @@ impl Modal for CommandPalette {
     fn computed_element(
         &self,
         term_window: &mut TermWindow,
-    ) -> anyhow::Result<Ref<[ComputedElement]>> {
+    ) -> anyhow::Result<Ref<'_, [ComputedElement]>> {
         let selection = self.selection.borrow();
         let selection = selection.as_str();
 

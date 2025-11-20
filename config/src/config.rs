@@ -817,7 +817,7 @@ pub struct Config {
     pub unzoom_on_switch_pane: bool,
 
     #[dynamic(default = "default_max_fps")]
-    pub max_fps: u8,
+    pub max_fps: u64,
 
     #[dynamic(default = "default_shape_cache_size")]
     pub shape_cache_size: usize,
@@ -1802,7 +1802,7 @@ fn default_anim_fps() -> u8 {
     10
 }
 
-fn default_max_fps() -> u8 {
+fn default_max_fps() -> u64 {
     60
 }
 

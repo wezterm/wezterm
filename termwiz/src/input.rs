@@ -46,6 +46,7 @@ use winapi::um::wincon::{
 
 pub use wezterm_escape_parser::csi::MouseButtons;
 
+#[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputEvent {
     Key(KeyEvent),

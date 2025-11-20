@@ -557,7 +557,7 @@ impl std::fmt::Debug for SshStream {
 
 #[cfg(unix)]
 impl AsFd for SshStream {
-    fn as_fd(&self) -> BorrowedFd {
+    fn as_fd(&self) -> BorrowedFd<'_> {
         self.stdout.as_fd()
     }
 }
