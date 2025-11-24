@@ -62,12 +62,12 @@ impl portable_pty::MasterPty for SshPty {
         Ok(*self.size.lock().unwrap())
     }
 
-    fn try_clone_reader(&self) -> anyhow::Result<Box<(dyn Read + Send + 'static)>> {
+    fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send + 'static>> {
         let reader = self.reader.try_clone()?;
         Ok(Box::new(reader))
     }
 
-    fn take_writer(&self) -> anyhow::Result<Box<(dyn Write + Send + 'static)>> {
+    fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send + 'static>> {
         let writer = self.writer.try_clone()?;
         Ok(Box::new(writer))
     }

@@ -245,6 +245,12 @@ As features stabilize some brief notes about them will accumulate here.
 * `libssh` based ssh sessions will now respect `ServerAliveInterval`. #4023
 * macOS: prevent infinite loop in `Services` menu validation. Thanks to @cpick!
   #7098 #6738 #6833 #6864
+* Wayland: fixed issue with fractional scaling. Thanks to @kalebo! #7277
+* Incorrect boundary condition in renderstate. Thanks to @I-Info! #7274
+* MacOS: fix memory leak in macOS MetalLayer management. Thanks to @I-Info!
+  #7283
+* [max_fps](config/lua/config/max_fps.md) can now be set to values larger than
+  `255`. Thanks to @beckend! #7366
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
