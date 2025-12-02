@@ -40,15 +40,15 @@ case $OSTYPE in
     for bin in wezterm wezterm-mux-server wezterm-gui strip-ansi-escapes ; do
       # If the user ran a simple `cargo build --release`, then we want to allow
       # a single-arch package to be built
-      if [[ -f target/release/$bin ]] ; then
-        cp target/release/$bin $zipdir/WezTerm.app/Contents/MacOS/$bin
+      if [[ -f $TARGET_DIR/release/$bin ]] ; then
+        cp $TARGET_DIR/release/$bin $zipdir/WezTerm.app/Contents/MacOS/$bin
       else
         # The CI runs `cargo build --target XXX --release` which means that
-        # the binaries will be deployed in `target/XXX/release` instead of
+        # the binaries will be deployed in `$TARGET_DIR/XXX/release` instead of
         # the plain path above.
         # In that situation, we have two architectures to assemble into a
         # Universal ("fat") binary, so we use the `lipo` tool for that.
-        lipo target/*/release/$bin -output $zipdir/WezTerm.app/Contents/MacOS/$bin -create
+        lipo $TARGET_DIR/*/release/$bin -output $zipdir/WezTerm.app/Contents/MacOS/$bin -create
       fi
     done
 
@@ -141,51 +141,11 @@ case $OSTYPE in
           SPEC_RELEASE=0
         fi
 
-        cat > wezterm.spec <<EOF
-Name: wezterm
-Version: ${WEZTERM_RPM_VERSION}
-Release: ${SPEC_RELEASE}
-Packager: Wez Furlong <wez@wezfurlong.org>
-License: MIT
-URL: https://wezterm.org/
-Summary: Wez's Terminal Emulator.
-%if 0%{?suse_version}
-Requires: dbus-1, fontconfig, openssl, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-egl1, libwayland-cursor0, Mesa-libEGL1, libxcb-keysyms1, libxcb-ewmh2, libxcb-icccm4
-%else
-Requires: dbus, fontconfig, openssl, libxcb, libxkbcommon, libxkbcommon-x11, libwayland-client, libwayland-egl, libwayland-cursor, mesa-libEGL, xcb-util-keysyms, xcb-util-wm
-%endif
-EOF
-
-        BUILD_COMMAND=<<EOF
-%build
-echo build
-EOF
-
+        # Set up variables for spec generation
         if test -n "${COPR_SRPM}" ; then
-
           TAR_NAME=$(git -c "core.abbrev=8" show -s "--format=%cd_%h" "--date=format:%Y%m%d_%H%M%S")
-
-          cat >> wezterm.spec <<EOF
-BuildRequires: gcc, gcc-c++, make, curl, fontconfig-devel, openssl-devel, libxcb-devel, libxkbcommon-devel, libxkbcommon-x11-devel, wayland-devel, xcb-util-devel, xcb-util-keysyms-devel, xcb-util-image-devel, xcb-util-wm-devel, git
-%if 0%{?suse_version}
-BuildRequires: Mesa-libEGL-devel
-%else
-BuildRequires: mesa-libEGL-devel
-%endif
-%if 0%{?fedora} >= 41
-BuildRequires: openssl-devel-engine
-%endif
-Source0: wezterm-${TAR_NAME}.tar.gz
-
-%global debug_package %{nil}
-
-%changelog
-* Mon Oct 2 2023 Wez Furlong
-- See git for full changelog
-
-EOF
           HERE="."
-          BUILD_COMMAND=$(cat <<EOF
+          BUILD_SECTION=$(cat <<'BUILDEOFEOF'
 %prep
 %autosetup
 %build
@@ -198,29 +158,94 @@ source ~/.cargo/env
 cargo build --release \
       -p wezterm-gui -p wezterm -p wezterm-mux-server \
       -p strip-ansi-escapes
-
-EOF
+BUILDEOFEOF
 )
-
+          BUILD_REQUIRES=$(cat <<'BREQEOF'
+BuildRequires: gcc, gcc-c++, make, curl, fontconfig-devel, openssl-devel, libxcb-devel, libxkbcommon-devel, libxkbcommon-x11-devel, wayland-devel, xcb-util-devel, xcb-util-keysyms-devel, xcb-util-image-devel, xcb-util-wm-devel, git
+%if 0%{?suse_version}
+BuildRequires: Mesa-libEGL-devel
+%else
+BuildRequires: mesa-libEGL-devel
+%endif
+%if 0%{?fedora} >= 41
+BuildRequires: openssl-devel-engine
+%endif
+Source0: wezterm-${TAR_NAME}.tar.gz
+BREQEOF
+)
+        else
+          HERE="${HERE}"
+          BUILD_SECTION=$(cat <<'BUILDEOFEOF'
+%build
+echo build
+BUILDEOFEOF
+)
+          BUILD_REQUIRES=""
         fi
 
-        cat >> wezterm.spec <<EOF
+        # Generate single spec with subpackages
+        cat > wezterm.spec <<EOF
+Name: wezterm
+Version: ${WEZTERM_RPM_VERSION}
+Release: ${SPEC_RELEASE}
+Packager: Wez Furlong <wez@wezfurlong.org>
+License: MIT
+URL: https://wezterm.org/
+Summary: Wez's Terminal Emulator.
+${BUILD_REQUIRES}
+
+%global debug_package %{nil}
+
 %description
 wezterm is a terminal emulator with support for modern features
 such as fonts with ligatures, hyperlinks, tabs and multiple
 windows.
 
-${BUILD_COMMAND}
+# Subpackage: wezterm-common
+%package -n wezterm-common
+Summary: Wez's Terminal Emulator - Common CLI components
+Requires: openssl
+%description -n wezterm-common
+wezterm-common provides the base CLI launcher and utilities shared by
+all wezterm components.
+
+# Subpackage: wezterm-gui
+%package -n wezterm-gui
+Summary: Wez's Terminal Emulator - GUI and multiplexer
+Requires: wezterm-common
+%if 0%{?suse_version}
+Requires: dbus-1, fontconfig, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-egl1, libwayland-cursor0, Mesa-libEGL1, libxcb-keysyms1, libxcb-ewmh2, libxcb-icccm4
+%else
+Requires: dbus, fontconfig, libxcb, libxkbcommon, libxkbcommon-x11, libwayland-client, libwayland-egl, libwayland-cursor, mesa-libEGL, xcb-util-keysyms, xcb-util-wm
+%endif
+%description -n wezterm-gui
+wezterm-gui is a GPU-accelerated cross-platform terminal emulator with
+support for modern features such as fonts with ligatures, hyperlinks,
+tabs and multiple windows.
+
+# Subpackage: wezterm-mux-server
+%package -n wezterm-mux-server
+Summary: Wez's Terminal Emulator - Multiplexer server (headless)
+Requires: openssl
+%description -n wezterm-mux-server
+wezterm-mux-server is a headless terminal multiplexer that can be used
+as a session manager for terminal sessions, without requiring X11,
+Wayland, or other GUI libraries.
+
+# Main package (metapackage)
+Requires: wezterm-common, wezterm-gui, wezterm-mux-server
+
+${BUILD_SECTION}
 
 %install
 set -x
 cd ${HERE}
-mkdir -p %{buildroot}/usr/bin %{buildroot}/etc/profile.d
+mkdir -p %{buildroot}/usr/bin %{buildroot}/etc/profile.d %{buildroot}/usr/share/icons/hicolor/128x128/apps %{buildroot}/usr/share/applications %{buildroot}/usr/share/metainfo %{buildroot}/usr/share/nautilus-python/extensions
 install -Dm755 assets/open-wezterm-here -t %{buildroot}/usr/bin
-install -Dsm755 target/release/wezterm -t %{buildroot}/usr/bin
-install -Dsm755 target/release/wezterm-mux-server -t %{buildroot}/usr/bin
-install -Dsm755 target/release/wezterm-gui -t %{buildroot}/usr/bin
-install -Dsm755 target/release/strip-ansi-escapes -t %{buildroot}/usr/bin
+install -Dsm755 $TARGET_DIR/release/wezterm -t %{buildroot}/usr/bin
+install -Dsm755 $TARGET_DIR/release/wezterm-gui -t %{buildroot}/usr/bin
+install -Dsm755 $TARGET_DIR/release/wezterm-mux-server -t %{buildroot}/usr/bin
+install -Dsm755 $TARGET_DIR/release/strip-ansi-escapes -t %{buildroot}/usr/bin
 install -Dm644 assets/shell-integration/* -t %{buildroot}/etc/profile.d
 install -Dm644 assets/shell-completion/zsh %{buildroot}/usr/share/zsh/site-functions/_wezterm
 install -Dm644 assets/shell-completion/bash %{buildroot}/etc/bash_completion.d/wezterm
@@ -230,18 +255,29 @@ install -Dm644 assets/wezterm.appdata.xml %{buildroot}/usr/share/metainfo/org.we
 install -Dm644 assets/wezterm-nautilus.py %{buildroot}/usr/share/nautilus-python/extensions/wezterm-nautilus.py
 
 %files
-/usr/bin/open-wezterm-here
+# Main package (metapackage) has no files
+
+%files -n wezterm-common
 /usr/bin/wezterm
-/usr/bin/wezterm-gui
-/usr/bin/wezterm-mux-server
 /usr/bin/strip-ansi-escapes
 /usr/share/zsh/site-functions/_wezterm
 /etc/bash_completion.d/wezterm
+/etc/profile.d/*
+
+%files -n wezterm-gui
+/usr/bin/open-wezterm-here
+/usr/bin/wezterm-gui
 /usr/share/icons/hicolor/128x128/apps/org.wezfurlong.wezterm.png
 /usr/share/applications/org.wezfurlong.wezterm.desktop
 /usr/share/metainfo/org.wezfurlong.wezterm.appdata.xml
 /usr/share/nautilus-python/extensions/wezterm-nautilus.py*
-/etc/profile.d/*
+
+%files -n wezterm-mux-server
+/usr/bin/wezterm-mux-server
+
+%changelog
+* Mon Oct 2 2023 Wez Furlong
+- See git for full changelog
 EOF
 
         if test -n "${COPR_SRPM}" ; then
@@ -297,11 +333,11 @@ if [ "\$1" = "remove" ]; then
 fi
 EOF
 
-        install -Dsm755 -t pkg/debian/usr/bin target/release/wezterm-mux-server
-        install -Dsm755 -t pkg/debian/usr/bin target/release/wezterm-gui
-        install -Dsm755 -t pkg/debian/usr/bin target/release/wezterm
+        install -Dsm755 -t pkg/debian/usr/bin $TARGET_DIR/release/wezterm-mux-server
+        install -Dsm755 -t pkg/debian/usr/bin $TARGET_DIR/release/wezterm-gui
+        install -Dsm755 -t pkg/debian/usr/bin $TARGET_DIR/release/wezterm
         install -Dm755 -t pkg/debian/usr/bin assets/open-wezterm-here
-        install -Dsm755 -t pkg/debian/usr/bin target/release/strip-ansi-escapes
+        install -Dsm755 -t pkg/debian/usr/bin $TARGET_DIR/release/strip-ansi-escapes
 
         deps=$(cd pkg && dpkg-shlibdeps -O -e debian/usr/bin/*)
         mv pkg/debian/postinst pkg/debian/DEBIAN/postinst
@@ -366,9 +402,9 @@ options="!check"
 url="https://wezterm.org/"
 makedepends="cmd:tic"
 source="
-  target/release/wezterm
-  target/release/wezterm-gui
-  target/release/wezterm-mux-server
+  $TARGET_DIR/release/wezterm
+  $TARGET_DIR/release/wezterm-gui
+  $TARGET_DIR/release/wezterm-mux-server
   assets/open-wezterm-here
   assets/wezterm.desktop
   assets/wezterm.appdata.xml
