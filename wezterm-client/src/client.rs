@@ -840,25 +840,7 @@ impl Reconnectable {
         if let Some(Ok(ssh_params)) = tls_client.ssh_parameters() {
             if self.tls_creds.is_none() {
                 // We need to bootstrap via an ssh session
-
-                let mut ssh_config = wezterm_ssh::Config::new();
-                ssh_config.add_default_config_files();
-
-                let mut fields = ssh_params.host_and_port.split(':');
-                let host = fields
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("no host component somehow"))?;
-                let port = fields.next();
-
-                let mut ssh_config = ssh_config.for_host(host);
-                if let Some(username) = &ssh_params.username {
-                    ssh_config.insert("user".to_string(), username.to_string());
-                }
-                if let Some(port) = port {
-                    ssh_config.insert("port".to_string(), port.to_string());
-                }
-
-                let sess = ssh_connect_with_ui(ssh_config, ui)?;
+                let sess = crate::ssh_bootstrap::establish_ssh_session(&ssh_params, ui)?;
 
                 let creds = ui.run_and_log_error(|| {
                     // The `tlscreds` command will start the server if needed and then
@@ -867,47 +849,28 @@ impl Reconnectable {
                         "{} cli tlscreds",
                         Self::wezterm_bin_path(&tls_client.remote_wezterm_path)
                     );
-
                     ui.output_str(&format!("Running: {}\n", cmd));
-                    let mut exec = smol::block_on(sess.exec(&cmd, None))
-                        .with_context(|| format!("executing `{}` on remote host", cmd))?;
 
-                    log::debug!("waiting for command to finish");
-                    let status = exec.child.wait()?;
-                    if !status.success() {
-                        anyhow::bail!("{} failed", cmd);
-                    }
-
-                    drop(exec.stdin);
-
-                    let mut stderr = exec.stderr;
-                    thread::spawn(move || {
-                        // stderr is ideally empty
-                        let mut err = String::new();
-                        let _ = stderr.read_to_string(&mut err);
-                        if !err.is_empty() {
-                            log::error!("remote: `{}` stderr -> `{}`", cmd, err);
+                    crate::ssh_bootstrap::execute_remote_command_for_pdu(&sess, &cmd, |pdu| {
+                        match pdu {
+                            Pdu::GetTlsCredsResponse(creds) => {
+                                log::info!("got TLS creds");
+                                // Save the credentials to disk, as that is currently the easiest
+                                // way to get them into openssl.  Ideally we'd keep these entirely
+                                // in memory.
+                                std::fs::write(
+                                    &self.tls_creds_ca_path()?,
+                                    creds.ca_cert_pem.as_bytes(),
+                                )?;
+                                std::fs::write(
+                                    &self.tls_creds_cert_path()?,
+                                    creds.client_cert_pem.as_bytes(),
+                                )?;
+                                Ok(creds)
+                            }
+                            _ => bail!("unexpected response to tlscreds"),
                         }
-                    });
-
-                    let creds = match Pdu::decode(exec.stdout)
-                        .context("reading tlscreds response")?
-                        .pdu
-                    {
-                        Pdu::GetTlsCredsResponse(creds) => creds,
-                        _ => bail!("unexpected response to tlscreds"),
-                    };
-
-                    // Save the credentials to disk, as that is currently the easiest
-                    // way to get them into openssl.  Ideally we'd keep these entirely
-                    // in memory.
-                    std::fs::write(&self.tls_creds_ca_path()?, creds.ca_cert_pem.as_bytes())?;
-                    std::fs::write(
-                        &self.tls_creds_cert_path()?,
-                        creds.client_cert_pem.as_bytes(),
-                    )?;
-                    log::info!("got TLS creds");
-                    Ok(creds)
+                    })
                 })?;
                 self.tls_creds.replace(creds);
             }
