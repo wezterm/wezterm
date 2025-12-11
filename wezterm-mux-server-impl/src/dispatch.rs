@@ -5,7 +5,6 @@ use codec::{DecodedPdu, Pdu, StreamPeek};
 use futures::FutureExt;
 use mux::{Mux, MuxNotification};
 use smol::prelude::*;
-use smol::Async;
 use wezterm_uds::UnixStream;
 
 #[cfg(unix)]
@@ -28,20 +27,16 @@ where
     T: std::io::Read,
     T: std::io::Write,
     T: AsRawDesc,
-    T: std::fmt::Debug,
+    T: std::fmt::Debug + Send + Unpin,
     T: async_io::IoSafe,
 {
     let stream = smol::Async::new(stream)?;
     process_async(stream).await
 }
 
-pub async fn process_async<T>(stream: Async<T>) -> anyhow::Result<()>
+pub async fn process_async<S>(stream: S) -> anyhow::Result<()>
 where
-    T: 'static,
-    T: std::io::Read,
-    T: std::io::Write,
-    T: std::fmt::Debug,
-    T: async_io::IoSafe,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static + std::fmt::Debug,
 {
     log::trace!("process_async called");
 
