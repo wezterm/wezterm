@@ -16,7 +16,7 @@ hide:
 * Configuration via a [configuration file](config/files.md) with hot reloading
 * Multiple Windows (Hotkey: `Super-N`)
 * Splits/Panes (Split horizontally/vertically: `Ctrl-Shift-Alt-%` and `Ctrl-Shift-Alt-"`, move between panes: `Ctrl-Shift-ArrowKey`)
-* Tabs (Hotkey: `Super-T`, next/prev: `Super-Shift-[` and `Super-Shift-]`, go-to: `Super-[1-9]`)
+* Tabs (Hotkey: `Super-T`, next/prev: `Super-Shift-[` and `Super-Shift-]`, go-to: `Super-[1-9]`, drag to reorder or detach)
   <video width="80%" controls src="screenshots/wezterm-tabs.mp4" loop></video>
 * [SSH client with native tabs](ssh.md)
 * [Connect to serial ports for embedded/Arduino work](serial.md)

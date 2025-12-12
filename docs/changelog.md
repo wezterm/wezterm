@@ -69,6 +69,8 @@ As features stabilize some brief notes about them will accumulate here.
   @mgpinf! #6801
 
 #### New
+* Tab bar now supports drag-and-drop: drag tabs to reorder them within the
+  window, or drag outside the window to detach the tab into a new window. #549
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
   and deserialization of JSON, TOML and YAML. Thanks to @expnn! #4969
 * `wezterm ssh` now supports agent forwarding. Thanks to @Riatre! #5345

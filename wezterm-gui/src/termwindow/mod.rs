@@ -362,6 +362,17 @@ enum EventState {
     InProgressWithQueued(Option<PaneId>),
 }
 
+/// Tracks the state of a tab being dragged
+#[derive(Clone, Debug)]
+pub struct TabDragState {
+    /// The index of the tab being dragged
+    pub tab_idx: usize,
+    /// The mouse event that started the drag
+    pub start_event: MouseEvent,
+    /// Whether the drag threshold has been exceeded (to distinguish click from drag)
+    pub drag_threshold_exceeded: bool,
+}
+
 pub struct TermWindow {
     pub window: Option<Window>,
     pub config: ConfigHandle,
@@ -440,6 +451,7 @@ pub struct TermWindow {
 
     ui_items: Vec<UIItem>,
     dragging: Option<(UIItem, MouseEvent)>,
+    tab_dragging: Option<TabDragState>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
@@ -783,6 +795,7 @@ impl TermWindow {
             semantic_zones: HashMap::new(),
             ui_items: vec![],
             dragging: None,
+            tab_dragging: None,
             last_ui_item: None,
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),

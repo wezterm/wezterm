@@ -1,6 +1,7 @@
 use crate::tabbar::TabBarItem;
 use crate::termwindow::{
-    GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
+    GuiWin, MouseCapture, PositionedSplit, ScrollHit, TabDragState, TermWindowNotif, UIItem,
+    UIItemType, TMB,
 };
 use ::window::{
     MouseButtons as WMB, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
@@ -133,6 +134,12 @@ impl super::TermWindow {
                     // Completed a drag
                     return;
                 }
+                if press == &MousePress::Left {
+                    if let Some(tab_drag) = self.tab_dragging.take() {
+                        self.complete_tab_drag(tab_drag, &event, context);
+                        return;
+                    }
+                }
             }
 
             WMEK::Press(ref press) => {
@@ -181,6 +188,28 @@ impl super::TermWindow {
 
                 if let Some((item, start_event)) = self.dragging.take() {
                     self.drag_ui_item(item, start_event, x, y, event, context);
+                    return;
+                }
+
+                // Handle tab dragging
+                if let Some(mut tab_drag) = self.tab_dragging.take() {
+                    let drag_threshold = 10; // pixels
+                    let delta_x = (event.coords.x - tab_drag.start_event.coords.x).abs() as usize;
+                    let delta_y = (event.coords.y - tab_drag.start_event.coords.y).abs() as usize;
+
+                    if !tab_drag.drag_threshold_exceeded
+                        && (delta_x > drag_threshold || delta_y > drag_threshold)
+                    {
+                        tab_drag.drag_threshold_exceeded = true;
+                    }
+
+                    if tab_drag.drag_threshold_exceeded {
+                        // Show grabbing cursor during drag
+                        context.set_cursor(Some(MouseCursor::Hand));
+                        context.invalidate();
+                    }
+
+                    self.tab_dragging = Some(tab_drag);
                     return;
                 }
             }
@@ -462,7 +491,13 @@ impl super::TermWindow {
         match event.kind {
             WMEK::Press(MousePress::Left) => match item {
                 TabBarItem::Tab { tab_idx, .. } => {
-                    self.activate_tab(tab_idx as isize).ok();
+                    // Start potential tab drag operation
+                    self.tab_dragging = Some(TabDragState {
+                        tab_idx,
+                        start_event: event.clone(),
+                        drag_threshold_exceeded: false,
+                    });
+                    // Don't activate yet - we'll do that on release if it wasn't a drag
                 }
                 TabBarItem::NewTabButton { .. } => {
                     self.do_new_tab_button_click(MousePress::Left);
@@ -561,6 +596,97 @@ impl super::TermWindow {
             _ => {}
         }
         context.set_cursor(Some(MouseCursor::Arrow));
+    }
+
+    fn complete_tab_drag(
+        &mut self,
+        tab_drag: TabDragState,
+        event: &MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        if !tab_drag.drag_threshold_exceeded {
+            // This was just a click, not a drag - activate the tab
+            self.activate_tab(tab_drag.tab_idx as isize).ok();
+            return;
+        }
+
+        // Check if mouse is outside window bounds
+        let outside_window = event.coords.x < 0
+            || event.coords.x as usize > self.dimensions.pixel_width
+            || event.coords.y < 0
+            || event.coords.y as usize > self.dimensions.pixel_height;
+
+        if outside_window {
+            // Detach tab to a new window
+            self.detach_tab_to_new_window(tab_drag.tab_idx);
+        } else {
+            // Check if we should reorder tabs based on x position
+            if let Some(target_idx) = self.get_tab_at_position(event.coords.x, event.coords.y) {
+                if target_idx != tab_drag.tab_idx {
+                    self.reorder_tab(tab_drag.tab_idx, target_idx);
+                }
+            }
+            // Activate the dragged tab (it may have moved)
+            // Note: after reorder, the tab might be at a different index
+        }
+
+        context.invalidate();
+    }
+
+    fn get_tab_at_position(&self, x: isize, _y: isize) -> Option<usize> {
+        let tabs: Vec<(usize, usize, usize)> = self
+            .ui_items
+            .iter()
+            .filter_map(|item| {
+                if let UIItemType::TabBar(TabBarItem::Tab { tab_idx, .. }) = &item.item_type {
+                    Some((*tab_idx, item.x, item.x + item.width))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        find_tab_at_x_position(&tabs, x)
+    }
+
+    fn reorder_tab(&mut self, from_idx: usize, to_idx: usize) {
+        if from_idx == to_idx {
+            return;
+        }
+        // First activate the tab we want to move
+        if self.activate_tab(from_idx as isize).is_ok() {
+            // Then move it to the target position
+            if let Err(err) = self.move_tab(to_idx) {
+                log::error!("Failed to reorder tab: {:#}", err);
+            }
+        }
+    }
+
+    fn detach_tab_to_new_window(&mut self, tab_idx: usize) {
+        let mux = Mux::get();
+
+        // Get the tab
+        let tab = match mux.get_window(self.mux_window_id) {
+            Some(window) => match window.get_by_idx(tab_idx) {
+                Some(tab) => tab.clone(),
+                None => return,
+            },
+            None => return,
+        };
+
+        // Get the active pane from the tab
+        let pane_id = match tab.get_active_pane() {
+            Some(pane) => pane.pane_id(),
+            None => return,
+        };
+
+        // Use an async task to move the pane to a new window
+        promise::spawn::spawn(async move {
+            let mux = Mux::get();
+            if let Err(err) = mux.move_pane_to_new_tab(pane_id, None, None).await {
+                log::error!("Failed to detach tab to new window: {:#}", err);
+            }
+        })
+        .detach();
     }
 
     pub fn mouse_event_above_scroll_thumb(
@@ -1049,5 +1175,111 @@ fn mouse_press_to_tmb(press: &MousePress) -> TMB {
         MousePress::Left => TMB::Left,
         MousePress::Right => TMB::Right,
         MousePress::Middle => TMB::Middle,
+    }
+}
+
+// Given a list of tabs as (tab_idx, x_start, x_end), find which tab index
+// corresponds to the given x coordinate. Used for tab drag-and-drop reordering.
+fn find_tab_at_x_position(tabs: &[(usize, usize, usize)], x: isize) -> Option<usize> {
+    if tabs.is_empty() {
+        return None;
+    }
+
+    let mut sorted_tabs = tabs.to_vec();
+    sorted_tabs.sort_by_key(|(_, x_start, _)| *x_start);
+
+    let x_usize = x.max(0) as usize;
+
+    for (tab_idx, x_start, x_end) in &sorted_tabs {
+        if x_usize >= *x_start && x_usize <= *x_end {
+            return Some(*tab_idx);
+        }
+        if x_usize < *x_start {
+            return Some(*tab_idx);
+        }
+    }
+
+    sorted_tabs.last().map(|(tab_idx, _, _)| *tab_idx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_tab_at_x_position_empty() {
+        let tabs: Vec<(usize, usize, usize)> = vec![];
+        assert_eq!(find_tab_at_x_position(&tabs, 50), None);
+    }
+
+    #[test]
+    fn test_find_tab_at_x_position_single_tab() {
+        // Single tab at x=10, width=50 (so x_end=60)
+        let tabs = vec![(0, 10, 60)];
+
+        // Before the tab
+        assert_eq!(find_tab_at_x_position(&tabs, 5), Some(0));
+
+        // Within the tab
+        assert_eq!(find_tab_at_x_position(&tabs, 30), Some(0));
+
+        // After the tab
+        assert_eq!(find_tab_at_x_position(&tabs, 100), Some(0));
+    }
+
+    #[test]
+    fn test_find_tab_at_x_position_multiple_tabs() {
+        // Three tabs: tab0 at 10-60, tab1 at 65-115, tab2 at 120-170
+        let tabs = vec![(0, 10, 60), (1, 65, 115), (2, 120, 170)];
+
+        // Before first tab
+        assert_eq!(find_tab_at_x_position(&tabs, 5), Some(0));
+
+        // Within first tab
+        assert_eq!(find_tab_at_x_position(&tabs, 35), Some(0));
+
+        // Between first and second tab (gap area)
+        assert_eq!(find_tab_at_x_position(&tabs, 62), Some(1));
+
+        // Within second tab
+        assert_eq!(find_tab_at_x_position(&tabs, 90), Some(1));
+
+        // Within third tab
+        assert_eq!(find_tab_at_x_position(&tabs, 145), Some(2));
+
+        // After last tab
+        assert_eq!(find_tab_at_x_position(&tabs, 200), Some(2));
+    }
+
+    #[test]
+    fn test_find_tab_at_x_position_unsorted_input() {
+        // Tabs provided out of order should still work correctly
+        let tabs = vec![(2, 120, 170), (0, 10, 60), (1, 65, 115)];
+
+        assert_eq!(find_tab_at_x_position(&tabs, 35), Some(0));
+        assert_eq!(find_tab_at_x_position(&tabs, 90), Some(1));
+        assert_eq!(find_tab_at_x_position(&tabs, 145), Some(2));
+    }
+
+    #[test]
+    fn test_find_tab_at_x_position_negative_x() {
+        let tabs = vec![(0, 10, 60), (1, 65, 115)];
+
+        // Negative x should be treated as 0
+        assert_eq!(find_tab_at_x_position(&tabs, -10), Some(0));
+    }
+
+    #[test]
+    fn test_find_tab_at_x_position_at_boundaries() {
+        let tabs = vec![(0, 10, 60), (1, 65, 115)];
+
+        // Exactly at start of first tab
+        assert_eq!(find_tab_at_x_position(&tabs, 10), Some(0));
+
+        // Exactly at end of first tab
+        assert_eq!(find_tab_at_x_position(&tabs, 60), Some(0));
+
+        // Exactly at start of second tab
+        assert_eq!(find_tab_at_x_position(&tabs, 65), Some(1));
     }
 }
