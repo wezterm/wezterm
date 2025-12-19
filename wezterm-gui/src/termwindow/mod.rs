@@ -380,6 +380,7 @@ pub struct TermWindow {
     terminal_size: TerminalSize,
     pub mux_window_id: MuxWindowId,
     pub mux_window_id_for_subscriptions: Arc<Mutex<MuxWindowId>>,
+    subscription_cancelled: Arc<AtomicBool>,
     pub render_metrics: RenderMetrics,
     render_state: Option<RenderState>,
     input_map: InputMap,
@@ -696,6 +697,7 @@ impl TermWindow {
             focused: None,
             mux_window_id,
             mux_window_id_for_subscriptions: Arc::new(Mutex::new(mux_window_id)),
+            subscription_cancelled: Arc::new(AtomicBool::new(false)),
             fonts: Rc::clone(&fontconfig),
             render_metrics,
             dimensions,
@@ -1467,21 +1469,13 @@ impl TermWindow {
             | MuxNotification::PaneFocused(pane_id)
             | MuxNotification::PaneRemoved(pane_id)
             | MuxNotification::PaneOutput(pane_id) => {
-                // Ideally we'd check to see if pane_id is part of this window,
-                // but overlays may not be 100% associated with the window
-                // in the mux and we don't want to lose the invalidation
-                // signal for that case, so we just check window validity
-                // here and propagate to the window event handler that
-                // will then do the check with full context.
+                // Check window validity and propagate to the window event handler
+                // that will do the full pane visibility check.
+                // If the window is not found, the mux_window_id may be stale during
+                // a workspace switch - skip this notification but keep the subscription.
                 let mux = Mux::get();
                 if mux.get_window(mux_window_id).is_none() {
-                    // Something inconsistent: cancel subscription
-                    log::debug!(
-                        "PaneOutput: wanted mux_window_id={} from mux, but \
-                         was not found, cancel mux subscription",
-                        mux_window_id
-                    );
-                    return false;
+                    return true;
                 }
                 let _ = pane_id;
             }
@@ -1502,9 +1496,10 @@ impl TermWindow {
                 if window_id != mux_window_id {
                     return true;
                 }
-                // Set the window as dead to unsubscribe from further notifications
-                dead.store(true, Ordering::Relaxed);
-                return false;
+                // The removed window matches our current mux_window_id.
+                // During workspace switches, mux_window_id may be stale.
+                // Skip this notification but keep the subscription alive.
+                return true;
             }
             MuxNotification::TabResized(tab_id)
             | MuxNotification::TabTitleChanged { tab_id, .. } => {
@@ -1543,7 +1538,7 @@ impl TermWindow {
         let window = self.window.clone().expect("window to be valid on startup");
         let mux_window_id = Arc::clone(&self.mux_window_id_for_subscriptions);
         let mux = Mux::get();
-        let dead = Arc::new(AtomicBool::new(false));
+        let dead = Arc::clone(&self.subscription_cancelled);
         mux.subscribe(move |n| {
             if dead.load(Ordering::Relaxed) {
                 return false;
@@ -3619,6 +3614,8 @@ impl TermWindow {
 
 impl Drop for TermWindow {
     fn drop(&mut self) {
+        // Cancel the mux subscription
+        self.subscription_cancelled.store(true, Ordering::Relaxed);
         self.clear_all_overlays();
         if let Some(window) = self.window.take() {
             if let Some(fe) = try_front_end() {
