@@ -281,7 +281,7 @@ hide:
 
     ```console
     $ brew tap wezterm/wezterm-linuxbrew
-    $ brew install wezterm
+    $ brew install wezterm/wezterm-linuxbrew/wezterm
     ```
 
     If you'd like to use a nightly build you can perform a head install:
