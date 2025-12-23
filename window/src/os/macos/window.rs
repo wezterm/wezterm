@@ -1979,7 +1979,8 @@ impl WindowView {
     }
 
     extern "C" fn selected_range(_this: &mut Object, _sel: Sel) -> NSRange {
-        NSRange::new(NSNotFound as _, 0)
+        // Required for macOS dictation support; see #4592
+        NSRange::new(0, 0)
     }
 
     // Called by the IME when inserting composed text and/or emoji
@@ -2039,22 +2040,14 @@ impl WindowView {
             let mut inner = myself.inner.borrow_mut();
             inner.ime_text = s.to_string();
 
-            /*
-            let key_is_down = inner.key_is_down.take().unwrap_or(true);
+            // Show composition preview for dictation; see #4592
+            let status = if s.is_empty() {
+                DeadKeyStatus::None
+            } else {
+                DeadKeyStatus::Composing(s.to_string())
+            };
+            inner.events.dispatch(WindowEvent::AdviseDeadKeyStatus(status));
 
-            let key = KeyCode::composed(s);
-
-            let event = KeyEvent {
-                key,
-                modifiers: Modifiers::NONE,
-                repeat_count: 1,
-                key_is_down,
-            }
-            .normalize_shift();
-
-            inner.ime_last_event.replace(event.clone());
-            inner.events.dispatch(WindowEvent::KeyEvent(event));
-            */
             inner.ime_last_event.take();
             inner.ime_state = ImeDisposition::Acted;
         }
@@ -2070,6 +2063,9 @@ impl WindowView {
             inner.ime_text.clear();
             inner.ime_last_event.take();
             inner.ime_state = ImeDisposition::Acted;
+            inner
+                .events
+                .dispatch(WindowEvent::AdviseDeadKeyStatus(DeadKeyStatus::None));
         }
     }
 
