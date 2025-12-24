@@ -70,6 +70,7 @@ use wezterm_term::{Alert, Progress, StableRowIndex, TerminalConfiguration, Termi
 
 pub mod background;
 pub mod box_model;
+pub mod cairo2d;
 pub mod charselect;
 pub mod clipboard;
 pub mod keyevent;
@@ -845,7 +846,7 @@ impl TermWindow {
         });
 
         let gl = match config.front_end {
-            FrontEndSelection::WebGpu => None,
+            FrontEndSelection::WebGpu | FrontEndSelection::Cairo2D => None,
             _ => Some(window.enable_opengl().await?),
         };
 
@@ -881,6 +882,9 @@ impl TermWindow {
             if let Some(webgpu) = webgpu {
                 myself.webgpu.replace(Rc::clone(&webgpu));
                 myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
+            }
+            if config.front_end == FrontEndSelection::Cairo2D {
+                myself.created(RenderContext::Cairo2D)?;
             }
             myself.load_os_parameters();
             window.show();
@@ -964,6 +968,8 @@ impl TermWindow {
                     self.is_repaint_pending = false;
                     if self.webgpu.is_some() {
                         self.do_paint_webgpu()?;
+                    } else if self.config.front_end == FrontEndSelection::Cairo2D {
+                        self.do_paint_cairo2d()?;
                     } else {
                         self.do_paint(window);
                     }
@@ -1004,6 +1010,8 @@ impl TermWindow {
                     Ok(true)
                 } else if self.webgpu.is_some() {
                     self.do_paint_webgpu()
+                } else if self.config.front_end == FrontEndSelection::Cairo2D {
+                    self.do_paint_cairo2d()
                 } else {
                     Ok(self.do_paint(window))
                 }
@@ -1102,6 +1110,11 @@ impl TermWindow {
 
     fn do_paint_webgpu_impl(&mut self) -> anyhow::Result<bool> {
         self.paint_impl(&mut RenderFrame::WebGpu);
+        Ok(true)
+    }
+
+    fn do_paint_cairo2d(&mut self) -> anyhow::Result<bool> {
+        self.paint_impl(&mut RenderFrame::Cairo2D);
         Ok(true)
     }
 

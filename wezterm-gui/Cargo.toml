@@ -37,6 +37,7 @@ embed-resource.workspace = true
 anyhow.workspace = true
 bitflags.workspace = true
 bytemuck.workspace = true
+cairo-rs.workspace = true
 chrono.workspace = true
 clap.workspace = true
 codec.workspace = true
@@ -95,6 +96,7 @@ walkdir.workspace = true
 wezterm-bidi.workspace = true
 wezterm-blob-leases = { workspace=true, features=["simple_tempdir"] }
 wezterm-client.workspace = true
+wezterm-color-types.workspace = true
 wezterm-dynamic.workspace = true
 wezterm-font.workspace = true
 wezterm-gui-subcommands.workspace = true

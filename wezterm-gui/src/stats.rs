@@ -136,10 +136,33 @@ impl metrics::CounterFn for MyCounter {
     }
 }
 
+struct MyGauge {
+    value: std::sync::atomic::AtomicU64,
+}
+
+impl metrics::GaugeFn for MyGauge {
+    fn increment(&self, value: f64) {
+        let current = f64::from_bits(self.value.load(Ordering::Relaxed));
+        self.value
+            .store((current + value).to_bits(), Ordering::Relaxed);
+    }
+
+    fn decrement(&self, value: f64) {
+        let current = f64::from_bits(self.value.load(Ordering::Relaxed));
+        self.value
+            .store((current - value).to_bits(), Ordering::Relaxed);
+    }
+
+    fn set(&self, value: f64) {
+        self.value.store(value.to_bits(), Ordering::Relaxed);
+    }
+}
+
 struct Inner {
     histograms: HashMap<Key, Arc<ScaledHistogram>>,
     throughput: HashMap<Key, Arc<Throughput>>,
     counters: HashMap<Key, Arc<MyCounter>>,
+    gauges: HashMap<Key, Arc<MyGauge>>,
 }
 
 impl Inner {
@@ -193,6 +216,16 @@ impl Inner {
             },
             Column {
                 name: "COUNT".to_string(),
+                alignment: Alignment::Left,
+            },
+        ];
+        let gauge_cols = vec![
+            Column {
+                name: "STAT".to_string(),
+                alignment: Alignment::Left,
+            },
+            Column {
+                name: "VALUE".to_string(),
                 alignment: Alignment::Left,
             },
         ];
@@ -262,6 +295,17 @@ impl Inner {
                 eprintln!();
                 tabulate_output(&count_cols, &data, &mut std::io::stderr().lock()).ok();
 
+                data.clear();
+                for (key, gauge) in &inner.gauges {
+                    let value = f64::from_bits(gauge.value.load(Ordering::Relaxed));
+                    data.push(vec![key.to_string(), format!("{:.1}", value)]);
+                }
+                if !data.is_empty() {
+                    data.sort_by(|a, b| a[0].cmp(&b[0]));
+                    eprintln!();
+                    tabulate_output(&gauge_cols, &data, &mut std::io::stderr().lock()).ok();
+                }
+
                 last_print = Instant::now();
             }
         }
@@ -273,6 +317,7 @@ fn make_inner() -> Arc<Mutex<Inner>> {
         histograms: HashMap::new(),
         throughput: HashMap::new(),
         counters: HashMap::new(),
+        gauges: HashMap::new(),
     }))
 }
 
@@ -317,8 +362,18 @@ impl Recorder for Stats {
         }
     }
 
-    fn register_gauge(&self, _key: &Key, _metadata: &Metadata) -> Gauge {
-        Gauge::noop()
+    fn register_gauge(&self, key: &Key, _metadata: &Metadata) -> Gauge {
+        let mut inner = self.inner.lock();
+        match inner.gauges.get(key) {
+            Some(existing) => Gauge::from_arc(existing.clone()),
+            None => {
+                let gauge = Arc::new(MyGauge {
+                    value: std::sync::atomic::AtomicU64::new(0),
+                });
+                inner.gauges.insert(key.clone(), gauge.clone());
+                Gauge::from_arc(gauge)
+            }
+        }
     }
 
     fn register_histogram(&self, key: &Key, _metadata: &Metadata) -> metrics::Histogram {

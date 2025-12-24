@@ -621,9 +621,11 @@ impl crate::TermWindow {
             visibility,
         ) {
             // Selected text overrides colors
+            // Composite selection_bg over the cell's original bg_color to handle
+            // selection backgrounds with alpha transparency (e.g., semi-transparent selection)
             (true, _, _, CursorVisibility::Hidden) => (
                 params.selection_fg.when_fully_transparent(params.fg_color),
-                params.selection_bg,
+                params.selection_bg.composite_over(params.bg_color),
                 params.cursor_bg,
             ),
             // block Cursor cell overrides colors

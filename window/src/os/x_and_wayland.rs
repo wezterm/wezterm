@@ -240,6 +240,35 @@ impl WindowOps for Window {
         }
     }
 
+    fn present_software_frame(&self, pixels: &[u8], width: u32, height: u32) -> anyhow::Result<()> {
+        match self {
+            Self::X11(x) => x.present_software_frame(pixels, width, height),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(_w) => {
+                // TODO: Implement Wayland software buffer presentation
+                Ok(())
+            }
+        }
+    }
+
+    fn present_software_frame_region(
+        &self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        dst_x: i16,
+        dst_y: i16,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::X11(x) => x.present_software_frame_region(pixels, width, height, dst_x, dst_y),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(_w) => {
+                // TODO: Implement Wayland software buffer partial presentation
+                Ok(())
+            }
+        }
+    }
+
     fn close(&self) {
         match self {
             Self::X11(x) => x.close(),

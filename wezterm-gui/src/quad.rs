@@ -40,13 +40,32 @@ pub struct Vertex {
     pub hsv: [f32; 3],
     pub has_color: f32,
     pub mix_value: f32,
+    // Stable glyph identifier for Cairo2D cache (ignored by GPU backends)
+    pub glyph_id: u32,
+    // Background color for Cairo2D cache (ignored by GPU backends)
+    pub bg_color: [f32; 4],
+    // Cell boundaries for Cairo2D background fill (ignored by GPU backends)
+    // cell_y is the top of the cell, cell_height is the full cell height
+    pub cell_y: f32,
+    pub cell_height: f32,
 }
 ::window::glium::implement_vertex!(
-    Vertex, position, tex, fg_color, alt_color, hsv, has_color, mix_value
+    Vertex,
+    position,
+    tex,
+    fg_color,
+    alt_color,
+    hsv,
+    has_color,
+    mix_value,
+    glyph_id,
+    bg_color,
+    cell_y,
+    cell_height
 );
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
     0 => Float32x2,
     1 => Float32x2,
     2 => Float32x4,
@@ -54,6 +73,10 @@ impl Vertex {
     4 => Float32x3,
     5 => Float32,
     6 => Float32,
+    7 => Uint32,
+    8 => Float32x4,
+    9 => Float32,
+    10 => Float32,
     ];
 
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
@@ -105,6 +128,15 @@ pub trait QuadTrait {
 
     fn set_hsv(&mut self, hsv: Option<HsbTransform>);
     fn set_position(&mut self, left: f32, top: f32, right: f32, bottom: f32);
+
+    /// Set glyph identifier for Cairo2D caching (ignored by GPU backends)
+    fn set_glyph_id(&mut self, id: u32);
+
+    /// Set background color for Cairo2D caching (ignored by GPU backends)
+    fn set_bg_color(&mut self, color: LinearRgba);
+
+    /// Set cell boundaries for Cairo2D background fill (ignored by GPU backends)
+    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32);
 }
 
 pub enum QuadImpl<'a> {
@@ -152,6 +184,27 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_position(left, top, right, bottom),
             Self::Boxed(q) => q.set_position(left, top, right, bottom),
+        }
+    }
+
+    fn set_glyph_id(&mut self, id: u32) {
+        match self {
+            Self::Vert(q) => q.set_glyph_id(id),
+            Self::Boxed(q) => q.set_glyph_id(id),
+        }
+    }
+
+    fn set_bg_color(&mut self, color: LinearRgba) {
+        match self {
+            Self::Vert(q) => q.set_bg_color(color),
+            Self::Boxed(q) => q.set_bg_color(color),
+        }
+    }
+
+    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32) {
+        match self {
+            Self::Vert(q) => q.set_cell_bounds(cell_y, cell_height),
+            Self::Boxed(q) => q.set_cell_bounds(cell_y, cell_height),
         }
     }
 }
@@ -205,6 +258,26 @@ impl<'a> QuadTrait for Quad<'a> {
         self.vert[V_BOT_LEFT].position = [left, bottom];
         self.vert[V_BOT_RIGHT].position = [right, bottom];
     }
+
+    fn set_glyph_id(&mut self, id: u32) {
+        for v in self.vert.iter_mut() {
+            v.glyph_id = id;
+        }
+    }
+
+    fn set_bg_color(&mut self, color: LinearRgba) {
+        let (r, g, b, a) = color.tuple();
+        for v in self.vert.iter_mut() {
+            v.bg_color = [r, g, b, a];
+        }
+    }
+
+    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32) {
+        for v in self.vert.iter_mut() {
+            v.cell_y = cell_y;
+            v.cell_height = cell_height;
+        }
+    }
 }
 
 pub trait QuadAllocator {
@@ -231,6 +304,10 @@ pub struct BoxedQuad {
     hsv: [f32; 3],
     has_color: f32,
     mix_value: f32,
+    glyph_id: u32,
+    bg_color: [f32; 4],
+    cell_y: f32,
+    cell_height: f32,
 }
 
 impl QuadTrait for BoxedQuad {
@@ -259,6 +336,19 @@ impl QuadTrait for BoxedQuad {
     fn set_position(&mut self, left: f32, top: f32, right: f32, bottom: f32) {
         self.position = (left, top, right, bottom);
     }
+
+    fn set_glyph_id(&mut self, id: u32) {
+        self.glyph_id = id;
+    }
+
+    fn set_bg_color(&mut self, color: LinearRgba) {
+        self.bg_color = color.into();
+    }
+
+    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32) {
+        self.cell_y = cell_y;
+        self.cell_height = cell_height;
+    }
 }
 
 impl BoxedQuad {
@@ -276,6 +366,10 @@ impl BoxedQuad {
             fg_color: verts[V_TOP_LEFT].fg_color,
             hsv: verts[V_TOP_LEFT].hsv,
             mix_value: verts[V_TOP_LEFT].mix_value,
+            glyph_id: verts[V_TOP_LEFT].glyph_id,
+            bg_color: verts[V_TOP_LEFT].bg_color,
+            cell_y: verts[V_TOP_LEFT].cell_y,
+            cell_height: verts[V_TOP_LEFT].cell_height,
         }
     }
 
@@ -303,6 +397,14 @@ impl BoxedQuad {
             self.fg_color[3],
         ));
         quad.set_alt_color_and_mix_value(self.alt_color.into(), self.mix_value);
+        quad.set_glyph_id(self.glyph_id);
+        quad.set_bg_color(LinearRgba::with_components(
+            self.bg_color[0],
+            self.bg_color[1],
+            self.bg_color[2],
+            self.bg_color[3],
+        ));
+        quad.set_cell_bounds(self.cell_y, self.cell_height);
 
         vert
     }
@@ -398,6 +500,9 @@ impl<'a> TripleLayerQuadAllocatorTrait for TripleLayerQuadAllocator<'a> {
 #[cfg(test)]
 #[test]
 fn size() {
-    assert_eq!(std::mem::size_of::<Vertex>() * VERTICES_PER_CELL, 272);
-    assert_eq!(std::mem::size_of::<BoxedQuad>(), 84);
+    // Vertex: 96 bytes (includes cell_y, cell_height for Cairo2D)
+    // 4 vertices per cell = 384 bytes
+    assert_eq!(std::mem::size_of::<Vertex>() * VERTICES_PER_CELL, 384);
+    // BoxedQuad: 112 bytes (includes cell_y, cell_height for Cairo2D)
+    assert_eq!(std::mem::size_of::<BoxedQuad>(), 112);
 }

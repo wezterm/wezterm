@@ -7,6 +7,9 @@ pub enum FrontEndSelection {
     OpenGL,
     WebGpu,
     Software,
+    /// Pure 2D software rendering using Cairo - efficient for VNC/remote desktop
+    /// where GPU acceleration is not available
+    Cairo2D,
 }
 
 /// Corresponds to <https://docs.rs/wgpu/latest/wgpu/struct.AdapterInfo.html>

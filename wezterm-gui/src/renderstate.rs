@@ -1,6 +1,7 @@
 use super::glyphcache::GlyphCache;
 use super::quad::*;
 use super::utilsprites::{RenderMetrics, UtilSprites};
+use crate::termwindow::cairo2d::CairoTexture;
 use crate::termwindow::webgpu::{adapter_info_to_gpu_info, WebGpuState, WebGpuTexture};
 use ::window::bitmaps::atlas::OutOfTextureSpace;
 use ::window::bitmaps::Texture2d;
@@ -23,11 +24,14 @@ const INDICES_PER_CELL: usize = 6;
 pub enum RenderContext {
     Glium(Rc<GliumContext>),
     WebGpu(Rc<WebGpuState>),
+    /// Pure 2D software rendering using Cairo - no GPU required
+    Cairo2D,
 }
 
 pub enum RenderFrame<'a> {
     Glium(&'a mut glium::Frame),
     WebGpu,
+    Cairo2D,
 }
 
 impl RenderContext {
@@ -39,6 +43,7 @@ impl RenderContext {
                 indices,
             )?)),
             Self::WebGpu(state) => Ok(IndexBuffer::WebGpu(WebGpuIndexBuffer::new(indices, state))),
+            Self::Cairo2D => Ok(IndexBuffer::Cairo2D(indices.to_vec())),
         }
     }
 
@@ -47,7 +52,7 @@ impl RenderContext {
             Self::Glium(_) => {
                 vec![Vertex::default(); num_quads * VERTICES_PER_CELL]
             }
-            Self::WebGpu(_) => vec![],
+            Self::WebGpu(_) | Self::Cairo2D => vec![],
         }
     }
 
@@ -64,6 +69,9 @@ impl RenderContext {
             Self::WebGpu(state) => Ok(VertexBuffer::WebGpu(WebGpuVertexBuffer::new(
                 num_quads * VERTICES_PER_CELL,
                 state,
+            ))),
+            Self::Cairo2D => Ok(VertexBuffer::Cairo2D(Cairo2DVertexBuffer::new(
+                num_quads * VERTICES_PER_CELL,
             ))),
         }
     }
@@ -103,6 +111,20 @@ impl RenderContext {
                     Rc::new(WebGpuTexture::new(size as u32, size as u32, state)?);
                 Ok(texture)
             }
+            Self::Cairo2D => {
+                // Cairo has no hard texture size limit, but let's be reasonable
+                let max_size = 8192;
+                if size > max_size {
+                    anyhow::bail!(
+                        "Cannot use a texture of size {} as it exceeds \
+                         the max {} for Cairo 2D rendering",
+                        size,
+                        max_size
+                    );
+                }
+                let texture: Rc<dyn Texture2d> = Rc::new(CairoTexture::new(size, size)?);
+                Ok(texture)
+            }
         }
     }
 
@@ -117,6 +139,7 @@ impl RenderContext {
                 let info = adapter_info_to_gpu_info(state.adapter_info.clone());
                 format!("WebGPU: {}", info.to_string())
             }
+            Self::Cairo2D => "Cairo 2D (Pure Software)".to_string(),
         }
     }
 }
@@ -124,6 +147,7 @@ impl RenderContext {
 pub enum IndexBuffer {
     Glium(GliumIndexBuffer<u32>),
     WebGpu(WebGpuIndexBuffer),
+    Cairo2D(Vec<u32>),
 }
 
 impl IndexBuffer {
@@ -139,11 +163,18 @@ impl IndexBuffer {
             _ => unreachable!(),
         }
     }
+    pub fn cairo2d(&self) -> &Vec<u32> {
+        match self {
+            Self::Cairo2D(c) => c,
+            _ => unreachable!(),
+        }
+    }
 }
 
 pub enum VertexBuffer {
     Glium(GliumVertexBuffer<Vertex>),
     WebGpu(WebGpuVertexBuffer),
+    Cairo2D(Cairo2DVertexBuffer),
 }
 
 impl VertexBuffer {
@@ -165,11 +196,60 @@ impl VertexBuffer {
             _ => unreachable!(),
         }
     }
+    pub fn cairo2d(&self) -> &Cairo2DVertexBuffer {
+        match self {
+            Self::Cairo2D(c) => c,
+            _ => unreachable!(),
+        }
+    }
+    pub fn cairo2d_mut(&mut self) -> &mut Cairo2DVertexBuffer {
+        match self {
+            Self::Cairo2D(c) => c,
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// CPU-side vertex buffer for Cairo 2D rendering
+pub struct Cairo2DVertexBuffer {
+    pub vertices: RefCell<Vec<Vertex>>,
+    num_vertices: usize,
+}
+
+impl Cairo2DVertexBuffer {
+    pub fn new(num_vertices: usize) -> Self {
+        Self {
+            vertices: RefCell::new(vec![Vertex::default(); num_vertices]),
+            num_vertices,
+        }
+    }
+
+    pub fn map(&self) -> Cairo2DMappedVertexBuffer {
+        // Use unsafe to extend the lifetime, using the ExtendStatic trait
+        // for type-safe transmutation (same pattern as Glium and WebGpu)
+        unsafe {
+            let vertices = self.vertices.borrow_mut();
+            Cairo2DMappedVertexBuffer {
+                vertices: vertices.extend_lifetime(),
+            }
+        }
+    }
+
+    pub fn recreate(&mut self) -> Vec<Vertex> {
+        let mut new_vertices = vec![Vertex::default(); self.num_vertices];
+        std::mem::swap(&mut new_vertices, &mut *self.vertices.borrow_mut());
+        new_vertices
+    }
+}
+
+pub struct Cairo2DMappedVertexBuffer {
+    vertices: RefMut<'static, Vec<Vertex>>,
 }
 
 enum MappedVertexBuffer {
     Glium(GliumMappedVertexBuffer),
     WebGpu(WebGpuMappedVertexBuffer),
+    Cairo2D(Cairo2DMappedVertexBuffer),
 }
 
 impl MappedVertexBuffer {
@@ -180,6 +260,7 @@ impl MappedVertexBuffer {
                 let mapping: &mut [Vertex] = bytemuck::cast_slice_mut(&mut g.mapping);
                 &mut mapping[range]
             }
+            Self::Cairo2D(c) => &mut c.vertices[range],
         }
     }
 }
@@ -427,6 +508,10 @@ impl TripleVertexBuffer {
                 })
             }
             VertexBuffer::WebGpu(vb) => MappedVertexBuffer::WebGpu(vb.map()),
+            VertexBuffer::Cairo2D(vb) => {
+                // Cairo2D uses CPU-side buffers with lifetime already extended
+                MappedVertexBuffer::Cairo2D(vb.map())
+            }
         };
 
         MappedQuads {
@@ -595,6 +680,7 @@ impl RenderState {
                             Some(Self::compile_prog(&context, Self::glyph_shader)?)
                         }
                         RenderContext::WebGpu(_) => None,
+                        RenderContext::Cairo2D => None,
                     };
 
                     let main_layer = Rc::new(RenderLayer::new(&context, 1024, 0)?);

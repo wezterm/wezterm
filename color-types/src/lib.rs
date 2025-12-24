@@ -29,6 +29,24 @@ static F32_TO_U8_TABLE: LazyLock<[u32; 104]> = LazyLock::new(generate_linear_f32
 static RGB_TO_SRGB_TABLE: LazyLock<[u8; 256]> = LazyLock::new(generate_rgb_to_srgb8_table);
 #[cfg(feature = "std")]
 static RGB_TO_F32_TABLE: LazyLock<[f32; 256]> = LazyLock::new(generate_rgb_to_linear_f32_table);
+#[cfg(feature = "std")]
+static SRGB_TO_LINEAR_U8_TABLE: LazyLock<[u8; 256]> =
+    LazyLock::new(generate_srgb_to_linear_u8_table);
+
+#[cfg(feature = "std")]
+fn generate_srgb_to_linear_u8_table() -> [u8; 256] {
+    let mut table = [0u8; 256];
+    for (srgb, entry) in table.iter_mut().enumerate() {
+        let c = (srgb as f32) / 255.0;
+        let linear = if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        };
+        *entry = (linear * 255.0) as u8;
+    }
+    table
+}
 
 #[cfg(feature = "std")]
 fn generate_rgb_to_srgb8_table() -> [u8; 256] {
@@ -153,6 +171,13 @@ fn linear_f32_to_srgbf32(f: f32) -> f32 {
 #[cfg(feature = "std")]
 pub fn linear_u8_to_srgb8(f: u8) -> u8 {
     unsafe { *RGB_TO_SRGB_TABLE.get_unchecked(f as usize) }
+}
+
+/// Convert sRGB u8 (0-255) to linear u8 (0-255) using a lookup table.
+/// This is the inverse of linear_u8_to_srgb8.
+#[cfg(feature = "std")]
+pub fn srgb8_to_linear_u8(srgb: u8) -> u8 {
+    unsafe { *SRGB_TO_LINEAR_U8_TABLE.get_unchecked(srgb as usize) }
 }
 
 #[cfg(feature = "std")]
@@ -977,6 +1002,27 @@ impl LinearRgba {
     /// Returns self multiplied by the supplied alpha value
     pub fn mul_alpha(self, alpha: f32) -> Self {
         Self(self.0, self.1, self.2, self.3 * alpha)
+    }
+
+    /// Porter-Duff "over" compositing: self over other.
+    /// Blends self on top of other using self's alpha.
+    /// Blending is done in sRGB space to match Cairo's compositing behavior.
+    /// Result has alpha = 1.0 (fully opaque).
+    pub fn composite_over(self, other: Self) -> Self {
+        // Convert to sRGB for blending (to match Cairo's behavior)
+        let self_srgb = self.to_srgb();
+        let other_srgb = other.to_srgb();
+        let alpha = self_srgb.3;
+        let inv_alpha = 1.0 - alpha;
+        // Blend in sRGB space
+        let blended = SrgbaTuple(
+            self_srgb.0 * alpha + other_srgb.0 * inv_alpha,
+            self_srgb.1 * alpha + other_srgb.1 * inv_alpha,
+            self_srgb.2 * alpha + other_srgb.2 * inv_alpha,
+            1.0, // Result is fully opaque
+        );
+        // Convert back to linear
+        blended.to_linear()
     }
 
     /// Convert to an SRGB u32 pixel
