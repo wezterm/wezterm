@@ -281,13 +281,13 @@ hide:
 
     ```console
     $ brew tap wezterm/wezterm-linuxbrew
-    $ brew install wezterm
+    $ brew install --formula wezterm
     ```
 
     If you'd like to use a nightly build you can perform a head install:
 
     ```console
-    $ brew install --HEAD wezterm
+    $ brew install --HEAD --formula wezterm
     ```
 
     to upgrade to a newer nightly, it is simplest to remove then
@@ -295,7 +295,7 @@ hide:
 
     ```console
     $ brew rm wezterm
-    $ brew install --HEAD wezterm
+    $ brew install --HEAD --formula wezterm
     ```
 === "Nix/NixOS"
 
