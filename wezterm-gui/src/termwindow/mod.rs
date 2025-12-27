@@ -2850,21 +2850,16 @@ impl TermWindow {
             Search(pattern) => {
                 if let Some(pane) = self.get_active_pane_or_overlay() {
                     let mut replace_current = false;
-                    let activate_match_pos = match pattern {
-                        Pattern::Extended(extended_search) => {
-                            match &extended_search.activate_match {
-                                config::keyassignment::ActivateMatchPosition::AfterCursor => {
-                                    ActivateMatchPosition::AfterCursor
-                                }
-                                config::keyassignment::ActivateMatchPosition::BeforeCursor => {
-                                    ActivateMatchPosition::BeforeCursor
-                                }
-                                config::keyassignment::ActivateMatchPosition::First => {
-                                    ActivateMatchPosition::First
-                                }
-                            }
+                    let activate_match_pos = match &pattern.activate_match {
+                        Some(config::keyassignment::ActivateMatchPosition::AfterCursor) => {
+                            ActivateMatchPosition::AfterCursor
                         }
-                        _ => ActivateMatchPosition::First,
+                        Some(config::keyassignment::ActivateMatchPosition::BeforeCursor) => {
+                            ActivateMatchPosition::BeforeCursor
+                        }
+                        Some(config::keyassignment::ActivateMatchPosition::First) | None => {
+                            ActivateMatchPosition::First
+                        }
                     };
                     if let Some(existing) = pane.downcast_ref::<CopyOverlay>() {
                         let mut params = existing.get_params();
@@ -3609,19 +3604,11 @@ impl TermWindow {
     }
 
     fn resolve_search_pattern(&self, pattern: Pattern, pane: &Arc<dyn Pane>) -> MuxPattern {
-        match pattern {
-            Pattern::CaseSensitiveString(s) => MuxPattern::CaseSensitiveString(s),
-            Pattern::CaseInSensitiveString(s) => MuxPattern::CaseInSensitiveString(s),
-            Pattern::Regex(s) => MuxPattern::Regex(s),
-            Pattern::Extended(extended_search) => match extended_search.pattern {
-                InnerPattern::CaseSensitiveString(s) => MuxPattern::CaseSensitiveString(s),
-                InnerPattern::CaseInSensitiveString(s) => MuxPattern::CaseInSensitiveString(s),
-                InnerPattern::Regex(s) => MuxPattern::Regex(s),
-                InnerPattern::CurrentSelectionOrEmptyString => {
-                    MuxPattern::CaseSensitiveString(self.get_selection_text_first_line(pane))
-                }
-            },
-            Pattern::CurrentSelectionOrEmptyString => {
+        match pattern.pattern {
+            InnerPattern::CaseSensitiveString(s) => MuxPattern::CaseSensitiveString(s),
+            InnerPattern::CaseInSensitiveString(s) => MuxPattern::CaseInSensitiveString(s),
+            InnerPattern::Regex(s) => MuxPattern::Regex(s),
+            InnerPattern::CurrentSelectionOrEmptyString => {
                 MuxPattern::CaseSensitiveString(self.get_selection_text_first_line(pane))
             }
         }
