@@ -184,11 +184,12 @@ mod windows {
         }
 
         /// Publish path as the path for class_name.
+        /// Note: We publish the full path (not just filename) so that CLI tools
+        /// running from external terminals can connect to the socket.
+        /// See: https://github.com/wezterm/wezterm/issues/4456
         pub fn new(path: &Path, class_name: &str) -> anyhow::Result<Self> {
             let (mutex_name, map_name) = Self::compute_names(class_name);
             let path = path
-                .file_name()
-                .ok_or_else(|| anyhow::anyhow!("path has no file_name!?"))?
                 .to_str()
                 .ok_or_else(|| anyhow::anyhow!("path is not UTF8!"))?
                 .to_string();
