@@ -139,6 +139,10 @@ struct CliListResultItem {
     is_active: bool,
     is_zoomed: bool,
     tty_name: Option<String>,
+    /// Whether the pane's process has exited
+    is_dead: bool,
+    /// The exit code of the process, if available (null if still running)
+    exit_code: Option<u32>,
 }
 
 impl CliListResultItem {
@@ -157,6 +161,8 @@ impl CliListResultItem {
             is_active_pane,
             is_zoomed_pane,
             tty_name,
+            is_dead,
+            exit_code,
             size:
                 TerminalSize {
                     rows,
@@ -197,6 +203,8 @@ impl CliListResultItem {
             is_active: is_active_pane,
             is_zoomed: is_zoomed_pane,
             tty_name,
+            is_dead,
+            exit_code,
         }
     }
 }

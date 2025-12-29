@@ -250,6 +250,11 @@ pub trait Pane: Downcast + Send + Sync {
     fn mouse_event(&self, event: MouseEvent) -> anyhow::Result<()>;
     fn perform_actions(&self, _actions: Vec<termwiz::escape::Action>) {}
     fn is_dead(&self) -> bool;
+    /// Returns the exit code of the process, if available.
+    /// Returns None if the process is still running or exit code is unknown.
+    fn exit_code(&self) -> Option<u32> {
+        None
+    }
     fn kill(&self) {}
     fn palette(&self) -> ColorPalette;
     fn domain_id(&self) -> DomainId;

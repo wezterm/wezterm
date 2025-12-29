@@ -278,6 +278,8 @@ fn pane_tree(
                 left_col,
                 top_row,
                 tty_name: pane.tty_name(),
+                is_dead: pane.is_dead(),
+                exit_code: pane.exit_code(),
             })
         }
     }
@@ -2161,6 +2163,12 @@ pub struct PaneEntry {
     pub top_row: usize,
     pub left_col: usize,
     pub tty_name: Option<String>,
+    /// Whether the pane's process has exited
+    #[serde(default)]
+    pub is_dead: bool,
+    /// The exit code of the process, if available
+    #[serde(default)]
+    pub exit_code: Option<u32>,
 }
 
 #[derive(Deserialize, Clone, Serialize, PartialEq, Debug)]

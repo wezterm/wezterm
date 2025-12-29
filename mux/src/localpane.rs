@@ -48,8 +48,13 @@ enum ProcessState {
     },
     DeadPendingClose {
         killed: bool,
+        /// The exit code of the process, if available
+        exit_code: Option<u32>,
     },
-    Dead,
+    Dead {
+        /// The exit code of the process, if available
+        exit_code: Option<u32>,
+    },
 }
 
 struct CachedProcInfo {
@@ -255,7 +260,7 @@ impl Pane for LocalPane {
                 let _ = signaller.kill();
                 *killed = true;
             }
-            ProcessState::DeadPendingClose { killed } => {
+            ProcessState::DeadPendingClose { killed, .. } => {
                 *killed = true;
             }
             _ => {}
@@ -288,6 +293,7 @@ impl Pane for LocalPane {
                 };
 
                 if let Some(status) = status {
+                    let exit_code = Some(status.exit_code());
                     let success = match status.success() {
                         true => true,
                         false => configuration()
@@ -301,15 +307,15 @@ impl Pane for LocalPane {
                         success,
                         killed,
                     ) {
-                        (ExitBehavior::Close, _, _) => *proc = ProcessState::Dead,
+                        (ExitBehavior::Close, _, _) => *proc = ProcessState::Dead { exit_code },
                         (ExitBehavior::CloseOnCleanExit, false, _) => {
                             brief = format!("⚠️  Process {cmd} didn't exit cleanly");
                             terse = format!("{status}.");
                             trailer = format!("{EXIT_BEHAVIOR}=\"CloseOnCleanExit\"");
 
-                            *proc = ProcessState::DeadPendingClose { killed: false }
+                            *proc = ProcessState::DeadPendingClose { killed: false, exit_code }
                         }
-                        (ExitBehavior::CloseOnCleanExit, ..) => *proc = ProcessState::Dead,
+                        (ExitBehavior::CloseOnCleanExit, ..) => *proc = ProcessState::Dead { exit_code },
                         (ExitBehavior::Hold, success, false) => {
                             trailer = format!("{EXIT_BEHAVIOR}=\"Hold\"");
 
@@ -320,20 +326,20 @@ impl Pane for LocalPane {
                                 brief = format!("⚠️  Process {cmd} didn't exit cleanly");
                                 terse = format!("{status}");
                             }
-                            *proc = ProcessState::DeadPendingClose { killed: false }
+                            *proc = ProcessState::DeadPendingClose { killed: false, exit_code }
                         }
-                        (ExitBehavior::Hold, _, true) => *proc = ProcessState::Dead,
+                        (ExitBehavior::Hold, _, true) => *proc = ProcessState::Dead { exit_code },
                     }
                     log::debug!("child terminated, new state is {:?}", proc);
                 }
             }
-            ProcessState::DeadPendingClose { killed } => {
+            ProcessState::DeadPendingClose { killed, exit_code } => {
                 if *killed {
-                    *proc = ProcessState::Dead;
+                    *proc = ProcessState::Dead { exit_code: *exit_code };
                     log::debug!("child state -> {:?}", proc);
                 }
             }
-            ProcessState::Dead => {}
+            ProcessState::Dead { .. } => {}
         }
 
         let mut notify = None;
@@ -367,7 +373,16 @@ impl Pane for LocalPane {
         match &*proc {
             ProcessState::Running { .. } => false,
             ProcessState::DeadPendingClose { .. } => false,
-            ProcessState::Dead => true,
+            ProcessState::Dead { .. } => true,
+        }
+    }
+
+    fn exit_code(&self) -> Option<u32> {
+        let proc = self.process.lock();
+        match &*proc {
+            ProcessState::Running { .. } => None,
+            ProcessState::DeadPendingClose { exit_code, .. } => *exit_code,
+            ProcessState::Dead { exit_code } => *exit_code,
         }
     }
 
