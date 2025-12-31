@@ -2,7 +2,6 @@ use crate::domain::{ClientDomain, ClientDomainConfig};
 use crate::pane::ClientPane;
 use anyhow::{anyhow, bail, Context};
 use async_ossl::AsyncSslStream;
-use async_trait::async_trait;
 use codec::*;
 use config::{configuration, SshDomain, TlsDomainClient, UnixDomain, UnixTarget};
 use filedescriptor::FileDescriptor;
@@ -513,19 +512,9 @@ pub fn unix_connect_with_retry(
     error.expect("only get here after at least one unix fail")
 }
 
-#[async_trait(?Send)]
 pub trait AsyncReadAndWrite: Unpin + AsyncRead + AsyncWrite + std::fmt::Debug + Send {}
 
-#[async_trait(?Send)]
-impl<T> AsyncReadAndWrite for Async<T>
-where
-    T: std::fmt::Debug,
-    T: std::io::Write,
-    T: std::io::Read,
-    T: Send,
-    T: async_io::IoSafe,
-{
-}
+impl<T> AsyncReadAndWrite for T where T: Unpin + AsyncRead + AsyncWrite + std::fmt::Debug + Send {}
 
 #[derive(Debug)]
 struct Reconnectable {
