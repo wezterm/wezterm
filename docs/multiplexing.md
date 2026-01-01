@@ -282,3 +282,66 @@ remote terminal session
 ```console
 $ wezterm connect server.name
 ```
+
+## QUIC Domains
+
+A connection to a multiplexer made via a [QUIC](https://en.wikipedia.org/wiki/QUIC)
+encrypted UDP connection is referred to as a *QUIC Domain*. QUIC provides advantages
+over TLS-based connections including lower latency, connection migration support,
+and faster connection establishment.
+
+Starting with this version, wezterm can bootstrap a QUIC session by performing an
+initial connection via SSH to start the wezterm multiplexer on the remote host and
+securely obtain a certificate. Once bootstrapped, the client will use a QUIC
+protected UDP connection to communicate with the server.
+
+### Configuring the client
+
+For each server that you wish to connect to, add a client section like this:
+
+```lua
+config.quic_clients = {
+  {
+    -- A handy alias for this session; you will use `wezterm connect server.name`
+    -- to connect to it.
+    name = 'server.name',
+    -- The host:port for the remote host
+    remote_address = 'server.hostname:9001',
+    -- The value can be "user@host:port"; it accepts the same syntax as the
+    -- `wezterm ssh` subcommand.
+    bootstrap_via_ssh = 'server.hostname',
+  },
+}
+```
+
+[See QuicDomainClient](config/lua/QuicDomainClient.md) for more information on possible
+settings.
+
+### Configuring the server
+
+```lua
+config.quic_servers = {
+  {
+    -- The host:port combination on which the server will listen
+    -- for client connections
+    bind_address = 'server.hostname:9001',
+  },
+}
+```
+
+[See QuicDomainServer](config/lua/QuicDomainServer.md) for more information on possible
+settings.
+
+### Connecting
+
+On the client, running this will connect to the server, start up
+the multiplexer and obtain a certificate for the QUIC connection.
+A connection window will show the progress and may prompt you for
+SSH authentication. Once the connection has been initiated, wezterm
+will automatically reconnect using the certificate it obtained during
+bootstrapping if your connection was interrupted and resume your
+remote terminal session.
+
+```console
+$ wezterm connect server.name
+```
