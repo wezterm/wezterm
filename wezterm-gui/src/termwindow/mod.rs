@@ -708,7 +708,7 @@ impl TermWindow {
             pending_scale_changes: LinkedList::new(),
             terminal_size,
             render_state,
-            cairo2d_state: RefCell::new(render::Cairo2DRenderState::new()),
+            cairo2d_state: RefCell::new(render::Cairo2DRenderState::new(&config)),
             input_map: InputMap::new(&config),
             leader_is_down: None,
             dead_key_status: DeadKeyStatus::None,
@@ -1804,6 +1804,7 @@ impl TermWindow {
         self.line_to_ele_shape_cache
             .borrow_mut()
             .update_config(&config);
+        self.cairo2d_state.borrow_mut().update_config(&config);
         self.fancy_tab_bar.take();
         self.invalidate_fancy_tab_bar();
         self.invalidate_modal();

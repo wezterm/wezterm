@@ -829,6 +829,8 @@ pub struct Config {
     pub line_to_ele_shape_cache_size: usize,
     #[dynamic(default = "default_glyph_cache_image_cache_size")]
     pub glyph_cache_image_cache_size: usize,
+    #[dynamic(default = "default_cairo2d_glyph_cache_size")]
+    pub cairo2d_glyph_cache_size: usize,
 
     #[dynamic(default)]
     pub visual_bell: VisualBell,
@@ -2098,6 +2100,10 @@ fn default_line_quad_cache_size() -> usize {
 
 fn default_line_to_ele_shape_cache_size() -> usize {
     1024
+}
+
+fn default_cairo2d_glyph_cache_size() -> usize {
+    4096
 }
 
 #[derive(Debug, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]

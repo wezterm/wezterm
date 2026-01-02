@@ -25,8 +25,9 @@ use ::window::bitmaps::Texture2d;
 use ::window::WindowOps;
 use anyhow::Context;
 use cairo::{Format, ImageSurface, Operator};
+use config::ConfigHandle;
+use lfucache::LfuCache;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 use wezterm_color_types::srgb8_to_linear_u8;
@@ -91,7 +92,7 @@ impl EfficiencyWindow {
 }
 
 /// Cache key for pre-rendered glyphs
-#[derive(Hash, Eq, PartialEq, Clone, Copy)]
+#[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
 struct GlyphCacheKey {
     glyph_id: u32,
     fg_rgba: u32,
@@ -120,12 +121,12 @@ pub struct Cairo2DRenderState {
     efficiency_1s: EfficiencyWindow,
     efficiency_10s: EfficiencyWindow,
     efficiency_60s: EfficiencyWindow,
-    /// Glyph cache for pre-rendered glyphs
-    glyph_cache: HashMap<GlyphCacheKey, CachedGlyph>,
+    /// Glyph cache for pre-rendered glyphs using LfuCache for proper eviction
+    glyph_cache: LfuCache<GlyphCacheKey, CachedGlyph>,
 }
 
 impl Cairo2DRenderState {
-    pub fn new() -> Self {
+    pub fn new(config: &ConfigHandle) -> Self {
         Self {
             surface: None,
             width: 0,
@@ -135,8 +136,18 @@ impl Cairo2DRenderState {
             efficiency_1s: EfficiencyWindow::new(1),
             efficiency_10s: EfficiencyWindow::new(10),
             efficiency_60s: EfficiencyWindow::new(60),
-            glyph_cache: HashMap::new(),
+            glyph_cache: LfuCache::new(
+                "cairo2d.glyph_cache.hit.rate",
+                "cairo2d.glyph_cache.miss.rate",
+                |config| config.cairo2d_glyph_cache_size,
+                config,
+            ),
         }
+    }
+
+    /// Update cache sizes when configuration changes
+    pub fn update_config(&mut self, config: &ConfigHandle) {
+        self.glyph_cache.update_config(config);
     }
 }
 
@@ -754,9 +765,9 @@ impl crate::TermWindow {
                 cell_height: job.cell_height as u16,
             };
 
-            // Try cache lookup
+            // Try cache lookup (get() requires mut because LfuCache updates frequency)
             let cache_hit = {
-                let state = self.cairo2d_state.borrow();
+                let mut state = self.cairo2d_state.borrow_mut();
                 if let Some(cached) = state.glyph_cache.get(&cache_key) {
                     let cell_width = job.dest_width;
                     let cell_height = job.cell_height;
@@ -875,11 +886,8 @@ impl crate::TermWindow {
 
             {
                 let mut state = self.cairo2d_state.borrow_mut();
-                if state.glyph_cache.len() > 10000 {
-                    metrics::histogram!("cairo2d.cache.evict.rate").record(1.);
-                    state.glyph_cache.clear();
-                }
-                state.glyph_cache.insert(
+                // LfuCache handles eviction automatically based on cairo2d_glyph_cache_size
+                state.glyph_cache.put(
                     cache_key,
                     CachedGlyph {
                         pixels: cell_buffer,
