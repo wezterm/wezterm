@@ -718,6 +718,24 @@ impl WindowOps for Window {
         .await
     }
 
+    fn present_software_frame_region(
+        &self,
+        _pixels: &[u8],
+        width: u32,
+        height: u32,
+        dst_x: i16,
+        dst_y: i16,
+    ) -> anyhow::Result<()> {
+        log::debug!(
+            "present_software_frame_region (macOS stub): {}x{} at ({}, {})",
+            width,
+            height,
+            dst_x,
+            dst_y
+        );
+        anyhow::bail!("macOS software frame presentation not yet implemented")
+    }
+
     fn notify<T: Any + Send + Sync>(&self, t: T)
     where
         Self: Sized,

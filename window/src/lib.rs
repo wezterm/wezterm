@@ -264,23 +264,10 @@ pub trait WindowOps {
         Ok(())
     }
 
-    /// Present a software-rendered frame to the window.
+    /// Present a software-rendered frame (or region) to the window.
     /// The pixels are in BGRA format (native byte order for most platforms).
     /// This is used by the Cairo2D backend for GPU-less rendering.
-    fn present_software_frame(
-        &self,
-        _pixels: &[u8],
-        _width: u32,
-        _height: u32,
-    ) -> anyhow::Result<()> {
-        // Default implementation does nothing - backend-specific implementations
-        // should override this to actually present the frame
-        Ok(())
-    }
-
-    /// Present a partial software-rendered frame to the window.
-    /// Only updates the specified region (dst_y offset, height).
-    /// Used for incremental updates to reduce X11 bandwidth.
+    /// Use dst_x=0, dst_y=0 to present a full frame.
     fn present_software_frame_region(
         &self,
         _pixels: &[u8],

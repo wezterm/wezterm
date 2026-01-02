@@ -2169,64 +2169,6 @@ impl WindowOps for XWindow {
         });
     }
 
-    fn present_software_frame(&self, pixels: &[u8], width: u32, height: u32) -> anyhow::Result<()> {
-        log::debug!(
-            "present_software_frame: {}x{}, {} bytes",
-            width,
-            height,
-            pixels.len()
-        );
-
-        let window_id = self.0;
-        let pixels = pixels.to_vec();
-        XConnection::with_window_inner(window_id, move |inner| {
-            let conn = inner.conn();
-            let xcb_conn = &conn.conn;
-
-            // Use child_id - this is the actual drawable window where OpenGL also renders
-            let target_window = inner.child_id;
-
-            // Create a graphics context for this window
-            let gc = xcb_conn.generate_id();
-            xcb_conn.send_request(&xcb::x::CreateGc {
-                cid: gc,
-                drawable: xcb::x::Drawable::Window(target_window),
-                value_list: &[],
-            });
-
-            // Use the actual depth from the connection (either 24 or 32)
-            let depth = conn.depth;
-
-            log::debug!(
-                "present_software_frame: using depth {}, target child_id",
-                depth
-            );
-
-            // Send the pixel data directly using PutImage
-            // The format is ZPixmap which uses the server's native byte order
-            // Cairo outputs ARGB32 which is 4 bytes per pixel
-            xcb_conn.send_request(&xcb::x::PutImage {
-                format: xcb::x::ImageFormat::ZPixmap,
-                drawable: xcb::x::Drawable::Window(target_window),
-                gc,
-                width: width as u16,
-                height: height as u16,
-                dst_x: 0,
-                dst_y: 0,
-                left_pad: 0,
-                depth,
-                data: &pixels,
-            });
-
-            // Free the graphics context
-            xcb_conn.send_request(&xcb::x::FreeGc { gc });
-            xcb_conn.flush()?;
-
-            Ok(())
-        });
-        Ok(())
-    }
-
     fn present_software_frame_region(
         &self,
         pixels: &[u8],
