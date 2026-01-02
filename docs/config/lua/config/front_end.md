@@ -52,8 +52,8 @@ a pixel buffer using efficient 2D operations.
 
 ### When to Use Cairo2D
 
-Cairo2D is specifically designed for environments where GPU acceleration is
-unavailable or impractical:
+Cairo2D is designed for environments where GPU acceleration is unavailable
+or impractical:
 
 * **Terminal servers** - Multi-user servers where GPU resources are shared or unavailable
 * **VNC/Remote desktop** - Connections where X11 forwarding or remote display protocols are used
@@ -61,56 +61,8 @@ unavailable or impractical:
 * **Headless servers** - Systems without display hardware
 
 In these scenarios, the `Software` front end forces the use of llvmpipe,
-which emulates a full GPU in software. This is highly CPU-intensive and
-inefficient for terminal rendering where most frames are largely static
-text. Cairo2D avoids this overhead by rendering only what has changed.
-
-### Performance Optimizations
-
-Cairo2D implements several optimizations to minimize CPU usage and network
-bandwidth:
-
-#### Line-Based Dirty Region Tracking
-
-Instead of re-rendering the entire screen on every frame, Cairo2D tracks
-which terminal lines have changed using per-line content hashing. When
-content changes, only the affected lines are re-rendered and transmitted.
-This is particularly effective for:
-
-* Scrolling output (only new lines are rendered)
-* Cursor movement (only affected lines update)
-* Partial screen updates (editing in vim, etc.)
-
-#### Glyph Caching
-
-Rendered glyphs are cached with their foreground color, background color,
-and cell dimensions as the cache key. This means each unique character/color
-combination is rendered once and reused, dramatically reducing CPU time for
-static content.
-
-#### Partial X11 Updates
-
-When running over X11, Cairo2D uses targeted `PutImage` calls to update
-only the dirty regions of the window. This reduces bandwidth consumption
-by 50-95% compared to full-frame updates, which is critical for remote
-desktop and VNC scenarios.
-
-#### Frame Reuse
-
-Complete frame hashes are computed to detect when the display content is
-identical to the previous frame. In this case, the existing rendered surface
-is presented without any re-rendering.
-
-### Metrics
-
-Cairo2D exports several metrics for monitoring performance:
-
-* `cairo2d.efficiency_1s_pct` - Bandwidth savings over the last 1 second
-* `cairo2d.efficiency_10s_pct` - Bandwidth savings over the last 10 seconds
-* `cairo2d.efficiency_60s_pct` - Bandwidth savings over the last 60 seconds
-* `cairo2d.cache.hit.rate` - Glyph cache hit rate
-* `cairo2d.frame.reused.rate` - Frames reused without re-rendering
-* `cairo2d.frame.partial.rate` - Frames with partial updates
+which emulates a full GPU in software. Cairo2D avoids this overhead by
+using direct 2D rendering with incremental updates.
 
 ### Platform Support
 
@@ -118,24 +70,12 @@ Currently, Cairo2D is supported on:
 
 * **X11** (Linux) - Full support including partial updates
 
-Wayland support is planned but not yet implemented.
+Wayland, macOS, and Windows support is planned but not yet implemented.
 
 ### Example Configuration
 
 ```lua
--- For terminal server or VNC usage:
 return {
   front_end = "Cairo2D",
 }
 ```
-
-### Comparison with Software Front End
-
-| Aspect | Software (llvmpipe) | Cairo2D |
-|--------|---------------------|---------|
-| Rendering approach | Full GPU emulation | Pure 2D operations |
-| CPU usage | High (GPU emulation overhead) | Low (direct pixel operations) |
-| Incremental updates | No (full frame each time) | Yes (line-based dirty tracking) |
-| Glyph caching | Via GPU texture atlas | Direct pixel cache per fg/bg color |
-| Network bandwidth | Full frame data | Only changed regions |
-| Best for | Compatibility fallback | Remote desktop/VNC/terminal servers |
