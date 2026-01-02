@@ -210,18 +210,55 @@ impl VertexBuffer {
     }
 }
 
+/// Cairo2D-specific cache data stored parallel to vertices.
+/// This data is used by Cairo2D for glyph caching and background rendering,
+/// but is not included in the Vertex struct to avoid bloating GPU buffers.
+#[derive(Clone, Copy, Default)]
+pub struct Cairo2DCacheData {
+    /// Stable glyph identifier for cache lookup
+    pub glyph_id: u32,
+    /// Background color (r, g, b, a) in linear space
+    pub bg_color: [f32; 4],
+    /// Top of the cell in screen coordinates
+    pub cell_y: f32,
+    /// Height of the cell
+    pub cell_height: f32,
+}
+
 /// CPU-side vertex buffer for Cairo 2D rendering
 pub struct Cairo2DVertexBuffer {
     pub vertices: RefCell<Vec<Vertex>>,
+    /// Parallel storage for Cairo2D-specific cache data.
+    /// Each entry corresponds to a quad (4 vertices), so the
+    /// index is vertex_index / VERTICES_PER_CELL.
+    pub cache_data: RefCell<Vec<Cairo2DCacheData>>,
     num_vertices: usize,
 }
 
 impl Cairo2DVertexBuffer {
     pub fn new(num_vertices: usize) -> Self {
+        let num_quads = num_vertices / VERTICES_PER_CELL;
         Self {
             vertices: RefCell::new(vec![Vertex::default(); num_vertices]),
+            cache_data: RefCell::new(vec![Cairo2DCacheData::default(); num_quads]),
             num_vertices,
         }
+    }
+
+    /// Set cache data for a quad at the given vertex index.
+    /// The vertex_index should be the base index of the quad (first of 4 vertices).
+    pub fn set_cache_data(&self, vertex_index: usize, data: Cairo2DCacheData) {
+        let quad_index = vertex_index / VERTICES_PER_CELL;
+        let mut cache_data = self.cache_data.borrow_mut();
+        if quad_index < cache_data.len() {
+            cache_data[quad_index] = data;
+        }
+    }
+
+    /// Get cache data for a quad at the given quad index.
+    pub fn get_cache_data(&self, quad_index: usize) -> Option<Cairo2DCacheData> {
+        let cache_data = self.cache_data.borrow();
+        cache_data.get(quad_index).copied()
     }
 
     pub fn map(&self) -> Cairo2DMappedVertexBuffer {
@@ -236,8 +273,11 @@ impl Cairo2DVertexBuffer {
     }
 
     pub fn recreate(&mut self) -> Vec<Vertex> {
+        let num_quads = self.num_vertices / VERTICES_PER_CELL;
         let mut new_vertices = vec![Vertex::default(); self.num_vertices];
         std::mem::swap(&mut new_vertices, &mut *self.vertices.borrow_mut());
+        // Also reset cache data
+        *self.cache_data.borrow_mut() = vec![Cairo2DCacheData::default(); num_quads];
         new_vertices
     }
 }
@@ -269,6 +309,9 @@ pub struct MappedQuads<'a> {
     mapping: MappedVertexBuffer,
     next: RefMut<'a, usize>,
     capacity: usize,
+    /// Optional Cairo2D cache data for storing glyph/bg metadata separately.
+    /// When present, allocate() returns Cairo2DQuad instead of Quad.
+    cairo2d_cache: Option<&'a RefCell<Vec<Cairo2DCacheData>>>,
 }
 
 pub struct WebGpuMappedVertexBuffer {
@@ -365,26 +408,31 @@ pub struct GliumMappedVertexBuffer {
 
 impl<'a> QuadAllocator for MappedQuads<'a> {
     fn allocate<'b>(&'b mut self) -> anyhow::Result<QuadImpl<'b>> {
-        let idx = *self.next;
+        let quad_idx = *self.next;
         *self.next += 1;
-        let idx = if idx >= self.capacity {
+        let quad_idx = if quad_idx >= self.capacity {
             // We don't have enough quads, so we'll keep re-using
             // the first quad until we reach the end of the render
             // pass, at which point we'll detect this condition
             // and re-allocate the quads.
             0
         } else {
-            idx
+            quad_idx
         };
 
-        let idx = idx * VERTICES_PER_CELL;
+        let vertex_idx = quad_idx * VERTICES_PER_CELL;
         let mut quad = Quad {
-            vert: self.mapping.slice_mut(idx..idx + VERTICES_PER_CELL),
+            vert: self.mapping.slice_mut(vertex_idx..vertex_idx + VERTICES_PER_CELL),
         };
 
         quad.set_has_color(false);
 
-        Ok(QuadImpl::Vert(quad))
+        // For Cairo2D, wrap in Cairo2DQuad to store cache data separately
+        if let Some(cache_data) = self.cairo2d_cache {
+            Ok(QuadImpl::Cairo2D(Cairo2DQuad::new(quad, cache_data, quad_idx)))
+        } else {
+            Ok(QuadImpl::Vert(quad))
+        }
     }
 
     fn extend_with(&mut self, vertices: &[Vertex]) {
@@ -493,7 +541,10 @@ impl TripleVertexBuffer {
         // we can then store in the same struct.
         // This is "safe" because we carry them around together and ensure
         // that the owner is dropped after the derived data.
-        let mapping = match &mut *bufs {
+        //
+        // For Cairo2D, we also need a reference to the cache_data for storing
+        // glyph/bg metadata separately from the Vertex struct.
+        let (mapping, cairo2d_cache) = match &mut *bufs {
             VertexBuffer::Glium(vb) => {
                 let buf_slice = unsafe {
                     vb.slice_mut(..)
@@ -502,15 +553,22 @@ impl TripleVertexBuffer {
                 };
                 let mapping = buf_slice.map();
 
-                MappedVertexBuffer::Glium(GliumMappedVertexBuffer {
-                    _owner: bufs,
-                    mapping,
-                })
+                (
+                    MappedVertexBuffer::Glium(GliumMappedVertexBuffer {
+                        _owner: bufs,
+                        mapping,
+                    }),
+                    None,
+                )
             }
-            VertexBuffer::WebGpu(vb) => MappedVertexBuffer::WebGpu(vb.map()),
+            VertexBuffer::WebGpu(vb) => (MappedVertexBuffer::WebGpu(vb.map()), None),
             VertexBuffer::Cairo2D(vb) => {
-                // Cairo2D uses CPU-side buffers with lifetime already extended
-                MappedVertexBuffer::Cairo2D(vb.map())
+                // Cairo2D uses CPU-side buffers with lifetime already extended.
+                // We also get a reference to the cache_data for storing Cairo2D-specific
+                // metadata (glyph_id, bg_color, cell bounds) separately from vertices.
+                let cache_ref: &'static RefCell<Vec<Cairo2DCacheData>> =
+                    unsafe { std::mem::transmute(&vb.cache_data) };
+                (MappedVertexBuffer::Cairo2D(vb.map()), Some(cache_ref))
             }
         };
 
@@ -518,6 +576,7 @@ impl TripleVertexBuffer {
             mapping,
             next: self.next_quad.borrow_mut(),
             capacity: self.capacity,
+            cairo2d_cache,
         }
     }
 

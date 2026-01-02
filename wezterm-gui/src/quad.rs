@@ -2,10 +2,11 @@
 // this warning to its use
 #![allow(clippy::unneeded_field_pattern)]
 
-use crate::renderstate::BorrowedLayers;
+use crate::renderstate::{BorrowedLayers, Cairo2DCacheData};
 use ::window::bitmaps::TextureRect;
 use ::window::color::LinearRgba;
 use config::HsbTransform;
+use std::cell::RefCell;
 
 /// Each cell is composed of two triangles built from 4 vertices.
 /// The buffer is organized row by row.
@@ -40,14 +41,6 @@ pub struct Vertex {
     pub hsv: [f32; 3],
     pub has_color: f32,
     pub mix_value: f32,
-    // Stable glyph identifier for Cairo2D cache (ignored by GPU backends)
-    pub glyph_id: u32,
-    // Background color for Cairo2D cache (ignored by GPU backends)
-    pub bg_color: [f32; 4],
-    // Cell boundaries for Cairo2D background fill (ignored by GPU backends)
-    // cell_y is the top of the cell, cell_height is the full cell height
-    pub cell_y: f32,
-    pub cell_height: f32,
 }
 ::window::glium::implement_vertex!(
     Vertex,
@@ -57,26 +50,18 @@ pub struct Vertex {
     alt_color,
     hsv,
     has_color,
-    mix_value,
-    glyph_id,
-    bg_color,
-    cell_y,
-    cell_height
+    mix_value
 );
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
-    0 => Float32x2,
-    1 => Float32x2,
-    2 => Float32x4,
-    3 => Float32x4,
-    4 => Float32x3,
-    5 => Float32,
-    6 => Float32,
-    7 => Uint32,
-    8 => Float32x4,
-    9 => Float32,
-    10 => Float32,
+    const ATTRIBS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+    0 => Float32x2,  // position
+    1 => Float32x2,  // tex
+    2 => Float32x4,  // fg_color
+    3 => Float32x4,  // alt_color
+    4 => Float32x3,  // hsv
+    5 => Float32,    // has_color
+    6 => Float32,    // mix_value
     ];
 
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
@@ -142,6 +127,7 @@ pub trait QuadTrait {
 pub enum QuadImpl<'a> {
     Vert(Quad<'a>),
     Boxed(&'a mut BoxedQuad),
+    Cairo2D(Cairo2DQuad<'a>),
 }
 
 impl<'a> QuadTrait for QuadImpl<'a> {
@@ -149,6 +135,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_texture_discrete(x1, x2, y1, y2),
             Self::Boxed(q) => q.set_texture_discrete(x1, x2, y1, y2),
+            Self::Cairo2D(q) => q.set_texture_discrete(x1, x2, y1, y2),
         }
     }
 
@@ -156,6 +143,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_has_color_impl(has_color),
             Self::Boxed(q) => q.set_has_color_impl(has_color),
+            Self::Cairo2D(q) => q.set_has_color_impl(has_color),
         }
     }
 
@@ -163,6 +151,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_fg_color(color),
             Self::Boxed(q) => q.set_fg_color(color),
+            Self::Cairo2D(q) => q.set_fg_color(color),
         }
     }
 
@@ -170,6 +159,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_alt_color_and_mix_value(color, mix_value),
             Self::Boxed(q) => q.set_alt_color_and_mix_value(color, mix_value),
+            Self::Cairo2D(q) => q.set_alt_color_and_mix_value(color, mix_value),
         }
     }
 
@@ -177,6 +167,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_hsv(hsv),
             Self::Boxed(q) => q.set_hsv(hsv),
+            Self::Cairo2D(q) => q.set_hsv(hsv),
         }
     }
 
@@ -184,6 +175,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_position(left, top, right, bottom),
             Self::Boxed(q) => q.set_position(left, top, right, bottom),
+            Self::Cairo2D(q) => q.set_position(left, top, right, bottom),
         }
     }
 
@@ -191,6 +183,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_glyph_id(id),
             Self::Boxed(q) => q.set_glyph_id(id),
+            Self::Cairo2D(q) => q.set_glyph_id(id),
         }
     }
 
@@ -198,6 +191,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_bg_color(color),
             Self::Boxed(q) => q.set_bg_color(color),
+            Self::Cairo2D(q) => q.set_bg_color(color),
         }
     }
 
@@ -205,6 +199,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_cell_bounds(cell_y, cell_height),
             Self::Boxed(q) => q.set_cell_bounds(cell_y, cell_height),
+            Self::Cairo2D(q) => q.set_cell_bounds(cell_y, cell_height),
         }
     }
 }
@@ -259,23 +254,84 @@ impl<'a> QuadTrait for Quad<'a> {
         self.vert[V_BOT_RIGHT].position = [right, bottom];
     }
 
+    // These methods are no-ops for GPU backends.
+    // For Cairo2D, use Cairo2DQuad which stores this data separately.
+    fn set_glyph_id(&mut self, _id: u32) {}
+    fn set_bg_color(&mut self, _color: LinearRgba) {}
+    fn set_cell_bounds(&mut self, _cell_y: f32, _cell_height: f32) {}
+}
+
+/// A quad wrapper for Cairo2D that stores cache data separately from vertices.
+/// This allows the Vertex struct to remain GPU-friendly while Cairo2D gets the
+/// additional metadata it needs for glyph caching and background rendering.
+pub struct Cairo2DQuad<'a> {
+    /// The underlying vertex quad
+    quad: Quad<'a>,
+    /// Reference to the cache data storage (parallel to vertices)
+    cache_data: &'a RefCell<Vec<Cairo2DCacheData>>,
+    /// Index into cache_data for this quad
+    quad_index: usize,
+}
+
+impl<'a> Cairo2DQuad<'a> {
+    pub fn new(
+        quad: Quad<'a>,
+        cache_data: &'a RefCell<Vec<Cairo2DCacheData>>,
+        quad_index: usize,
+    ) -> Self {
+        Self {
+            quad,
+            cache_data,
+            quad_index,
+        }
+    }
+}
+
+impl<'a> QuadTrait for Cairo2DQuad<'a> {
+    fn set_texture_discrete(&mut self, x1: f32, x2: f32, y1: f32, y2: f32) {
+        self.quad.set_texture_discrete(x1, x2, y1, y2);
+    }
+
+    fn set_has_color_impl(&mut self, has_color: f32) {
+        self.quad.set_has_color_impl(has_color);
+    }
+
+    fn set_fg_color(&mut self, color: LinearRgba) {
+        self.quad.set_fg_color(color);
+    }
+
+    fn set_alt_color_and_mix_value(&mut self, color: LinearRgba, mix_value: f32) {
+        self.quad.set_alt_color_and_mix_value(color, mix_value);
+    }
+
+    fn set_hsv(&mut self, hsv: Option<HsbTransform>) {
+        self.quad.set_hsv(hsv);
+    }
+
+    fn set_position(&mut self, left: f32, top: f32, right: f32, bottom: f32) {
+        self.quad.set_position(left, top, right, bottom);
+    }
+
     fn set_glyph_id(&mut self, id: u32) {
-        for v in self.vert.iter_mut() {
-            v.glyph_id = id;
+        let mut cache = self.cache_data.borrow_mut();
+        if let Some(data) = cache.get_mut(self.quad_index) {
+            data.glyph_id = id;
         }
     }
 
     fn set_bg_color(&mut self, color: LinearRgba) {
         let (r, g, b, a) = color.tuple();
-        for v in self.vert.iter_mut() {
-            v.bg_color = [r, g, b, a];
+        let mut cache = self.cache_data.borrow_mut();
+        if let Some(data) = cache.get_mut(self.quad_index) {
+            data.bg_color = [r, g, b, a];
         }
     }
 
     fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32) {
-        for v in self.vert.iter_mut() {
-            v.cell_y = cell_y;
-            v.cell_height = cell_height;
+        let mut cache = self.cache_data.borrow_mut();
+        if let Some(data) = cache.get_mut(self.quad_index) {
+            data.cell_y = cell_y;
+            data.cell_height = cell_height;
         }
     }
 }
@@ -304,10 +360,6 @@ pub struct BoxedQuad {
     hsv: [f32; 3],
     has_color: f32,
     mix_value: f32,
-    glyph_id: u32,
-    bg_color: [f32; 4],
-    cell_y: f32,
-    cell_height: f32,
 }
 
 impl QuadTrait for BoxedQuad {
@@ -337,18 +389,11 @@ impl QuadTrait for BoxedQuad {
         self.position = (left, top, right, bottom);
     }
 
-    fn set_glyph_id(&mut self, id: u32) {
-        self.glyph_id = id;
-    }
-
-    fn set_bg_color(&mut self, color: LinearRgba) {
-        self.bg_color = color.into();
-    }
-
-    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32) {
-        self.cell_y = cell_y;
-        self.cell_height = cell_height;
-    }
+    // These methods are no-ops for HeapQuadAllocator (used for caching).
+    // Cairo2D uses Cairo2DQuad which stores this data separately.
+    fn set_glyph_id(&mut self, _id: u32) {}
+    fn set_bg_color(&mut self, _color: LinearRgba) {}
+    fn set_cell_bounds(&mut self, _cell_y: f32, _cell_height: f32) {}
 }
 
 impl BoxedQuad {
@@ -366,10 +411,6 @@ impl BoxedQuad {
             fg_color: verts[V_TOP_LEFT].fg_color,
             hsv: verts[V_TOP_LEFT].hsv,
             mix_value: verts[V_TOP_LEFT].mix_value,
-            glyph_id: verts[V_TOP_LEFT].glyph_id,
-            bg_color: verts[V_TOP_LEFT].bg_color,
-            cell_y: verts[V_TOP_LEFT].cell_y,
-            cell_height: verts[V_TOP_LEFT].cell_height,
         }
     }
 
@@ -397,14 +438,6 @@ impl BoxedQuad {
             self.fg_color[3],
         ));
         quad.set_alt_color_and_mix_value(self.alt_color.into(), self.mix_value);
-        quad.set_glyph_id(self.glyph_id);
-        quad.set_bg_color(LinearRgba::with_components(
-            self.bg_color[0],
-            self.bg_color[1],
-            self.bg_color[2],
-            self.bg_color[3],
-        ));
-        quad.set_cell_bounds(self.cell_y, self.cell_height);
 
         vert
     }
@@ -500,9 +533,9 @@ impl<'a> TripleLayerQuadAllocatorTrait for TripleLayerQuadAllocator<'a> {
 #[cfg(test)]
 #[test]
 fn size() {
-    // Vertex: 96 bytes (includes cell_y, cell_height for Cairo2D)
-    // 4 vertices per cell = 384 bytes
-    assert_eq!(std::mem::size_of::<Vertex>() * VERTICES_PER_CELL, 384);
-    // BoxedQuad: 112 bytes (includes cell_y, cell_height for Cairo2D)
-    assert_eq!(std::mem::size_of::<BoxedQuad>(), 112);
+    // Vertex: 68 bytes (GPU-only data, Cairo2D cache data stored separately)
+    // 4 vertices per cell = 272 bytes
+    assert_eq!(std::mem::size_of::<Vertex>() * VERTICES_PER_CELL, 272);
+    // BoxedQuad: 84 bytes (GPU-only data)
+    assert_eq!(std::mem::size_of::<BoxedQuad>(), 84);
 }
