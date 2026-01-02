@@ -485,6 +485,22 @@ impl SrgbaTuple {
         Self(self.0, self.1, self.2, self.3 * alpha)
     }
 
+    /// Porter-Duff "over" compositing: self over other.
+    /// Blends self on top of other using self's alpha.
+    /// Blending is done in sRGB space, which matches Cairo's compositing behavior.
+    /// Result has alpha = 1.0 (fully opaque).
+    pub fn composite_over(self, other: Self) -> Self {
+        let alpha = self.3;
+        let inv_alpha = 1.0 - alpha;
+        // Blend in sRGB space (matches Cairo's compositing)
+        Self(
+            self.0 * alpha + other.0 * inv_alpha,
+            self.1 * alpha + other.1 * inv_alpha,
+            self.2 * alpha + other.2 * inv_alpha,
+            1.0, // Result is fully opaque
+        )
+    }
+
     pub fn to_linear(self) -> LinearRgba {
         // See https://docs.rs/palette/0.5.0/src/palette/encoding/srgb.rs.html#43
         fn to_linear(v: f32) -> f32 {
@@ -1006,23 +1022,21 @@ impl LinearRgba {
 
     /// Porter-Duff "over" compositing: self over other.
     /// Blends self on top of other using self's alpha.
-    /// Blending is done in sRGB space to match Cairo's compositing behavior.
+    /// Blending is done in linear space, which is physically correct for light.
     /// Result has alpha = 1.0 (fully opaque).
+    ///
+    /// Note: For sRGB-space blending (matching Cairo's behavior), use
+    /// `SrgbaTuple::composite_over` instead.
     pub fn composite_over(self, other: Self) -> Self {
-        // Convert to sRGB for blending (to match Cairo's behavior)
-        let self_srgb = self.to_srgb();
-        let other_srgb = other.to_srgb();
-        let alpha = self_srgb.3;
+        let alpha = self.3;
         let inv_alpha = 1.0 - alpha;
-        // Blend in sRGB space
-        let blended = SrgbaTuple(
-            self_srgb.0 * alpha + other_srgb.0 * inv_alpha,
-            self_srgb.1 * alpha + other_srgb.1 * inv_alpha,
-            self_srgb.2 * alpha + other_srgb.2 * inv_alpha,
+        // Blend in linear space (physically correct)
+        Self(
+            self.0 * alpha + other.0 * inv_alpha,
+            self.1 * alpha + other.1 * inv_alpha,
+            self.2 * alpha + other.2 * inv_alpha,
             1.0, // Result is fully opaque
-        );
-        // Convert back to linear
-        blended.to_linear()
+        )
     }
 
     /// Convert to an SRGB u32 pixel
