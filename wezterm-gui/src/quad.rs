@@ -121,6 +121,55 @@ pub enum QuadImpl<'a> {
     Vert(Quad<'a>),
     Boxed(&'a mut BoxedQuad),
     Cairo2D(Cairo2DQuad<'a>),
+    /// Heap-allocated quad with parallel Cairo2D cache data (for HeapQuadAllocator)
+    HeapCairo2D(HeapCairo2DQuad<'a>),
+}
+
+/// A heap-allocated quad wrapper that stores Cairo2D cache data in parallel.
+/// Used by HeapQuadAllocator to maintain cache data for Cairo2D line caching.
+pub struct HeapCairo2DQuad<'a> {
+    quad: &'a mut BoxedQuad,
+    cache_data: &'a mut Cairo2DCacheData,
+}
+
+impl<'a> QuadTrait for HeapCairo2DQuad<'a> {
+    fn set_texture_discrete(&mut self, x1: f32, x2: f32, y1: f32, y2: f32) {
+        self.quad.set_texture_discrete(x1, x2, y1, y2);
+    }
+
+    fn set_has_color_impl(&mut self, has_color: f32) {
+        self.quad.set_has_color_impl(has_color);
+    }
+
+    fn set_fg_color(&mut self, color: LinearRgba) {
+        self.quad.set_fg_color(color);
+    }
+
+    fn set_alt_color_and_mix_value(&mut self, color: LinearRgba, mix_value: f32) {
+        self.quad.set_alt_color_and_mix_value(color, mix_value);
+    }
+
+    fn set_hsv(&mut self, hsv: Option<HsbTransform>) {
+        self.quad.set_hsv(hsv);
+    }
+
+    fn set_position(&mut self, left: f32, top: f32, right: f32, bottom: f32) {
+        self.quad.set_position(left, top, right, bottom);
+    }
+
+    fn set_glyph_id(&mut self, id: u32) {
+        self.cache_data.glyph_id = id;
+    }
+
+    fn set_bg_color(&mut self, color: LinearRgba) {
+        let (r, g, b, a) = color.tuple();
+        self.cache_data.bg_color = [r, g, b, a];
+    }
+
+    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32) {
+        self.cache_data.cell_y = cell_y;
+        self.cache_data.cell_height = cell_height;
+    }
 }
 
 impl<'a> QuadTrait for QuadImpl<'a> {
@@ -129,6 +178,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
             Self::Vert(q) => q.set_texture_discrete(x1, x2, y1, y2),
             Self::Boxed(q) => q.set_texture_discrete(x1, x2, y1, y2),
             Self::Cairo2D(q) => q.set_texture_discrete(x1, x2, y1, y2),
+            Self::HeapCairo2D(q) => q.set_texture_discrete(x1, x2, y1, y2),
         }
     }
 
@@ -137,6 +187,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
             Self::Vert(q) => q.set_has_color_impl(has_color),
             Self::Boxed(q) => q.set_has_color_impl(has_color),
             Self::Cairo2D(q) => q.set_has_color_impl(has_color),
+            Self::HeapCairo2D(q) => q.set_has_color_impl(has_color),
         }
     }
 
@@ -145,6 +196,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
             Self::Vert(q) => q.set_fg_color(color),
             Self::Boxed(q) => q.set_fg_color(color),
             Self::Cairo2D(q) => q.set_fg_color(color),
+            Self::HeapCairo2D(q) => q.set_fg_color(color),
         }
     }
 
@@ -153,6 +205,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
             Self::Vert(q) => q.set_alt_color_and_mix_value(color, mix_value),
             Self::Boxed(q) => q.set_alt_color_and_mix_value(color, mix_value),
             Self::Cairo2D(q) => q.set_alt_color_and_mix_value(color, mix_value),
+            Self::HeapCairo2D(q) => q.set_alt_color_and_mix_value(color, mix_value),
         }
     }
 
@@ -161,6 +214,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
             Self::Vert(q) => q.set_hsv(hsv),
             Self::Boxed(q) => q.set_hsv(hsv),
             Self::Cairo2D(q) => q.set_hsv(hsv),
+            Self::HeapCairo2D(q) => q.set_hsv(hsv),
         }
     }
 
@@ -169,6 +223,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
             Self::Vert(q) => q.set_position(left, top, right, bottom),
             Self::Boxed(q) => q.set_position(left, top, right, bottom),
             Self::Cairo2D(q) => q.set_position(left, top, right, bottom),
+            Self::HeapCairo2D(q) => q.set_position(left, top, right, bottom),
         }
     }
 
@@ -177,6 +232,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
             Self::Vert(q) => q.set_glyph_id(id),
             Self::Boxed(q) => q.set_glyph_id(id),
             Self::Cairo2D(q) => q.set_glyph_id(id),
+            Self::HeapCairo2D(q) => q.set_glyph_id(id),
         }
     }
 
@@ -185,6 +241,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
             Self::Vert(q) => q.set_bg_color(color),
             Self::Boxed(q) => q.set_bg_color(color),
             Self::Cairo2D(q) => q.set_bg_color(color),
+            Self::HeapCairo2D(q) => q.set_bg_color(color),
         }
     }
 
@@ -193,6 +250,7 @@ impl<'a> QuadTrait for QuadImpl<'a> {
             Self::Vert(q) => q.set_cell_bounds(cell_y, cell_height),
             Self::Boxed(q) => q.set_cell_bounds(cell_y, cell_height),
             Self::Cairo2D(q) => q.set_cell_bounds(cell_y, cell_height),
+            Self::HeapCairo2D(q) => q.set_cell_bounds(cell_y, cell_height),
         }
     }
 }
@@ -332,11 +390,19 @@ impl<'a> QuadTrait for Cairo2DQuad<'a> {
 pub trait QuadAllocator {
     fn allocate(&mut self) -> anyhow::Result<QuadImpl<'_>>;
     fn extend_with(&mut self, vertices: &[Vertex]);
+    fn extend_with_cache(&mut self, vertices: &[Vertex], cache_data: &[Cairo2DCacheData]);
 }
 
 pub trait TripleLayerQuadAllocatorTrait {
     fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl<'_>>;
     fn extend_with(&mut self, layer_num: usize, vertices: &[Vertex]);
+    /// Extend with both vertices and Cairo2D cache data
+    fn extend_with_cache(
+        &mut self,
+        layer_num: usize,
+        vertices: &[Vertex],
+        cache_data: &[Cairo2DCacheData],
+    );
 }
 
 /// We prefer to allocate a quad at a time for HeapQuadAllocator
@@ -441,6 +507,10 @@ pub struct HeapQuadAllocator {
     layer0: Vec<Box<BoxedQuad>>,
     layer1: Vec<Box<BoxedQuad>>,
     layer2: Vec<Box<BoxedQuad>>,
+    // Parallel Cairo2D cache data storage - only used when caching for Cairo2D backend
+    cache0: Vec<Cairo2DCacheData>,
+    cache1: Vec<Cairo2DCacheData>,
+    cache2: Vec<Cairo2DCacheData>,
 }
 
 impl std::fmt::Debug for HeapQuadAllocator {
@@ -452,9 +522,18 @@ impl std::fmt::Debug for HeapQuadAllocator {
 impl HeapQuadAllocator {
     pub fn apply_to(&self, other: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
         let start = std::time::Instant::now();
-        for (layer_num, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
-            for quad in quads {
-                other.extend_with(layer_num, &quad.to_vertices());
+        for (layer_num, quads, cache) in [
+            (0, &self.layer0, &self.cache0),
+            (1, &self.layer1, &self.cache1),
+            (2, &self.layer2, &self.cache2),
+        ] {
+            for (idx, quad) in quads.iter().enumerate() {
+                let cache_slice = if idx < cache.len() {
+                    &cache[idx..idx + 1]
+                } else {
+                    &[]
+                };
+                other.extend_with_cache(layer_num, &quad.to_vertices(), cache_slice);
             }
         }
         metrics::histogram!("quad_buffer_apply").record(start.elapsed());
@@ -464,17 +543,24 @@ impl HeapQuadAllocator {
 
 impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
     fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl<'_>> {
-        let quads = match layer_num {
-            0 => &mut self.layer0,
-            1 => &mut self.layer1,
-            2 => &mut self.layer2,
+        let (quads, cache) = match layer_num {
+            0 => (&mut self.layer0, &mut self.cache0),
+            1 => (&mut self.layer1, &mut self.cache1),
+            2 => (&mut self.layer2, &mut self.cache2),
             _ => unreachable!(),
         };
 
         quads.push(Box::new(BoxedQuad::default()));
+        cache.push(Cairo2DCacheData::default());
 
+        // Get mutable references to the last elements
         let quad = quads.last_mut().unwrap();
-        Ok(QuadImpl::Boxed(quad))
+        let cache_data = cache.last_mut().unwrap();
+
+        Ok(QuadImpl::HeapCairo2D(HeapCairo2DQuad {
+            quad,
+            cache_data,
+        }))
     }
 
     fn extend_with(&mut self, layer_num: usize, vertices: &[Vertex]) {
@@ -500,6 +586,37 @@ impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
             dest_quads.push(Box::new(BoxedQuad::from_vertices(quad)));
         }
     }
+
+    fn extend_with_cache(
+        &mut self,
+        layer_num: usize,
+        vertices: &[Vertex],
+        cache_data: &[Cairo2DCacheData],
+    ) {
+        if vertices.is_empty() {
+            return;
+        }
+
+        let (dest_quads, dest_cache) = match layer_num {
+            0 => (&mut self.layer0, &mut self.cache0),
+            1 => (&mut self.layer1, &mut self.cache1),
+            2 => (&mut self.layer2, &mut self.cache2),
+            _ => unreachable!(),
+        };
+
+        assert_eq!(vertices.len() % VERTICES_PER_CELL, 0);
+        let src_quads: &[[Vertex; VERTICES_PER_CELL]] =
+            unsafe { std::slice::from_raw_parts(vertices.as_ptr().cast(), vertices.len() / 4) };
+
+        for (idx, quad) in src_quads.iter().enumerate() {
+            dest_quads.push(Box::new(BoxedQuad::from_vertices(quad)));
+            if idx < cache_data.len() {
+                dest_cache.push(cache_data[idx]);
+            } else {
+                dest_cache.push(Cairo2DCacheData::default());
+            }
+        }
+    }
 }
 
 pub enum TripleLayerQuadAllocator<'a> {
@@ -519,6 +636,18 @@ impl<'a> TripleLayerQuadAllocatorTrait for TripleLayerQuadAllocator<'a> {
         match self {
             Self::Gpu(b) => b.extend_with(layer_num, vertices),
             Self::Heap(h) => h.extend_with(layer_num, vertices),
+        }
+    }
+
+    fn extend_with_cache(
+        &mut self,
+        layer_num: usize,
+        vertices: &[Vertex],
+        cache_data: &[Cairo2DCacheData],
+    ) {
+        match self {
+            Self::Gpu(b) => b.extend_with_cache(layer_num, vertices, cache_data),
+            Self::Heap(h) => h.extend_with_cache(layer_num, vertices, cache_data),
         }
     }
 }
