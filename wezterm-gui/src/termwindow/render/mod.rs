@@ -39,6 +39,9 @@ pub mod corners;
 pub mod draw;
 pub mod draw_cairo;
 pub mod fancy_tab_bar;
+
+// Re-export Cairo2D state type for TermWindow
+pub use draw_cairo::Cairo2DRenderState;
 pub mod paint;
 pub mod pane;
 pub mod screen_line;

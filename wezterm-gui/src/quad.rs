@@ -43,14 +43,7 @@ pub struct Vertex {
     pub mix_value: f32,
 }
 ::window::glium::implement_vertex!(
-    Vertex,
-    position,
-    tex,
-    fg_color,
-    alt_color,
-    hsv,
-    has_color,
-    mix_value
+    Vertex, position, tex, fg_color, alt_color, hsv, has_color, mix_value
 );
 
 impl Vertex {

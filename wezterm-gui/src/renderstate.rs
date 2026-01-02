@@ -422,14 +422,18 @@ impl<'a> QuadAllocator for MappedQuads<'a> {
 
         let vertex_idx = quad_idx * VERTICES_PER_CELL;
         let mut quad = Quad {
-            vert: self.mapping.slice_mut(vertex_idx..vertex_idx + VERTICES_PER_CELL),
+            vert: self
+                .mapping
+                .slice_mut(vertex_idx..vertex_idx + VERTICES_PER_CELL),
         };
 
         quad.set_has_color(false);
 
         // For Cairo2D, wrap in Cairo2DQuad to store cache data separately
         if let Some(cache_data) = self.cairo2d_cache {
-            Ok(QuadImpl::Cairo2D(Cairo2DQuad::new(quad, cache_data, quad_idx)))
+            Ok(QuadImpl::Cairo2D(Cairo2DQuad::new(
+                quad, cache_data, quad_idx,
+            )))
         } else {
             Ok(QuadImpl::Vert(quad))
         }

@@ -25,7 +25,6 @@ use ::window::bitmaps::Texture2d;
 use ::window::WindowOps;
 use anyhow::Context;
 use cairo::{Format, ImageSurface, Operator};
-use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -91,33 +90,6 @@ impl EfficiencyWindow {
     }
 }
 
-/// Persistent surface and frame state for incremental rendering
-struct Cairo2DState {
-    surface: Option<ImageSurface>,
-    width: i32,
-    height: i32,
-    last_frame_hash: u64,
-    /// Per-line bucket data for detecting which lines changed
-    line_buckets: Vec<LineBucket>,
-    /// Efficiency tracking over time windows
-    efficiency_1s: EfficiencyWindow,
-    efficiency_10s: EfficiencyWindow,
-    efficiency_60s: EfficiencyWindow,
-}
-
-thread_local! {
-    static CAIRO2D_STATE: RefCell<Cairo2DState> = RefCell::new(Cairo2DState {
-        surface: None,
-        width: 0,
-        height: 0,
-        last_frame_hash: 0,
-        line_buckets: Vec::new(),
-        efficiency_1s: EfficiencyWindow::new(1),
-        efficiency_10s: EfficiencyWindow::new(10),
-        efficiency_60s: EfficiencyWindow::new(60),
-    });
-}
-
 /// Cache key for pre-rendered glyphs
 #[derive(Hash, Eq, PartialEq, Clone, Copy)]
 struct GlyphCacheKey {
@@ -134,8 +106,38 @@ struct CachedGlyph {
     pixels: Vec<u8>,
 }
 
-thread_local! {
-    static GLYPH_CACHE: RefCell<HashMap<GlyphCacheKey, CachedGlyph>> = RefCell::new(HashMap::new());
+/// Persistent surface and frame state for incremental Cairo2D rendering.
+/// This is stored in TermWindow rather than thread_local to properly scope
+/// the state to each window instance.
+pub struct Cairo2DRenderState {
+    surface: Option<ImageSurface>,
+    width: i32,
+    height: i32,
+    last_frame_hash: u64,
+    /// Per-line bucket data for detecting which lines changed
+    line_buckets: Vec<LineBucket>,
+    /// Efficiency tracking over time windows
+    efficiency_1s: EfficiencyWindow,
+    efficiency_10s: EfficiencyWindow,
+    efficiency_60s: EfficiencyWindow,
+    /// Glyph cache for pre-rendered glyphs
+    glyph_cache: HashMap<GlyphCacheKey, CachedGlyph>,
+}
+
+impl Cairo2DRenderState {
+    pub fn new() -> Self {
+        Self {
+            surface: None,
+            width: 0,
+            height: 0,
+            last_frame_hash: 0,
+            line_buckets: Vec::new(),
+            efficiency_1s: EfficiencyWindow::new(1),
+            efficiency_10s: EfficiencyWindow::new(10),
+            efficiency_60s: EfficiencyWindow::new(60),
+            glyph_cache: HashMap::new(),
+        }
+    }
 }
 
 /// Convert linear RGB to sRGB (gamma correction)
@@ -320,18 +322,18 @@ impl crate::TermWindow {
             .collect();
 
         // Check if we can reuse the previous frame
-        let can_reuse = CAIRO2D_STATE.with(|state| {
-            let state = state.borrow();
+        let can_reuse = {
+            let state = self.cairo2d_state.borrow();
             state.surface.is_some()
                 && state.width == width
                 && state.height == height
                 && state.last_frame_hash == frame_hash
-        });
+        };
 
         if can_reuse {
             metrics::histogram!("cairo2d.frame.reused.rate").record(1.);
-            CAIRO2D_STATE.with(|state| {
-                let mut state = state.borrow_mut();
+            {
+                let mut state = self.cairo2d_state.borrow_mut();
                 if let Some(ref mut surface) = state.surface {
                     surface.flush();
                     if let Ok(data) = surface.data() {
@@ -347,18 +349,13 @@ impl crate::TermWindow {
                         }
                     }
                 }
-            });
+            }
             return Ok(());
         }
 
         // Detect dirty regions
-        let (dirty_rows, force_full_redraw) = self.detect_dirty_regions(
-            &current_line_buckets,
-            width,
-            height,
-            cell_height,
-            num_lines,
-        );
+        let (dirty_rows, force_full_redraw) =
+            self.detect_dirty_regions(&current_line_buckets, width, height, cell_height, num_lines);
 
         let do_partial_update = !force_full_redraw && !dirty_rows.is_empty();
         if do_partial_update {
@@ -368,8 +365,8 @@ impl crate::TermWindow {
         }
 
         // Get or create the persistent surface
-        let surface = CAIRO2D_STATE.with(|state| {
-            let mut state = state.borrow_mut();
+        let surface = {
+            let mut state = self.cairo2d_state.borrow_mut();
             if state.surface.is_none() || state.width != width || state.height != height {
                 state.surface = ImageSurface::create(Format::ARgb32, width, height).ok();
                 state.width = width;
@@ -377,7 +374,7 @@ impl crate::TermWindow {
                 state.line_buckets.clear();
             }
             state.surface.take()
-        });
+        };
         let mut surface = surface.context("Failed to get Cairo surface")?;
 
         // Collect glyph jobs for batched processing
@@ -426,8 +423,8 @@ impl crate::TermWindow {
             };
 
             // Update efficiency metrics
-            CAIRO2D_STATE.with(|state| {
-                let mut state = state.borrow_mut();
+            {
+                let mut state = self.cairo2d_state.borrow_mut();
                 let eff_1s = state
                     .efficiency_1s
                     .add(bytes_sent as u64, full_frame_bytes as u64);
@@ -440,16 +437,16 @@ impl crate::TermWindow {
                 metrics::gauge!("cairo2d.efficiency_1s_pct").set(eff_1s);
                 metrics::gauge!("cairo2d.efficiency_10s_pct").set(eff_10s);
                 metrics::gauge!("cairo2d.efficiency_60s_pct").set(eff_60s);
-            });
+            }
         }
 
         // Store surface and line buckets for next frame
-        CAIRO2D_STATE.with(|state| {
-            let mut state = state.borrow_mut();
+        {
+            let mut state = self.cairo2d_state.borrow_mut();
             state.surface = Some(surface);
             state.last_frame_hash = frame_hash;
             state.line_buckets = current_line_buckets;
-        });
+        }
 
         Ok(())
     }
@@ -463,100 +460,95 @@ impl crate::TermWindow {
         cell_height: usize,
         num_lines: usize,
     ) -> (Vec<DirtyRow>, bool) {
-        CAIRO2D_STATE.with(|state| {
-            let state = state.borrow();
-            let prev_buckets = &state.line_buckets;
+        let state = self.cairo2d_state.borrow();
+        let prev_buckets = &state.line_buckets;
 
-            if state.width != width || state.height != height || prev_buckets.is_empty() {
-                return (Vec::new(), true);
+        if state.width != width || state.height != height || prev_buckets.is_empty() {
+            return (Vec::new(), true);
+        }
+
+        struct DirtyLine {
+            idx: usize,
+            min_y: usize,
+            max_y: usize,
+        }
+
+        let mut dirty_lines: Vec<DirtyLine> = Vec::new();
+        for (idx, bucket) in current_line_buckets.iter().enumerate() {
+            let prev_hash = prev_buckets.get(idx).map(|b| b.hash).unwrap_or(0);
+            if bucket.hash != prev_hash {
+                let min_y = if bucket.min_y == usize::MAX {
+                    idx * cell_height
+                } else {
+                    bucket.min_y
+                };
+                let max_y = if bucket.max_y == 0 {
+                    ((idx + 1) * cell_height).min(height as usize)
+                } else {
+                    bucket.max_y
+                };
+                dirty_lines.push(DirtyLine { idx, min_y, max_y });
             }
+        }
 
-            struct DirtyLine {
-                idx: usize,
-                min_y: usize,
-                max_y: usize,
-            }
+        let dirty_ratio = dirty_lines.len() as f32 / num_lines.max(1) as f32;
+        if dirty_ratio > 0.5 {
+            metrics::counter!("cairo2d.partial.full_redraw_threshold").increment(1);
+            return (Vec::new(), true);
+        }
 
-            let mut dirty_lines: Vec<DirtyLine> = Vec::new();
-            for (idx, bucket) in current_line_buckets.iter().enumerate() {
-                let prev_hash = prev_buckets.get(idx).map(|b| b.hash).unwrap_or(0);
-                if bucket.hash != prev_hash {
-                    let min_y = if bucket.min_y == usize::MAX {
-                        idx * cell_height
-                    } else {
-                        bucket.min_y
-                    };
-                    let max_y = if bucket.max_y == 0 {
-                        ((idx + 1) * cell_height).min(height as usize)
-                    } else {
-                        bucket.max_y
-                    };
-                    dirty_lines.push(DirtyLine { idx, min_y, max_y });
+        // Coalesce adjacent dirty lines
+        let mut dirty_rows: Vec<DirtyRow> = Vec::new();
+        let mut region_start_idx: Option<usize> = None;
+        let mut region_end_idx: usize = 0;
+        let mut region_min_y: usize = 0;
+        let mut region_max_y: usize = 0;
+
+        for dirty in &dirty_lines {
+            match region_start_idx {
+                None => {
+                    region_start_idx = Some(dirty.idx);
+                    region_end_idx = dirty.idx;
+                    region_min_y = dirty.min_y;
+                    region_max_y = dirty.max_y;
                 }
-            }
-
-            let dirty_ratio = dirty_lines.len() as f32 / num_lines.max(1) as f32;
-            if dirty_ratio > 0.5 {
-                metrics::counter!("cairo2d.partial.full_redraw_threshold").increment(1);
-                return (Vec::new(), true);
-            }
-
-            // Coalesce adjacent dirty lines
-            let mut dirty_rows: Vec<DirtyRow> = Vec::new();
-            let mut region_start_idx: Option<usize> = None;
-            let mut region_end_idx: usize = 0;
-            let mut region_min_y: usize = 0;
-            let mut region_max_y: usize = 0;
-
-            for dirty in &dirty_lines {
-                match region_start_idx {
-                    None => {
+                Some(_) => {
+                    if dirty.idx <= region_end_idx + 3 {
+                        region_end_idx = dirty.idx;
+                        region_min_y = region_min_y.min(dirty.min_y);
+                        region_max_y = region_max_y.max(dirty.max_y);
+                    } else {
+                        let pixel_height = region_max_y.saturating_sub(region_min_y);
+                        if pixel_height > 0 && region_min_y < height as usize {
+                            dirty_rows.push(DirtyRow {
+                                pixel_y: region_min_y,
+                                pixel_height: pixel_height
+                                    .min((height as usize).saturating_sub(region_min_y)),
+                            });
+                        }
                         region_start_idx = Some(dirty.idx);
                         region_end_idx = dirty.idx;
                         region_min_y = dirty.min_y;
                         region_max_y = dirty.max_y;
                     }
-                    Some(_) => {
-                        if dirty.idx <= region_end_idx + 3 {
-                            region_end_idx = dirty.idx;
-                            region_min_y = region_min_y.min(dirty.min_y);
-                            region_max_y = region_max_y.max(dirty.max_y);
-                        } else {
-                            let pixel_height = region_max_y.saturating_sub(region_min_y);
-                            if pixel_height > 0 && region_min_y < height as usize {
-                                dirty_rows.push(DirtyRow {
-                                    pixel_y: region_min_y,
-                                    pixel_height: pixel_height
-                                        .min((height as usize).saturating_sub(region_min_y)),
-                                });
-                            }
-                            region_start_idx = Some(dirty.idx);
-                            region_end_idx = dirty.idx;
-                            region_min_y = dirty.min_y;
-                            region_max_y = dirty.max_y;
-                        }
-                    }
                 }
             }
+        }
 
-            if region_start_idx.is_some() {
-                let pixel_height = region_max_y.saturating_sub(region_min_y);
-                if pixel_height > 0 && region_min_y < height as usize {
-                    dirty_rows.push(DirtyRow {
-                        pixel_y: region_min_y,
-                        pixel_height: pixel_height
-                            .min((height as usize).saturating_sub(region_min_y)),
-                    });
-                }
+        if region_start_idx.is_some() {
+            let pixel_height = region_max_y.saturating_sub(region_min_y);
+            if pixel_height > 0 && region_min_y < height as usize {
+                dirty_rows.push(DirtyRow {
+                    pixel_y: region_min_y,
+                    pixel_height: pixel_height.min((height as usize).saturating_sub(region_min_y)),
+                });
             }
+        }
 
-            metrics::counter!("cairo2d.partial.dirty_lines_total")
-                .increment(dirty_lines.len() as u64);
-            metrics::counter!("cairo2d.partial.dirty_regions_total")
-                .increment(dirty_rows.len() as u64);
+        metrics::counter!("cairo2d.partial.dirty_lines_total").increment(dirty_lines.len() as u64);
+        metrics::counter!("cairo2d.partial.dirty_regions_total").increment(dirty_rows.len() as u64);
 
-            (dirty_rows, false)
-        })
+        (dirty_rows, false)
     }
 
     /// PASS 1: Render solid colors and images, collect glyph jobs
@@ -763,9 +755,9 @@ impl crate::TermWindow {
             };
 
             // Try cache lookup
-            let cache_hit = GLYPH_CACHE.with(|cache| {
-                let cache_ref = cache.borrow();
-                if let Some(cached) = cache_ref.get(&cache_key) {
+            let cache_hit = {
+                let state = self.cairo2d_state.borrow();
+                if let Some(cached) = state.glyph_cache.get(&cache_key) {
                     let cell_width = job.dest_width;
                     let cell_height = job.cell_height;
                     for row in 0..cell_height {
@@ -784,10 +776,11 @@ impl crate::TermWindow {
                             .copy_from_slice(&cached.pixels[src_start..src_start + copy_bytes]);
                     }
                     metrics::histogram!("cairo2d.cache.hit.rate").record(1.);
-                    return true;
+                    true
+                } else {
+                    false
                 }
-                false
-            });
+            };
 
             if cache_hit {
                 continue;
@@ -880,14 +873,19 @@ impl crate::TermWindow {
                     .copy_from_slice(&dest_data[src_start..src_start + copy_bytes]);
             }
 
-            GLYPH_CACHE.with(|cache| {
-                let mut cache_mut = cache.borrow_mut();
-                if cache_mut.len() > 10000 {
+            {
+                let mut state = self.cairo2d_state.borrow_mut();
+                if state.glyph_cache.len() > 10000 {
                     metrics::histogram!("cairo2d.cache.evict.rate").record(1.);
-                    cache_mut.clear();
+                    state.glyph_cache.clear();
                 }
-                cache_mut.insert(cache_key, CachedGlyph { pixels: cell_buffer });
-            });
+                state.glyph_cache.insert(
+                    cache_key,
+                    CachedGlyph {
+                        pixels: cell_buffer,
+                    },
+                );
+            }
         }
 
         drop(dest_data);

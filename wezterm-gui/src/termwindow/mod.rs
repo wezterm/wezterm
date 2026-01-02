@@ -383,6 +383,8 @@ pub struct TermWindow {
     pub mux_window_id_for_subscriptions: Arc<Mutex<MuxWindowId>>,
     pub render_metrics: RenderMetrics,
     render_state: Option<RenderState>,
+    /// Cairo2D rendering state (surface, caches, efficiency tracking)
+    cairo2d_state: RefCell<render::Cairo2DRenderState>,
     input_map: InputMap,
     /// If is_some, the LEADER modifier is active until the specified instant.
     leader_is_down: Option<std::time::Instant>,
@@ -706,6 +708,7 @@ impl TermWindow {
             pending_scale_changes: LinkedList::new(),
             terminal_size,
             render_state,
+            cairo2d_state: RefCell::new(render::Cairo2DRenderState::new()),
             input_map: InputMap::new(&config),
             leader_is_down: None,
             dead_key_status: DeadKeyStatus::None,
