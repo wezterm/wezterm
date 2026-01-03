@@ -1,6 +1,6 @@
 use crate::quad::Vertex;
 use anyhow::anyhow;
-use config::{ConfigHandle, GpuInfo, WebGpuPowerPreference};
+use config::{ConfigHandle, GpuInfo, WebGpuPowerPreference, WebGpuPresentMode};
 use std::cell::RefCell;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -359,12 +359,42 @@ impl WebGpuState {
             vec![]
         };
 
-        let config = wgpu::SurfaceConfiguration {
+        // Determine present mode based on config and surface capabilities
+        let present_mode = match config.webgpu_present_mode {
+            WebGpuPresentMode::Fifo => wgpu::PresentMode::Fifo,
+            WebGpuPresentMode::Mailbox => {
+                if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                    wgpu::PresentMode::Mailbox
+                } else {
+                    log::warn!("Mailbox present mode not supported, falling back to Fifo");
+                    wgpu::PresentMode::Fifo
+                }
+            }
+            WebGpuPresentMode::Immediate => {
+                if caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
+                    wgpu::PresentMode::Immediate
+                } else {
+                    log::warn!("Immediate present mode not supported, falling back to Fifo");
+                    wgpu::PresentMode::Fifo
+                }
+            }
+            WebGpuPresentMode::AutoNoVsync => {
+                if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                    wgpu::PresentMode::Mailbox
+                } else if caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
+                    wgpu::PresentMode::Immediate
+                } else {
+                    wgpu::PresentMode::Fifo
+                }
+            }
+        };
+
+        let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: dimensions.pixel_width as u32,
             height: dimensions.pixel_height as u32,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode: if caps
                 .alpha_modes
                 .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
@@ -379,9 +409,9 @@ impl WebGpuState {
                 wgpu::CompositeAlphaMode::Auto
             },
             view_formats,
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: config.webgpu_max_frame_latency,
         };
-        surface.configure(&device, &config);
+        surface.configure(&device, &surface_config);
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("../shader.wgsl"));
 
@@ -466,7 +496,7 @@ impl WebGpuState {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format: surface_config.format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -498,7 +528,7 @@ impl WebGpuState {
             surface,
             device,
             queue,
-            config: RefCell::new(config),
+            config: RefCell::new(surface_config),
             dimensions: RefCell::new(dimensions),
             render_pipeline,
             handle,

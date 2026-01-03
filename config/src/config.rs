@@ -24,7 +24,8 @@ use crate::{
     default_config_with_overrides_applied, default_one_point_oh, default_one_point_oh_f64,
     default_true, default_win32_acrylic_accent_color, CellWidth, GpuInfo,
     IntegratedTitleButtonColor, KeyMapPreference, LoadedConfig, MouseEventTriggerMods, RgbaColor,
-    SerialDomain, SystemBackdrop, WebGpuPowerPreference, CONFIG_DIRS, CONFIG_FILE_OVERRIDE,
+    SerialDomain, SystemBackdrop, WebGpuPowerPreference, WebGpuPresentMode, CONFIG_DIRS,
+    CONFIG_FILE_OVERRIDE,
     CONFIG_OVERRIDES, CONFIG_SKIP, HOME_DIR,
 };
 use anyhow::Context;
@@ -348,6 +349,19 @@ pub struct Config {
 
     #[dynamic(default)]
     pub webgpu_preferred_adapter: Option<GpuInfo>,
+
+    /// Controls GPU presentation timing.
+    /// - Fifo: Vsync enabled, may add latency (default)
+    /// - Mailbox: Low latency without tearing (if supported)
+    /// - Immediate: Lowest latency, may tear
+    /// - AutoNoVsync: Tries Mailbox, falls back to Immediate
+    #[dynamic(default)]
+    pub webgpu_present_mode: WebGpuPresentMode,
+
+    /// Maximum number of frames the GPU can queue before blocking.
+    /// Lower values reduce input latency. Default is 2.
+    #[dynamic(default = "default_webgpu_max_frame_latency")]
+    pub webgpu_max_frame_latency: u32,
 
     #[dynamic(default)]
     pub wsl_domains: Option<Vec<WslDomain>>,
@@ -1804,6 +1818,10 @@ fn default_anim_fps() -> u8 {
 
 fn default_max_fps() -> u64 {
     60
+}
+
+fn default_webgpu_max_frame_latency() -> u32 {
+    2
 }
 
 fn default_tiling_desktop_environments() -> Vec<String> {

@@ -55,3 +55,23 @@ impl Default for WebGpuPowerPreference {
         Self::LowPower
     }
 }
+
+/// Controls GPU presentation timing and vsync behavior.
+/// See <https://docs.rs/wgpu/latest/wgpu/enum.PresentMode.html>
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
+pub enum WebGpuPresentMode {
+    /// Vsync enabled, may add latency (default)
+    Fifo,
+    /// Low latency without tearing, if supported by the display
+    Mailbox,
+    /// Lowest latency, may cause tearing
+    Immediate,
+    /// Automatically selects Mailbox if available, otherwise Immediate
+    AutoNoVsync,
+}
+
+impl Default for WebGpuPresentMode {
+    fn default() -> Self {
+        Self::Fifo
+    }
+}
