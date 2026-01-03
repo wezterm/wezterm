@@ -1,11 +1,5 @@
 /// Shared utilities for loading PEM-encoded certificates from the filesystem
-use anyhow::Context;
-use std::path::Path;
-
-/// Load PEM data from a file
-pub fn load_pem_file(path: &Path) -> anyhow::Result<Vec<u8>> {
-    std::fs::read(path).context(format!("reading PEM file from {}", path.display()))
-}
+use std::fs;
 
 /// Iterate over PEM root certificate paths and load their contents.
 ///
@@ -21,13 +15,13 @@ where
     for root_cert_path in pem_root_certs {
         if root_cert_path.is_dir() {
             // If it's a directory, load all .pem files
-            match std::fs::read_dir(root_cert_path) {
+            match fs::read_dir(root_cert_path) {
                 Ok(entries) => {
                     for entry in entries {
                         if let Ok(entry) = entry {
                             let path = entry.path();
                             if path.extension().map_or(false, |ext| ext == "pem") {
-                                match load_pem_file(&path) {
+                                match fs::read(&path) {
                                     Ok(data) => {
                                         if let Err(e) = f(data) {
                                             log::warn!(
@@ -55,7 +49,7 @@ where
             }
         } else {
             // If it's a file, load it directly
-            match load_pem_file(root_cert_path) {
+            match fs::read(root_cert_path) {
                 Ok(data) => {
                     if let Err(e) = f(data) {
                         log::warn!(

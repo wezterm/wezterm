@@ -891,6 +891,12 @@ impl Reconnectable {
                         }
                     })
                 })?;
+
+                // Validate credentials before using them
+                if !Self::is_certificate_valid(&creds.client_cert_pem) {
+                    bail!("TLS credentials from SSH bootstrap are invalid");
+                }
+
                 self.tls_creds.replace(creds);
             }
         }
@@ -944,26 +950,27 @@ impl Reconnectable {
                 key_file.display()
             ))?;
 
-        fn load_cert(name: &Path) -> anyhow::Result<X509> {
-            let cert_bytes = std::fs::read(name)?;
-            log::trace!("loaded {}", name.display());
+        // Helper to load certificate from PEM file
+        fn load_cert_from_file(path: &Path) -> anyhow::Result<X509> {
+            let cert_bytes = std::fs::read(path)?;
+            log::trace!("loaded {}", path.display());
             Ok(X509::from_pem(&cert_bytes)?)
         }
-        for name in &tls_client.pem_root_certs {
-            if name.is_dir() {
-                for entry in std::fs::read_dir(name)? {
-                    if let Ok(cert) = load_cert(&entry?.path()) {
-                        connector.cert_store_mut().add_cert(cert).ok();
-                    }
-                }
-            } else {
-                connector.cert_store_mut().add_cert(load_cert(name)?)?;
+
+        // Load root certificates from pem_root_certs
+        let _ = config::pem_util::load_pem_root_certs(&tls_client.pem_root_certs, |data| {
+            if let Ok(cert) = X509::from_pem(&data) {
+                connector.cert_store_mut().add_cert(cert).ok();
+                log::trace!("loaded certificate from pem_root_certs");
             }
-        }
+            Ok(())
+        });
 
         if let Ok(ca_path) = self.tls_creds_ca_path() {
             if ca_path.exists() {
-                connector.cert_store_mut().add_cert(load_cert(&ca_path)?)?;
+                connector
+                    .cert_store_mut()
+                    .add_cert(load_cert_from_file(&ca_path)?)?;
             }
         }
 
