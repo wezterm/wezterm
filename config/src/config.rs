@@ -25,8 +25,7 @@ use crate::{
     default_true, default_win32_acrylic_accent_color, CellWidth, GpuInfo,
     IntegratedTitleButtonColor, KeyMapPreference, LoadedConfig, MouseEventTriggerMods, RgbaColor,
     SerialDomain, SystemBackdrop, WebGpuPowerPreference, WebGpuPresentMode, CONFIG_DIRS,
-    CONFIG_FILE_OVERRIDE,
-    CONFIG_OVERRIDES, CONFIG_SKIP, HOME_DIR,
+    CONFIG_FILE_OVERRIDE, CONFIG_OVERRIDES, CONFIG_SKIP, HOME_DIR,
 };
 use anyhow::Context;
 use luahelper::impl_lua_conversion_dynamic;
