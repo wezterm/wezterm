@@ -1,0 +1,12 @@
+[package]
+name = "term-load-gen"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal load generator for measuring rendering performance"
+
+# Keep this crate out of the main wezterm workspace
+[workspace]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+terminal_size = "0.4"
