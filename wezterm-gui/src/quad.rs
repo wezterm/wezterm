@@ -390,14 +390,16 @@ impl<'a> QuadTrait for Cairo2DQuad<'a> {
 pub trait QuadAllocator {
     fn allocate(&mut self) -> anyhow::Result<QuadImpl<'_>>;
     fn extend_with(&mut self, vertices: &[Vertex]);
-    fn extend_with_cache(&mut self, vertices: &[Vertex], cache_data: &[Cairo2DCacheData]);
+    /// Cairo2D specific - extends with vertices and cache data
+    fn extend_with_cairo2d(&mut self, vertices: &[Vertex], cache_data: &[Cairo2DCacheData]);
 }
 
 pub trait TripleLayerQuadAllocatorTrait {
     fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl<'_>>;
+    /// Original GPU method - extends with vertices only
     fn extend_with(&mut self, layer_num: usize, vertices: &[Vertex]);
-    /// Extend with both vertices and Cairo2D cache data
-    fn extend_with_cache(
+    /// Cairo2D specific - extends with vertices and cache data
+    fn extend_with_cairo2d(
         &mut self,
         layer_num: usize,
         vertices: &[Vertex],
@@ -502,7 +504,6 @@ impl BoxedQuad {
     }
 }
 
-#[derive(Default)]
 pub struct HeapQuadAllocator {
     layer0: Vec<Box<BoxedQuad>>,
     layer1: Vec<Box<BoxedQuad>>,
@@ -511,6 +512,8 @@ pub struct HeapQuadAllocator {
     cache0: Vec<Cairo2DCacheData>,
     cache1: Vec<Cairo2DCacheData>,
     cache2: Vec<Cairo2DCacheData>,
+    // Controls whether to use Cairo2D-specific caching behavior
+    uses_cairo2d: bool,
 }
 
 impl std::fmt::Debug for HeapQuadAllocator {
@@ -520,20 +523,41 @@ impl std::fmt::Debug for HeapQuadAllocator {
 }
 
 impl HeapQuadAllocator {
+    pub fn new(uses_cairo2d: bool) -> Self {
+        Self {
+            layer0: Vec::new(),
+            layer1: Vec::new(),
+            layer2: Vec::new(),
+            cache0: Vec::new(),
+            cache1: Vec::new(),
+            cache2: Vec::new(),
+            uses_cairo2d,
+        }
+    }
+
     pub fn apply_to(&self, other: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
         let start = std::time::Instant::now();
-        for (layer_num, quads, cache) in [
-            (0, &self.layer0, &self.cache0),
-            (1, &self.layer1, &self.cache1),
-            (2, &self.layer2, &self.cache2),
-        ] {
-            for (idx, quad) in quads.iter().enumerate() {
-                let cache_slice = if idx < cache.len() {
-                    &cache[idx..idx + 1]
-                } else {
-                    &[]
-                };
-                other.extend_with_cache(layer_num, &quad.to_vertices(), cache_slice);
+        if self.uses_cairo2d {
+            for (layer_num, quads, cache) in [
+                (0, &self.layer0, &self.cache0),
+                (1, &self.layer1, &self.cache1),
+                (2, &self.layer2, &self.cache2),
+            ] {
+                for (idx, quad) in quads.iter().enumerate() {
+                    let cache_slice = if idx < cache.len() {
+                        &cache[idx..idx + 1]
+                    } else {
+                        &[]
+                    };
+                    other.extend_with_cairo2d(layer_num, &quad.to_vertices(), cache_slice);
+                }
+            }
+        } else {
+            // Original GPU path - no cache data
+            for (layer_num, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
+                for quad in quads {
+                    other.extend_with(layer_num, &quad.to_vertices());
+                }
             }
         }
         metrics::histogram!("quad_buffer_apply").record(start.elapsed());
@@ -551,18 +575,20 @@ impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
         };
 
         quads.push(Box::new(BoxedQuad::default()));
-        cache.push(Cairo2DCacheData::default());
 
-        // Get mutable references to the last elements
-        let quad = quads.last_mut().unwrap();
-        let cache_data = cache.last_mut().unwrap();
-
-        Ok(QuadImpl::HeapCairo2D(HeapCairo2DQuad {
-            quad,
-            cache_data,
-        }))
+        if self.uses_cairo2d {
+            cache.push(Cairo2DCacheData::default());
+            let quad = quads.last_mut().unwrap();
+            let cache_data = cache.last_mut().unwrap();
+            Ok(QuadImpl::HeapCairo2D(HeapCairo2DQuad { quad, cache_data }))
+        } else {
+            // Original GPU behavior
+            let quad = quads.last_mut().unwrap();
+            Ok(QuadImpl::Boxed(quad))
+        }
     }
 
+    /// Original GPU method - extends with vertices only
     fn extend_with(&mut self, layer_num: usize, vertices: &[Vertex]) {
         if vertices.is_empty() {
             return;
@@ -575,9 +601,6 @@ impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
             _ => unreachable!(),
         };
 
-        // This is logically equivalent to
-        // https://doc.rust-lang.org/std/primitive.slice.html#method.as_chunks_unchecked
-        // which is currently nightly-only
         assert_eq!(vertices.len() % VERTICES_PER_CELL, 0);
         let src_quads: &[[Vertex; VERTICES_PER_CELL]] =
             unsafe { std::slice::from_raw_parts(vertices.as_ptr().cast(), vertices.len() / 4) };
@@ -587,33 +610,26 @@ impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
         }
     }
 
-    fn extend_with_cache(
+    /// Cairo2D specific - delegates to extend_with then handles cache
+    fn extend_with_cairo2d(
         &mut self,
         layer_num: usize,
         vertices: &[Vertex],
         cache_data: &[Cairo2DCacheData],
     ) {
-        if vertices.is_empty() {
-            return;
-        }
+        // First do the vertex extension
+        self.extend_with(layer_num, vertices);
 
-        let (dest_quads, dest_cache) = match layer_num {
-            0 => (&mut self.layer0, &mut self.cache0),
-            1 => (&mut self.layer1, &mut self.cache1),
-            2 => (&mut self.layer2, &mut self.cache2),
-            _ => unreachable!(),
-        };
-
-        assert_eq!(vertices.len() % VERTICES_PER_CELL, 0);
-        let src_quads: &[[Vertex; VERTICES_PER_CELL]] =
-            unsafe { std::slice::from_raw_parts(vertices.as_ptr().cast(), vertices.len() / 4) };
-
-        for (idx, quad) in src_quads.iter().enumerate() {
-            dest_quads.push(Box::new(BoxedQuad::from_vertices(quad)));
-            if idx < cache_data.len() {
-                dest_cache.push(cache_data[idx]);
-            } else {
-                dest_cache.push(Cairo2DCacheData::default());
+        // Then handle cache data if we're in Cairo2D mode
+        if self.uses_cairo2d && !cache_data.is_empty() {
+            let dest_cache = match layer_num {
+                0 => &mut self.cache0,
+                1 => &mut self.cache1,
+                2 => &mut self.cache2,
+                _ => unreachable!(),
+            };
+            for cd in cache_data {
+                dest_cache.push(*cd);
             }
         }
     }
@@ -639,15 +655,15 @@ impl<'a> TripleLayerQuadAllocatorTrait for TripleLayerQuadAllocator<'a> {
         }
     }
 
-    fn extend_with_cache(
+    fn extend_with_cairo2d(
         &mut self,
         layer_num: usize,
         vertices: &[Vertex],
         cache_data: &[Cairo2DCacheData],
     ) {
         match self {
-            Self::Gpu(b) => b.extend_with_cache(layer_num, vertices, cache_data),
-            Self::Heap(h) => h.extend_with_cache(layer_num, vertices, cache_data),
+            Self::Gpu(b) => b.extend_with_cairo2d(layer_num, vertices, cache_data),
+            Self::Heap(h) => h.extend_with_cairo2d(layer_num, vertices, cache_data),
         }
     }
 }

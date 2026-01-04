@@ -52,15 +52,15 @@ struct LineBucket {
     max_y: usize,
 }
 
-/// Tracks bandwidth efficiency over a time window
-struct EfficiencyWindow {
+/// Tracks percentage of frame area skipped (not updated) over a time window
+struct SkipRatioWindow {
     bytes_sent: u64,
     bytes_total: u64,
     window_start: Instant,
     window_duration: std::time::Duration,
 }
 
-impl EfficiencyWindow {
+impl SkipRatioWindow {
     fn new(duration_secs: u64) -> Self {
         Self {
             bytes_sent: 0,
@@ -70,7 +70,7 @@ impl EfficiencyWindow {
         }
     }
 
-    /// Add bytes and return current running efficiency for this window
+    /// Add bytes and return percentage of frame area skipped for this window
     fn add(&mut self, sent: u64, total: u64) -> f64 {
         // Reset window if expired
         if self.window_start.elapsed() >= self.window_duration {
@@ -82,7 +82,7 @@ impl EfficiencyWindow {
         self.bytes_sent += sent;
         self.bytes_total += total;
 
-        // Return current efficiency
+        // Return percentage of frame area that was skipped (not sent)
         if self.bytes_total > 0 {
             ((self.bytes_total - self.bytes_sent) as f64 / self.bytes_total as f64) * 100.0
         } else {
@@ -117,10 +117,10 @@ pub struct Cairo2DRenderState {
     last_frame_hash: u64,
     /// Per-line bucket data for detecting which lines changed
     line_buckets: Vec<LineBucket>,
-    /// Efficiency tracking over time windows
-    efficiency_1s: EfficiencyWindow,
-    efficiency_10s: EfficiencyWindow,
-    efficiency_60s: EfficiencyWindow,
+    /// Tracks percentage of frame area skipped over time windows
+    skip_ratio_1s: SkipRatioWindow,
+    skip_ratio_10s: SkipRatioWindow,
+    skip_ratio_60s: SkipRatioWindow,
     /// Glyph cache for pre-rendered glyphs using LfuCache for proper eviction
     glyph_cache: LfuCache<GlyphCacheKey, CachedGlyph>,
 }
@@ -133,9 +133,9 @@ impl Cairo2DRenderState {
             height: 0,
             last_frame_hash: 0,
             line_buckets: Vec::new(),
-            efficiency_1s: EfficiencyWindow::new(1),
-            efficiency_10s: EfficiencyWindow::new(10),
-            efficiency_60s: EfficiencyWindow::new(60),
+            skip_ratio_1s: SkipRatioWindow::new(1),
+            skip_ratio_10s: SkipRatioWindow::new(10),
+            skip_ratio_60s: SkipRatioWindow::new(60),
             glyph_cache: LfuCache::new(
                 "cairo2d.glyph_cache.hit.rate",
                 "cairo2d.glyph_cache.miss.rate",
@@ -433,21 +433,21 @@ impl crate::TermWindow {
                 full_frame_bytes
             };
 
-            // Update efficiency metrics
+            // Update frame area skip metrics
             {
                 let mut state = self.cairo2d_state.borrow_mut();
-                let eff_1s = state
-                    .efficiency_1s
+                let skip_1s = state
+                    .skip_ratio_1s
                     .add(bytes_sent as u64, full_frame_bytes as u64);
-                let eff_10s = state
-                    .efficiency_10s
+                let skip_10s = state
+                    .skip_ratio_10s
                     .add(bytes_sent as u64, full_frame_bytes as u64);
-                let eff_60s = state
-                    .efficiency_60s
+                let skip_60s = state
+                    .skip_ratio_60s
                     .add(bytes_sent as u64, full_frame_bytes as u64);
-                metrics::gauge!("cairo2d.efficiency_1s_pct").set(eff_1s);
-                metrics::gauge!("cairo2d.efficiency_10s_pct").set(eff_10s);
-                metrics::gauge!("cairo2d.efficiency_60s_pct").set(eff_60s);
+                metrics::gauge!("cairo2d.frame_area_update_skip_1s_pct").set(skip_1s);
+                metrics::gauge!("cairo2d.frame_area_update_skip_10s_pct").set(skip_10s);
+                metrics::gauge!("cairo2d.frame_area_update_skip_60s_pct").set(skip_60s);
             }
         }
 

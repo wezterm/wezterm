@@ -1,4 +1,5 @@
 use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
+use crate::renderstate::RenderContext;
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
 use crate::termwindow::render::{
@@ -467,7 +468,11 @@ impl crate::TermWindow {
                         }
                     }
 
-                    let mut buf = HeapQuadAllocator::default();
+                    let uses_cairo2d = matches!(
+                        self.term_window.render_state.as_ref().unwrap().context,
+                        RenderContext::Cairo2D
+                    );
+                    let mut buf = HeapQuadAllocator::new(uses_cairo2d);
                     let next_due = self.term_window.has_animation.borrow_mut().take();
 
                     let shape_key = LineToEleShapeCacheKey {

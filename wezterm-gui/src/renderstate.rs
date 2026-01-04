@@ -457,22 +457,12 @@ impl<'a> QuadAllocator for MappedQuads<'a> {
         }
     }
 
-    fn extend_with_cache(&mut self, vertices: &[Vertex], cache_data: &[Cairo2DCacheData]) {
+    fn extend_with_cairo2d(&mut self, vertices: &[Vertex], cache_data: &[Cairo2DCacheData]) {
+        // Remember the starting quad index before extend_with updates it
         let quad_idx = *self.next;
-        let len = vertices.len();
-        let num_quads = len / VERTICES_PER_CELL;
 
-        // idx and next are number of quads, so divide by number of vertices
-        *self.next += num_quads;
-
-        // Copy vertices if there is room
-        let vertex_idx = quad_idx * VERTICES_PER_CELL;
-        let capacity = self.capacity * VERTICES_PER_CELL;
-        if vertex_idx + len <= capacity {
-            self.mapping
-                .slice_mut(vertex_idx..vertex_idx + len)
-                .copy_from_slice(vertices);
-        }
+        // Delegate vertex copying to extend_with
+        self.extend_with(vertices);
 
         // Copy cache data for Cairo2D if present
         if let Some(cache_ref) = self.cairo2d_cache {
@@ -746,13 +736,13 @@ impl TripleLayerQuadAllocatorTrait for BorrowedLayers {
         self.layers[layer_num].extend_with(vertices)
     }
 
-    fn extend_with_cache(
+    fn extend_with_cairo2d(
         &mut self,
         layer_num: usize,
         vertices: &[Vertex],
         cache_data: &[Cairo2DCacheData],
     ) {
-        self.layers[layer_num].extend_with_cache(vertices, cache_data)
+        self.layers[layer_num].extend_with_cairo2d(vertices, cache_data)
     }
 }
 
