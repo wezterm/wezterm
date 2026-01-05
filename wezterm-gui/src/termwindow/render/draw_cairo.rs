@@ -786,7 +786,7 @@ impl crate::TermWindow {
                         dest_data[dest_start..dest_start + copy_bytes]
                             .copy_from_slice(&cached.pixels[src_start..src_start + copy_bytes]);
                     }
-                    metrics::histogram!("cairo2d.cache.hit.rate").record(1.);
+                    metrics::counter!("cairo2d.glyph_cache.hit").increment(1);
                     true
                 } else {
                     false
@@ -797,7 +797,7 @@ impl crate::TermWindow {
                 continue;
             }
 
-            metrics::histogram!("cairo2d.cache.miss.rate").record(1.);
+            metrics::counter!("cairo2d.glyph_cache.miss").increment(1);
 
             // Render glyph
             let fg_a = job.fg_a as u16;

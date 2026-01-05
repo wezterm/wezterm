@@ -2103,7 +2103,7 @@ fn default_line_to_ele_shape_cache_size() -> usize {
 }
 
 fn default_cairo2d_glyph_cache_size() -> usize {
-    4096
+    8192
 }
 
 #[derive(Debug, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]

@@ -543,6 +543,15 @@ impl HeapQuadAllocator {
                 (1, &self.layer1, &self.cache1),
                 (2, &self.layer2, &self.cache2),
             ] {
+                // Debug assertion: cache should match quads length in Cairo2D mode
+                debug_assert_eq!(
+                    quads.len(),
+                    cache.len(),
+                    "HeapQuadAllocator: quads/cache length mismatch in layer {}: {} quads vs {} cache entries",
+                    layer_num,
+                    quads.len(),
+                    cache.len()
+                );
                 for (idx, quad) in quads.iter().enumerate() {
                     let cache_slice = if idx < cache.len() {
                         &cache[idx..idx + 1]
@@ -620,16 +629,19 @@ impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
         // First do the vertex extension
         self.extend_with(layer_num, vertices);
 
-        // Then handle cache data if we're in Cairo2D mode
-        if self.uses_cairo2d && !cache_data.is_empty() {
+        // Handle cache data in Cairo2D mode - must maintain 1:1 with quads
+        if self.uses_cairo2d {
             let dest_cache = match layer_num {
                 0 => &mut self.cache0,
                 1 => &mut self.cache1,
                 2 => &mut self.cache2,
                 _ => unreachable!(),
             };
-            for cd in cache_data {
-                dest_cache.push(*cd);
+            let num_quads = vertices.len() / VERTICES_PER_CELL;
+            for i in 0..num_quads {
+                // Use provided cache data if available, otherwise push default
+                let cd = cache_data.get(i).copied().unwrap_or_default();
+                dest_cache.push(cd);
             }
         }
     }

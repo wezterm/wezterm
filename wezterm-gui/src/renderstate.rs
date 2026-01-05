@@ -464,13 +464,15 @@ impl<'a> QuadAllocator for MappedQuads<'a> {
         // Delegate vertex copying to extend_with
         self.extend_with(vertices);
 
-        // Copy cache data for Cairo2D if present
+        // Copy cache data for Cairo2D - must maintain 1:1 with quads
         if let Some(cache_ref) = self.cairo2d_cache {
             let mut cache = cache_ref.borrow_mut();
-            for (i, cd) in cache_data.iter().enumerate() {
+            let num_quads = vertices.len() / VERTICES_PER_CELL;
+            for i in 0..num_quads {
                 let dest_idx = quad_idx + i;
                 if dest_idx < cache.len() {
-                    cache[dest_idx] = *cd;
+                    // Use provided cache data if available, otherwise use default
+                    cache[dest_idx] = cache_data.get(i).copied().unwrap_or_default();
                 }
             }
         }

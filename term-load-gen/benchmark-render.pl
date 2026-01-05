@@ -300,7 +300,7 @@ sub generate_report {
     print "\n";
     print "Cairo2D Internal Stats (last run):\n";
     printf "%-20s | %10s | %10s | %12s | %10s\n",
-           "Scenario", "CacheHit%", "FrameSkip%", "BytesSaved", "Paint(p50)";
+           "Scenario", "GlyphHit%", "FrameSkip%", "BytesSaved", "Paint(p50)";
     print "-" x 20, "-+-", "-" x 10, "-+-", "-" x 10, "-+-", "-" x 12, "-+-", "-" x 10, "\n";
 
     for my $scenario (@scenarios) {
@@ -308,9 +308,9 @@ sub generate_report {
         my $last_run = $runs_data->[-1] // {};
         my $stats = $last_run->{stats} // {};
 
-        # Calculate cache hit rate
-        my $cache_hit = $stats->{'cairo2d.cache.hit.rate'}{p50} // 0;
-        my $cache_miss = $stats->{'cairo2d.cache.miss.rate'}{p50} // 0;
+        # Calculate glyph cache hit rate (using counter counts)
+        my $cache_hit = $stats->{'cairo2d.glyph_cache.hit'}{count} // 0;
+        my $cache_miss = $stats->{'cairo2d.glyph_cache.miss'}{count} // 0;
         my $cache_pct = ($cache_hit + $cache_miss) > 0
             ? sprintf("%.1f%%", 100 * $cache_hit / ($cache_hit + $cache_miss))
             : '-';
