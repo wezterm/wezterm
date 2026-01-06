@@ -32,24 +32,24 @@ use std::hash::{Hash, Hasher};
 use std::time::Instant;
 use wezterm_color_types::srgb8_to_linear_u8;
 
-/// Represents a dirty row region for partial screen updates
+/// Represents a dirty rectangular region for partial screen updates
 #[derive(Clone, Debug)]
-struct DirtyRow {
-    /// Top pixel of the dirty row region
+struct DirtyRect {
+    /// Left pixel of the dirty region
+    pixel_x: usize,
+    /// Top pixel of the dirty region
     pixel_y: usize,
+    /// Width in pixels of the dirty region
+    pixel_width: usize,
     /// Height in pixels of the dirty region
     pixel_height: usize,
 }
 
-/// Tracks hash and actual pixel bounds for a line bucket
+/// Tracks hash for a single cell in the grid
 #[derive(Clone, Debug, Default)]
-struct LineBucket {
-    /// Hash of the line's vertex data
+struct CellBucket {
+    /// Hash of the cell's vertex data
     hash: u64,
-    /// Actual minimum pixel Y of content in this bucket
-    min_y: usize,
-    /// Actual maximum pixel Y of content in this bucket
-    max_y: usize,
 }
 
 /// Tracks percentage of frame area skipped (not updated) over a time window
@@ -115,8 +115,16 @@ pub struct Cairo2DRenderState {
     width: i32,
     height: i32,
     last_frame_hash: u64,
-    /// Per-line bucket data for detecting which lines changed
-    line_buckets: Vec<LineBucket>,
+    /// Per-cell bucket data for detecting which cells changed (flattened 2D: row * num_cols + col)
+    cell_buckets: Vec<CellBucket>,
+    /// Number of columns in the cell grid
+    num_cols: usize,
+    /// Number of rows in the cell grid
+    num_rows: usize,
+    /// Cell width in pixels (cached from render_metrics)
+    cell_width: usize,
+    /// Cell height in pixels (cached from render_metrics)
+    cell_height: usize,
     /// Tracks percentage of frame area skipped over time windows
     skip_ratio_1s: SkipRatioWindow,
     skip_ratio_10s: SkipRatioWindow,
@@ -132,7 +140,11 @@ impl Cairo2DRenderState {
             width: 0,
             height: 0,
             last_frame_hash: 0,
-            line_buckets: Vec::new(),
+            cell_buckets: Vec::new(),
+            num_cols: 0,
+            num_rows: 0,
+            cell_width: 0,
+            cell_height: 0,
             skip_ratio_1s: SkipRatioWindow::new(1),
             skip_ratio_10s: SkipRatioWindow::new(10),
             skip_ratio_60s: SkipRatioWindow::new(60),
@@ -181,9 +193,9 @@ fn hash_vertex_for_frame(v: &Vertex, cache: &Cairo2DCacheData, hasher: &mut impl
     v.has_color.to_bits().hash(hasher);
 }
 
-/// Hash vertex fields for line-level change detection
+/// Hash vertex fields for cell-level change detection
 #[inline(always)]
-fn hash_vertex_for_line(v: &Vertex, cache: &Cairo2DCacheData, hasher: &mut impl Hasher) {
+fn hash_vertex_for_cell(v: &Vertex, cache: &Cairo2DCacheData, hasher: &mut impl Hasher) {
     hash_vertex_for_frame(v, cache, hasher);
 }
 
@@ -241,17 +253,22 @@ impl crate::TermWindow {
         let atlas_width = atlas.width() as f64;
         let atlas_height = atlas.height() as f64;
 
-        // Compute per-line hashes for detecting which specific lines changed
+        // Compute per-cell hashes for detecting which specific cells changed
+        let cell_width = self.render_metrics.cell_size.width as usize;
         let cell_height = self.render_metrics.cell_size.height as usize;
-        let num_lines = if cell_height > 0 {
+        let num_cols = if cell_width > 0 {
+            (width as usize + cell_width - 1) / cell_width
+        } else {
+            1
+        };
+        let num_rows = if cell_height > 0 {
             (height as usize + cell_height - 1) / cell_height
         } else {
             1
         };
-        let mut line_hashers: Vec<DefaultHasher> =
-            (0..num_lines).map(|_| DefaultHasher::new()).collect();
-        let mut line_min_y: Vec<usize> = vec![usize::MAX; num_lines];
-        let mut line_max_y: Vec<usize> = vec![0; num_lines];
+        let num_cells = num_rows * num_cols;
+        let mut cell_hashers: Vec<DefaultHasher> =
+            (0..num_cells).map(|_| DefaultHasher::new()).collect();
         let mut frame_hasher = DefaultHasher::new();
 
         // Hash all vertices for change detection
@@ -273,46 +290,37 @@ impl crate::TermWindow {
 
                             let quad_verts = &vertices[base..base + 4];
                             let cache = cache_data.get(quad_idx).copied().unwrap_or_default();
-                            let mut quad_min_y = f32::MAX;
-                            let mut quad_max_y = f32::MIN;
-                            for v in quad_verts {
-                                let vy = v.position[1] + half_height as f32;
-                                quad_min_y = quad_min_y.min(vy);
-                                quad_max_y = quad_max_y.max(vy);
-                            }
 
-                            // Use cache data for cell_y and cell_height
-                            let bucket_y = if cache.cell_height > 0.0 {
-                                cache.cell_y + half_height as f32
+                            // Get cell position from top-left vertex
+                            let cell_x = (quad_verts[0].position[0] + half_width as f32) as usize;
+                            let cell_y = if cache.cell_height > 0.0 {
+                                (cache.cell_y + half_height as f32) as usize
                             } else {
-                                quad_min_y
+                                (quad_verts[0].position[1] + half_height as f32) as usize
                             };
 
-                            if bucket_y < 0.0 || bucket_y >= height_f as f32 {
-                                for v in quad_verts {
-                                    hash_vertex_for_frame(v, &cache, &mut frame_hasher);
-                                }
-                                continue;
-                            }
-
-                            let line_idx = if cell_height > 0 {
-                                (bucket_y as usize) / cell_height
+                            // Calculate cell grid position
+                            let col = if cell_width > 0 {
+                                cell_x / cell_width
+                            } else {
+                                0
+                            };
+                            let row = if cell_height > 0 {
+                                cell_y / cell_height
                             } else {
                                 0
                             };
 
-                            if line_idx < num_lines {
-                                let qmin = quad_min_y.max(0.0) as usize;
-                                let qmax =
-                                    (quad_max_y.min(height_f as f32) as usize).min(height as usize);
-                                line_min_y[line_idx] = line_min_y[line_idx].min(qmin);
-                                line_max_y[line_idx] = line_max_y[line_idx].max(qmax);
-                            }
-
+                            // Hash for frame-level change detection
                             for v in quad_verts {
                                 hash_vertex_for_frame(v, &cache, &mut frame_hasher);
-                                if line_idx < num_lines {
-                                    hash_vertex_for_line(v, &cache, &mut line_hashers[line_idx]);
+                            }
+
+                            // Hash for cell-level change detection
+                            if row < num_rows && col < num_cols {
+                                let cell_idx = row * num_cols + col;
+                                for v in quad_verts {
+                                    hash_vertex_for_cell(v, &cache, &mut cell_hashers[cell_idx]);
                                 }
                             }
                         }
@@ -322,14 +330,9 @@ impl crate::TermWindow {
         }
 
         let frame_hash = frame_hasher.finish();
-        let current_line_buckets: Vec<LineBucket> = line_hashers
+        let current_cell_buckets: Vec<CellBucket> = cell_hashers
             .into_iter()
-            .enumerate()
-            .map(|(idx, h)| LineBucket {
-                hash: h.finish(),
-                min_y: line_min_y[idx],
-                max_y: line_max_y[idx],
-            })
+            .map(|h| CellBucket { hash: h.finish() })
             .collect();
 
         // Check if we can reuse the previous frame
@@ -364,11 +367,18 @@ impl crate::TermWindow {
             return Ok(());
         }
 
-        // Detect dirty regions
-        let (dirty_rows, force_full_redraw) =
-            self.detect_dirty_regions(&current_line_buckets, width, height, cell_height, num_lines);
+        // Detect dirty regions (cell-level)
+        let (dirty_rects, force_full_redraw) = self.detect_dirty_cells(
+            &current_cell_buckets,
+            width,
+            height,
+            cell_width,
+            cell_height,
+            num_cols,
+            num_rows,
+        );
 
-        let do_partial_update = !force_full_redraw && !dirty_rows.is_empty();
+        let do_partial_update = !force_full_redraw && !dirty_rects.is_empty();
         if do_partial_update {
             metrics::histogram!("cairo2d.frame.partial.rate").record(1.);
         } else {
@@ -382,7 +392,17 @@ impl crate::TermWindow {
                 state.surface = ImageSurface::create(Format::ARgb32, width, height).ok();
                 state.width = width;
                 state.height = height;
-                state.line_buckets.clear();
+                state.cell_buckets.clear();
+                state.num_cols = 0;
+                state.num_rows = 0;
+            }
+            // Update cell dimensions if they changed
+            if state.cell_width != cell_width || state.cell_height != cell_height {
+                state.cell_width = cell_width;
+                state.cell_height = cell_height;
+                state.cell_buckets.clear();
+                state.num_cols = 0;
+                state.num_rows = 0;
             }
             state.surface.take()
         };
@@ -425,8 +445,8 @@ impl crate::TermWindow {
 
         if let Some(window) = self.window.as_ref() {
             let full_frame_bytes = width as usize * height as usize * 4;
-            let bytes_sent = if do_partial_update && !dirty_rows.is_empty() {
-                self.present_partial_frame(window, &pixels, width, height, &dirty_rows)?
+            let bytes_sent = if do_partial_update && !dirty_rects.is_empty() {
+                self.present_partial_frame(window, &pixels, width, height, &dirty_rects)?
             } else {
                 metrics::counter!("cairo2d.full.bytes_sent").increment(full_frame_bytes as u64);
                 window.present_software_frame_region(&pixels, width as u32, height as u32, 0, 0)?;
@@ -451,115 +471,126 @@ impl crate::TermWindow {
             }
         }
 
-        // Store surface and line buckets for next frame
+        // Store surface and cell buckets for next frame
         {
             let mut state = self.cairo2d_state.borrow_mut();
             state.surface = Some(surface);
             state.last_frame_hash = frame_hash;
-            state.line_buckets = current_line_buckets;
+            state.cell_buckets = current_cell_buckets;
+            state.num_cols = num_cols;
+            state.num_rows = num_rows;
         }
 
         Ok(())
     }
 
-    /// Detect which screen regions have changed since the last frame
-    fn detect_dirty_regions(
+    /// Detect which screen cells have changed since the last frame
+    /// Returns dirty rectangles (coalesced row-wise runs of dirty cells)
+    fn detect_dirty_cells(
         &self,
-        current_line_buckets: &[LineBucket],
+        current_cell_buckets: &[CellBucket],
         width: i32,
         height: i32,
+        cell_width: usize,
         cell_height: usize,
-        num_lines: usize,
-    ) -> (Vec<DirtyRow>, bool) {
+        num_cols: usize,
+        num_rows: usize,
+    ) -> (Vec<DirtyRect>, bool) {
         let state = self.cairo2d_state.borrow();
-        let prev_buckets = &state.line_buckets;
+        let prev_buckets = &state.cell_buckets;
 
-        if state.width != width || state.height != height || prev_buckets.is_empty() {
+        // Force full redraw if dimensions changed or no previous state
+        if state.width != width
+            || state.height != height
+            || state.num_cols != num_cols
+            || state.num_rows != num_rows
+            || prev_buckets.is_empty()
+        {
             return (Vec::new(), true);
         }
 
-        struct DirtyLine {
-            idx: usize,
-            min_y: usize,
-            max_y: usize,
-        }
+        // Build dirty cell bitmap
+        let num_cells = num_rows * num_cols;
+        let mut dirty_count = 0usize;
+        let mut dirty_bitmap: Vec<bool> = vec![false; num_cells];
 
-        let mut dirty_lines: Vec<DirtyLine> = Vec::new();
-        for (idx, bucket) in current_line_buckets.iter().enumerate() {
+        for (idx, bucket) in current_cell_buckets.iter().enumerate() {
             let prev_hash = prev_buckets.get(idx).map(|b| b.hash).unwrap_or(0);
             if bucket.hash != prev_hash {
-                let min_y = if bucket.min_y == usize::MAX {
-                    idx * cell_height
-                } else {
-                    bucket.min_y
-                };
-                let max_y = if bucket.max_y == 0 {
-                    ((idx + 1) * cell_height).min(height as usize)
-                } else {
-                    bucket.max_y
-                };
-                dirty_lines.push(DirtyLine { idx, min_y, max_y });
+                dirty_bitmap[idx] = true;
+                dirty_count += 1;
             }
         }
 
-        let dirty_ratio = dirty_lines.len() as f32 / num_lines.max(1) as f32;
+        // Fall back to full redraw if too many cells are dirty
+        let dirty_ratio = dirty_count as f32 / num_cells.max(1) as f32;
         if dirty_ratio > 0.5 {
             metrics::counter!("cairo2d.partial.full_redraw_threshold").increment(1);
             return (Vec::new(), true);
         }
 
-        // Coalesce adjacent dirty lines
-        let mut dirty_rows: Vec<DirtyRow> = Vec::new();
-        let mut region_start_idx: Option<usize> = None;
-        let mut region_end_idx: usize = 0;
-        let mut region_min_y: usize = 0;
-        let mut region_max_y: usize = 0;
+        // Coalesce dirty cells into rectangles (row-wise runs)
+        let mut dirty_rects: Vec<DirtyRect> = Vec::new();
+        let width_usize = width as usize;
+        let height_usize = height as usize;
 
-        for dirty in &dirty_lines {
-            match region_start_idx {
-                None => {
-                    region_start_idx = Some(dirty.idx);
-                    region_end_idx = dirty.idx;
-                    region_min_y = dirty.min_y;
-                    region_max_y = dirty.max_y;
-                }
-                Some(_) => {
-                    if dirty.idx <= region_end_idx + 3 {
-                        region_end_idx = dirty.idx;
-                        region_min_y = region_min_y.min(dirty.min_y);
-                        region_max_y = region_max_y.max(dirty.max_y);
-                    } else {
-                        let pixel_height = region_max_y.saturating_sub(region_min_y);
-                        if pixel_height > 0 && region_min_y < height as usize {
-                            dirty_rows.push(DirtyRow {
-                                pixel_y: region_min_y,
-                                pixel_height: pixel_height
-                                    .min((height as usize).saturating_sub(region_min_y)),
+        for row in 0..num_rows {
+            let mut run_start: Option<usize> = None;
+
+            for col in 0..num_cols {
+                let cell_idx = row * num_cols + col;
+                let is_dirty = dirty_bitmap[cell_idx];
+
+                match (run_start, is_dirty) {
+                    (None, true) => {
+                        // Start a new run
+                        run_start = Some(col);
+                    }
+                    (Some(start), false) => {
+                        // End the current run
+                        let pixel_x = start * cell_width;
+                        let pixel_y = row * cell_height;
+                        let pixel_width =
+                            ((col - start) * cell_width).min(width_usize.saturating_sub(pixel_x));
+                        let pixel_height = cell_height.min(height_usize.saturating_sub(pixel_y));
+
+                        if pixel_width > 0 && pixel_height > 0 {
+                            dirty_rects.push(DirtyRect {
+                                pixel_x,
+                                pixel_y,
+                                pixel_width,
+                                pixel_height,
                             });
                         }
-                        region_start_idx = Some(dirty.idx);
-                        region_end_idx = dirty.idx;
-                        region_min_y = dirty.min_y;
-                        region_max_y = dirty.max_y;
+                        run_start = None;
                     }
+                    _ => {}
+                }
+            }
+
+            // Handle run that extends to end of row
+            if let Some(start) = run_start {
+                let pixel_x = start * cell_width;
+                let pixel_y = row * cell_height;
+                let pixel_width =
+                    ((num_cols - start) * cell_width).min(width_usize.saturating_sub(pixel_x));
+                let pixel_height = cell_height.min(height_usize.saturating_sub(pixel_y));
+
+                if pixel_width > 0 && pixel_height > 0 {
+                    dirty_rects.push(DirtyRect {
+                        pixel_x,
+                        pixel_y,
+                        pixel_width,
+                        pixel_height,
+                    });
                 }
             }
         }
 
-        if region_start_idx.is_some() {
-            let pixel_height = region_max_y.saturating_sub(region_min_y);
-            if pixel_height > 0 && region_min_y < height as usize {
-                dirty_rows.push(DirtyRow {
-                    pixel_y: region_min_y,
-                    pixel_height: pixel_height.min((height as usize).saturating_sub(region_min_y)),
-                });
-            }
-        }
+        metrics::counter!("cairo2d.partial.dirty_cells_total").increment(dirty_count as u64);
+        metrics::counter!("cairo2d.partial.dirty_rects_total").increment(dirty_rects.len() as u64);
 
-        metrics::counter!("cairo2d.partial.dirty_lines_total").increment(dirty_lines.len() as u64);
-        metrics::counter!("cairo2d.partial.dirty_regions_total").increment(dirty_rows.len() as u64);
-
-        (dirty_rows, false)
+        (dirty_rects, false)
     }
 
     /// PASS 1: Render solid colors and images, collect glyph jobs
@@ -903,48 +934,64 @@ impl crate::TermWindow {
         Ok(())
     }
 
-    /// Present only the dirty regions of the frame
+    /// Present only the dirty rectangular regions of the frame
     fn present_partial_frame(
         &self,
         window: &::window::Window,
         pixels: &[u8],
         width: i32,
         height: i32,
-        dirty_rows: &[DirtyRow],
+        dirty_rects: &[DirtyRect],
     ) -> anyhow::Result<usize> {
-        let stride = width as usize * 4;
+        let src_stride = width as usize * 4;
         let mut bytes_sent = 0usize;
+        let width_usize = width as usize;
         let height_usize = height as usize;
-        let full_frame_bytes = width as usize * height as usize * 4;
+        let full_frame_bytes = width_usize * height_usize * 4;
 
-        log::debug!("cairo2d partial update: {} dirty regions", dirty_rows.len());
+        log::debug!("cairo2d partial update: {} dirty rects", dirty_rects.len());
 
-        for region in dirty_rows {
-            if region.pixel_y >= height_usize {
+        for rect in dirty_rects {
+            // Validate bounds
+            if rect.pixel_x >= width_usize || rect.pixel_y >= height_usize {
                 continue;
             }
 
-            let pixel_offset = region.pixel_y * stride;
-            let max_height = height_usize.saturating_sub(region.pixel_y);
-            let region_height = region.pixel_height.min(max_height);
+            let rect_width = rect
+                .pixel_width
+                .min(width_usize.saturating_sub(rect.pixel_x));
+            let rect_height = rect
+                .pixel_height
+                .min(height_usize.saturating_sub(rect.pixel_y));
 
-            if region_height == 0 {
+            if rect_width == 0 || rect_height == 0 {
                 continue;
             }
 
-            let region_bytes = region_height * stride;
+            // Extract rectangular region into contiguous buffer
+            let rect_stride = rect_width * 4;
+            let rect_bytes = rect_stride * rect_height;
+            let mut rect_pixels = vec![0u8; rect_bytes];
 
-            if pixel_offset + region_bytes <= pixels.len() {
-                let region_pixels = &pixels[pixel_offset..pixel_offset + region_bytes];
-                window.present_software_frame_region(
-                    region_pixels,
-                    width as u32,
-                    region_height as u32,
-                    0,
-                    region.pixel_y as i16,
-                )?;
-                bytes_sent += region_bytes;
+            for row in 0..rect_height {
+                let src_y = rect.pixel_y + row;
+                let src_offset = src_y * src_stride + rect.pixel_x * 4;
+                let dst_offset = row * rect_stride;
+
+                if src_offset + rect_stride <= pixels.len() {
+                    rect_pixels[dst_offset..dst_offset + rect_stride]
+                        .copy_from_slice(&pixels[src_offset..src_offset + rect_stride]);
+                }
             }
+
+            window.present_software_frame_region(
+                &rect_pixels,
+                rect_width as u32,
+                rect_height as u32,
+                rect.pixel_x as i16,
+                rect.pixel_y as i16,
+            )?;
+            bytes_sent += rect_bytes;
         }
 
         metrics::counter!("cairo2d.partial.bytes_sent").increment(bytes_sent as u64);
@@ -952,8 +999,8 @@ impl crate::TermWindow {
             .increment((full_frame_bytes - bytes_sent) as u64);
 
         log::trace!(
-            "cairo2d partial: {} regions, sent {} / {} bytes",
-            dirty_rows.len(),
+            "cairo2d partial: {} rects, sent {} / {} bytes",
+            dirty_rects.len(),
             bytes_sent,
             full_frame_bytes
         );
