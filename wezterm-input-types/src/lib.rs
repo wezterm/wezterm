@@ -1758,10 +1758,13 @@ impl KeyEvent {
         }
         modifiers += 1;
 
+        log::error!("well.. {}", self.repeat_count);
+
         let event_type =
             if flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES) && !self.key_is_down {
                 ":3"
             } else if self.repeat_count != 1 {
+                log::error!("{}", self.repeat_count);
                 ":2"
             } else {
                 ""
