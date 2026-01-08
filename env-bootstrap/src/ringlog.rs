@@ -191,7 +191,7 @@ impl log::Log for Logger {
                 // Direct `write!` will `write()` every single padding space as individual syscall
                 // which makes terminal with tracing logs enabled unusably slow.
                 let logline = format!(
-                    "{}  {level_color}{:6}{reset} {target_color}{:padding$}{reset} > {}",
+                    "{}  {level_color}{:6}{reset} {target_color}{:padding$}{reset} > {}\n",
                     ts,
                     level,
                     target,
