@@ -47,8 +47,10 @@ define_class!(
             completion_handler: &block2::Block<dyn Fn(UNNotificationPresentationOptions)>,
         ) {
             log::debug!("will_present");
-            let options =
-                UNNotificationPresentationOptions::List | UNNotificationPresentationOptions::Sound;
+            let options = UNNotificationPresentationOptions::List
+                | UNNotificationPresentationOptions::Sound
+                | UNNotificationPresentationOptions::Badge
+                | UNNotificationPresentationOptions::Banner;
             completion_handler.call((options,));
         }
 
