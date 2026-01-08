@@ -223,6 +223,8 @@ pub struct Cairo2DCacheData {
     pub cell_y: f32,
     /// Height of the cell
     pub cell_height: f32,
+    /// Cell column index (0-based) for dirty tracking
+    pub cell_col: usize,
 }
 
 /// CPU-side vertex buffer for Cairo 2D rendering
