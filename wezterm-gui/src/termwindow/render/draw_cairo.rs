@@ -32,17 +32,17 @@ use std::hash::{Hash, Hasher};
 use std::time::Instant;
 use wezterm_color_types::srgb8_to_linear_u8;
 
-/// Represents a dirty rectangular region for partial screen updates
+/// Dirty region in cell coordinates for partial screen updates
 #[derive(Clone, Debug)]
-struct DirtyRect {
-    /// Left pixel of the dirty region
-    pixel_x: usize,
-    /// Top pixel of the dirty region
-    pixel_y: usize,
-    /// Width in pixels of the dirty region
-    pixel_width: usize,
-    /// Height in pixels of the dirty region
-    pixel_height: usize,
+struct DirtyCellRect {
+    /// Starting column (cell index)
+    col: usize,
+    /// Starting row (cell index)
+    row: usize,
+    /// Number of cells wide
+    width: usize,
+    /// Number of cells tall
+    height: usize,
 }
 
 /// Tracks hash for a single cell in the grid
@@ -50,14 +50,6 @@ struct DirtyRect {
 struct CellBucket {
     /// Hash of the cell's vertex data
     hash: u64,
-    /// Actual minimum pixel X of content in this cell
-    min_x: usize,
-    /// Actual maximum pixel X of content in this cell
-    max_x: usize,
-    /// Actual minimum pixel Y of content in this cell
-    min_y: usize,
-    /// Actual maximum pixel Y of content in this cell
-    max_y: usize,
 }
 
 /// Tracks percentage of frame area skipped (not updated) over a time window
@@ -182,32 +174,6 @@ fn linear_to_srgb(linear: f32) -> f64 {
     srgb as f64
 }
 
-/// Convert sRGB to linear RGB (inverse gamma)
-#[inline]
-fn srgb_to_linear_f32(srgb: f32) -> f32 {
-    if srgb <= 0.04045 {
-        srgb / 12.92
-    } else {
-        ((srgb + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-/// Blend two colors in linear space and return sRGB result
-/// coverage is 0-255, fg_a is foreground alpha 0-255
-#[inline]
-fn blend_linear(fg_linear: f32, bg_linear: f32, coverage: u16, fg_a: u16) -> u8 {
-    let cov_scaled = (coverage * fg_a) / 255;
-    let t = cov_scaled as f32 / 255.0;
-    let blended_linear = bg_linear * (1.0 - t) + fg_linear * t;
-    // Convert back to sRGB
-    let srgb = if blended_linear <= 0.0031308 {
-        blended_linear * 12.92
-    } else {
-        1.055 * blended_linear.powf(1.0 / 2.4) - 0.055
-    };
-    (srgb * 255.0).clamp(0.0, 255.0) as u8
-}
-
 /// Hash vertex fields for frame-level change detection
 #[inline(always)]
 fn hash_vertex_for_frame(v: &Vertex, cache: &Cairo2DCacheData, hasher: &mut impl Hasher) {
@@ -271,6 +237,20 @@ impl crate::TermWindow {
         let half_width = width_f / 2.0;
         let half_height = height_f / 2.0;
 
+        // Compute window padding offsets
+        let h_context = config::DimensionContext {
+            dpi: self.dimensions.dpi as f32,
+            pixel_max: self.terminal_size.pixel_width as f32,
+            pixel_cell: self.render_metrics.cell_size.width as f32,
+        };
+        let v_context = config::DimensionContext {
+            dpi: self.dimensions.dpi as f32,
+            pixel_max: self.terminal_size.pixel_height as f32,
+            pixel_cell: self.render_metrics.cell_size.height as f32,
+        };
+        let padding_left = self.config.window_padding.left.evaluate_as_pixels(h_context) as usize;
+        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context) as usize;
+
         // Get the default background color from palette (for cells with transparent bg)
         let palette_bg = self.palette().background;
         let default_bg_r = (palette_bg.0 * 255.0) as u8;
@@ -303,11 +283,6 @@ impl crate::TermWindow {
         let num_cells = num_rows * num_cols;
         let mut cell_hashers: Vec<DefaultHasher> =
             (0..num_cells).map(|_| DefaultHasher::new()).collect();
-        // Track actual pixel bounds per cell (like old LineBucket did)
-        let mut cell_min_x: Vec<usize> = vec![usize::MAX; num_cells];
-        let mut cell_max_x: Vec<usize> = vec![0; num_cells];
-        let mut cell_min_y: Vec<usize> = vec![usize::MAX; num_cells];
-        let mut cell_max_y: Vec<usize> = vec![0; num_cells];
         let mut frame_hasher = DefaultHasher::new();
 
         // Hash all vertices for change detection
@@ -329,20 +304,6 @@ impl crate::TermWindow {
 
                             let quad_verts = &vertices[base..base + 4];
                             let cache = cache_data.get(quad_idx).copied().unwrap_or_default();
-
-                            // Calculate actual pixel bounds of this quad
-                            let mut quad_min_x = f32::MAX;
-                            let mut quad_max_x = f32::MIN;
-                            let mut quad_min_y = f32::MAX;
-                            let mut quad_max_y = f32::MIN;
-                            for v in quad_verts {
-                                let vx = v.position[0] + half_width as f32;
-                                let vy = v.position[1] + half_height as f32;
-                                quad_min_x = quad_min_x.min(vx);
-                                quad_max_x = quad_max_x.max(vx);
-                                quad_min_y = quad_min_y.min(vy);
-                                quad_max_y = quad_max_y.max(vy);
-                            }
 
                             // Get cell position - use cache if set_cell_bounds was called,
                             // otherwise fall back to position-based calculation
@@ -379,23 +340,12 @@ impl crate::TermWindow {
                                 hash_vertex_for_frame(v, &cache, &mut frame_hasher);
                             }
 
-                            // Hash for cell-level change detection and track pixel bounds
+                            // Hash for cell-level change detection
                             if row < num_rows && col < num_cols {
                                 let cell_idx = row * num_cols + col;
                                 for v in quad_verts {
                                     hash_vertex_for_cell(v, &cache, &mut cell_hashers[cell_idx]);
                                 }
-                                // Track actual pixel bounds for this cell
-                                let qmin_x = quad_min_x.max(0.0) as usize;
-                                let qmax_x =
-                                    (quad_max_x.min(width_f as f32) as usize).min(width as usize);
-                                let qmin_y = quad_min_y.max(0.0) as usize;
-                                let qmax_y =
-                                    (quad_max_y.min(height_f as f32) as usize).min(height as usize);
-                                cell_min_x[cell_idx] = cell_min_x[cell_idx].min(qmin_x);
-                                cell_max_x[cell_idx] = cell_max_x[cell_idx].max(qmax_x);
-                                cell_min_y[cell_idx] = cell_min_y[cell_idx].min(qmin_y);
-                                cell_max_y[cell_idx] = cell_max_y[cell_idx].max(qmax_y);
                             }
                         }
                     }
@@ -406,14 +356,7 @@ impl crate::TermWindow {
         let frame_hash = frame_hasher.finish();
         let current_cell_buckets: Vec<CellBucket> = cell_hashers
             .into_iter()
-            .enumerate()
-            .map(|(idx, h)| CellBucket {
-                hash: h.finish(),
-                min_x: cell_min_x[idx],
-                max_x: cell_max_x[idx],
-                min_y: cell_min_y[idx],
-                max_y: cell_max_y[idx],
-            })
+            .map(|h| CellBucket { hash: h.finish() })
             .collect();
 
         // Check if we can reuse the previous frame
@@ -453,8 +396,6 @@ impl crate::TermWindow {
             &current_cell_buckets,
             width,
             height,
-            cell_width,
-            cell_height,
             num_cols,
             num_rows,
         );
@@ -527,7 +468,7 @@ impl crate::TermWindow {
         if let Some(window) = self.window.as_ref() {
             let full_frame_bytes = width as usize * height as usize * 4;
             let bytes_sent = if do_partial_update && !dirty_rects.is_empty() {
-                self.present_partial_frame(window, &pixels, width, height, &dirty_rects)?
+                self.present_partial_frame(window, &pixels, width, height, cell_width, cell_height, padding_left, padding_top, &dirty_rects)?
             } else {
                 metrics::counter!("cairo2d.full.bytes_sent").increment(full_frame_bytes as u64);
                 window.present_software_frame_region(&pixels, width as u32, height as u32, 0, 0)?;
@@ -572,11 +513,9 @@ impl crate::TermWindow {
         current_cell_buckets: &[CellBucket],
         width: i32,
         height: i32,
-        cell_width: usize,
-        cell_height: usize,
         num_cols: usize,
         num_rows: usize,
-    ) -> (Vec<DirtyRect>, bool) {
+    ) -> (Vec<DirtyCellRect>, bool) {
         let state = self.cairo2d_state.borrow();
         let prev_buckets = &state.cell_buckets;
 
@@ -610,99 +549,30 @@ impl crate::TermWindow {
             return (Vec::new(), true);
         }
 
-        // Coalesce dirty cells into rectangles (row-wise runs)
-        // Use actual pixel bounds from cell buckets for accurate Y positioning
-        let mut dirty_rects: Vec<DirtyRect> = Vec::new();
-        let width_usize = width as usize;
-        let height_usize = height as usize;
+        // Coalesce dirty cells into rectangles (row-wise runs of dirty cells)
+        let mut dirty_rects: Vec<DirtyCellRect> = Vec::new();
 
         for row in 0..num_rows {
             let mut run_start: Option<usize> = None;
-            let mut run_min_x: usize = usize::MAX;
-            let mut run_max_x: usize = 0;
-            let mut run_min_y: usize = usize::MAX;
-            let mut run_max_y: usize = 0;
 
             for col in 0..num_cols {
                 let cell_idx = row * num_cols + col;
                 let is_dirty = dirty_bitmap[cell_idx];
-                let bucket = &current_cell_buckets[cell_idx];
-                // Use union of current and previous bounds for proper dirty rect
-                // This handles cases where content was removed (current has no bounds)
-                let prev_bucket = prev_buckets.get(cell_idx);
-                let effective_min_x = if bucket.min_x != usize::MAX {
-                    bucket.min_x
-                } else {
-                    prev_bucket.map(|b| b.min_x).unwrap_or(usize::MAX)
-                };
-                let effective_max_x = if bucket.max_x != 0 {
-                    bucket.max_x
-                } else {
-                    prev_bucket.map(|b| b.max_x).unwrap_or(0)
-                };
-                let effective_min_y = if bucket.min_y != usize::MAX {
-                    bucket.min_y
-                } else {
-                    prev_bucket.map(|b| b.min_y).unwrap_or(usize::MAX)
-                };
-                let effective_max_y = if bucket.max_y != 0 {
-                    bucket.max_y
-                } else {
-                    prev_bucket.map(|b| b.max_y).unwrap_or(0)
-                };
 
                 match (run_start, is_dirty) {
                     (None, true) => {
-                        // Start a new run
+                        // Start a new run of dirty cells
                         run_start = Some(col);
-                        run_min_x = effective_min_x;
-                        run_max_x = effective_max_x;
-                        run_min_y = effective_min_y;
-                        run_max_y = effective_max_y;
                     }
                     (Some(start), false) => {
-                        // End the current run - use actual pixel bounds
-                        let pixel_x = if run_min_x == usize::MAX {
-                            start * cell_width // fallback
-                        } else {
-                            run_min_x
-                        };
-                        let pixel_y = if run_min_y == usize::MAX {
-                            row * cell_height // fallback if no bounds recorded
-                        } else {
-                            run_min_y
-                        };
-                        let pixel_width = if run_max_x == 0 {
-                            ((col - start) * cell_width).min(width_usize.saturating_sub(pixel_x))
-                        } else {
-                            run_max_x.saturating_sub(run_min_x).min(width_usize.saturating_sub(pixel_x))
-                        };
-                        let pixel_height = if run_max_y == 0 {
-                            cell_height.min(height_usize.saturating_sub(pixel_y))
-                        } else {
-                            run_max_y.saturating_sub(run_min_y).min(height_usize.saturating_sub(pixel_y))
-                        };
-
-                        if pixel_width > 0 && pixel_height > 0 {
-                            dirty_rects.push(DirtyRect {
-                                pixel_x,
-                                pixel_y,
-                                pixel_width,
-                                pixel_height,
-                            });
-                        }
+                        // End the current run
+                        dirty_rects.push(DirtyCellRect {
+                            col: start,
+                            row,
+                            width: col - start,
+                            height: 1,
+                        });
                         run_start = None;
-                        run_min_x = usize::MAX;
-                        run_max_x = 0;
-                        run_min_y = usize::MAX;
-                        run_max_y = 0;
-                    }
-                    (Some(_), true) => {
-                        // Extend the run - update pixel bounds using effective bounds
-                        run_min_x = run_min_x.min(effective_min_x);
-                        run_max_x = run_max_x.max(effective_max_x);
-                        run_min_y = run_min_y.min(effective_min_y);
-                        run_max_y = run_max_y.max(effective_max_y);
                     }
                     _ => {}
                 }
@@ -710,35 +580,12 @@ impl crate::TermWindow {
 
             // Handle run that extends to end of row
             if let Some(start) = run_start {
-                let pixel_x = if run_min_x == usize::MAX {
-                    start * cell_width
-                } else {
-                    run_min_x
-                };
-                let pixel_y = if run_min_y == usize::MAX {
-                    row * cell_height
-                } else {
-                    run_min_y
-                };
-                let pixel_width = if run_max_x == 0 {
-                    ((num_cols - start) * cell_width).min(width_usize.saturating_sub(pixel_x))
-                } else {
-                    run_max_x.saturating_sub(run_min_x).min(width_usize.saturating_sub(pixel_x))
-                };
-                let pixel_height = if run_max_y == 0 {
-                    cell_height.min(height_usize.saturating_sub(pixel_y))
-                } else {
-                    run_max_y.saturating_sub(run_min_y).min(height_usize.saturating_sub(pixel_y))
-                };
-
-                if pixel_width > 0 && pixel_height > 0 {
-                    dirty_rects.push(DirtyRect {
-                        pixel_x,
-                        pixel_y,
-                        pixel_width,
-                        pixel_height,
-                    });
-                }
+                dirty_rects.push(DirtyCellRect {
+                    col: start,
+                    row,
+                    width: num_cols - start,
+                    height: 1,
+                });
             }
         }
 
@@ -985,25 +832,27 @@ impl crate::TermWindow {
 
             metrics::counter!("cairo2d.glyph_cache.miss").increment(1);
 
-            // Render glyph
+            // Render glyph using sRGB blending (matches original 9cc95f1)
             let fg_a = job.fg_a as u16;
+            let bg_r = actual_bg_r as u16;
+            let bg_g = actual_bg_g as u16;
+            let bg_b = actual_bg_b as u16;
 
-            // Pre-compute blend tables in linear space for correct color mixing
-            // Convert sRGB values to linear for blending
-            let fg_r_lin = srgb_to_linear_f32(job.fg_r as f32 / 255.0);
-            let fg_g_lin = srgb_to_linear_f32(job.fg_g as f32 / 255.0);
-            let fg_b_lin = srgb_to_linear_f32(job.fg_b as f32 / 255.0);
-            let bg_r_lin = srgb_to_linear_f32(actual_bg_r as f32 / 255.0);
-            let bg_g_lin = srgb_to_linear_f32(actual_bg_g as f32 / 255.0);
-            let bg_b_lin = srgb_to_linear_f32(actual_bg_b as f32 / 255.0);
-
+            // Pre-compute blend tables for this fg/bg combination
             let mut blend_table_r = [0u8; 256];
             let mut blend_table_g = [0u8; 256];
             let mut blend_table_b = [0u8; 256];
             for cov in 0..256u16 {
-                blend_table_r[cov as usize] = blend_linear(fg_r_lin, bg_r_lin, cov, fg_a);
-                blend_table_g[cov as usize] = blend_linear(fg_g_lin, bg_g_lin, cov, fg_a);
-                blend_table_b[cov as usize] = blend_linear(fg_b_lin, bg_b_lin, cov, fg_a);
+                let cov_scaled = (cov * fg_a) / 255;
+                blend_table_r[cov as usize] =
+                    ((bg_r * (255 - cov_scaled) + job.fg_r as u16 * cov_scaled) / 255).min(255)
+                        as u8;
+                blend_table_g[cov as usize] =
+                    ((bg_g * (255 - cov_scaled) + job.fg_g as u16 * cov_scaled) / 255).min(255)
+                        as u8;
+                blend_table_b[cov as usize] =
+                    ((bg_b * (255 - cov_scaled) + job.fg_b as u16 * cov_scaled) / 255).min(255)
+                        as u8;
             }
 
             // Render glyph pixels
@@ -1094,7 +943,11 @@ impl crate::TermWindow {
         pixels: &[u8],
         width: i32,
         height: i32,
-        dirty_rects: &[DirtyRect],
+        cell_width: usize,
+        cell_height: usize,
+        padding_left: usize,
+        padding_top: usize,
+        dirty_rects: &[DirtyCellRect],
     ) -> anyhow::Result<usize> {
         let src_stride = width as usize * 4;
         let mut bytes_sent = 0usize;
@@ -1102,20 +955,22 @@ impl crate::TermWindow {
         let height_usize = height as usize;
         let full_frame_bytes = width_usize * height_usize * 4;
 
-        log::debug!("cairo2d partial update: {} dirty rects", dirty_rects.len());
+        log::debug!("cairo2d partial update: {} dirty cell rects", dirty_rects.len());
 
         for rect in dirty_rects {
+            // Convert cell coordinates to pixel coordinates (add padding offset)
+            let pixel_x = padding_left + rect.col * cell_width;
+            let pixel_y = padding_top + rect.row * cell_height;
+            let pixel_width = rect.width * cell_width;
+            let pixel_height = rect.height * cell_height;
+
             // Validate bounds
-            if rect.pixel_x >= width_usize || rect.pixel_y >= height_usize {
+            if pixel_x >= width_usize || pixel_y >= height_usize {
                 continue;
             }
 
-            let rect_width = rect
-                .pixel_width
-                .min(width_usize.saturating_sub(rect.pixel_x));
-            let rect_height = rect
-                .pixel_height
-                .min(height_usize.saturating_sub(rect.pixel_y));
+            let rect_width = pixel_width.min(width_usize.saturating_sub(pixel_x));
+            let rect_height = pixel_height.min(height_usize.saturating_sub(pixel_y));
 
             if rect_width == 0 || rect_height == 0 {
                 continue;
@@ -1127,8 +982,8 @@ impl crate::TermWindow {
             let mut rect_pixels = vec![0u8; rect_bytes];
 
             for row in 0..rect_height {
-                let src_y = rect.pixel_y + row;
-                let src_offset = src_y * src_stride + rect.pixel_x * 4;
+                let src_y = pixel_y + row;
+                let src_offset = src_y * src_stride + pixel_x * 4;
                 let dst_offset = row * rect_stride;
 
                 if src_offset + rect_stride <= pixels.len() {
@@ -1141,8 +996,8 @@ impl crate::TermWindow {
                 &rect_pixels,
                 rect_width as u32,
                 rect_height as u32,
-                rect.pixel_x as i16,
-                rect.pixel_y as i16,
+                pixel_x as i16,
+                pixel_y as i16,
             )?;
             bytes_sent += rect_bytes;
         }
@@ -1152,7 +1007,7 @@ impl crate::TermWindow {
             .increment((full_frame_bytes - bytes_sent) as u64);
 
         log::trace!(
-            "cairo2d partial: {} rects, sent {} / {} bytes",
+            "cairo2d partial: {} cell rects, sent {} / {} bytes",
             dirty_rects.len(),
             bytes_sent,
             full_frame_bytes
