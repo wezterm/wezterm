@@ -225,6 +225,9 @@ pub struct Cairo2DCacheData {
     pub cell_height: f32,
     /// Cell column index (0-based) for dirty tracking
     pub cell_col: usize,
+    /// Whether this cell is selected (for Cairo2D to skip background fill
+    /// and let the selection rectangle handle it, ensuring consistent sRGB blending)
+    pub is_selected: bool,
 }
 
 /// CPU-side vertex buffer for Cairo 2D rendering

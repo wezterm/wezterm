@@ -115,6 +115,9 @@ pub trait QuadTrait {
 
     /// Set cell boundaries for Cairo2D background fill and dirty tracking (ignored by GPU backends)
     fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32, cell_col: usize);
+
+    /// Mark cell as selected for Cairo2D to skip background fill (ignored by GPU backends)
+    fn set_is_selected(&mut self, selected: bool);
 }
 
 pub enum QuadImpl<'a> {
@@ -170,6 +173,10 @@ impl<'a> QuadTrait for HeapCairo2DQuad<'a> {
         self.cache_data.cell_y = cell_y;
         self.cache_data.cell_height = cell_height;
         self.cache_data.cell_col = cell_col;
+    }
+
+    fn set_is_selected(&mut self, selected: bool) {
+        self.cache_data.is_selected = selected;
     }
 }
 
@@ -254,6 +261,15 @@ impl<'a> QuadTrait for QuadImpl<'a> {
             Self::HeapCairo2D(q) => q.set_cell_bounds(cell_y, cell_height, cell_col),
         }
     }
+
+    fn set_is_selected(&mut self, selected: bool) {
+        match self {
+            Self::Vert(q) => q.set_is_selected(selected),
+            Self::Boxed(q) => q.set_is_selected(selected),
+            Self::Cairo2D(q) => q.set_is_selected(selected),
+            Self::HeapCairo2D(q) => q.set_is_selected(selected),
+        }
+    }
 }
 
 /// A helper for updating the 4 vertices that compose a glyph cell
@@ -311,6 +327,7 @@ impl<'a> QuadTrait for Quad<'a> {
     fn set_glyph_id(&mut self, _id: u32) {}
     fn set_bg_color(&mut self, _color: LinearRgba) {}
     fn set_cell_bounds(&mut self, _cell_y: f32, _cell_height: f32, _cell_col: usize) {}
+    fn set_is_selected(&mut self, _selected: bool) {}
 }
 
 /// A quad wrapper for Cairo2D that stores cache data separately from vertices.
@@ -387,6 +404,13 @@ impl<'a> QuadTrait for Cairo2DQuad<'a> {
             data.cell_col = cell_col;
         }
     }
+
+    fn set_is_selected(&mut self, selected: bool) {
+        let mut cache = self.cache_data.borrow_mut();
+        if let Some(data) = cache.get_mut(self.quad_index) {
+            data.is_selected = selected;
+        }
+    }
 }
 
 pub trait QuadAllocator {
@@ -457,6 +481,7 @@ impl QuadTrait for BoxedQuad {
     fn set_glyph_id(&mut self, _id: u32) {}
     fn set_bg_color(&mut self, _color: LinearRgba) {}
     fn set_cell_bounds(&mut self, _cell_y: f32, _cell_height: f32, _cell_col: usize) {}
+    fn set_is_selected(&mut self, _selected: bool) {}
 }
 
 impl BoxedQuad {

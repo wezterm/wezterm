@@ -225,6 +225,8 @@ struct GlyphJob {
     bg_b: u8,
     bg_a: u8,
     glyph_id: u32,
+    /// If true, skip background fill - the selection rectangle handles it
+    is_selected: bool,
 }
 
 impl crate::TermWindow {
@@ -305,46 +307,66 @@ impl crate::TermWindow {
                             let quad_verts = &vertices[base..base + 4];
                             let cache = cache_data.get(quad_idx).copied().unwrap_or_default();
 
-                            // Get cell position - use cache if set_cell_bounds was called,
-                            // otherwise fall back to position-based calculation
-                            let (col, row) = if cache.cell_height > 0.0 {
-                                // set_cell_bounds was called - use cached values
+                            // Hash for frame-level change detection
+                            for v in quad_verts {
+                                hash_vertex_for_frame(v, &cache, &mut frame_hasher);
+                            }
+
+                            // Get cell range - for glyphs use cache, for multi-cell quads
+                            // (like selection rectangles) calculate from bounding box
+                            let (start_col, end_col, start_row, end_row) = if cache.cell_height > 0.0
+                            {
+                                // set_cell_bounds was called - single cell glyph
                                 let cell_y = (cache.cell_y + half_height as f32) as usize;
                                 let row = if cell_height > 0 {
                                     cell_y / cell_height
                                 } else {
                                     0
                                 };
-                                (cache.cell_col, row)
+                                (cache.cell_col, cache.cell_col + 1, row, row + 1)
                             } else {
-                                // Fallback: calculate from vertex position
-                                let cell_x =
-                                    (quad_verts[0].position[0] + half_width as f32) as usize;
-                                let cell_y =
-                                    (quad_verts[0].position[1] + half_height as f32) as usize;
-                                let col = if cell_width > 0 {
-                                    cell_x / cell_width
+                                // Multi-cell quad (e.g., selection rectangle) - hash into all covered cells
+                                // Convert screen coords to pixel coords, then subtract padding to get
+                                // position within the cell grid
+                                let x1 = (quad_verts[V_TOP_LEFT].position[0] + half_width as f32)
+                                    .max(0.0) as usize;
+                                let y1 = (quad_verts[V_TOP_LEFT].position[1] + half_height as f32)
+                                    .max(0.0) as usize;
+                                let x2 = (quad_verts[V_BOT_RIGHT].position[0] + half_width as f32)
+                                    .max(0.0) as usize;
+                                let y2 = (quad_verts[V_BOT_RIGHT].position[1] + half_height as f32)
+                                    .max(0.0) as usize;
+
+                                // Subtract padding to get position relative to cell grid origin
+                                let x1_in_grid = x1.saturating_sub(padding_left);
+                                let y1_in_grid = y1.saturating_sub(padding_top);
+                                let x2_in_grid = x2.saturating_sub(padding_left);
+                                let y2_in_grid = y2.saturating_sub(padding_top);
+
+                                let start_col =
+                                    if cell_width > 0 { x1_in_grid / cell_width } else { 0 };
+                                let end_col = if cell_width > 0 {
+                                    (x2_in_grid + cell_width - 1) / cell_width
                                 } else {
-                                    0
+                                    1
                                 };
-                                let row = if cell_height > 0 {
-                                    cell_y / cell_height
+                                let start_row =
+                                    if cell_height > 0 { y1_in_grid / cell_height } else { 0 };
+                                let end_row = if cell_height > 0 {
+                                    (y2_in_grid + cell_height - 1) / cell_height
                                 } else {
-                                    0
+                                    1
                                 };
-                                (col, row)
+                                (start_col, end_col, start_row, end_row)
                             };
 
-                            // Hash for frame-level change detection
-                            for v in quad_verts {
-                                hash_vertex_for_frame(v, &cache, &mut frame_hasher);
-                            }
-
-                            // Hash for cell-level change detection
-                            if row < num_rows && col < num_cols {
-                                let cell_idx = row * num_cols + col;
-                                for v in quad_verts {
-                                    hash_vertex_for_cell(v, &cache, &mut cell_hashers[cell_idx]);
+                            // Hash for cell-level change detection - all cells in range
+                            for row in start_row..end_row.min(num_rows) {
+                                for col in start_col..end_col.min(num_cols) {
+                                    let cell_idx = row * num_cols + col;
+                                    for v in quad_verts {
+                                        hash_vertex_for_cell(v, &cache, &mut cell_hashers[cell_idx]);
+                                    }
                                 }
                             }
                         }
@@ -669,7 +691,10 @@ impl crate::TermWindow {
                     let has_color = tl.has_color;
 
                     if has_color == 3.0 {
-                        // Solid color
+                        // Solid color (e.g., selection rectangle)
+                        // Draw semi-transparently - Cairo will blend in sRGB space.
+                        // For consistency with glyph backgrounds, we'll handle
+                        // the color space mismatch in the glyph rendering path.
                         let [r, g, b, a] = tl.fg_color;
                         ctx.set_source_rgba(
                             linear_to_srgb(r),
@@ -718,6 +743,7 @@ impl crate::TermWindow {
                                 bg_b: (linear_to_srgb(bg_b) * 255.0) as u8,
                                 bg_a: (bg_a * 255.0) as u8,
                                 glyph_id: cache.glyph_id,
+                                is_selected: cache.is_selected,
                             });
                         } else {
                             // Color emoji or background image
@@ -771,37 +797,49 @@ impl crate::TermWindow {
             let actual_bg_g = job.bg_g;
             let actual_bg_b = job.bg_b;
 
-            // Fill full cell with background
-            for row in 0..job.cell_height {
-                let dest_row = job.cell_y + row;
-                if dest_row >= dest_height {
-                    break;
-                }
-                for col in 0..job.dest_width {
-                    let dest_col = job.dest_x + col;
-                    if dest_col >= dest_width {
+            // Fill full cell with background, but skip for selected cells.
+            // For selected cells, the selection rectangle (drawn earlier with Cairo)
+            // already provides the background via sRGB-space alpha blending.
+            // This ensures consistent selection colors between glyph and empty cells.
+            if !job.is_selected {
+                for row in 0..job.cell_height {
+                    let dest_row = job.cell_y + row;
+                    if dest_row >= dest_height {
                         break;
                     }
-                    let dest_offset = dest_row * dest_stride + dest_col * 4;
-                    dest_data[dest_offset + 0] = actual_bg_b;
-                    dest_data[dest_offset + 1] = actual_bg_g;
-                    dest_data[dest_offset + 2] = actual_bg_r;
-                    dest_data[dest_offset + 3] = 255;
+                    for col in 0..job.dest_width {
+                        let dest_col = job.dest_x + col;
+                        if dest_col >= dest_width {
+                            break;
+                        }
+                        let dest_offset = dest_row * dest_stride + dest_col * 4;
+                        dest_data[dest_offset + 0] = actual_bg_b;
+                        dest_data[dest_offset + 1] = actual_bg_g;
+                        dest_data[dest_offset + 2] = actual_bg_r;
+                        dest_data[dest_offset + 3] = 255;
+                    }
                 }
             }
 
-            let cache_key = GlyphCacheKey {
-                glyph_id: job.glyph_id,
-                fg_rgba: pack_rgba(job.fg_r, job.fg_g, job.fg_b, job.fg_a),
-                bg_rgba: pack_rgba(actual_bg_r, actual_bg_g, actual_bg_b, job.bg_a),
-                cell_width: job.dest_width as u16,
-                cell_height: job.cell_height as u16,
+            // Skip cache for selected cells - the cached pixels include background
+            // which would overwrite the selection rectangle. For selected cells,
+            // we render the glyph directly over the selection (already drawn by Cairo).
+            let cache_key = if !job.is_selected {
+                Some(GlyphCacheKey {
+                    glyph_id: job.glyph_id,
+                    fg_rgba: pack_rgba(job.fg_r, job.fg_g, job.fg_b, job.fg_a),
+                    bg_rgba: pack_rgba(actual_bg_r, actual_bg_g, actual_bg_b, job.bg_a),
+                    cell_width: job.dest_width as u16,
+                    cell_height: job.cell_height as u16,
+                })
+            } else {
+                None
             };
 
-            // Try cache lookup (get() requires mut because LfuCache updates frequency)
-            let cache_hit = {
+            // Try cache lookup (only for non-selected cells)
+            let cache_hit = if let Some(ref key) = cache_key {
                 let mut state = self.cairo2d_state.borrow_mut();
-                if let Some(cached) = state.glyph_cache.get(&cache_key) {
+                if let Some(cached) = state.glyph_cache.get(key) {
                     let cell_width = job.dest_width;
                     let cell_height = job.cell_height;
                     for row in 0..cell_height {
@@ -824,6 +862,8 @@ impl crate::TermWindow {
                 } else {
                     false
                 }
+            } else {
+                false
             };
 
             if cache_hit {
@@ -899,33 +939,35 @@ impl crate::TermWindow {
                 }
             }
 
-            // Cache the rendered cell
-            let cell_width = job.dest_width;
-            let cell_height = job.cell_height;
-            let mut cell_buffer = vec![0u8; cell_width * cell_height * 4];
+            // Cache the rendered cell (only for non-selected cells)
+            if let Some(key) = cache_key {
+                let cell_width = job.dest_width;
+                let cell_height = job.cell_height;
+                let mut cell_buffer = vec![0u8; cell_width * cell_height * 4];
 
-            for row in 0..cell_height {
-                let dest_row = job.cell_y + row;
-                if dest_row >= dest_height {
-                    break;
+                for row in 0..cell_height {
+                    let dest_row = job.cell_y + row;
+                    if dest_row >= dest_height {
+                        break;
+                    }
+                    let src_start = dest_row * dest_stride + job.dest_x * 4;
+                    let dst_start = row * cell_width * 4;
+                    let copy_width = cell_width.min(dest_width.saturating_sub(job.dest_x));
+                    let copy_bytes = copy_width * 4;
+                    cell_buffer[dst_start..dst_start + copy_bytes]
+                        .copy_from_slice(&dest_data[src_start..src_start + copy_bytes]);
                 }
-                let src_start = dest_row * dest_stride + job.dest_x * 4;
-                let dst_start = row * cell_width * 4;
-                let copy_width = cell_width.min(dest_width.saturating_sub(job.dest_x));
-                let copy_bytes = copy_width * 4;
-                cell_buffer[dst_start..dst_start + copy_bytes]
-                    .copy_from_slice(&dest_data[src_start..src_start + copy_bytes]);
-            }
 
-            {
-                let mut state = self.cairo2d_state.borrow_mut();
-                // LfuCache handles eviction automatically based on cairo2d_glyph_cache_size
-                state.glyph_cache.put(
-                    cache_key,
-                    CachedGlyph {
-                        pixels: cell_buffer,
-                    },
-                );
+                {
+                    let mut state = self.cairo2d_state.borrow_mut();
+                    // LfuCache handles eviction automatically based on cairo2d_glyph_cache_size
+                    state.glyph_cache.put(
+                        key,
+                        CachedGlyph {
+                            pixels: cell_buffer,
+                        },
+                    );
+                }
             }
         }
 

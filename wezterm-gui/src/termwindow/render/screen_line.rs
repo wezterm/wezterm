@@ -667,6 +667,7 @@ impl crate::TermWindow {
                                 hsv
                             });
                             quad.set_has_color(glyph.has_color);
+                            quad.set_is_selected(selected);
                         }
                     }
                 }
