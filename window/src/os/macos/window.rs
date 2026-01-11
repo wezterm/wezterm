@@ -90,6 +90,8 @@ enum ImeDisposition {
     None,
     /// IME triggered an action
     Acted,
+    /// IME acted then requested continue
+    ActedThenContinue,
     /// We decided to continue with key dispatch
     Continue,
 }
@@ -1951,7 +1953,10 @@ impl WindowView {
 
         if let Some(myself) = Self::get_this(this) {
             let mut inner = myself.inner.borrow_mut();
-            inner.ime_state = ImeDisposition::Continue;
+            inner.ime_state = match inner.ime_state {
+                ImeDisposition::Acted => ImeDisposition::ActedThenContinue,
+                _ => ImeDisposition::Continue,
+            };
             inner.ime_last_event.take();
         }
     }
@@ -2705,13 +2710,15 @@ impl WindowView {
         };
 
         if key_is_down && use_ime && forward_to_ime {
-            if let Some(myself) = Self::get_this(this) {
+            let preedit_before_ime = if let Some(myself) = Self::get_this(this) {
                 let mut inner = myself.inner.borrow_mut();
                 inner.key_is_down.replace(key_is_down);
                 inner.ime_state = ImeDisposition::None;
                 inner.in_key_event = true;
-                inner.ime_text.clear();
-            }
+                std::mem::take(&mut inner.ime_text)
+            } else {
+                String::new()
+            };
 
             unsafe {
                 let array: id = msg_send![class!(NSArray), arrayWithObject: nsevent];
@@ -2730,6 +2737,20 @@ impl WindowView {
                             // IME handled the event by generating NOOP;
                             // let's continue with our normal handling
                             // code below.
+                            if !preedit_before_ime.is_empty() {
+                                let event = KeyEvent {
+                                    key: KeyCode::composed(&preedit_before_ime),
+                                    modifiers: Modifiers::NONE,
+                                    leds: KeyboardLedStatus::empty(),
+                                    repeat_count: 1,
+                                    key_is_down: true,
+                                    raw: None,
+                                };
+                                inner.events.dispatch(WindowEvent::AdviseDeadKeyStatus(
+                                    DeadKeyStatus::None,
+                                ));
+                                inner.events.dispatch(WindowEvent::KeyEvent(event));
+                            }
                             inner.ime_last_event.take();
                         }
                         ImeDisposition::Acted => {
@@ -2747,6 +2768,12 @@ impl WindowView {
                                 .events
                                 .dispatch(WindowEvent::AdviseDeadKeyStatus(status));
                             return;
+                        }
+                        ImeDisposition::ActedThenContinue => {
+                            inner
+                                .events
+                                .dispatch(WindowEvent::AdviseDeadKeyStatus(DeadKeyStatus::None));
+                            inner.ime_last_event.take();
                         }
                         ImeDisposition::None => {
                             // The IME clocked something in its state,
