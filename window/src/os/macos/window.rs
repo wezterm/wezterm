@@ -2350,7 +2350,47 @@ impl WindowView {
         Self::mouse_common(this, nsevent, MouseEventKind::Release(MousePress::Left));
     }
 
+    /// Commit any pending IME preedit text before processing mouse events.
+    /// This ensures that clicking while composing text commits the composition
+    /// rather than losing it.
+    fn commit_preedit(this: &mut Object) {
+        let has_preedit = if let Some(myself) = Self::get_this(this) {
+            let mut inner = myself.inner.borrow_mut();
+            if !inner.ime_text.is_empty() {
+                let text = std::mem::take(&mut inner.ime_text);
+                let event = KeyEvent {
+                    key: KeyCode::composed(&text),
+                    modifiers: Modifiers::NONE,
+                    leds: KeyboardLedStatus::empty(),
+                    repeat_count: 1,
+                    key_is_down: true,
+                    raw: None,
+                };
+                inner
+                    .events
+                    .dispatch(WindowEvent::AdviseDeadKeyStatus(DeadKeyStatus::None));
+                inner.events.dispatch(WindowEvent::KeyEvent(event));
+                inner.ime_last_event.take();
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if has_preedit {
+            unsafe {
+                let input_context: id = msg_send![this, inputContext];
+                if input_context != nil {
+                    let _: () = msg_send![input_context, discardMarkedText];
+                }
+            }
+        }
+    }
+
     extern "C" fn mouse_down(this: &mut Object, _sel: Sel, nsevent: id) {
+        Self::commit_preedit(this);
         Self::mouse_common(this, nsevent, MouseEventKind::Press(MousePress::Left));
     }
     extern "C" fn right_mouse_up(this: &mut Object, _sel: Sel, nsevent: id) {
@@ -2441,10 +2481,12 @@ impl WindowView {
     }
 
     extern "C" fn right_mouse_down(this: &mut Object, _sel: Sel, nsevent: id) {
+        Self::commit_preedit(this);
         Self::mouse_common(this, nsevent, MouseEventKind::Press(MousePress::Right));
     }
 
     extern "C" fn other_mouse_down(this: &mut Object, _sel: Sel, nsevent: id) {
+        Self::commit_preedit(this);
         // Safety: See `other_mouse_up`
         unsafe {
             let button_number = NSEvent::buttonNumber(nsevent);
