@@ -502,6 +502,7 @@ impl Window {
                 ime_last_event: None,
                 live_resizing: false,
                 ime_text: String::new(),
+                in_key_event: false,
             }));
 
             let window: id = msg_send![get_window_class(), alloc];
@@ -1572,6 +1573,10 @@ struct Inner {
     live_resizing: bool,
 
     ime_text: String,
+
+    /// Whether we're currently processing a key event.
+    /// Used to distinguish between key-triggered and external IME calls.
+    in_key_event: bool,
 }
 
 #[repr(C)]
@@ -2057,6 +2062,17 @@ impl WindowView {
             */
             inner.ime_last_event.take();
             inner.ime_state = ImeDisposition::Acted;
+
+            if !inner.in_key_event {
+                let status = if s.is_empty() {
+                    DeadKeyStatus::None
+                } else {
+                    DeadKeyStatus::Composing(s.to_string())
+                };
+                inner
+                    .events
+                    .dispatch(WindowEvent::AdviseDeadKeyStatus(status));
+            }
         }
     }
 
@@ -2070,6 +2086,12 @@ impl WindowView {
             inner.ime_text.clear();
             inner.ime_last_event.take();
             inner.ime_state = ImeDisposition::Acted;
+
+            if !inner.in_key_event {
+                inner
+                    .events
+                    .dispatch(WindowEvent::AdviseDeadKeyStatus(DeadKeyStatus::None));
+            }
         }
     }
 
@@ -2687,6 +2709,7 @@ impl WindowView {
                 let mut inner = myself.inner.borrow_mut();
                 inner.key_is_down.replace(key_is_down);
                 inner.ime_state = ImeDisposition::None;
+                inner.in_key_event = true;
                 inner.ime_text.clear();
             }
 
@@ -2696,6 +2719,7 @@ impl WindowView {
 
                 if let Some(myself) = Self::get_this(this) {
                     let mut inner = myself.inner.borrow_mut();
+                    inner.in_key_event = false;
                     log::trace!(
                         "IME state: {:?}, last_event: {:?}",
                         inner.ime_state,
