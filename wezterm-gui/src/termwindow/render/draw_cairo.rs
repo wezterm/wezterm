@@ -131,6 +131,10 @@ pub struct Cairo2DRenderState {
     skip_ratio_60s: SkipRatioWindow,
     /// Glyph cache for pre-rendered glyphs using LfuCache for proper eviction
     glyph_cache: LfuCache<GlyphCacheKey, CachedGlyph>,
+    /// Previous cursor cell positions (col, row) for dirty tracking.
+    /// Cursor quads may span multiple cells (wide characters), so we track all of them.
+    /// When the cursor moves, all previous positions must be invalidated.
+    prev_cursor_cells: Vec<(usize, usize)>,
 }
 
 impl Cairo2DRenderState {
@@ -154,6 +158,7 @@ impl Cairo2DRenderState {
                 |config| config.cairo2d_glyph_cache_size,
                 config,
             ),
+            prev_cursor_cells: Vec::new(),
         }
     }
 
@@ -210,6 +215,10 @@ struct GlyphJob {
     dest_x: usize,
     dest_y: usize,
     dest_width: usize,
+    /// Cell-aligned X position for caching (padding_left + cell_col * cell_width)
+    cell_x: usize,
+    /// Actual cell width from render metrics (not glyph quad width)
+    actual_cell_width: usize,
     cell_y: usize,
     cell_height: usize,
     tex_x: usize,
@@ -287,6 +296,9 @@ impl crate::TermWindow {
             (0..num_cells).map(|_| DefaultHasher::new()).collect();
         let mut frame_hasher = DefaultHasher::new();
 
+        // Collect current cursor cell positions (cursor quads have glyph_id with high bit set)
+        let mut current_cursor_cells: Vec<(usize, usize)> = Vec::new();
+
         // Hash all vertices for change detection
         for layer in render_state.layers.borrow().iter() {
             for idx in 0..3 {
@@ -317,9 +329,12 @@ impl crate::TermWindow {
                             let (start_col, end_col, start_row, end_row) = if cache.cell_height > 0.0
                             {
                                 // set_cell_bounds was called - single cell glyph
+                                // Subtract padding to get position relative to cell grid origin
+                                // (consistent with multi-cell quad handling and present_partial_frame)
                                 let cell_y = (cache.cell_y + half_height as f32) as usize;
+                                let cell_y_in_grid = cell_y.saturating_sub(padding_top);
                                 let row = if cell_height > 0 {
-                                    cell_y / cell_height
+                                    cell_y_in_grid / cell_height
                                 } else {
                                     0
                                 };
@@ -366,6 +381,15 @@ impl crate::TermWindow {
                                     let cell_idx = row * num_cols + col;
                                     for v in quad_verts {
                                         hash_vertex_for_cell(v, &cache, &mut cell_hashers[cell_idx]);
+                                    }
+                                }
+                            }
+
+                            // Track cursor quad positions (cursor quads have high bit set in glyph_id)
+                            if cache.glyph_id & 0x8000_0000 != 0 {
+                                for row in start_row..end_row.min(num_rows) {
+                                    for col in start_col..end_col.min(num_cols) {
+                                        current_cursor_cells.push((col, row));
                                     }
                                 }
                             }
@@ -416,13 +440,19 @@ impl crate::TermWindow {
         // Detect dirty regions (cell-level)
         let (dirty_rects, force_full_redraw) = self.detect_dirty_cells(
             &current_cell_buckets,
+            &current_cursor_cells,
             width,
             height,
             num_cols,
             num_rows,
         );
 
-        let do_partial_update = !force_full_redraw && !dirty_rects.is_empty();
+        // Force full redraw if cursor is involved to avoid cursor ghost artifacts.
+        // The partial update system has trouble tracking cursor movements reliably.
+        let cursor_involved = !current_cursor_cells.is_empty()
+            || !self.cairo2d_state.borrow().prev_cursor_cells.is_empty();
+        let do_partial_update =
+            !force_full_redraw && !dirty_rects.is_empty() && !cursor_involved;
         if do_partial_update {
             metrics::histogram!("cairo2d.frame.partial.rate").record(1.);
         } else {
@@ -440,11 +470,12 @@ impl crate::TermWindow {
                 state.num_cols = 0;
                 state.num_rows = 0;
             }
-            // Update cell dimensions if they changed
+            // Update cell dimensions if they changed - clear caches since cached data has wrong size
             if state.cell_width != cell_width || state.cell_height != cell_height {
                 state.cell_width = cell_width;
                 state.cell_height = cell_height;
                 state.cell_buckets.clear();
+                state.glyph_cache.clear();
                 state.num_cols = 0;
                 state.num_rows = 0;
             }
@@ -467,6 +498,8 @@ impl crate::TermWindow {
             default_bg_r,
             default_bg_g,
             default_bg_b,
+            padding_left,
+            cell_width,
             &mut glyph_jobs,
         )?;
 
@@ -478,6 +511,9 @@ impl crate::TermWindow {
                 width as usize,
                 height as usize,
                 &glyph_jobs,
+                default_bg_r,
+                default_bg_g,
+                default_bg_b,
             )?;
         }
 
@@ -523,6 +559,8 @@ impl crate::TermWindow {
             state.cell_buckets = current_cell_buckets;
             state.num_cols = num_cols;
             state.num_rows = num_rows;
+            // Save current cursor positions for next frame's dirty tracking
+            state.prev_cursor_cells = current_cursor_cells;
         }
 
         Ok(())
@@ -533,6 +571,7 @@ impl crate::TermWindow {
     fn detect_dirty_cells(
         &self,
         current_cell_buckets: &[CellBucket],
+        current_cursor_cells: &[(usize, usize)],
         width: i32,
         height: i32,
         num_cols: usize,
@@ -551,6 +590,9 @@ impl crate::TermWindow {
             return (Vec::new(), true);
         }
 
+        // Get previous cursor positions for dirty tracking
+        let prev_cursor_cells = &state.prev_cursor_cells;
+
         // Build dirty cell bitmap
         let num_cells = num_rows * num_cols;
         let mut dirty_count = 0usize;
@@ -561,6 +603,38 @@ impl crate::TermWindow {
             if bucket.hash != prev_hash {
                 dirty_bitmap[idx] = true;
                 dirty_count += 1;
+            }
+        }
+
+        // Force all previous cursor cells dirty.
+        // This ensures the old cursor position is repainted even if the
+        // underlying text hasn't changed. We mark ALL previous cursor cells
+        // dirty regardless of whether the cursor moved, because the cursor
+        // might blink or change shape, and the hash-based detection might
+        // miss some cursor changes due to timing.
+        for &(col, row) in prev_cursor_cells.iter() {
+            if col < num_cols && row < num_rows {
+                let cell_idx = row * num_cols + col;
+                if !dirty_bitmap[cell_idx] {
+                    dirty_bitmap[cell_idx] = true;
+                    dirty_count += 1;
+                    log::trace!(
+                        "cairo2d: forcing previous cursor cell ({}, {}) dirty",
+                        col,
+                        row
+                    );
+                }
+            }
+        }
+
+        // Also force current cursor cells dirty to ensure cursor updates are visible
+        for &(col, row) in current_cursor_cells.iter() {
+            if col < num_cols && row < num_rows {
+                let cell_idx = row * num_cols + col;
+                if !dirty_bitmap[cell_idx] {
+                    dirty_bitmap[cell_idx] = true;
+                    dirty_count += 1;
+                }
             }
         }
 
@@ -630,6 +704,8 @@ impl crate::TermWindow {
         default_bg_r: u8,
         default_bg_g: u8,
         default_bg_b: u8,
+        padding_left: usize,
+        cell_width: usize,
         glyph_jobs: &mut Vec<GlyphJob>,
     ) -> anyhow::Result<()> {
         let ctx = cairo::Context::new(surface).context("Failed to create Cairo context")?;
@@ -723,11 +799,15 @@ impl crate::TermWindow {
                             let [bg_r, bg_g, bg_b, bg_a] = cache.bg_color;
                             let cell_y = (cache.cell_y as f64 + half_height) as usize;
                             let cell_height = cache.cell_height as usize;
+                            // Cell-aligned X position for caching (same glyph renders identically regardless of position)
+                            let cell_x = padding_left + cache.cell_col as usize * cell_width;
 
                             glyph_jobs.push(GlyphJob {
                                 dest_x: dest_x as usize,
                                 dest_y: dest_y as usize,
                                 dest_width: dest_width as usize,
+                                cell_x,
+                                actual_cell_width: cell_width,
                                 cell_y,
                                 cell_height,
                                 tex_x: tex_x1 as usize,
@@ -782,6 +862,9 @@ impl crate::TermWindow {
         dest_width: usize,
         dest_height: usize,
         glyph_jobs: &[GlyphJob],
+        default_bg_r: u8,
+        default_bg_g: u8,
+        default_bg_b: u8,
     ) -> anyhow::Result<()> {
         let mut atlas_surface_mut = atlas.surface_mut();
         let atlas_stride = atlas_surface_mut.stride() as usize;
@@ -793,182 +876,265 @@ impl crate::TermWindow {
         let mut dest_data = surface.data().expect("Failed to get destination data");
 
         for job in glyph_jobs {
-            let actual_bg_r = job.bg_r;
-            let actual_bg_g = job.bg_g;
-            let actual_bg_b = job.bg_b;
+            // If bg_a is 0, it means set_bg_color wasn't called successfully
+            // (cache data bounds check failed), so fall back to default background
+            let (actual_bg_r, actual_bg_g, actual_bg_b) = if job.bg_a > 0 {
+                (job.bg_r, job.bg_g, job.bg_b)
+            } else {
+                log::trace!(
+                    "cairo2d: bg_a is 0 for glyph at ({}, {}), using default background",
+                    job.dest_x,
+                    job.dest_y
+                );
+                (default_bg_r, default_bg_g, default_bg_b)
+            };
 
             // Fill full cell with background, but skip for selected cells.
             // For selected cells, the selection rectangle (drawn earlier with Cairo)
             // already provides the background via sRGB-space alpha blending.
             // This ensures consistent selection colors between glyph and empty cells.
-            if !job.is_selected {
-                for row in 0..job.cell_height {
-                    let dest_row = job.cell_y + row;
-                    if dest_row >= dest_height {
-                        break;
-                    }
-                    for col in 0..job.dest_width {
-                        let dest_col = job.dest_x + col;
-                        if dest_col >= dest_width {
-                            break;
-                        }
-                        let dest_offset = dest_row * dest_stride + dest_col * 4;
-                        dest_data[dest_offset + 0] = actual_bg_b;
-                        dest_data[dest_offset + 1] = actual_bg_g;
-                        dest_data[dest_offset + 2] = actual_bg_r;
-                        dest_data[dest_offset + 3] = 255;
-                    }
-                }
-            }
-
-            // Skip cache for selected cells - the cached pixels include background
-            // which would overwrite the selection rectangle. For selected cells,
-            // we render the glyph directly over the selection (already drawn by Cairo).
-            let cache_key = if !job.is_selected {
-                Some(GlyphCacheKey {
-                    glyph_id: job.glyph_id,
-                    fg_rgba: pack_rgba(job.fg_r, job.fg_g, job.fg_b, job.fg_a),
-                    bg_rgba: pack_rgba(actual_bg_r, actual_bg_g, actual_bg_b, job.bg_a),
-                    cell_width: job.dest_width as u16,
-                    cell_height: job.cell_height as u16,
-                })
+            //
+            // If cell_height is 0 but bg_a > 0, it means set_cell_bounds failed but
+            // set_bg_color succeeded - this is terminal content where the cache data
+            // wasn't properly set. Fall back to using the glyph height.
+            // If both cell_height and bg_a are 0, this is likely a UI element (title bar,
+            // tab bar) that intentionally doesn't have cell-based backgrounds.
+            let effective_cell_height = if job.cell_height > 0 {
+                job.cell_height
+            } else if job.bg_a > 0 {
+                // Fallback for terminal content: use glyph height when cell_height is 0
+                log::trace!(
+                    "cairo2d: cell_height is 0 for glyph at ({}, {}), using glyph height {} instead",
+                    job.dest_x,
+                    job.dest_y,
+                    job.height
+                );
+                job.height
             } else {
-                None
+                // UI element - no cell-based background fill needed
+                0
             };
-
-            // Try cache lookup (only for non-selected cells)
-            let cache_hit = if let Some(ref key) = cache_key {
-                let mut state = self.cairo2d_state.borrow_mut();
-                if let Some(cached) = state.glyph_cache.get(key) {
-                    let cell_width = job.dest_width;
-                    let cell_height = job.cell_height;
-                    for row in 0..cell_height {
-                        let dest_row = job.cell_y + row;
-                        if dest_row >= dest_height {
-                            break;
-                        }
-                        let copy_width = cell_width.min(dest_width.saturating_sub(job.dest_x));
-                        if copy_width == 0 {
-                            continue;
-                        }
-                        let src_start = row * cell_width * 4;
-                        let dest_start = dest_row * dest_stride + job.dest_x * 4;
-                        let copy_bytes = copy_width * 4;
-                        dest_data[dest_start..dest_start + copy_bytes]
-                            .copy_from_slice(&cached.pixels[src_start..src_start + copy_bytes]);
-                    }
-                    metrics::counter!("cairo2d.glyph_cache.hit").increment(1);
-                    true
-                } else {
-                    false
-                }
+            let effective_cell_y = if job.cell_height > 0 {
+                job.cell_y
+            } else if job.bg_a > 0 {
+                // Fallback for terminal content: use glyph dest_y when cell_y is not set
+                job.dest_y
             } else {
-                false
+                // UI element - not used since effective_cell_height is 0
+                0
             };
+            // Cache eligibility: terminal content cells (cell_height > 0) that are not cursor
+            // Also require glyph to fit entirely within the cell (no negative bearings or overhangs)
+            let glyph_fits_in_cell = job.dest_x >= job.cell_x
+                && job.dest_y >= job.cell_y
+                && job.dest_x + job.width <= job.cell_x + job.actual_cell_width
+                && job.dest_y + job.height <= job.cell_y + job.cell_height;
+            let is_cacheable = job.cell_height > 0
+                && (job.glyph_id & 0x8000_0000) == 0
+                && !job.is_selected
+                && glyph_fits_in_cell;
 
-            if cache_hit {
-                continue;
-            }
-
-            metrics::counter!("cairo2d.glyph_cache.miss").increment(1);
-
-            // Render glyph using sRGB blending (matches original 9cc95f1)
+            // Pre-compute blend tables for this fg/bg combination (used for both cached and direct rendering)
             let fg_a = job.fg_a as u16;
             let bg_r = actual_bg_r as u16;
             let bg_g = actual_bg_g as u16;
             let bg_b = actual_bg_b as u16;
 
-            // Pre-compute blend tables for this fg/bg combination
             let mut blend_table_r = [0u8; 256];
             let mut blend_table_g = [0u8; 256];
             let mut blend_table_b = [0u8; 256];
             for cov in 0..256u16 {
                 let cov_scaled = (cov * fg_a) / 255;
                 blend_table_r[cov as usize] =
-                    ((bg_r * (255 - cov_scaled) + job.fg_r as u16 * cov_scaled) / 255).min(255)
-                        as u8;
+                    ((bg_r * (255 - cov_scaled) + job.fg_r as u16 * cov_scaled) / 255).min(255) as u8;
                 blend_table_g[cov as usize] =
-                    ((bg_g * (255 - cov_scaled) + job.fg_g as u16 * cov_scaled) / 255).min(255)
-                        as u8;
+                    ((bg_g * (255 - cov_scaled) + job.fg_g as u16 * cov_scaled) / 255).min(255) as u8;
                 blend_table_b[cov as usize] =
-                    ((bg_b * (255 - cov_scaled) + job.fg_b as u16 * cov_scaled) / 255).min(255)
-                        as u8;
+                    ((bg_b * (255 - cov_scaled) + job.fg_b as u16 * cov_scaled) / 255).min(255) as u8;
             }
 
-            // Render glyph pixels
-            for row in 0..job.height {
-                let tex_row = job.tex_y + row;
-                let dest_row = job.dest_y + row;
-
-                if tex_row >= atlas_height_px || dest_row >= dest_height {
-                    continue;
-                }
-
-                for col in 0..job.width {
-                    let tex_col = job.tex_x + col;
-                    let dest_col = job.dest_x + col;
-
-                    if tex_col >= atlas_width_px || dest_col >= dest_width {
-                        continue;
-                    }
-
-                    let atlas_offset = tex_row * atlas_stride + tex_col * 4;
-                    let cov_b = atlas_data[atlas_offset + 0] as u16;
-                    let cov_g = atlas_data[atlas_offset + 1] as u16;
-                    let cov_a = atlas_data[atlas_offset + 3] as u16;
-                    let cov_r = atlas_data[atlas_offset + 2] as u16;
-
-                    if cov_a == 0 {
-                        continue;
-                    }
-
-                    let dest_offset = dest_row * dest_stride + dest_col * 4;
-
-                    let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
-                    let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
-                    let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
-
-                    let out_r = blend_table_r[cov_r_lin as usize];
-                    let out_g = blend_table_g[cov_g_lin as usize];
-                    let out_b = blend_table_b[cov_b_lin as usize];
-
-                    dest_data[dest_offset + 0] = out_b;
-                    dest_data[dest_offset + 1] = out_g;
-                    dest_data[dest_offset + 2] = out_r;
-                    dest_data[dest_offset + 3] = 255;
-                }
-            }
-
-            // Cache the rendered cell (only for non-selected cells)
-            if let Some(key) = cache_key {
-                let cell_width = job.dest_width;
+            if is_cacheable {
+                // CACHEABLE PATH: Render to temp buffer, cache, blit to screen
+                let cell_width = job.actual_cell_width;
                 let cell_height = job.cell_height;
-                let mut cell_buffer = vec![0u8; cell_width * cell_height * 4];
+                let cache_key = GlyphCacheKey {
+                    glyph_id: job.glyph_id,
+                    fg_rgba: pack_rgba(job.fg_r, job.fg_g, job.fg_b, job.fg_a),
+                    bg_rgba: pack_rgba(actual_bg_r, actual_bg_g, actual_bg_b, job.bg_a),
+                    cell_width: cell_width as u16,
+                    cell_height: cell_height as u16,
+                };
 
+                // Try cache lookup
+                let cached_pixels = {
+                    let mut state = self.cairo2d_state.borrow_mut();
+                    state.glyph_cache.get(&cache_key).map(|c| c.pixels.clone())
+                };
+
+                let pixels = if let Some(pixels) = cached_pixels {
+                    metrics::counter!("cairo2d.glyph_cache.hit").increment(1);
+                    pixels
+                } else {
+                    metrics::counter!("cairo2d.glyph_cache.miss").increment(1);
+
+                    // Render to temp buffer at relative coordinates (0,0)
+                    let mut temp_buffer = vec![0u8; cell_width * cell_height * 4];
+                    let temp_stride = cell_width * 4;
+
+                    // Fill temp buffer with background
+                    for row in 0..cell_height {
+                        for col in 0..cell_width {
+                            let offset = row * temp_stride + col * 4;
+                            temp_buffer[offset + 0] = actual_bg_b;
+                            temp_buffer[offset + 1] = actual_bg_g;
+                            temp_buffer[offset + 2] = actual_bg_r;
+                            temp_buffer[offset + 3] = 255;
+                        }
+                    }
+
+                    // Render glyph to temp buffer at relative position
+                    // Glyph position within cell = (dest_x - cell_x, dest_y - cell_y)
+                    let rel_x = job.dest_x.saturating_sub(job.cell_x);
+                    let rel_y = job.dest_y.saturating_sub(job.cell_y);
+
+                    for row in 0..job.height {
+                        let tex_row = job.tex_y + row;
+                        let buf_row = rel_y + row;
+
+                        if tex_row >= atlas_height_px || buf_row >= cell_height {
+                            continue;
+                        }
+
+                        for col in 0..job.width {
+                            let tex_col = job.tex_x + col;
+                            let buf_col = rel_x + col;
+
+                            if tex_col >= atlas_width_px || buf_col >= cell_width {
+                                continue;
+                            }
+
+                            let atlas_offset = tex_row * atlas_stride + tex_col * 4;
+                            let cov_b = atlas_data[atlas_offset + 0] as u16;
+                            let cov_g = atlas_data[atlas_offset + 1] as u16;
+                            let cov_a = atlas_data[atlas_offset + 3] as u16;
+                            let cov_r = atlas_data[atlas_offset + 2] as u16;
+
+                            if cov_a == 0 {
+                                continue;
+                            }
+
+                            let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
+                            let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
+                            let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
+
+                            let out_r = blend_table_r[cov_r_lin as usize];
+                            let out_g = blend_table_g[cov_g_lin as usize];
+                            let out_b = blend_table_b[cov_b_lin as usize];
+
+                            let buf_offset = buf_row * temp_stride + buf_col * 4;
+                            temp_buffer[buf_offset + 0] = out_b;
+                            temp_buffer[buf_offset + 1] = out_g;
+                            temp_buffer[buf_offset + 2] = out_r;
+                            temp_buffer[buf_offset + 3] = 255;
+                        }
+                    }
+
+                    // Store in cache
+                    {
+                        let mut state = self.cairo2d_state.borrow_mut();
+                        state.glyph_cache.put(cache_key, CachedGlyph { pixels: temp_buffer.clone() });
+                    }
+
+                    temp_buffer
+                };
+
+                // Blit cached/rendered pixels to screen at cell position
                 for row in 0..cell_height {
-                    let dest_row = job.cell_y + row;
-                    if dest_row >= dest_height {
+                    let screen_row = job.cell_y + row;
+                    if screen_row >= dest_height {
                         break;
                     }
-                    let src_start = dest_row * dest_stride + job.dest_x * 4;
-                    let dst_start = row * cell_width * 4;
-                    let copy_width = cell_width.min(dest_width.saturating_sub(job.dest_x));
+                    let copy_width = cell_width.min(dest_width.saturating_sub(job.cell_x));
+                    if copy_width == 0 {
+                        continue;
+                    }
+                    let src_start = row * cell_width * 4;
+                    let dest_start = screen_row * dest_stride + job.cell_x * 4;
                     let copy_bytes = copy_width * 4;
-                    cell_buffer[dst_start..dst_start + copy_bytes]
-                        .copy_from_slice(&dest_data[src_start..src_start + copy_bytes]);
+                    dest_data[dest_start..dest_start + copy_bytes]
+                        .copy_from_slice(&pixels[src_start..src_start + copy_bytes]);
+                }
+            } else {
+                // NON-CACHEABLE PATH: Render directly to screen (UI elements, cursor, selected)
+                let is_cursor = (job.glyph_id & 0x8000_0000) != 0;
+
+                // Fill background using glyph coordinates
+                // Skip for cursor glyphs - cursor is an overlay, shouldn't overwrite character underneath
+                if !job.is_selected && !is_cursor {
+                    for row in 0..effective_cell_height {
+                        let dest_row = effective_cell_y + row;
+                        if dest_row >= dest_height {
+                            break;
+                        }
+                        for col in 0..job.dest_width {
+                            let dest_col = job.dest_x + col;
+                            if dest_col >= dest_width {
+                                break;
+                            }
+                            let dest_offset = dest_row * dest_stride + dest_col * 4;
+                            dest_data[dest_offset + 0] = actual_bg_b;
+                            dest_data[dest_offset + 1] = actual_bg_g;
+                            dest_data[dest_offset + 2] = actual_bg_r;
+                            dest_data[dest_offset + 3] = 255;
+                        }
+                    }
                 }
 
-                {
-                    let mut state = self.cairo2d_state.borrow_mut();
-                    // LfuCache handles eviction automatically based on cairo2d_glyph_cache_size
-                    state.glyph_cache.put(
-                        key,
-                        CachedGlyph {
-                            pixels: cell_buffer,
-                        },
-                    );
+                // Render glyph directly to screen
+                for row in 0..job.height {
+                    let tex_row = job.tex_y + row;
+                    let dest_row = job.dest_y + row;
+
+                    if tex_row >= atlas_height_px || dest_row >= dest_height {
+                        continue;
+                    }
+
+                    for col in 0..job.width {
+                        let tex_col = job.tex_x + col;
+                        let dest_col = job.dest_x + col;
+
+                        if tex_col >= atlas_width_px || dest_col >= dest_width {
+                            continue;
+                        }
+
+                        let atlas_offset = tex_row * atlas_stride + tex_col * 4;
+                        let cov_b = atlas_data[atlas_offset + 0] as u16;
+                        let cov_g = atlas_data[atlas_offset + 1] as u16;
+                        let cov_a = atlas_data[atlas_offset + 3] as u16;
+                        let cov_r = atlas_data[atlas_offset + 2] as u16;
+
+                        if cov_a == 0 {
+                            continue;
+                        }
+
+                        let dest_offset = dest_row * dest_stride + dest_col * 4;
+
+                        let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
+                        let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
+                        let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
+
+                        let out_r = blend_table_r[cov_r_lin as usize];
+                        let out_g = blend_table_g[cov_g_lin as usize];
+                        let out_b = blend_table_b[cov_b_lin as usize];
+
+                        dest_data[dest_offset + 0] = out_b;
+                        dest_data[dest_offset + 1] = out_g;
+                        dest_data[dest_offset + 2] = out_r;
+                        dest_data[dest_offset + 3] = 255;
+                    }
                 }
             }
+
         }
 
         drop(dest_data);
