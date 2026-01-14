@@ -5,7 +5,7 @@ use crate::tab::{SplitRequest, Tab, TabId};
 use crate::window::{Window, WindowId};
 use anyhow::{anyhow, Context, Error};
 use config::keyassignment::SpawnTabDomain;
-use config::{configuration, ExitBehavior, GuiPosition};
+use config::{configuration, ExitBehavior, GuiPosition, WindowCloseMuxBehavior};
 use domain::{Domain, DomainId, DomainState, SplitSource};
 use filedescriptor::{poll, pollfd, socketpair, AsRawSocketDescriptor, FileDescriptor, POLLIN};
 #[cfg(unix)]
@@ -853,23 +853,30 @@ impl Mux {
 
         let window = self.windows.write().remove(&window_id);
         if let Some(window) = window {
-            // Gather all the domains referenced by this window
-            let mut domains_of_window = HashSet::new();
-            for tab in window.iter() {
-                for pane in tab.iter_panes_ignoring_zoom() {
-                    domains_of_window.insert(pane.pane.domain_id());
-                }
-            }
+            let should_detach = match configuration().window_close_mux_behavior {
+                WindowCloseMuxBehavior::Detach => true,
+                WindowCloseMuxBehavior::Kill => false,
+            };
 
-            for domain_id in domains_of_window {
-                if let Some(domain) = self.get_domain(domain_id) {
-                    if domain.detachable() {
-                        log::info!("detaching domain");
-                        if let Err(err) = domain.detach() {
-                            log::error!(
-                                "while detaching domain {domain_id} {}: {err:#}",
-                                domain.domain_name()
-                            );
+            if should_detach {
+                // Gather all the domains referenced by this window
+                let mut domains_of_window = HashSet::new();
+                for tab in window.iter() {
+                    for pane in tab.iter_panes_ignoring_zoom() {
+                        domains_of_window.insert(pane.pane.domain_id());
+                    }
+                }
+
+                for domain_id in domains_of_window {
+                    if let Some(domain) = self.get_domain(domain_id) {
+                        if domain.detachable() {
+                            log::info!("detaching domain");
+                            if let Err(err) = domain.detach() {
+                                log::error!(
+                                    "while detaching domain {domain_id} {}: {err:#}",
+                                    domain.domain_name()
+                                );
+                            }
                         }
                     }
                 }
