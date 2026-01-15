@@ -160,7 +160,7 @@ cargo build --release \
       -p strip-ansi-escapes
 BUILDEOFEOF
 )
-          BUILD_REQUIRES=$(cat <<'BREQEOF'
+          BUILD_REQUIRES=$(cat <<BREQEOF
 BuildRequires: gcc, gcc-c++, make, curl, fontconfig-devel, openssl-devel, libxcb-devel, libxkbcommon-devel, libxkbcommon-x11-devel, wayland-devel, xcb-util-devel, xcb-util-keysyms-devel, xcb-util-image-devel, xcb-util-wm-devel, git
 %if 0%{?suse_version}
 BuildRequires: Mesa-libEGL-devel
