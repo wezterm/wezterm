@@ -91,7 +91,7 @@ impl SkipRatioWindow {
     }
 }
 
-/// Cache key for pre-rendered glyphs
+/// Cache key for pre-rendered glyphs (extended to support overhangs and multi-cell)
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
 struct GlyphCacheKey {
     glyph_id: u32,
@@ -99,12 +99,25 @@ struct GlyphCacheKey {
     bg_rgba: u32,
     cell_width: u16,
     cell_height: u16,
+    /// Number of cells this glyph spans (1 for normal, 2+ for ligatures/double-wide)
+    num_cells: u8,
+    /// Pixels of left overhang (glyph extends before cell_x)
+    left_pad: u8,
+    /// Pixels of right overhang (glyph extends past cell boundary)
+    right_pad: u8,
 }
 
-/// Cached pre-rendered glyph pixels
+/// Cached pre-rendered glyph pixels (extended to support overhangs)
 struct CachedGlyph {
-    /// Pre-rendered BGRA pixels (full cell including background)
+    /// Pre-rendered BGRA pixels with alpha for overhang regions
+    /// Size: (left_pad + cell_width * num_cells + right_pad) * cell_height * 4
     pixels: Vec<u8>,
+    /// Total buffer width in pixels
+    width: usize,
+    /// Total buffer height in pixels
+    height: usize,
+    /// Pixels of left overhang (offset from buffer start to cell origin)
+    left_pad: u8,
 }
 
 /// Persistent surface and frame state for incremental Cairo2D rendering.
@@ -236,6 +249,12 @@ struct GlyphJob {
     glyph_id: u32,
     /// If true, skip background fill - the selection rectangle handles it
     is_selected: bool,
+    /// Number of cells this glyph spans (1 for normal, 2+ for ligatures/double-wide)
+    num_cells: u8,
+    /// Pixels of left overhang (glyph extends before cell_x)
+    left_pad: u8,
+    /// Pixels of right overhang (glyph extends past cell boundary)
+    right_pad: u8,
 }
 
 impl crate::TermWindow {
@@ -802,17 +821,46 @@ impl crate::TermWindow {
                             // Cell-aligned X position for caching (same glyph renders identically regardless of position)
                             let cell_x = padding_left + cache.cell_col as usize * cell_width;
 
+                            // Compute number of cells this glyph spans and overhang padding
+                            let dest_x_usize = dest_x as usize;
+                            let glyph_width = tex_width as usize;
+
+                            // Left overhang: glyph starts before cell boundary
+                            let left_pad = if dest_x_usize < cell_x {
+                                (cell_x - dest_x_usize).min(255) as u8
+                            } else {
+                                0u8
+                            };
+
+                            // Compute num_cells from dest_width (how many cells the quad spans)
+                            let dest_width_usize = dest_width as usize;
+                            let num_cells = if cell_width > 0 && cell_height > 0 {
+                                ((dest_width_usize + cell_width - 1) / cell_width).max(1).min(255) as u8
+                            } else {
+                                1u8
+                            };
+
+                            // Right overhang: glyph extends past the rightmost cell boundary
+                            let cell_span_width = cell_width * num_cells as usize;
+                            let glyph_end = dest_x_usize + glyph_width;
+                            let cell_end = cell_x + cell_span_width;
+                            let right_pad = if glyph_end > cell_end {
+                                (glyph_end - cell_end).min(255) as u8
+                            } else {
+                                0u8
+                            };
+
                             glyph_jobs.push(GlyphJob {
-                                dest_x: dest_x as usize,
+                                dest_x: dest_x_usize,
                                 dest_y: dest_y as usize,
-                                dest_width: dest_width as usize,
+                                dest_width: dest_width_usize,
                                 cell_x,
                                 actual_cell_width: cell_width,
                                 cell_y,
                                 cell_height,
                                 tex_x: tex_x1 as usize,
                                 tex_y: tex_y1 as usize,
-                                width: tex_width as usize,
+                                width: glyph_width,
                                 height: tex_height as usize,
                                 fg_r: (linear_to_srgb(fg_r) * 255.0) as u8,
                                 fg_g: (linear_to_srgb(fg_g) * 255.0) as u8,
@@ -824,6 +872,9 @@ impl crate::TermWindow {
                                 bg_a: (bg_a * 255.0) as u8,
                                 glyph_id: cache.glyph_id,
                                 is_selected: cache.is_selected,
+                                num_cells,
+                                left_pad,
+                                right_pad,
                             });
                         } else {
                             // Color emoji or background image
@@ -875,7 +926,14 @@ impl crate::TermWindow {
         let atlas_data = atlas_surface_mut.data().expect("Failed to get atlas data");
         let mut dest_data = surface.data().expect("Failed to get destination data");
 
-        for job in glyph_jobs {
+        // Render cursor jobs LAST to ensure they overlay everything including overhangs.
+        // This fixes the issue where character overhangs would overwrite the cursor.
+        let (cursor_jobs, regular_jobs): (Vec<_>, Vec<_>) = glyph_jobs
+            .iter()
+            .partition(|job| (job.glyph_id & 0x8000_0000) != 0);
+
+        // Process regular jobs first, then cursor jobs
+        for job in regular_jobs.into_iter().chain(cursor_jobs.into_iter()) {
             // If bg_a is 0, it means set_bg_color wasn't called successfully
             // (cache data bounds check failed), so fall back to default background
             let (actual_bg_r, actual_bg_g, actual_bg_b) = if job.bg_a > 0 {
@@ -923,16 +981,15 @@ impl crate::TermWindow {
                 // UI element - not used since effective_cell_height is 0
                 0
             };
-            // Cache eligibility: terminal content cells (cell_height > 0) that are not cursor
-            // Also require glyph to fit entirely within the cell (no negative bearings or overhangs)
-            let glyph_fits_in_cell = job.dest_x >= job.cell_x
-                && job.dest_y >= job.cell_y
-                && job.dest_x + job.width <= job.cell_x + job.actual_cell_width
-                && job.dest_y + job.height <= job.cell_y + job.cell_height;
+            // Cache eligibility: terminal content cells (cell_height > 0) that are not cursor or selected
+            // For single-cell glyphs: only cache if glyph fits entirely within cell (no overhangs)
+            // For multi-cell glyphs (ligatures): cache with extended dimensions including any overhangs
+            let has_overhangs = job.left_pad > 0 || job.right_pad > 0;
+            let is_multi_cell = job.num_cells > 1;
             let is_cacheable = job.cell_height > 0
                 && (job.glyph_id & 0x8000_0000) == 0
                 && !job.is_selected
-                && glyph_fits_in_cell;
+                && (is_multi_cell || !has_overhangs);
 
             // Pre-compute blend tables for this fg/bg combination (used for both cached and direct rendering)
             let fg_a = job.fg_a as u16;
@@ -954,54 +1011,84 @@ impl crate::TermWindow {
             }
 
             if is_cacheable {
-                // CACHEABLE PATH: Render to temp buffer, cache, blit to screen
+                // CACHEABLE PATH: Render to temp buffer (with optional padding for overhangs), cache, blit to screen
                 let cell_width = job.actual_cell_width;
                 let cell_height = job.cell_height;
+                let left_pad = job.left_pad as usize;
+                let right_pad = job.right_pad as usize;
+                let num_cells = job.num_cells as usize;
+
+                // Total buffer width includes padding for overhangs
+                let cell_span_width = cell_width * num_cells;
+                let buf_width = left_pad + cell_span_width + right_pad;
+                let buf_height = cell_height;
+
                 let cache_key = GlyphCacheKey {
                     glyph_id: job.glyph_id,
                     fg_rgba: pack_rgba(job.fg_r, job.fg_g, job.fg_b, job.fg_a),
                     bg_rgba: pack_rgba(actual_bg_r, actual_bg_g, actual_bg_b, job.bg_a),
                     cell_width: cell_width as u16,
                     cell_height: cell_height as u16,
+                    num_cells: job.num_cells,
+                    left_pad: job.left_pad,
+                    right_pad: job.right_pad,
                 };
 
                 // Try cache lookup
-                let cached_pixels = {
+                let cached_glyph = {
                     let mut state = self.cairo2d_state.borrow_mut();
-                    state.glyph_cache.get(&cache_key).map(|c| c.pixels.clone())
+                    state.glyph_cache.get(&cache_key).map(|c| CachedGlyph {
+                        pixels: c.pixels.clone(),
+                        width: c.width,
+                        height: c.height,
+                        left_pad: c.left_pad,
+                    })
                 };
 
-                let pixels = if let Some(pixels) = cached_pixels {
+                let glyph_data = if let Some(cached) = cached_glyph {
                     metrics::counter!("cairo2d.glyph_cache.hit").increment(1);
-                    pixels
+                    cached
                 } else {
                     metrics::counter!("cairo2d.glyph_cache.miss").increment(1);
 
-                    // Render to temp buffer at relative coordinates (0,0)
-                    let mut temp_buffer = vec![0u8; cell_width * cell_height * 4];
-                    let temp_stride = cell_width * 4;
+                    // Render to temp buffer with extended dimensions
+                    let mut temp_buffer = vec![0u8; buf_width * buf_height * 4];
+                    let temp_stride = buf_width * 4;
 
-                    // Fill temp buffer with background
-                    for row in 0..cell_height {
-                        for col in 0..cell_width {
+                    // Fill cell region(s) with background (alpha=255), padding regions with transparent (alpha=0)
+                    for row in 0..buf_height {
+                        for col in 0..buf_width {
                             let offset = row * temp_stride + col * 4;
-                            temp_buffer[offset + 0] = actual_bg_b;
-                            temp_buffer[offset + 1] = actual_bg_g;
-                            temp_buffer[offset + 2] = actual_bg_r;
-                            temp_buffer[offset + 3] = 255;
+                            // Check if we're in the cell region (between left_pad and left_pad + cell_span_width)
+                            let in_cell_region = col >= left_pad && col < left_pad + cell_span_width;
+                            if in_cell_region {
+                                // Cell region: solid background with alpha=255
+                                temp_buffer[offset + 0] = actual_bg_b;
+                                temp_buffer[offset + 1] = actual_bg_g;
+                                temp_buffer[offset + 2] = actual_bg_r;
+                                temp_buffer[offset + 3] = 255;
+                            } else {
+                                // Padding region: transparent (alpha=0)
+                                temp_buffer[offset + 0] = 0;
+                                temp_buffer[offset + 1] = 0;
+                                temp_buffer[offset + 2] = 0;
+                                temp_buffer[offset + 3] = 0;
+                            }
                         }
                     }
 
                     // Render glyph to temp buffer at relative position
-                    // Glyph position within cell = (dest_x - cell_x, dest_y - cell_y)
-                    let rel_x = job.dest_x.saturating_sub(job.cell_x);
+                    // Glyph position in buffer = left_pad + (dest_x - cell_x), (dest_y - cell_y)
+                    // But dest_x might be < cell_x for left overhangs, so we need signed math
+                    let glyph_offset_from_cell = job.dest_x as isize - job.cell_x as isize;
+                    let rel_x = (left_pad as isize + glyph_offset_from_cell).max(0) as usize;
                     let rel_y = job.dest_y.saturating_sub(job.cell_y);
 
                     for row in 0..job.height {
                         let tex_row = job.tex_y + row;
                         let buf_row = rel_y + row;
 
-                        if tex_row >= atlas_height_px || buf_row >= cell_height {
+                        if tex_row >= atlas_height_px || buf_row >= buf_height {
                             continue;
                         }
 
@@ -1009,7 +1096,7 @@ impl crate::TermWindow {
                             let tex_col = job.tex_x + col;
                             let buf_col = rel_x + col;
 
-                            if tex_col >= atlas_width_px || buf_col >= cell_width {
+                            if tex_col >= atlas_width_px || buf_col >= buf_width {
                                 continue;
                             }
 
@@ -1023,53 +1110,137 @@ impl crate::TermWindow {
                                 continue;
                             }
 
-                            let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
-                            let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
-                            let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
-
-                            let out_r = blend_table_r[cov_r_lin as usize];
-                            let out_g = blend_table_g[cov_g_lin as usize];
-                            let out_b = blend_table_b[cov_b_lin as usize];
-
                             let buf_offset = buf_row * temp_stride + buf_col * 4;
-                            temp_buffer[buf_offset + 0] = out_b;
-                            temp_buffer[buf_offset + 1] = out_g;
-                            temp_buffer[buf_offset + 2] = out_r;
-                            temp_buffer[buf_offset + 3] = 255;
+                            let in_cell_region = buf_col >= left_pad && buf_col < left_pad + cell_span_width;
+
+                            if in_cell_region {
+                                // Cell region: blend fg with bg using blend tables, alpha=255 (opaque)
+                                let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
+                                let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
+                                let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
+
+                                temp_buffer[buf_offset + 0] = blend_table_b[cov_b_lin as usize];
+                                temp_buffer[buf_offset + 1] = blend_table_g[cov_g_lin as usize];
+                                temp_buffer[buf_offset + 2] = blend_table_r[cov_r_lin as usize];
+                                temp_buffer[buf_offset + 3] = 255;
+                            } else {
+                                // Overhang region: use fg color directly with coverage as alpha
+                                // This allows proper compositing over whatever is already on screen
+                                temp_buffer[buf_offset + 0] = job.fg_b;
+                                temp_buffer[buf_offset + 1] = job.fg_g;
+                                temp_buffer[buf_offset + 2] = job.fg_r;
+                                // Scale coverage by fg alpha
+                                let scaled_alpha = ((cov_a * job.fg_a as u16) / 255).min(255) as u8;
+                                temp_buffer[buf_offset + 3] = scaled_alpha;
+                            }
                         }
                     }
 
                     // Store in cache
+                    let cached = CachedGlyph {
+                        pixels: temp_buffer,
+                        width: buf_width,
+                        height: buf_height,
+                        left_pad: job.left_pad,
+                    };
                     {
                         let mut state = self.cairo2d_state.borrow_mut();
-                        state.glyph_cache.put(cache_key, CachedGlyph { pixels: temp_buffer.clone() });
+                        state.glyph_cache.put(cache_key, CachedGlyph {
+                            pixels: cached.pixels.clone(),
+                            width: cached.width,
+                            height: cached.height,
+                            left_pad: cached.left_pad,
+                        });
                     }
 
-                    temp_buffer
+                    cached
                 };
 
-                // Blit cached/rendered pixels to screen at cell position
-                for row in 0..cell_height {
+                // Clear the full cell region on screen BEFORE blitting
+                // This ensures stale content is removed when content shifts
+                let cell_span = job.actual_cell_width * job.num_cells as usize;
+                for row in 0..job.cell_height {
                     let screen_row = job.cell_y + row;
                     if screen_row >= dest_height {
                         break;
                     }
-                    let copy_width = cell_width.min(dest_width.saturating_sub(job.cell_x));
-                    if copy_width == 0 {
-                        continue;
+                    for col in 0..cell_span {
+                        let dest_col = job.cell_x + col;
+                        if dest_col >= dest_width {
+                            break;
+                        }
+                        let dest_offset = screen_row * dest_stride + dest_col * 4;
+                        dest_data[dest_offset + 0] = actual_bg_b;
+                        dest_data[dest_offset + 1] = actual_bg_g;
+                        dest_data[dest_offset + 2] = actual_bg_r;
+                        dest_data[dest_offset + 3] = 255;
                     }
-                    let src_start = row * cell_width * 4;
-                    let dest_start = screen_row * dest_stride + job.cell_x * 4;
-                    let copy_bytes = copy_width * 4;
-                    dest_data[dest_start..dest_start + copy_bytes]
-                        .copy_from_slice(&pixels[src_start..src_start + copy_bytes]);
+                }
+
+                // Blit cached/rendered pixels to screen (including overhangs)
+                // Screen position: cell_x - left_pad (but clamp to 0)
+                let screen_x_start = job.cell_x.saturating_sub(left_pad);
+                let buf_x_start = if job.cell_x < left_pad { left_pad - job.cell_x } else { 0 };
+
+                for row in 0..glyph_data.height {
+                    let screen_row = job.cell_y + row;
+                    if screen_row >= dest_height {
+                        break;
+                    }
+
+                    for col in buf_x_start..glyph_data.width {
+                        let screen_col = screen_x_start + (col - buf_x_start);
+                        if screen_col >= dest_width {
+                            break;
+                        }
+
+                        let src_offset = row * glyph_data.width * 4 + col * 4;
+                        let alpha = glyph_data.pixels[src_offset + 3];
+
+                        if alpha == 0 {
+                            // Fully transparent - skip
+                            continue;
+                        }
+
+                        let dest_offset = screen_row * dest_stride + screen_col * 4;
+
+                        if alpha == 255 {
+                            // Opaque - direct copy (fast path for cell region)
+                            dest_data[dest_offset + 0] = glyph_data.pixels[src_offset + 0];
+                            dest_data[dest_offset + 1] = glyph_data.pixels[src_offset + 1];
+                            dest_data[dest_offset + 2] = glyph_data.pixels[src_offset + 2];
+                            dest_data[dest_offset + 3] = 255;
+                        } else {
+                            // Semi-transparent - alpha blend (for overhang regions)
+                            let src_b = glyph_data.pixels[src_offset + 0] as u16;
+                            let src_g = glyph_data.pixels[src_offset + 1] as u16;
+                            let src_r = glyph_data.pixels[src_offset + 2] as u16;
+                            let dst_b = dest_data[dest_offset + 0] as u16;
+                            let dst_g = dest_data[dest_offset + 1] as u16;
+                            let dst_r = dest_data[dest_offset + 2] as u16;
+                            let a = alpha as u16;
+                            let inv_a = 255 - a;
+
+                            dest_data[dest_offset + 0] = ((src_b * a + dst_b * inv_a) / 255) as u8;
+                            dest_data[dest_offset + 1] = ((src_g * a + dst_g * inv_a) / 255) as u8;
+                            dest_data[dest_offset + 2] = ((src_r * a + dst_r * inv_a) / 255) as u8;
+                            dest_data[dest_offset + 3] = 255;
+                        }
+                    }
                 }
             } else {
                 // NON-CACHEABLE PATH: Render directly to screen (UI elements, cursor, selected)
+                // Check if this is a cursor glyph and what shape it is
                 let is_cursor = (job.glyph_id & 0x8000_0000) != 0;
+                let cursor_shape = if is_cursor { job.glyph_id & 0x7FFF_FFFF } else { 0 };
+                // CursorShape enum values:
+                //   Default=0: filled block (used when focused)
+                //   BlinkingBlock=1, SteadyBlock=2: outline only (used when unfocused)
+                //   BlinkingUnderline=3, SteadyUnderline=4, BlinkingBar=5, SteadyBar=6: line cursors
+                let is_filled_cursor = is_cursor && cursor_shape == 0;
 
                 // Fill background using glyph coordinates
-                // Skip for cursor glyphs - cursor is an overlay, shouldn't overwrite character underneath
+                // Skip for cursor glyphs - cursor is handled separately below
                 if !job.is_selected && !is_cursor {
                     for row in 0..effective_cell_height {
                         let dest_row = effective_cell_y + row;
@@ -1090,47 +1261,132 @@ impl crate::TermWindow {
                     }
                 }
 
-                // Render glyph directly to screen
-                for row in 0..job.height {
-                    let tex_row = job.tex_y + row;
-                    let dest_row = job.dest_y + row;
+                // NOTE: Cursor fill for empty cells is handled differently now.
+                // The cursor's visibility comes from the cursor sprite rendering below,
+                // not from filling the cell background.
 
-                    if tex_row >= atlas_height_px || dest_row >= dest_height {
-                        continue;
+                if is_cursor {
+                    if is_filled_cursor {
+                        // Filled block cursor (Default shape, used when focused):
+                        // Glyph cells have cursor-modified background (cursor_bg or reversed),
+                        // so they DON'T match default_bg. Empty cells still have default_bg.
+                        // Fill ONLY pixels that match default_bg (empty cells).
+                        for row in 0..job.height {
+                            let dest_row = job.dest_y + row;
+                            if dest_row >= dest_height {
+                                continue;
+                            }
+                            for col in 0..job.width {
+                                let dest_col = job.dest_x + col;
+                                if dest_col >= dest_width {
+                                    continue;
+                                }
+                                let dest_offset = dest_row * dest_stride + dest_col * 4;
+                                let cur_b = dest_data[dest_offset + 0];
+                                let cur_g = dest_data[dest_offset + 1];
+                                let cur_r = dest_data[dest_offset + 2];
+                                // Only fill if pixel is default background (empty cell)
+                                if cur_r == default_bg_r && cur_g == default_bg_g && cur_b == default_bg_b {
+                                    // Fill with cursor foreground color (cursor_border_color)
+                                    dest_data[dest_offset + 0] = job.fg_b;
+                                    dest_data[dest_offset + 1] = job.fg_g;
+                                    dest_data[dest_offset + 2] = job.fg_r;
+                                    dest_data[dest_offset + 3] = 255;
+                                }
+                            }
+                        }
+                    } else {
+                        // Non-filled cursor (outline, bar, underline):
+                        // Render cursor sprite using blend tables
+                        for row in 0..job.height {
+                            let tex_row = job.tex_y + row;
+                            let dest_row = job.dest_y + row;
+
+                            if tex_row >= atlas_height_px || dest_row >= dest_height {
+                                continue;
+                            }
+
+                            for col in 0..job.width {
+                                let tex_col = job.tex_x + col;
+                                let dest_col = job.dest_x + col;
+
+                                if tex_col >= atlas_width_px || dest_col >= dest_width {
+                                    continue;
+                                }
+
+                                let atlas_offset = tex_row * atlas_stride + tex_col * 4;
+                                let cov_a = atlas_data[atlas_offset + 3] as u16;
+
+                                if cov_a == 0 {
+                                    continue;
+                                }
+
+                                // Use blend tables to draw cursor_border_color (job.fg) over existing
+                                let cov_b = atlas_data[atlas_offset + 0] as u16;
+                                let cov_g = atlas_data[atlas_offset + 1] as u16;
+                                let cov_r = atlas_data[atlas_offset + 2] as u16;
+
+                                let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
+                                let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
+                                let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
+
+                                let out_r = blend_table_r[cov_r_lin as usize];
+                                let out_g = blend_table_g[cov_g_lin as usize];
+                                let out_b = blend_table_b[cov_b_lin as usize];
+
+                                let dest_offset = dest_row * dest_stride + dest_col * 4;
+                                dest_data[dest_offset + 0] = out_b;
+                                dest_data[dest_offset + 1] = out_g;
+                                dest_data[dest_offset + 2] = out_r;
+                                dest_data[dest_offset + 3] = 255;
+                            }
+                        }
                     }
+                } else {
+                    // Non-cursor: render glyph directly to screen
+                    for row in 0..job.height {
+                        let tex_row = job.tex_y + row;
+                        let dest_row = job.dest_y + row;
 
-                    for col in 0..job.width {
-                        let tex_col = job.tex_x + col;
-                        let dest_col = job.dest_x + col;
-
-                        if tex_col >= atlas_width_px || dest_col >= dest_width {
+                        if tex_row >= atlas_height_px || dest_row >= dest_height {
                             continue;
                         }
 
-                        let atlas_offset = tex_row * atlas_stride + tex_col * 4;
-                        let cov_b = atlas_data[atlas_offset + 0] as u16;
-                        let cov_g = atlas_data[atlas_offset + 1] as u16;
-                        let cov_a = atlas_data[atlas_offset + 3] as u16;
-                        let cov_r = atlas_data[atlas_offset + 2] as u16;
+                        for col in 0..job.width {
+                            let tex_col = job.tex_x + col;
+                            let dest_col = job.dest_x + col;
 
-                        if cov_a == 0 {
-                            continue;
+                            if tex_col >= atlas_width_px || dest_col >= dest_width {
+                                continue;
+                            }
+
+                            let atlas_offset = tex_row * atlas_stride + tex_col * 4;
+                            let cov_a = atlas_data[atlas_offset + 3] as u16;
+
+                            if cov_a == 0 {
+                                continue;
+                            }
+
+                            let dest_offset = dest_row * dest_stride + dest_col * 4;
+
+                            // Blend foreground with background using blend tables
+                            let cov_b = atlas_data[atlas_offset + 0] as u16;
+                            let cov_g = atlas_data[atlas_offset + 1] as u16;
+                            let cov_r = atlas_data[atlas_offset + 2] as u16;
+
+                            let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
+                            let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
+                            let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
+
+                            let out_r = blend_table_r[cov_r_lin as usize];
+                            let out_g = blend_table_g[cov_g_lin as usize];
+                            let out_b = blend_table_b[cov_b_lin as usize];
+
+                            dest_data[dest_offset + 0] = out_b;
+                            dest_data[dest_offset + 1] = out_g;
+                            dest_data[dest_offset + 2] = out_r;
+                            dest_data[dest_offset + 3] = 255;
                         }
-
-                        let dest_offset = dest_row * dest_stride + dest_col * 4;
-
-                        let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
-                        let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
-                        let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
-
-                        let out_r = blend_table_r[cov_r_lin as usize];
-                        let out_g = blend_table_g[cov_g_lin as usize];
-                        let out_b = blend_table_b[cov_b_lin as usize];
-
-                        dest_data[dest_offset + 0] = out_b;
-                        dest_data[dest_offset + 1] = out_g;
-                        dest_data[dest_offset + 2] = out_r;
-                        dest_data[dest_offset + 3] = 255;
                     }
                 }
             }
