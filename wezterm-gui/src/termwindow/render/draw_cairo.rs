@@ -192,9 +192,18 @@ fn linear_to_srgb(linear: f32) -> f64 {
     srgb as f64
 }
 
-/// Hash vertex fields for frame-level change detection
+// Cursor detection helpers - cursor glyphs have the high bit set in glyph_id
+const CURSOR_FLAG_MASK: u32 = 0x8000_0000;
+
+/// Check if a glyph_id represents a cursor glyph
+#[inline]
+fn is_cursor_glyph(glyph_id: u32) -> bool {
+    glyph_id & CURSOR_FLAG_MASK != 0
+}
+
+/// Hash vertex fields for change detection (frame and cell level)
 #[inline(always)]
-fn hash_vertex_for_frame(v: &Vertex, cache: &Cairo2DCacheData, hasher: &mut impl Hasher) {
+fn hash_vertex(v: &Vertex, cache: &Cairo2DCacheData, hasher: &mut impl Hasher) {
     v.position[0].to_bits().hash(hasher);
     v.position[1].to_bits().hash(hasher);
     v.tex[0].to_bits().hash(hasher);
@@ -209,12 +218,6 @@ fn hash_vertex_for_frame(v: &Vertex, cache: &Cairo2DCacheData, hasher: &mut impl
     cache.bg_color[2].to_bits().hash(hasher);
     cache.bg_color[3].to_bits().hash(hasher);
     v.has_color.to_bits().hash(hasher);
-}
-
-/// Hash vertex fields for cell-level change detection
-#[inline(always)]
-fn hash_vertex_for_cell(v: &Vertex, cache: &Cairo2DCacheData, hasher: &mut impl Hasher) {
-    hash_vertex_for_frame(v, cache, hasher);
 }
 
 /// Pack RGBA components into a single u32
@@ -258,7 +261,24 @@ struct GlyphJob {
 }
 
 impl crate::TermWindow {
-    /// Main Cairo2D rendering entry point
+    /// Main Cairo2D software rendering entry point.
+    ///
+    /// This function implements a two-pass rendering architecture:
+    ///
+    /// 1. **Pass 1** (`render_cairo_pass1`): Uses Cairo for vector operations
+    ///    - Fills backgrounds and selection rectangles
+    ///    - Renders color emoji and images via Cairo's compositing
+    ///    - Collects glyph rendering jobs for batch processing
+    ///
+    /// 2. **Pass 2** (`render_cairo_pass2`): CPU-based glyph compositing
+    ///    - Pre-computed blend tables for fast alpha blending
+    ///    - LRU glyph cache to avoid redundant rendering
+    ///    - Proper gamma correction (linear → sRGB)
+    ///
+    /// The function also implements:
+    /// - Cell-level dirty tracking to skip unchanged content
+    /// - Partial frame updates to minimize bandwidth
+    /// - Cursor position tracking for proper invalidation
     pub(super) fn call_draw_cairo2d(&mut self) -> anyhow::Result<()> {
         let width = self.dimensions.pixel_width as i32;
         let height = self.dimensions.pixel_height as i32;
@@ -278,7 +298,11 @@ impl crate::TermWindow {
             pixel_max: self.terminal_size.pixel_height as f32,
             pixel_cell: self.render_metrics.cell_size.height as f32,
         };
-        let padding_left = self.config.window_padding.left.evaluate_as_pixels(h_context) as usize;
+        let padding_left = self
+            .config
+            .window_padding
+            .left
+            .evaluate_as_pixels(h_context) as usize;
         let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context) as usize;
 
         // Get the default background color from palette (for cells with transparent bg)
@@ -300,17 +324,24 @@ impl crate::TermWindow {
         // Compute per-cell hashes for detecting which specific cells changed
         let cell_width = self.render_metrics.cell_size.width as usize;
         let cell_height = self.render_metrics.cell_size.height as usize;
+        // Use saturating arithmetic to prevent overflow for large windows
         let num_cols = if cell_width > 0 {
-            (width as usize + cell_width - 1) / cell_width
+            (width as usize)
+                .saturating_add(cell_width)
+                .saturating_sub(1)
+                / cell_width
         } else {
             1
         };
         let num_rows = if cell_height > 0 {
-            (height as usize + cell_height - 1) / cell_height
+            (height as usize)
+                .saturating_add(cell_height)
+                .saturating_sub(1)
+                / cell_height
         } else {
             1
         };
-        let num_cells = num_rows * num_cols;
+        let num_cells = num_rows.saturating_mul(num_cols);
         let mut cell_hashers: Vec<DefaultHasher> =
             (0..num_cells).map(|_| DefaultHasher::new()).collect();
         let mut frame_hasher = DefaultHasher::new();
@@ -340,12 +371,13 @@ impl crate::TermWindow {
 
                             // Hash for frame-level change detection
                             for v in quad_verts {
-                                hash_vertex_for_frame(v, &cache, &mut frame_hasher);
+                                hash_vertex(v, &cache, &mut frame_hasher);
                             }
 
                             // Get cell range - for glyphs use cache, for multi-cell quads
                             // (like selection rectangles) calculate from bounding box
-                            let (start_col, end_col, start_row, end_row) = if cache.cell_height > 0.0
+                            let (start_col, end_col, start_row, end_row) = if cache.cell_height
+                                > 0.0
                             {
                                 // set_cell_bounds was called - single cell glyph
                                 // Subtract padding to get position relative to cell grid origin
@@ -377,15 +409,21 @@ impl crate::TermWindow {
                                 let x2_in_grid = x2.saturating_sub(padding_left);
                                 let y2_in_grid = y2.saturating_sub(padding_top);
 
-                                let start_col =
-                                    if cell_width > 0 { x1_in_grid / cell_width } else { 0 };
+                                let start_col = if cell_width > 0 {
+                                    x1_in_grid / cell_width
+                                } else {
+                                    0
+                                };
                                 let end_col = if cell_width > 0 {
                                     (x2_in_grid + cell_width - 1) / cell_width
                                 } else {
                                     1
                                 };
-                                let start_row =
-                                    if cell_height > 0 { y1_in_grid / cell_height } else { 0 };
+                                let start_row = if cell_height > 0 {
+                                    y1_in_grid / cell_height
+                                } else {
+                                    0
+                                };
                                 let end_row = if cell_height > 0 {
                                     (y2_in_grid + cell_height - 1) / cell_height
                                 } else {
@@ -399,13 +437,13 @@ impl crate::TermWindow {
                                 for col in start_col..end_col.min(num_cols) {
                                     let cell_idx = row * num_cols + col;
                                     for v in quad_verts {
-                                        hash_vertex_for_cell(v, &cache, &mut cell_hashers[cell_idx]);
+                                        hash_vertex(v, &cache, &mut cell_hashers[cell_idx]);
                                     }
                                 }
                             }
 
                             // Track cursor quad positions (cursor quads have high bit set in glyph_id)
-                            if cache.glyph_id & 0x8000_0000 != 0 {
+                            if is_cursor_glyph(cache.glyph_id) {
                                 for row in start_row..end_row.min(num_rows) {
                                     for col in start_col..end_col.min(num_cols) {
                                         current_cursor_cells.push((col, row));
@@ -470,8 +508,7 @@ impl crate::TermWindow {
         // The partial update system has trouble tracking cursor movements reliably.
         let cursor_involved = !current_cursor_cells.is_empty()
             || !self.cairo2d_state.borrow().prev_cursor_cells.is_empty();
-        let do_partial_update =
-            !force_full_redraw && !dirty_rects.is_empty() && !cursor_involved;
+        let do_partial_update = !force_full_redraw && !dirty_rects.is_empty() && !cursor_involved;
         if do_partial_update {
             metrics::histogram!("cairo2d.frame.partial.rate").record(1.);
         } else {
@@ -545,7 +582,17 @@ impl crate::TermWindow {
         if let Some(window) = self.window.as_ref() {
             let full_frame_bytes = width as usize * height as usize * 4;
             let bytes_sent = if do_partial_update && !dirty_rects.is_empty() {
-                self.present_partial_frame(window, &pixels, width, height, cell_width, cell_height, padding_left, padding_top, &dirty_rects)?
+                self.present_partial_frame(
+                    window,
+                    &pixels,
+                    width,
+                    height,
+                    cell_width,
+                    cell_height,
+                    padding_left,
+                    padding_top,
+                    &dirty_rects,
+                )?
             } else {
                 metrics::counter!("cairo2d.full.bytes_sent").increment(full_frame_bytes as u64);
                 window.present_software_frame_region(&pixels, width as u32, height as u32, 0, 0)?;
@@ -710,7 +757,16 @@ impl crate::TermWindow {
         (dirty_rects, false)
     }
 
-    /// PASS 1: Render solid colors and images, collect glyph jobs
+    /// Pass 1: Render solid colors and images using Cairo, collect glyph jobs.
+    ///
+    /// This pass handles:
+    /// - Background fills (solid color rectangles)
+    /// - Selection highlighting rectangles
+    /// - Color emoji and images (via Cairo's image compositing)
+    /// - Underline/strikethrough decorations
+    ///
+    /// Monochrome glyphs are deferred to Pass 2 for optimized CPU rendering
+    /// with caching and pre-computed blend tables.
     fn render_cairo_pass1(
         &self,
         surface: &mut ImageSurface,
@@ -827,15 +883,27 @@ impl crate::TermWindow {
 
                             // Left overhang: glyph starts before cell boundary
                             let left_pad = if dest_x_usize < cell_x {
-                                (cell_x - dest_x_usize).min(255) as u8
+                                let overhang = cell_x - dest_x_usize;
+                                if overhang > 255 {
+                                    log::warn!(
+                                        "cairo2d: Glyph left overhang {} exceeds 255px, clamping",
+                                        overhang
+                                    );
+                                }
+                                overhang.min(255) as u8
                             } else {
                                 0u8
                             };
 
                             // Compute num_cells from dest_width (how many cells the quad spans)
+                            // Use saturating arithmetic to prevent overflow
                             let dest_width_usize = dest_width as usize;
                             let num_cells = if cell_width > 0 && cell_height > 0 {
-                                ((dest_width_usize + cell_width - 1) / cell_width).max(1).min(255) as u8
+                                let cells = dest_width_usize
+                                    .saturating_add(cell_width)
+                                    .saturating_sub(1)
+                                    / cell_width;
+                                cells.max(1).min(255) as u8
                             } else {
                                 1u8
                             };
@@ -845,7 +913,14 @@ impl crate::TermWindow {
                             let glyph_end = dest_x_usize + glyph_width;
                             let cell_end = cell_x + cell_span_width;
                             let right_pad = if glyph_end > cell_end {
-                                (glyph_end - cell_end).min(255) as u8
+                                let overhang = glyph_end - cell_end;
+                                if overhang > 255 {
+                                    log::warn!(
+                                        "cairo2d: Glyph right overhang {} exceeds 255px, clamping",
+                                        overhang
+                                    );
+                                }
+                                overhang.min(255) as u8
                             } else {
                                 0u8
                             };
@@ -905,7 +980,19 @@ impl crate::TermWindow {
         Ok(())
     }
 
-    /// PASS 2: Batch process glyphs with caching
+    /// Pass 2: Batch process glyphs with caching and optimized CPU compositing.
+    ///
+    /// This pass renders monochrome glyphs using:
+    /// - **Pre-computed blend tables**: 256-entry lookup tables for each fg/bg color pair
+    ///   to avoid per-pixel arithmetic
+    /// - **LRU glyph cache**: Pre-rendered glyphs are cached by (glyph_id, fg, bg, geometry)
+    ///   to skip redundant rendering of repeated characters
+    /// - **Gamma-correct blending**: Coverage values are converted to linear space for
+    ///   proper alpha compositing, then results are converted back to sRGB
+    ///
+    /// Glyphs are processed in two batches:
+    /// 1. Regular glyphs (text content)
+    /// 2. Cursor glyphs (rendered last to ensure they overlay character overhangs)
     fn render_cairo_pass2(
         &self,
         surface: &mut ImageSurface,
@@ -923,14 +1010,16 @@ impl crate::TermWindow {
         let atlas_height_px = atlas_surface_mut.height() as usize;
         let dest_stride = surface.stride() as usize;
 
-        let atlas_data = atlas_surface_mut.data().expect("Failed to get atlas data");
-        let mut dest_data = surface.data().expect("Failed to get destination data");
+        let atlas_data = atlas_surface_mut
+            .data()
+            .context("Failed to get atlas data")?;
+        let mut dest_data = surface.data().context("Failed to get destination data")?;
 
         // Render cursor jobs LAST to ensure they overlay everything including overhangs.
         // This fixes the issue where character overhangs would overwrite the cursor.
         let (cursor_jobs, regular_jobs): (Vec<_>, Vec<_>) = glyph_jobs
             .iter()
-            .partition(|job| (job.glyph_id & 0x8000_0000) != 0);
+            .partition(|job| is_cursor_glyph(job.glyph_id));
 
         // Process regular jobs first, then cursor jobs
         for job in regular_jobs.into_iter().chain(cursor_jobs.into_iter()) {
@@ -987,7 +1076,7 @@ impl crate::TermWindow {
             let has_overhangs = job.left_pad > 0 || job.right_pad > 0;
             let is_multi_cell = job.num_cells > 1;
             let is_cacheable = job.cell_height > 0
-                && (job.glyph_id & 0x8000_0000) == 0
+                && !is_cursor_glyph(job.glyph_id)
                 && !job.is_selected
                 && (is_multi_cell || !has_overhangs);
 
@@ -1003,11 +1092,14 @@ impl crate::TermWindow {
             for cov in 0..256u16 {
                 let cov_scaled = (cov * fg_a) / 255;
                 blend_table_r[cov as usize] =
-                    ((bg_r * (255 - cov_scaled) + job.fg_r as u16 * cov_scaled) / 255).min(255) as u8;
+                    ((bg_r * (255 - cov_scaled) + job.fg_r as u16 * cov_scaled) / 255).min(255)
+                        as u8;
                 blend_table_g[cov as usize] =
-                    ((bg_g * (255 - cov_scaled) + job.fg_g as u16 * cov_scaled) / 255).min(255) as u8;
+                    ((bg_g * (255 - cov_scaled) + job.fg_g as u16 * cov_scaled) / 255).min(255)
+                        as u8;
                 blend_table_b[cov as usize] =
-                    ((bg_b * (255 - cov_scaled) + job.fg_b as u16 * cov_scaled) / 255).min(255) as u8;
+                    ((bg_b * (255 - cov_scaled) + job.fg_b as u16 * cov_scaled) / 255).min(255)
+                        as u8;
             }
 
             if is_cacheable {
@@ -1060,7 +1152,8 @@ impl crate::TermWindow {
                         for col in 0..buf_width {
                             let offset = row * temp_stride + col * 4;
                             // Check if we're in the cell region (between left_pad and left_pad + cell_span_width)
-                            let in_cell_region = col >= left_pad && col < left_pad + cell_span_width;
+                            let in_cell_region =
+                                col >= left_pad && col < left_pad + cell_span_width;
                             if in_cell_region {
                                 // Cell region: solid background with alpha=255
                                 temp_buffer[offset + 0] = actual_bg_b;
@@ -1101,6 +1194,10 @@ impl crate::TermWindow {
                             }
 
                             let atlas_offset = tex_row * atlas_stride + tex_col * 4;
+                            // Bounds check to prevent panic if atlas is malformed
+                            if atlas_offset + 3 >= atlas_data.len() {
+                                continue;
+                            }
                             let cov_b = atlas_data[atlas_offset + 0] as u16;
                             let cov_g = atlas_data[atlas_offset + 1] as u16;
                             let cov_a = atlas_data[atlas_offset + 3] as u16;
@@ -1111,13 +1208,17 @@ impl crate::TermWindow {
                             }
 
                             let buf_offset = buf_row * temp_stride + buf_col * 4;
-                            let in_cell_region = buf_col >= left_pad && buf_col < left_pad + cell_span_width;
+                            let in_cell_region =
+                                buf_col >= left_pad && buf_col < left_pad + cell_span_width;
 
                             if in_cell_region {
                                 // Cell region: blend fg with bg using blend tables, alpha=255 (opaque)
-                                let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
-                                let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
-                                let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
+                                let cov_r_lin =
+                                    srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
+                                let cov_g_lin =
+                                    srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
+                                let cov_b_lin =
+                                    srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
 
                                 temp_buffer[buf_offset + 0] = blend_table_b[cov_b_lin as usize];
                                 temp_buffer[buf_offset + 1] = blend_table_g[cov_g_lin as usize];
@@ -1145,12 +1246,15 @@ impl crate::TermWindow {
                     };
                     {
                         let mut state = self.cairo2d_state.borrow_mut();
-                        state.glyph_cache.put(cache_key, CachedGlyph {
-                            pixels: cached.pixels.clone(),
-                            width: cached.width,
-                            height: cached.height,
-                            left_pad: cached.left_pad,
-                        });
+                        state.glyph_cache.put(
+                            cache_key,
+                            CachedGlyph {
+                                pixels: cached.pixels.clone(),
+                                width: cached.width,
+                                height: cached.height,
+                                left_pad: cached.left_pad,
+                            },
+                        );
                     }
 
                     cached
@@ -1180,7 +1284,11 @@ impl crate::TermWindow {
                 // Blit cached/rendered pixels to screen (including overhangs)
                 // Screen position: cell_x - left_pad (but clamp to 0)
                 let screen_x_start = job.cell_x.saturating_sub(left_pad);
-                let buf_x_start = if job.cell_x < left_pad { left_pad - job.cell_x } else { 0 };
+                let buf_x_start = if job.cell_x < left_pad {
+                    left_pad - job.cell_x
+                } else {
+                    0
+                };
 
                 for row in 0..glyph_data.height {
                     let screen_row = job.cell_y + row;
@@ -1231,8 +1339,12 @@ impl crate::TermWindow {
             } else {
                 // NON-CACHEABLE PATH: Render directly to screen (UI elements, cursor, selected)
                 // Check if this is a cursor glyph and what shape it is
-                let is_cursor = (job.glyph_id & 0x8000_0000) != 0;
-                let cursor_shape = if is_cursor { job.glyph_id & 0x7FFF_FFFF } else { 0 };
+                let is_cursor = is_cursor_glyph(job.glyph_id);
+                let cursor_shape = if is_cursor {
+                    job.glyph_id & !CURSOR_FLAG_MASK
+                } else {
+                    0
+                };
                 // CursorShape enum values:
                 //   Default=0: filled block (used when focused)
                 //   BlinkingBlock=1, SteadyBlock=2: outline only (used when unfocused)
@@ -1286,7 +1398,10 @@ impl crate::TermWindow {
                                 let cur_g = dest_data[dest_offset + 1];
                                 let cur_r = dest_data[dest_offset + 2];
                                 // Only fill if pixel is default background (empty cell)
-                                if cur_r == default_bg_r && cur_g == default_bg_g && cur_b == default_bg_b {
+                                if cur_r == default_bg_r
+                                    && cur_g == default_bg_g
+                                    && cur_b == default_bg_b
+                                {
                                     // Fill with cursor foreground color (cursor_border_color)
                                     dest_data[dest_offset + 0] = job.fg_b;
                                     dest_data[dest_offset + 1] = job.fg_g;
@@ -1326,9 +1441,12 @@ impl crate::TermWindow {
                                 let cov_g = atlas_data[atlas_offset + 1] as u16;
                                 let cov_r = atlas_data[atlas_offset + 2] as u16;
 
-                                let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
-                                let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
-                                let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
+                                let cov_r_lin =
+                                    srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
+                                let cov_g_lin =
+                                    srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
+                                let cov_b_lin =
+                                    srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
 
                                 let out_r = blend_table_r[cov_r_lin as usize];
                                 let out_g = blend_table_g[cov_g_lin as usize];
@@ -1374,9 +1492,12 @@ impl crate::TermWindow {
                             let cov_g = atlas_data[atlas_offset + 1] as u16;
                             let cov_r = atlas_data[atlas_offset + 2] as u16;
 
-                            let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
-                            let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
-                            let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
+                            let cov_r_lin =
+                                srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
+                            let cov_g_lin =
+                                srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
+                            let cov_b_lin =
+                                srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
 
                             let out_r = blend_table_r[cov_r_lin as usize];
                             let out_g = blend_table_g[cov_g_lin as usize];
@@ -1390,7 +1511,6 @@ impl crate::TermWindow {
                     }
                 }
             }
-
         }
 
         drop(dest_data);
@@ -1419,7 +1539,10 @@ impl crate::TermWindow {
         let height_usize = height as usize;
         let full_frame_bytes = width_usize * height_usize * 4;
 
-        log::debug!("cairo2d partial update: {} dirty cell rects", dirty_rects.len());
+        log::debug!(
+            "cairo2d partial update: {} dirty cell rects",
+            dirty_rects.len()
+        );
 
         for rect in dirty_rects {
             // Convert cell coordinates to pixel coordinates (add padding offset)
