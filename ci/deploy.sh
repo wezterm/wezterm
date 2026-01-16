@@ -193,6 +193,7 @@ License: MIT
 URL: https://wezterm.org/
 Summary: Wez's Terminal Emulator.
 ${BUILD_REQUIRES}
+Requires: wezterm-common, wezterm-gui, wezterm-mux-server
 
 %global debug_package %{nil}
 
@@ -231,9 +232,6 @@ Requires: openssl
 wezterm-mux-server is a headless terminal multiplexer that can be used
 as a session manager for terminal sessions, without requiring X11,
 Wayland, or other GUI libraries.
-
-# Main package (metapackage)
-Requires: wezterm-common, wezterm-gui, wezterm-mux-server
 
 ${BUILD_SECTION}
 
