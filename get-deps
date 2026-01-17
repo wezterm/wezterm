@@ -143,6 +143,7 @@ suse_deps() {
 debian_deps() {
   APT="$SUDO apt-get"
   apt-cache show 'libxcb-util-dev' > /dev/null 2>&1 && XCBUTIL="libxcb-util-dev" || XCBUTIL="libxcb-util0-dev"
+  $APT update
   $APT install -y \
     'bsdutils' \
     'cmake' \
