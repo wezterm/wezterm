@@ -2203,6 +2203,7 @@ impl TermWindow {
 
             self.update_title();
             self.update_scrollbar();
+            self.emit_window_event("tab-focus-changed", None);
         }
         Ok(())
     }
