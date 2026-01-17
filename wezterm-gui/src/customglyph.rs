@@ -3678,6 +3678,14 @@ impl BlockKey {
             0x259e => Self::Blocks(&[Block::QuadrantUR, Block::QuadrantLL]),
             // [▟] QUADRANT UPPER RIGHT AND LOWER LEFT AND LOWER RIGHT
             0x259f => Self::Blocks(&[Block::QuadrantUR, Block::QuadrantLL, Block::QuadrantLR]),
+            // [◢] BLACK LOWER RIGHT TRIANGLE
+            0x25e2 => Self::Triangles(Triangle::RIGHT | Triangle::LOWER, BlockAlpha::Full),
+            // [◣] BLACK LOWER LEFT TRINGLE
+            0x25e3 => Self::Triangles(Triangle::LEFT | Triangle::LOWER, BlockAlpha::Full),
+            // [◤] BLACK UPPER LEFT TRIANGLE
+            0x25e4 => Self::Triangles(Triangle::LEFT | Triangle::UPPER, BlockAlpha::Full),
+            // [◥] BLACK UPPER RIGHT TRIANGLE
+            0x25e5 => Self::Triangles(Triangle::RIGHT | Triangle::UPPER, BlockAlpha::Full),
             // Sextant blocks
             n @ 0x1fb00..=0x1fb3b => Self::Sextant(SEXTANT_PATTERNS[(n & 0x3f) as usize]),
             // Octant blocks
