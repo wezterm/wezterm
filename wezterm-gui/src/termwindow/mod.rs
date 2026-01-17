@@ -1302,9 +1302,10 @@ impl TermWindow {
                 MuxNotification::SaveToDownloads { .. } => {
                     // Handled by frontend
                 }
-                MuxNotification::PaneFocused(_) => {
+                MuxNotification::PaneFocused(pane_id) => {
                     // Also handled by clientpane
                     self.update_title_post_status();
+                    self.emit_window_event("pane-focus-changed", Some(pane_id));
                 }
                 MuxNotification::TabResized(_) => {
                     // Also handled by wezterm-client
@@ -2200,6 +2201,7 @@ impl TermWindow {
 
             if let Some(pane) = self.get_active_pane_or_overlay() {
                 pane.focus_changed(true);
+                mux.notify(MuxNotification::PaneFocused(pane.pane_id()));
             }
 
             self.update_title();
