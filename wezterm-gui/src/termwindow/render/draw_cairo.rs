@@ -25,8 +25,6 @@ use ::window::bitmaps::Texture2d;
 use ::window::WindowOps;
 use anyhow::Context;
 use cairo::{Format, ImageSurface, Operator};
-use config::ConfigHandle;
-use lfucache::LfuCache;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
@@ -91,34 +89,6 @@ impl SkipRatioWindow {
     }
 }
 
-/// Cache key for pre-rendered glyphs (extended to support overhangs and multi-cell)
-#[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
-struct GlyphCacheKey {
-    glyph_id: u32,
-    fg_rgba: u32,
-    bg_rgba: u32,
-    cell_width: u16,
-    cell_height: u16,
-    /// Number of cells this glyph spans (1 for normal, 2+ for ligatures/double-wide)
-    num_cells: u16,
-    /// Pixels of left overhang (glyph extends before cell_x)
-    left_pad: u8,
-    /// Pixels of right overhang (glyph extends past cell boundary)
-    right_pad: u8,
-}
-
-/// Cached pre-rendered glyph pixels (extended to support overhangs)
-struct CachedGlyph {
-    /// Pre-rendered BGRA pixels with alpha for overhang regions
-    /// Size: (left_pad + cell_width * num_cells + right_pad) * cell_height * 4
-    pixels: Vec<u8>,
-    /// Total buffer width in pixels
-    width: usize,
-    /// Total buffer height in pixels
-    height: usize,
-    /// Pixels of left overhang (offset from buffer start to cell origin)
-    left_pad: u8,
-}
 
 /// Persistent surface and frame state for incremental Cairo2D rendering.
 /// This is stored in TermWindow rather than thread_local to properly scope
@@ -142,8 +112,6 @@ pub struct Cairo2DRenderState {
     skip_ratio_1s: SkipRatioWindow,
     skip_ratio_10s: SkipRatioWindow,
     skip_ratio_60s: SkipRatioWindow,
-    /// Glyph cache for pre-rendered glyphs using LfuCache for proper eviction
-    glyph_cache: LfuCache<GlyphCacheKey, CachedGlyph>,
     /// Previous cursor cell positions (col, row) for dirty tracking.
     /// Cursor quads may span multiple cells (wide characters), so we track all of them.
     /// When the cursor moves, all previous positions must be invalidated.
@@ -151,7 +119,7 @@ pub struct Cairo2DRenderState {
 }
 
 impl Cairo2DRenderState {
-    pub fn new(config: &ConfigHandle) -> Self {
+    pub fn new() -> Self {
         Self {
             surface: None,
             width: 0,
@@ -165,19 +133,8 @@ impl Cairo2DRenderState {
             skip_ratio_1s: SkipRatioWindow::new(1),
             skip_ratio_10s: SkipRatioWindow::new(10),
             skip_ratio_60s: SkipRatioWindow::new(60),
-            glyph_cache: LfuCache::new(
-                "cairo2d.glyph_cache.hit.rate",
-                "cairo2d.glyph_cache.miss.rate",
-                |config| config.cairo2d_glyph_cache_size,
-                config,
-            ),
             prev_cursor_cells: Vec::new(),
         }
-    }
-
-    /// Update cache sizes when configuration changes
-    pub fn update_config(&mut self, config: &ConfigHandle) {
-        self.glyph_cache.update_config(config);
     }
 }
 
@@ -218,12 +175,6 @@ fn hash_vertex(v: &Vertex, cache: &Cairo2DCacheData, hasher: &mut impl Hasher) {
     cache.bg_color[2].to_bits().hash(hasher);
     cache.bg_color[3].to_bits().hash(hasher);
     v.has_color.to_bits().hash(hasher);
-}
-
-/// Pack RGBA components into a single u32
-#[inline]
-fn pack_rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
-    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16) | ((a as u32) << 24)
 }
 
 /// Pre-computed blend tables for fast glyph compositing.
@@ -453,10 +404,6 @@ struct GlyphJob {
     dest_x: usize,
     dest_y: usize,
     dest_width: usize,
-    /// Cell-aligned X position for caching (padding_left + cell_col * cell_width)
-    cell_x: usize,
-    /// Actual cell width from render metrics (not glyph quad width)
-    actual_cell_width: usize,
     cell_y: usize,
     cell_height: usize,
     tex_x: usize,
@@ -474,12 +421,6 @@ struct GlyphJob {
     glyph_id: u32,
     /// If true, skip background fill - the selection rectangle handles it
     is_selected: bool,
-    /// Number of cells this glyph spans (1 for normal, 2+ for ligatures/double-wide)
-    num_cells: u16,
-    /// Pixels of left overhang (glyph extends before cell_x)
-    left_pad: u8,
-    /// Pixels of right overhang (glyph extends past cell boundary)
-    right_pad: u8,
 }
 
 impl crate::TermWindow {
@@ -494,7 +435,6 @@ impl crate::TermWindow {
     ///
     /// 2. **Pass 2** (`render_cairo_pass2`): CPU-based glyph compositing
     ///    - Pre-computed blend tables for fast alpha blending
-    ///    - LRU glyph cache to avoid redundant rendering
     ///    - Proper gamma correction (linear → sRGB)
     ///
     /// The function also implements:
@@ -748,12 +688,11 @@ impl crate::TermWindow {
                 state.num_cols = 0;
                 state.num_rows = 0;
             }
-            // Update cell dimensions if they changed - clear caches since cached data has wrong size
+            // Update cell dimensions if they changed - clear cell buckets since cached data has wrong size
             if state.cell_width != cell_width || state.cell_height != cell_height {
                 state.cell_width = cell_width;
                 state.cell_height = cell_height;
                 state.cell_buckets.clear();
-                state.glyph_cache.clear();
                 state.num_cols = 0;
                 state.num_rows = 0;
             }
@@ -776,8 +715,6 @@ impl crate::TermWindow {
             default_bg_r,
             default_bg_g,
             default_bg_b,
-            padding_left,
-            cell_width,
             &mut glyph_jobs,
         )?;
 
@@ -988,7 +925,7 @@ impl crate::TermWindow {
     /// - Underline/strikethrough decorations
     ///
     /// Monochrome glyphs are deferred to Pass 2 for optimized CPU rendering
-    /// with caching and pre-computed blend tables.
+    /// with pre-computed blend tables.
     fn render_cairo_pass1(
         &self,
         surface: &mut ImageSurface,
@@ -1001,8 +938,6 @@ impl crate::TermWindow {
         default_bg_r: u8,
         default_bg_g: u8,
         default_bg_b: u8,
-        padding_left: usize,
-        cell_width: usize,
         glyph_jobs: &mut Vec<GlyphJob>,
     ) -> anyhow::Result<()> {
         let ctx = cairo::Context::new(surface).context("Failed to create Cairo context")?;
@@ -1096,63 +1031,11 @@ impl crate::TermWindow {
                             let [bg_r, bg_g, bg_b, bg_a] = cache.bg_color;
                             let cell_y = (cache.cell_y as f64 + half_height) as usize;
                             let cell_height = cache.cell_height as usize;
-                            // Cell-aligned X position for caching (same glyph renders identically regardless of position)
-                            let cell_x = padding_left + cache.cell_col as usize * cell_width;
-
-                            // Compute number of cells this glyph spans and overhang padding
-                            let dest_x_usize = dest_x as usize;
-                            let dest_width_usize = dest_width as usize;
-
-                            // Left overhang: glyph starts before cell boundary
-                            let left_pad = if dest_x_usize < cell_x {
-                                let overhang = cell_x - dest_x_usize;
-                                if overhang > 255 {
-                                    log::debug!(
-                                        "cairo2d: Glyph left overhang {} exceeds 255px, clamping",
-                                        overhang
-                                    );
-                                }
-                                overhang.min(255) as u8
-                            } else {
-                                0u8
-                            };
-
-                            // Compute num_cells from dest_width (how many cells the quad spans)
-                            // Use saturating arithmetic to prevent overflow
-                            let num_cells = if cell_width > 0 && cell_height > 0 {
-                                let cells = dest_width_usize
-                                    .saturating_add(cell_width)
-                                    .saturating_sub(1)
-                                    / cell_width;
-                                cells.max(1).min(65535) as u16
-                            } else {
-                                1u16
-                            };
-
-                            // Right overhang: glyph extends past the rightmost cell boundary
-                            // Use dest_width (screen size) for consistency with num_cells calculation
-                            let cell_span_width = cell_width * num_cells as usize;
-                            let glyph_end = dest_x_usize + dest_width_usize;
-                            let cell_end = cell_x + cell_span_width;
-                            let right_pad = if glyph_end > cell_end {
-                                let overhang = glyph_end - cell_end;
-                                if overhang > 255 {
-                                    log::debug!(
-                                        "cairo2d: Glyph right overhang {} exceeds 255px, clamping",
-                                        overhang
-                                    );
-                                }
-                                overhang.min(255) as u8
-                            } else {
-                                0u8
-                            };
 
                             glyph_jobs.push(GlyphJob {
-                                dest_x: dest_x_usize,
+                                dest_x: dest_x as usize,
                                 dest_y: dest_y as usize,
-                                dest_width: dest_width_usize,
-                                cell_x,
-                                actual_cell_width: cell_width,
+                                dest_width: dest_width as usize,
                                 cell_y,
                                 cell_height,
                                 tex_x: tex_x1 as usize,
@@ -1169,9 +1052,6 @@ impl crate::TermWindow {
                                 bg_a: (bg_a * 255.0) as u8,
                                 glyph_id: cache.glyph_id,
                                 is_selected: cache.is_selected,
-                                num_cells,
-                                left_pad,
-                                right_pad,
                             });
                         } else {
                             // Color emoji or background image
@@ -1202,254 +1082,11 @@ impl crate::TermWindow {
         Ok(())
     }
 
-    /// Render a cacheable glyph: render to temp buffer, cache, and blit to screen.
-    /// Used for terminal content cells that are not cursor or selected.
-    #[allow(clippy::too_many_arguments)]
-    fn render_glyph_cached(
-        &self,
-        atlas_data: &[u8],
-        atlas_stride: usize,
-        atlas_width: usize,
-        atlas_height: usize,
-        dest_data: &mut [u8],
-        dest_stride: usize,
-        dest_width: usize,
-        dest_height: usize,
-        job: &GlyphJob,
-        blend_tables: &BlendTables,
-        bg: (u8, u8, u8),
-    ) {
-        let cell_width = job.actual_cell_width;
-        let cell_height = job.cell_height;
-        let left_pad = job.left_pad as usize;
-        let right_pad = job.right_pad as usize;
-        let num_cells = job.num_cells as usize;
-
-        // Total buffer width includes padding for overhangs
-        let cell_span_width = cell_width * num_cells;
-        let buf_width = left_pad + cell_span_width + right_pad;
-        let buf_height = cell_height;
-
-        let cache_key = GlyphCacheKey {
-            glyph_id: job.glyph_id,
-            fg_rgba: pack_rgba(job.fg_r, job.fg_g, job.fg_b, job.fg_a),
-            bg_rgba: pack_rgba(bg.0, bg.1, bg.2, job.bg_a),
-            cell_width: cell_width as u16,
-            cell_height: cell_height as u16,
-            num_cells: job.num_cells,
-            left_pad: job.left_pad,
-            right_pad: job.right_pad,
-        };
-
-        // Try cache lookup
-        let cached_glyph = {
-            let mut state = self.cairo2d_state.borrow_mut();
-            state.glyph_cache.get(&cache_key).map(|c| CachedGlyph {
-                pixels: c.pixels.clone(),
-                width: c.width,
-                height: c.height,
-                left_pad: c.left_pad,
-            })
-        };
-
-        let glyph_data = if let Some(cached) = cached_glyph {
-            metrics::counter!("cairo2d.glyph_cache.hit").increment(1);
-            cached
-        } else {
-            metrics::counter!("cairo2d.glyph_cache.miss").increment(1);
-
-            // Render to temp buffer with extended dimensions
-            let mut temp_buffer = vec![0u8; buf_width * buf_height * 4];
-            let temp_stride = buf_width * 4;
-
-            // Fill cell region(s) with background (alpha=255), padding regions with transparent (alpha=0)
-            for row in 0..buf_height {
-                for col in 0..buf_width {
-                    let offset = row * temp_stride + col * 4;
-                    // Check if we're in the cell region (between left_pad and left_pad + cell_span_width)
-                    let in_cell_region = col >= left_pad && col < left_pad + cell_span_width;
-                    if in_cell_region {
-                        // Cell region: solid background with alpha=255
-                        temp_buffer[offset + 0] = bg.2;
-                        temp_buffer[offset + 1] = bg.1;
-                        temp_buffer[offset + 2] = bg.0;
-                        temp_buffer[offset + 3] = 255;
-                    } else {
-                        // Padding region: transparent (alpha=0)
-                        temp_buffer[offset + 0] = 0;
-                        temp_buffer[offset + 1] = 0;
-                        temp_buffer[offset + 2] = 0;
-                        temp_buffer[offset + 3] = 0;
-                    }
-                }
-            }
-
-            // Render glyph to temp buffer at relative position
-            // Glyph position in buffer = left_pad + (dest_x - cell_x), (dest_y - cell_y)
-            // But dest_x might be < cell_x for left overhangs, so we need signed math
-            let glyph_offset_from_cell = job.dest_x as isize - job.cell_x as isize;
-            let rel_x = (left_pad as isize + glyph_offset_from_cell).max(0) as usize;
-            let rel_y = job.dest_y.saturating_sub(job.cell_y);
-
-            for row in 0..job.height {
-                let tex_row = job.tex_y + row;
-                let buf_row = rel_y + row;
-
-                if tex_row >= atlas_height || buf_row >= buf_height {
-                    continue;
-                }
-
-                for col in 0..job.width {
-                    let tex_col = job.tex_x + col;
-                    let buf_col = rel_x + col;
-
-                    if tex_col >= atlas_width || buf_col >= buf_width {
-                        continue;
-                    }
-
-                    let atlas_offset = tex_row * atlas_stride + tex_col * 4;
-                    // Bounds check to prevent panic if atlas is malformed
-                    if atlas_offset + 3 >= atlas_data.len() {
-                        continue;
-                    }
-                    let cov_b = atlas_data[atlas_offset + 0] as u16;
-                    let cov_g = atlas_data[atlas_offset + 1] as u16;
-                    let cov_a = atlas_data[atlas_offset + 3] as u16;
-                    let cov_r = atlas_data[atlas_offset + 2] as u16;
-
-                    if cov_a == 0 {
-                        continue;
-                    }
-
-                    let buf_offset = buf_row * temp_stride + buf_col * 4;
-                    let in_cell_region =
-                        buf_col >= left_pad && buf_col < left_pad + cell_span_width;
-
-                    if in_cell_region {
-                        // Cell region: blend fg with bg using blend tables, alpha=255 (opaque)
-                        let cov_r_lin = srgb8_to_linear_u8((cov_r * 255 / cov_a).min(255) as u8);
-                        let cov_g_lin = srgb8_to_linear_u8((cov_g * 255 / cov_a).min(255) as u8);
-                        let cov_b_lin = srgb8_to_linear_u8((cov_b * 255 / cov_a).min(255) as u8);
-
-                        temp_buffer[buf_offset + 0] = blend_tables.b[cov_b_lin as usize];
-                        temp_buffer[buf_offset + 1] = blend_tables.g[cov_g_lin as usize];
-                        temp_buffer[buf_offset + 2] = blend_tables.r[cov_r_lin as usize];
-                        temp_buffer[buf_offset + 3] = 255;
-                    } else {
-                        // Overhang region: use fg color directly with coverage as alpha
-                        // This allows proper compositing over whatever is already on screen
-                        temp_buffer[buf_offset + 0] = job.fg_b;
-                        temp_buffer[buf_offset + 1] = job.fg_g;
-                        temp_buffer[buf_offset + 2] = job.fg_r;
-                        // Scale coverage by fg alpha
-                        let scaled_alpha = ((cov_a * job.fg_a as u16) / 255).min(255) as u8;
-                        temp_buffer[buf_offset + 3] = scaled_alpha;
-                    }
-                }
-            }
-
-            // Store in cache
-            let cached = CachedGlyph {
-                pixels: temp_buffer,
-                width: buf_width,
-                height: buf_height,
-                left_pad: job.left_pad,
-            };
-            {
-                let mut state = self.cairo2d_state.borrow_mut();
-                state.glyph_cache.put(
-                    cache_key,
-                    CachedGlyph {
-                        pixels: cached.pixels.clone(),
-                        width: cached.width,
-                        height: cached.height,
-                        left_pad: cached.left_pad,
-                    },
-                );
-            }
-
-            cached
-        };
-
-        // Clear the full cell region on screen BEFORE blitting
-        // This ensures stale content is removed when content shifts
-        let cell_span = job.actual_cell_width * job.num_cells as usize;
-        fill_cell_background(
-            dest_data,
-            dest_stride,
-            dest_width,
-            dest_height,
-            job.cell_x,
-            job.cell_y,
-            cell_span,
-            job.cell_height,
-            bg,
-        );
-
-        // Blit cached/rendered pixels to screen (including overhangs)
-        // Screen position: cell_x - left_pad (but clamp to 0)
-        let screen_x_start = job.cell_x.saturating_sub(left_pad);
-        let buf_x_start = if job.cell_x < left_pad {
-            left_pad - job.cell_x
-        } else {
-            0
-        };
-
-        for row in 0..glyph_data.height {
-            let screen_row = job.cell_y + row;
-            if screen_row >= dest_height {
-                break;
-            }
-
-            for col in buf_x_start..glyph_data.width {
-                let screen_col = screen_x_start + (col - buf_x_start);
-                if screen_col >= dest_width {
-                    break;
-                }
-
-                let src_offset = row * glyph_data.width * 4 + col * 4;
-                let alpha = glyph_data.pixels[src_offset + 3];
-
-                if alpha == 0 {
-                    // Fully transparent - skip
-                    continue;
-                }
-
-                let dest_offset = screen_row * dest_stride + screen_col * 4;
-
-                if alpha == 255 {
-                    // Opaque - direct copy (fast path for cell region)
-                    dest_data[dest_offset + 0] = glyph_data.pixels[src_offset + 0];
-                    dest_data[dest_offset + 1] = glyph_data.pixels[src_offset + 1];
-                    dest_data[dest_offset + 2] = glyph_data.pixels[src_offset + 2];
-                    dest_data[dest_offset + 3] = 255;
-                } else {
-                    // Semi-transparent - alpha blend (for overhang regions)
-                    let src_b = glyph_data.pixels[src_offset + 0] as u16;
-                    let src_g = glyph_data.pixels[src_offset + 1] as u16;
-                    let src_r = glyph_data.pixels[src_offset + 2] as u16;
-                    let dst_b = dest_data[dest_offset + 0] as u16;
-                    let dst_g = dest_data[dest_offset + 1] as u16;
-                    let dst_r = dest_data[dest_offset + 2] as u16;
-                    let a = alpha as u16;
-                    let inv_a = 255 - a;
-
-                    dest_data[dest_offset + 0] = ((src_b * a + dst_b * inv_a) / 255) as u8;
-                    dest_data[dest_offset + 1] = ((src_g * a + dst_g * inv_a) / 255) as u8;
-                    dest_data[dest_offset + 2] = ((src_r * a + dst_r * inv_a) / 255) as u8;
-                    dest_data[dest_offset + 3] = 255;
-                }
-            }
-        }
-    }
-
-    /// Pass 2: Batch process glyphs with caching and optimized CPU compositing.
+    /// Pass 2: Batch process glyphs with optimized CPU compositing.
     ///
     /// This pass renders monochrome glyphs using:
     /// - **Pre-computed blend tables**: 256-entry lookup tables for each fg/bg color pair
     ///   to avoid per-pixel arithmetic
-    /// - **LRU glyph cache**: Pre-rendered glyphs are cached by (glyph_id, fg, bg, geometry)
-    ///   to skip redundant rendering of repeated characters
     /// - **Gamma-correct blending**: Coverage values are converted to linear space for
     ///   proper alpha compositing, then results are converted back to sRGB
     ///
@@ -1516,34 +1153,11 @@ impl crate::TermWindow {
                 (0, 0)
             };
 
-            // Cache eligibility: terminal content cells (cell_height > 0) that are not cursor or selected
-            let has_overhangs = job.left_pad > 0 || job.right_pad > 0;
-            let is_multi_cell = job.num_cells > 1;
-            let is_cacheable = job.cell_height > 0
-                && !is_cursor_glyph(job.glyph_id)
-                && !job.is_selected
-                && (is_multi_cell || !has_overhangs);
-
             // Pre-compute blend tables for this fg/bg combination
             let blend_tables =
                 compute_blend_tables((job.fg_r, job.fg_g, job.fg_b, job.fg_a), actual_bg);
 
-            if is_cacheable {
-                // CACHEABLE PATH: Render to temp buffer, cache, blit to screen
-                self.render_glyph_cached(
-                    &atlas_data,
-                    atlas_stride,
-                    atlas_width,
-                    atlas_height,
-                    &mut dest_data,
-                    dest_stride,
-                    dest_width,
-                    dest_height,
-                    job,
-                    &blend_tables,
-                    actual_bg,
-                );
-            } else if is_cursor_glyph(job.glyph_id) {
+            if is_cursor_glyph(job.glyph_id) {
                 // CURSOR PATH: Special handling for cursor glyphs
                 render_cursor_glyph(
                     &atlas_data,
@@ -1559,7 +1173,11 @@ impl crate::TermWindow {
                     default_bg,
                 );
             } else {
-                // NON-CACHEABLE PATH: Render directly to screen (UI elements, selected)
+                // DIRECT PATH: Render all non-cursor glyphs directly to screen
+                // This avoids the double alpha blending issue that occurred with the
+                // cached path (render_glyph_cached stored fg with coverage alpha,
+                // then blitting alpha-blended again causing darkened glyphs).
+
                 // Fill background first (skip for selected cells - selection rectangle handles it)
                 if !job.is_selected && effective_cell_height > 0 {
                     fill_cell_background(
