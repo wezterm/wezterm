@@ -134,7 +134,6 @@ log = "0.4"
 logging = { path = "lua-api-crates/logging" }
 lru = "0.16"
 luahelper = { path = "luahelper" }
-mac_address = "1.1.8"
 maplit = "1.0"
 memmap2 = "0.9"
 memmem = "0.1"
