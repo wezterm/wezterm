@@ -100,7 +100,7 @@ struct GlyphCacheKey {
     cell_width: u16,
     cell_height: u16,
     /// Number of cells this glyph spans (1 for normal, 2+ for ligatures/double-wide)
-    num_cells: u8,
+    num_cells: u16,
     /// Pixels of left overhang (glyph extends before cell_x)
     left_pad: u8,
     /// Pixels of right overhang (glyph extends past cell boundary)
@@ -475,7 +475,7 @@ struct GlyphJob {
     /// If true, skip background fill - the selection rectangle handles it
     is_selected: bool,
     /// Number of cells this glyph spans (1 for normal, 2+ for ligatures/double-wide)
-    num_cells: u8,
+    num_cells: u16,
     /// Pixels of left overhang (glyph extends before cell_x)
     left_pad: u8,
     /// Pixels of right overhang (glyph extends past cell boundary)
@@ -1101,13 +1101,13 @@ impl crate::TermWindow {
 
                             // Compute number of cells this glyph spans and overhang padding
                             let dest_x_usize = dest_x as usize;
-                            let glyph_width = tex_width as usize;
+                            let dest_width_usize = dest_width as usize;
 
                             // Left overhang: glyph starts before cell boundary
                             let left_pad = if dest_x_usize < cell_x {
                                 let overhang = cell_x - dest_x_usize;
                                 if overhang > 255 {
-                                    log::warn!(
+                                    log::debug!(
                                         "cairo2d: Glyph left overhang {} exceeds 255px, clamping",
                                         overhang
                                     );
@@ -1119,25 +1119,25 @@ impl crate::TermWindow {
 
                             // Compute num_cells from dest_width (how many cells the quad spans)
                             // Use saturating arithmetic to prevent overflow
-                            let dest_width_usize = dest_width as usize;
                             let num_cells = if cell_width > 0 && cell_height > 0 {
                                 let cells = dest_width_usize
                                     .saturating_add(cell_width)
                                     .saturating_sub(1)
                                     / cell_width;
-                                cells.max(1).min(255) as u8
+                                cells.max(1).min(65535) as u16
                             } else {
-                                1u8
+                                1u16
                             };
 
                             // Right overhang: glyph extends past the rightmost cell boundary
+                            // Use dest_width (screen size) for consistency with num_cells calculation
                             let cell_span_width = cell_width * num_cells as usize;
-                            let glyph_end = dest_x_usize + glyph_width;
+                            let glyph_end = dest_x_usize + dest_width_usize;
                             let cell_end = cell_x + cell_span_width;
                             let right_pad = if glyph_end > cell_end {
                                 let overhang = glyph_end - cell_end;
                                 if overhang > 255 {
-                                    log::warn!(
+                                    log::debug!(
                                         "cairo2d: Glyph right overhang {} exceeds 255px, clamping",
                                         overhang
                                     );
@@ -1157,7 +1157,7 @@ impl crate::TermWindow {
                                 cell_height,
                                 tex_x: tex_x1 as usize,
                                 tex_y: tex_y1 as usize,
-                                width: glyph_width,
+                                width: tex_width as usize,
                                 height: tex_height as usize,
                                 fg_r: (linear_to_srgb(fg_r) * 255.0) as u8,
                                 fg_g: (linear_to_srgb(fg_g) * 255.0) as u8,
