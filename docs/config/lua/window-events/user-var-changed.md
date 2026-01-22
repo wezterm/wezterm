@@ -8,7 +8,7 @@ used to set a user var.
 You can use something like the following from your shell:
 
 ```bash
-printf "\033]1337;SetUserVar=%s=%s\007" foo `echo -n bar | base64`
+printf "\033]1337;SetUserVar=%s=%s\007" foo `echo -n bar | base64 --wrap=0`
 ```
 
 to set the user var named `foo` to the value `bar`.
@@ -16,7 +16,7 @@ to set the user var named `foo` to the value `bar`.
 !!! note
     On some systems the `base64` command wraps the output by default after some
     amount of characters limiting the maximum length of the value. If this is
-    the case an argument like `-w 0` might help to avoid wrapping.
+    the case an argument like `--wrap=0` avoids wrapping.
 
 Then, if you have this in your config:
 
