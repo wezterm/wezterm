@@ -2068,14 +2068,19 @@ unsafe fn ime_set_context(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> Option<LRESULT> {
-    let inner = rc_from_hwnd(hwnd)?;
-    let inner = inner.borrow_mut();
+    let use_system_rendering = {
+        let inner = rc_from_hwnd(hwnd)?;
+        let inner = inner.borrow();
+        inner.config.ime_preedit_rendering == ImePreeditRendering::System
+    };
 
-    if inner.config.ime_preedit_rendering == ImePreeditRendering::System {
+    if use_system_rendering {
         return None;
     }
 
-    // Don't show system CompositionWindow because application itself draws it
+    // Don't show system CompositionWindow because application itself draws it.
+    // Note: DefWindowProcW may trigger other window messages, so we must
+    // release the borrow before calling it.
     let lparam = lparam & !(ISC_SHOWUICOMPOSITIONWINDOW as LPARAM);
     let result = DefWindowProcW(hwnd, msg, wparam, lparam);
     Some(result)
@@ -2480,12 +2485,31 @@ unsafe fn translate_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARA
 }
 
 unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    let ime_active = wparam == VK_PROCESSKEY as WPARAM;
+
+    // Handle IME active case first, before borrowing inner.
+    // TranslateMessage can trigger other window messages (like WM_SIZE)
+    // via CtfImeCreateInputContext, which would cause a borrow conflict
+    // if inner is already borrowed.
+    if ime_active {
+        // If the IME is active, allow Windows to perform default processing
+        // to drive it forwards.  It will generate a call to `ime_composition`
+        // or `ime_endcomposition` when it completes.
+
+        if msg == WM_KEYDOWN {
+            // Explicitly allow the built-in translation to occur for the IME
+            translate_message(hwnd, msg, wparam, lparam);
+            return Some(0);
+        }
+
+        return None;
+    }
+
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
     let repeat = (lparam & 0xffff) as u16;
     let scan_code = ((lparam >> 16) & 0xff) as u8;
     let releasing = (lparam & (1 << 31)) != 0;
-    let ime_active = wparam == VK_PROCESSKEY as WPARAM;
     let phys_code = super::keycodes::vkey_to_phys(wparam);
 
     let alt_pressed = (lparam & (1 << 29)) != 0;
@@ -2516,20 +2540,6 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
         ime_active,
         inner.dead_pending,
     );
-
-    if ime_active {
-        // If the IME is active, allow Windows to perform default processing
-        // to drive it forwards.  It will generate a call to `ime_composition`
-        // or `ime_endcomposition` when it completes.
-
-        if msg == WM_KEYDOWN {
-            // Explicitly allow the built-in translation to occur for the IME
-            translate_message(hwnd, msg, wparam, lparam);
-            return Some(0);
-        }
-
-        return None;
-    }
 
     if msg == WM_DEADCHAR {
         // Ignore WM_DEADCHAR; we only care about the resultant WM_CHAR
