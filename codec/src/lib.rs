@@ -925,6 +925,8 @@ pub struct GetPaneRenderChangesResponse {
 
     pub input_serial: Option<InputSerial>,
     pub seqno: SequenceNo,
+    #[serde(default)]
+    pub user_vars: HashMap<String, String>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]

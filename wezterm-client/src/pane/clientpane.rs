@@ -138,6 +138,7 @@ impl ClientPane {
         match pdu {
             Pdu::GetPaneRenderChangesResponse(mut delta) => {
                 *self.mouse_grabbed.lock() = delta.mouse_grabbed;
+                *self.user_vars.lock() = std::mem::take(&mut delta.user_vars);
 
                 let bonus_lines = std::mem::take(&mut delta.bonus_lines);
                 let client = { Arc::clone(&self.renderable.lock().inner.borrow().client) };
