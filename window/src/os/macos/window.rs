@@ -1978,8 +1978,15 @@ impl WindowView {
         }
     }
 
+    // Returns the selected text range. For proper macOS dictation support,
+    // this must return a valid range (not NSNotFound). Since terminals don't
+    // track document positions like text editors, we return position 0 with
+    // no selection (length 0), which signals "cursor at start, no selection".
     extern "C" fn selected_range(_this: &mut Object, _sel: Sel) -> NSRange {
-        NSRange::new(NSNotFound as _, 0)
+        // Return cursor position 0 with no selection (length 0).
+        // Returning NSNotFound breaks macOS dictation/voice input.
+        // See: https://github.com/wezterm/wezterm/issues/4592
+        NSRange::new(0, 0)
     }
 
     // Called by the IME when inserting composed text and/or emoji
