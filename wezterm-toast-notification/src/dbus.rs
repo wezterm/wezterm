@@ -9,6 +9,7 @@ use zbus::proxy;
 use zvariant::{Type, Value};
 
 #[derive(Debug, Type, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ServerInformation {
     /// The product name of the server.
     pub name: String,

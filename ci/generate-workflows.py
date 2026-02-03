@@ -581,11 +581,22 @@ rustup default {toolchain}
     def upload_artifact_nightly(self):
         steps = []
 
-        if self.uses_yum():
+        if self.uses_yum() or self.uses_zypper():
+
+            rpmbuild = "~/rpmbuild/RPMS/*"
+            if self.uses_zypper():
+                rpmbuild = "/usr/src/packages/RPMS/*"
+
+            script = ""
+            # Note that 'wezterm' MUST be last in this list,
+            # otherwise the globbing will mess things up
+            for pkg in ['wezterm-common', 'wezterm-gui', 'wezterm-mux-server', 'wezterm']:
+                script = script + f"mv {rpmbuild}/{pkg}-*.rpm {pkg}-nightly-{self.name}.rpm\n"
+
             steps.append(
                 RunStep(
                     "Move RPM",
-                    f"mv ~/rpmbuild/RPMS/*/*.rpm wezterm-nightly-{self.name}.rpm",
+                    script
                 )
             )
         elif self.uses_apk():
@@ -593,13 +604,6 @@ rustup default {toolchain}
                 RunStep(
                     "Move APKs",
                     f"mv ~/packages/wezterm/x86_64/*.apk wezterm-nightly-{self.name}.apk",
-                )
-            )
-        elif self.uses_zypper():
-            steps.append(
-                RunStep(
-                    "Move RPM",
-                    f"mv /usr/src/packages/RPMS/*/*.rpm wezterm-nightly-{self.name}.rpm",
                 )
             )
 
@@ -1004,7 +1008,6 @@ TARGETS = [
     # Target(container="debian:8.11", continuous_only=True, bootstrap_git=True),
     # harfbuzz's C++ is too new for debian 9's toolchain
     # Target(container="debian:9.12", continuous_only=True, bootstrap_git=True),
-    Target(container="debian:10.3", continuous_only=True),
     Target(container="debian:11", continuous_only=True),
     Target(container="debian:12", continuous_only=True),
     Target(name="centos9", container="quay.io/centos/centos:stream9"),
@@ -1014,7 +1017,10 @@ TARGETS = [
     Target(container="fedora:40"),
     Target(container="fedora:41"),
     # Target(container="alpine:3.15"),
-    Target(name="windows", os="windows-latest", rust_target="x86_64-pc-windows-msvc"),
+
+    # Windows is on 2022 for the time being due to
+    # https://github.com/actions/runner-images/issues/11644
+    Target(name="windows", os="windows-2022", rust_target="x86_64-pc-windows-msvc"),
 ]
 
 

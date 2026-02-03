@@ -235,7 +235,6 @@
             ]);
 
           LD_LIBRARY_PATH = libPath;
-          RUST_BACKTRACE = 1;
         };
 
         formatter = pkgs.nixfmt-rfc-style;

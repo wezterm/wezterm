@@ -951,7 +951,7 @@ impl Mux {
         self.prune_dead_windows();
     }
 
-    pub fn get_window(&self, window_id: WindowId) -> Option<MappedRwLockReadGuard<Window>> {
+    pub fn get_window(&self, window_id: WindowId) -> Option<MappedRwLockReadGuard<'_, Window>> {
         if !self.windows.read().contains_key(&window_id) {
             return None;
         }
@@ -960,7 +960,10 @@ impl Mux {
         }))
     }
 
-    pub fn get_window_mut(&self, window_id: WindowId) -> Option<MappedRwLockWriteGuard<Window>> {
+    pub fn get_window_mut(
+        &self,
+        window_id: WindowId,
+    ) -> Option<MappedRwLockWriteGuard<'_, Window>> {
         if !self.windows.read().contains_key(&window_id) {
             return None;
         }

@@ -237,7 +237,7 @@ pub trait Pane: Downcast + Send + Sync {
     }
     fn send_paste(&self, text: &str) -> anyhow::Result<()>;
     fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>>;
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write>;
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write>;
     fn resize(&self, size: TerminalSize) -> anyhow::Result<()>;
     /// Called as a hint that the pane is being resized as part of
     /// a zoom-to-fill-all-the-tab-space operation.
@@ -627,7 +627,7 @@ mod test {
         fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>> {
             Ok(None)
         }
-        fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+        fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
             unimplemented!()
         }
         fn resize(&self, _: TerminalSize) -> anyhow::Result<()> {
@@ -685,7 +685,7 @@ mod test {
         physical_lines
     }
 
-    fn summarize_logical_lines(lines: &[LogicalLine]) -> Vec<(StableRowIndex, Cow<str>)> {
+    fn summarize_logical_lines(lines: &[LogicalLine]) -> Vec<(StableRowIndex, Cow<'_, str>)> {
         lines
             .iter()
             .map(|l| (l.first_row, l.logical.as_str()))
@@ -698,7 +698,7 @@ mod test {
         let width = 20;
         let physical_lines = physical_lines_from_text(text, width);
 
-        fn text_from_lines(lines: &[Line]) -> Vec<Cow<str>> {
+        fn text_from_lines(lines: &[Line]) -> Vec<Cow<'_, str>> {
             lines.iter().map(|l| l.as_str()).collect::<Vec<_>>()
         }
 

@@ -524,7 +524,7 @@ impl Surface {
         lines
     }
 
-    pub fn screen_lines(&self) -> Vec<Cow<Line>> {
+    pub fn screen_lines(&self) -> Vec<Cow<'_, Line>> {
         self.lines.iter().map(|line| Cow::Borrowed(line)).collect()
     }
 
@@ -539,7 +539,7 @@ impl Surface {
     /// of `Change` entries that will update the display accordingly.
     /// The worst case is that this function will fabricate a sequence
     /// of Change entries to paint the screen from scratch.
-    pub fn get_changes(&self, seq: SequenceNo) -> (SequenceNo, Cow<[Change]>) {
+    pub fn get_changes(&self, seq: SequenceNo) -> (SequenceNo, Cow<'_, [Change]>) {
         // Do we have continuity in the sequence numbering?
         let first = self.seqno.saturating_sub(self.changes.len());
         if seq == 0 || first > seq || self.seqno == 0 {
