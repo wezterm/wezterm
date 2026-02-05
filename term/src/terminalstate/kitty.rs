@@ -171,6 +171,40 @@ impl TerminalState {
         }
     }
 
+    fn is_base64_decode_error(err: &anyhow::Error) -> bool {
+        err.chain().any(|e| {
+            e.downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::InvalidInput)
+                && e.to_string().contains("base64 decode")
+        })
+    }
+
+    fn kitty_img_inner_or_ignore_base64_decode_error(
+        &mut self,
+        img: KittyImage,
+    ) -> anyhow::Result<()> {
+        match self.kitty_img_inner(img) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                // If a client is interrupted (eg: ctrl-c) while streaming image
+                // data, we may see an incomplete final chunk and fail to decode.
+                // Drop the in-progress accumulation so we don't poison any future
+                // kitty graphics input.
+                self.kitty_img.accumulator.clear();
+
+                if Self::is_base64_decode_error(&err) {
+                    log::debug!(
+                        "kitty_img: ignoring invalid/incomplete base64 image data: {:#}",
+                        err
+                    );
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
     pub(crate) fn kitty_img(&mut self, img: KittyImage) -> anyhow::Result<()> {
         log::trace!("{:?}", img);
         if !self.config.enable_kitty_graphics() {
@@ -210,28 +244,7 @@ impl TerminalState {
                 if more_data_follows {
                     self.kitty_img.accumulator.push(img);
                 } else {
-                    if let Err(err) = self.kitty_img_inner(img) {
-                        // If a client is interrupted (eg: ctrl-c) while streaming image
-                        // data, we may see an incomplete final chunk and fail to decode.
-                        // Drop the in-progress accumulation so we don't poison any future
-                        // kitty graphics input.
-                        self.kitty_img.accumulator.clear();
-
-                        let is_base64_decode_error = err.chain().any(|e| {
-                            e.downcast_ref::<std::io::Error>()
-                                .is_some_and(|io| io.kind() == std::io::ErrorKind::InvalidInput)
-                                && e.to_string().contains("base64 decode")
-                        });
-
-                        if is_base64_decode_error {
-                            log::debug!(
-                                "kitty_img: ignoring invalid/incomplete base64 image data: {:#}",
-                                err
-                            );
-                        } else {
-                            return Err(err);
-                        }
-                    }
+                    self.kitty_img_inner_or_ignore_base64_decode_error(img)?;
                 }
             }
             KittyImage::TransmitDataAndDisplay {
@@ -248,25 +261,7 @@ impl TerminalState {
                 if more_data_follows {
                     self.kitty_img.accumulator.push(img);
                 } else {
-                    if let Err(err) = self.kitty_img_inner(img) {
-                        // See comment in TransmitData above.
-                        self.kitty_img.accumulator.clear();
-
-                        let is_base64_decode_error = err.chain().any(|e| {
-                            e.downcast_ref::<std::io::Error>()
-                                .is_some_and(|io| io.kind() == std::io::ErrorKind::InvalidInput)
-                                && e.to_string().contains("base64 decode")
-                        });
-
-                        if is_base64_decode_error {
-                            log::debug!(
-                                "kitty_img: ignoring invalid/incomplete base64 image data: {:#}",
-                                err
-                            );
-                        } else {
-                            return Err(err);
-                        }
-                    }
+                    self.kitty_img_inner_or_ignore_base64_decode_error(img)?;
                 }
             }
             KittyImage::Display {
