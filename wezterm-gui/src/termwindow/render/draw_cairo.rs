@@ -551,7 +551,7 @@ impl crate::TermWindow {
                                 } else {
                                     0
                                 };
-                                (cache.cell_col, cache.cell_col + 1, row, row + 1)
+                                (cache.cell_col, cache.cell_col + (cache.cell_num_cols.max(1) as usize), row, row + 1)
                             } else {
                                 // Multi-cell quad (e.g., selection rectangle) - hash into all covered cells
                                 // Convert screen coords to pixel coords, then subtract padding to get

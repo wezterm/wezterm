@@ -114,7 +114,7 @@ pub trait QuadTrait {
     fn set_bg_color(&mut self, color: LinearRgba);
 
     /// Set cell boundaries for Cairo2D background fill and dirty tracking (ignored by GPU backends)
-    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32, cell_col: usize);
+    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32, cell_col: usize, num_cells: u8);
 
     /// Mark cell as selected for Cairo2D to skip background fill (ignored by GPU backends)
     fn set_is_selected(&mut self, selected: bool);
@@ -169,10 +169,11 @@ impl<'a> QuadTrait for HeapCairo2DQuad<'a> {
         self.cache_data.bg_color = [r, g, b, a];
     }
 
-    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32, cell_col: usize) {
+    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32, cell_col: usize, num_cells: u8) {
         self.cache_data.cell_y = cell_y;
         self.cache_data.cell_height = cell_height;
         self.cache_data.cell_col = cell_col;
+        self.cache_data.cell_num_cols = num_cells;
     }
 
     fn set_is_selected(&mut self, selected: bool) {
@@ -253,12 +254,12 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         }
     }
 
-    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32, cell_col: usize) {
+    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32, cell_col: usize, num_cells: u8) {
         match self {
-            Self::Vert(q) => q.set_cell_bounds(cell_y, cell_height, cell_col),
-            Self::Boxed(q) => q.set_cell_bounds(cell_y, cell_height, cell_col),
-            Self::Cairo2D(q) => q.set_cell_bounds(cell_y, cell_height, cell_col),
-            Self::HeapCairo2D(q) => q.set_cell_bounds(cell_y, cell_height, cell_col),
+            Self::Vert(q) => q.set_cell_bounds(cell_y, cell_height, cell_col, num_cells),
+            Self::Boxed(q) => q.set_cell_bounds(cell_y, cell_height, cell_col, num_cells),
+            Self::Cairo2D(q) => q.set_cell_bounds(cell_y, cell_height, cell_col, num_cells),
+            Self::HeapCairo2D(q) => q.set_cell_bounds(cell_y, cell_height, cell_col, num_cells),
         }
     }
 
@@ -326,7 +327,7 @@ impl<'a> QuadTrait for Quad<'a> {
     // For Cairo2D, use Cairo2DQuad which stores this data separately.
     fn set_glyph_id(&mut self, _id: u32) {}
     fn set_bg_color(&mut self, _color: LinearRgba) {}
-    fn set_cell_bounds(&mut self, _cell_y: f32, _cell_height: f32, _cell_col: usize) {}
+    fn set_cell_bounds(&mut self, _cell_y: f32, _cell_height: f32, _cell_col: usize, _num_cells: u8) {}
     fn set_is_selected(&mut self, _selected: bool) {}
 }
 
@@ -396,12 +397,13 @@ impl<'a> QuadTrait for Cairo2DQuad<'a> {
         }
     }
 
-    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32, cell_col: usize) {
+    fn set_cell_bounds(&mut self, cell_y: f32, cell_height: f32, cell_col: usize, num_cells: u8) {
         let mut cache = self.cache_data.borrow_mut();
         if let Some(data) = cache.get_mut(self.quad_index) {
             data.cell_y = cell_y;
             data.cell_height = cell_height;
             data.cell_col = cell_col;
+            data.cell_num_cols = num_cells;
         }
     }
 
@@ -480,7 +482,7 @@ impl QuadTrait for BoxedQuad {
     // Cairo2D uses Cairo2DQuad which stores this data separately.
     fn set_glyph_id(&mut self, _id: u32) {}
     fn set_bg_color(&mut self, _color: LinearRgba) {}
-    fn set_cell_bounds(&mut self, _cell_y: f32, _cell_height: f32, _cell_col: usize) {}
+    fn set_cell_bounds(&mut self, _cell_y: f32, _cell_height: f32, _cell_col: usize, _num_cells: u8) {}
     fn set_is_selected(&mut self, _selected: bool) {}
 }
 

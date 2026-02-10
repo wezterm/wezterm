@@ -359,7 +359,7 @@ impl crate::TermWindow {
                 quad.set_hsv(hsv);
                 quad.set_has_color(false);
                 // Cairo2D needs cell bounds and background color for proper rendering
-                quad.set_cell_bounds(pos_y, cell_height, params.cursor.x);
+                quad.set_cell_bounds(pos_y, cell_height, params.cursor.x, 1);
                 quad.set_bg_color(params.palette.background.to_linear());
                 // Use a special glyph_id for cursor sprites (high bit set)
                 quad.set_glyph_id(0x8000_0000 | (shape as u32));
@@ -647,7 +647,7 @@ impl crate::TermWindow {
                             let mut quad = layers.allocate(1).context("layers.allocate(1)")?;
                             quad.set_glyph_id(info.pos.glyph_idx);
                             quad.set_bg_color(bg_color);
-                            quad.set_cell_bounds(pos_y, cell_height, phys_cell_idx);
+                            quad.set_cell_bounds(pos_y, cell_height, phys_cell_idx, info.pos.num_cells);
                             quad.set_position(
                                 gl_x + range.start,
                                 pos_y + top,
