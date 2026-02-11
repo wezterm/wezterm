@@ -441,7 +441,7 @@ macro_rules! pdu {
 /// The overall version of the codec.
 /// This must be bumped when backwards incompatible changes
 /// are made to the types and protocol.
-pub const CODEC_VERSION: usize = 45;
+pub const CODEC_VERSION: usize = 46;
 
 // Defines the Pdu enum.
 // Each struct has an explicit identifying number.
@@ -683,6 +683,9 @@ pub struct SpawnV2 {
     pub command_dir: Option<String>,
     pub size: TerminalSize,
     pub workspace: String,
+    /// If true, attach to the domain and reuse existing panes
+    /// rather than unconditionally spawning a new tab.
+    pub attach: bool,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
