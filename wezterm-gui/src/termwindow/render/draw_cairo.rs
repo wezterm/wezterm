@@ -551,7 +551,21 @@ impl crate::TermWindow {
                                 } else {
                                     0
                                 };
-                                (cache.cell_col, cache.cell_col + (cache.cell_num_cols.max(1) as usize), row, row + 1)
+                                let mut sc = cache.cell_col;
+                                let mut ec = cache.cell_col + (cache.cell_num_cols.max(1) as usize);
+                                // Expand range to cover actual pixel extent from vertex positions,
+                                // which include bearing offsets that can extend beyond cell boundaries
+                                if cell_width > 0 {
+                                    let vx1 = (quad_verts[V_TOP_LEFT].position[0] + half_width as f32)
+                                        .max(0.0) as usize;
+                                    let vx2 = (quad_verts[V_BOT_RIGHT].position[0] + half_width as f32)
+                                        .max(0.0) as usize;
+                                    let vx1_in_grid = vx1.saturating_sub(padding_left);
+                                    let vx2_in_grid = vx2.saturating_sub(padding_left);
+                                    sc = sc.min(vx1_in_grid / cell_width);
+                                    ec = ec.max((vx2_in_grid + cell_width - 1) / cell_width);
+                                }
+                                (sc, ec, row, row + 1)
                             } else {
                                 // Multi-cell quad (e.g., selection rectangle) - hash into all covered cells
                                 // Convert screen coords to pixel coords, then subtract padding to get
