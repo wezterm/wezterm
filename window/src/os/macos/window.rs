@@ -1979,7 +1979,14 @@ impl WindowView {
     }
 
     extern "C" fn selected_range(_this: &mut Object, _sel: Sel) -> NSRange {
-        // Required for macOS dictation support; see #4592
+        // Return an empty range at position 0 rather than {NSNotFound, 0}.
+        // NSTextInputClient expects character indices into a text storage
+        // buffer, but as a terminal emulator we don't maintain one—input
+        // is handled through insert_text/set_marked_text callbacks instead.
+        // Returning NSNotFound causes macOS dictation to silently bail out
+        // because it has no valid insertion point. An empty selection at 0
+        // satisfies the protocol and enables dictation. This is the same
+        // workaround used by kitty and Emacs. See #4592
         NSRange::new(0, 0)
     }
 
