@@ -226,6 +226,18 @@ impl ClientPane {
                 // it here.
                 log::trace!("advised of remote pane focus: {pane_id}");
 
+                // Pre-set focused_remote_pane_id to match what the server told us.
+                // This prevents advise_focus() from echoing SetFocusedPane back to
+                // the server when focus_pane_and_containing_tab triggers
+                // advise_focus_change -> focus_changed(true) -> advise_focus().
+                // Without this, the echo creates an infinite feedback loop that
+                // hangs the GUI, especially over high-latency connections where
+                // stale echoes cause focus oscillation between panes.
+                {
+                    let mut focused = self.client.focused_remote_pane_id.lock().unwrap();
+                    *focused = Some(self.remote_pane_id);
+                }
+
                 let mux = Mux::get();
                 if let Err(err) = mux.focus_pane_and_containing_tab(self.local_pane_id) {
                     log::error!("Error reconciling remote PaneFocused notification: {err:#}");
