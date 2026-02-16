@@ -100,14 +100,32 @@ case $OSTYPE in
     sed -e "s/@TAG@/$TAG_NAME/g" -e "s/@SHA256@/$SHA256/g" < ci/wezterm-homebrew-macos.rb.template > wezterm.rb
 
     ;;
-  msys)
-    zipdir=WezTerm-windows-$TAG_NAME
+  msys*|cygwin*)
+    rust_toolchain=$(rustup default)
+    case "$rust_toolchain" in
+      *x86_64-pc-windows-msvc*)
+        win_arch=x64
+        ;;
+      *aarch64-pc-windows-msvc*)
+        win_arch=arm64
+        ;;
+      *)
+        echo "unable to determine Windows architecture from rustup default: $rust_toolchain" >&2
+        exit 1
+        ;;
+    esac
+    if [[ "$win_arch" == "arm64" ]] ; then
+      arch_suffix="-arm64"
+    else
+      arch_suffix=""
+    fi
+    zipdir=WezTerm-windows${arch_suffix}-$TAG_NAME
     if [[ "$BUILD_REASON" == "Schedule" ]] ; then
-      zipname=WezTerm-windows-nightly.zip
-      instname=WezTerm-nightly-setup
+      zipname=WezTerm-windows${arch_suffix}-nightly.zip
+      instname=WezTerm${arch_suffix}-nightly-setup
     else
       zipname=$zipdir.zip
-      instname=WezTerm-${TAG_NAME}-setup
+      instname=WezTerm${arch_suffix}-${TAG_NAME}-setup
     fi
     rm -rf $zipdir $zipname
     mkdir $zipdir
@@ -116,16 +134,20 @@ case $OSTYPE in
       $TARGET_DIR/release/wezterm-gui.exe \
       $TARGET_DIR/release/strip-ansi-escapes.exe \
       $TARGET_DIR/release/wezterm.pdb \
-      assets/windows/conhost/conpty.dll \
-      assets/windows/conhost/OpenConsole.exe \
-      assets/windows/angle/libEGL.dll \
-      assets/windows/angle/libGLESv2.dll \
       $zipdir
-    mkdir $zipdir/mesa
-    cp $TARGET_DIR/release/mesa/opengl32.dll \
-        $zipdir/mesa
+    for asset_kind in conhost angle ; do
+      arch_asset_dir=assets/windows/$asset_kind/$win_arch
+      if compgen -G "$arch_asset_dir/*" > /dev/null ; then
+        cp $arch_asset_dir/* $zipdir
+      fi
+    done
+    arch_mesa_dir=assets/windows/mesa/$win_arch
+    if compgen -G "$arch_mesa_dir/*" > /dev/null ; then
+      mkdir -p $zipdir/mesa
+      cp $arch_mesa_dir/* $zipdir/mesa
+    fi
     7z a -tzip $zipname $zipdir
-    iscc.exe -DMyAppVersion=${TAG_NAME#nightly} -F${instname} ci/windows-installer.iss
+    iscc.exe -DMyAppVersion=${TAG_NAME#nightly} -DWezTermArch=${win_arch} -F${instname} ci/windows-installer.iss
     ;;
   linux-gnu|linux)
     distro=$(lsb_release -is 2>/dev/null || sh -c "source /etc/os-release && echo \$NAME")
@@ -437,5 +459,7 @@ EOF
     esac
     ;;
   *)
+    echo "unsupported OSTYPE: $OSTYPE" >&2
+    exit 1
     ;;
 esac

@@ -1,12 +1,51 @@
+#[cfg(windows)]
+fn copy_windows_asset_dir(
+    src_dir: &std::path::Path,
+    dest_dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    if !src_dir.is_dir() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(dest_dir)
+        .context(format!("create directory {}", dest_dir.display()))?;
+
+    for entry in std::fs::read_dir(src_dir).context(format!("read {}", src_dir.display()))? {
+        let entry = entry.context(format!("read entry in {}", src_dir.display()))?;
+        if !entry
+            .file_type()
+            .context(format!("stat {}", entry.path().display()))?
+            .is_file()
+        {
+            continue;
+        }
+
+        let src_name = entry.path();
+        let dest_name = dest_dir.join(entry.file_name());
+
+        if !dest_name.exists() {
+            std::fs::copy(&src_name, &dest_name).context(format!(
+                "copy {} -> {}",
+                src_name.display(),
+                dest_name.display()
+            ))?;
+        }
+    }
+
+    Ok(())
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     #[cfg(windows)]
     {
-        use anyhow::Context as _;
         use std::io::Write;
         use std::path::Path;
         let profile = std::env::var("PROFILE").unwrap();
+        let target = std::env::var("TARGET").unwrap();
         let repo_dir = std::env::current_dir()
             .ok()
             .and_then(|cwd| cwd.parent().map(|p| p.to_path_buf()))
@@ -14,52 +53,27 @@ fn main() {
         let exe_output_dir = repo_dir.join("target").join(profile);
         let windows_dir = repo_dir.join("assets").join("windows");
 
-        let conhost_dir = windows_dir.join("conhost");
-        for name in &["conpty.dll", "OpenConsole.exe"] {
-            let dest_name = exe_output_dir.join(name);
-            let src_name = conhost_dir.join(name);
+        let asset_arch = if target.contains("x86_64") {
+            Some("x64")
+        } else if target.contains("aarch64") {
+            Some("arm64")
+        } else {
+            None
+        };
 
-            if !dest_name.exists() {
-                std::fs::copy(&src_name, &dest_name)
-                    .context(format!(
-                        "copy {} -> {}",
-                        src_name.display(),
-                        dest_name.display()
-                    ))
-                    .unwrap();
-            }
-        }
-
-        let angle_dir = windows_dir.join("angle");
-        for name in &["libEGL.dll", "libGLESv2.dll"] {
-            let dest_name = exe_output_dir.join(name);
-            let src_name = angle_dir.join(name);
-
-            if !dest_name.exists() {
-                std::fs::copy(&src_name, &dest_name)
-                    .context(format!(
-                        "copy {} -> {}",
-                        src_name.display(),
-                        dest_name.display()
-                    ))
-                    .unwrap();
-            }
-        }
-
-        {
-            let dest_mesa = exe_output_dir.join("mesa");
-            let _ = std::fs::create_dir(&dest_mesa);
-            let dest_name = dest_mesa.join("opengl32.dll");
-            let src_name = windows_dir.join("mesa").join("opengl32.dll");
-            if !dest_name.exists() {
-                std::fs::copy(&src_name, &dest_name)
-                    .context(format!(
-                        "copy {} -> {}",
-                        src_name.display(),
-                        dest_name.display()
-                    ))
-                    .unwrap();
-            }
+        if let Some(asset_arch) = asset_arch {
+            copy_windows_asset_dir(
+                &windows_dir.join("conhost").join(asset_arch),
+                &exe_output_dir,
+            )
+            .unwrap();
+            copy_windows_asset_dir(&windows_dir.join("angle").join(asset_arch), &exe_output_dir)
+                .unwrap();
+            copy_windows_asset_dir(
+                &windows_dir.join("mesa").join(asset_arch),
+                &exe_output_dir.join("mesa"),
+            )
+            .unwrap();
         }
 
         // If a file named `.tag` is present, we'll take its contents for the
@@ -142,7 +156,6 @@ END
 
         // Obtain MSVC environment so that the rc compiler can find the right headers.
         // https://github.com/nabijaczleweli/rust-embed-resource/issues/11#issuecomment-603655972
-        let target = std::env::var("TARGET").unwrap();
         if let Some(tool) = cc::windows_registry::find_tool(target.as_str(), "cl.exe") {
             for (key, value) in tool.env() {
                 std::env::set_var(key, value);
