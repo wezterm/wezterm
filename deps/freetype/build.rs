@@ -74,13 +74,19 @@ fn libpng() {
         .file("libpng/pngwtran.c")
         .file("libpng/pngwutil.c");
 
+    let target = env::var("TARGET").unwrap();
     if let Ok(arch) = env::var("CARGO_CFG_TARGET_ARCH") {
         match arch.as_str() {
             "aarch64" | "arm" => {
                 cfg.file("libpng/arm/arm_init.c")
-                    .file("libpng/arm/filter_neon.S")
                     .file("libpng/arm/filter_neon_intrinsics.c")
                     .file("libpng/arm/palette_neon_intrinsics.c");
+                // filter_neon.S is a deprecated stub; the NEON optimizations
+                // are provided by filter_neon_intrinsics.c.  MSVC cannot
+                // compile .S (GAS assembly) files, so skip it on Windows.
+                if !target.contains("windows") {
+                    cfg.file("libpng/arm/filter_neon.S");
+                }
             }
             _ => {}
         }
@@ -92,7 +98,6 @@ fn libpng() {
     cfg.define("HAVE_SYS_TYPES_H", None);
     cfg.define("HAVE_STDINT_H", None);
     cfg.define("HAVE_STDDEF_H", None);
-    let target = env::var("TARGET").unwrap();
     if target.contains("powerpc64") {
         cfg.define("PNG_POWERPC_VSX_OPT", Some("0"));
     }
