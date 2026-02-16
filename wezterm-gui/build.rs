@@ -7,6 +7,7 @@ fn main() {
         use std::io::Write;
         use std::path::Path;
         let profile = std::env::var("PROFILE").unwrap();
+        let target = std::env::var("TARGET").unwrap_or_default();
         let repo_dir = std::env::current_dir()
             .ok()
             .and_then(|cwd| cwd.parent().map(|p| p.to_path_buf()))
@@ -14,51 +15,56 @@ fn main() {
         let exe_output_dir = repo_dir.join("target").join(profile);
         let windows_dir = repo_dir.join("assets").join("windows");
 
-        let conhost_dir = windows_dir.join("conhost");
-        for name in &["conpty.dll", "OpenConsole.exe"] {
-            let dest_name = exe_output_dir.join(name);
-            let src_name = conhost_dir.join(name);
+        // The bundled DLLs (conpty, ANGLE, Mesa) are x86_64 binaries.
+        // Only copy them when building for x86_64 targets.
+        let is_native_x86_64 = target.is_empty() || target.contains("x86_64");
+        if is_native_x86_64 {
+            let conhost_dir = windows_dir.join("conhost");
+            for name in &["conpty.dll", "OpenConsole.exe"] {
+                let dest_name = exe_output_dir.join(name);
+                let src_name = conhost_dir.join(name);
 
-            if !dest_name.exists() {
-                std::fs::copy(&src_name, &dest_name)
-                    .context(format!(
-                        "copy {} -> {}",
-                        src_name.display(),
-                        dest_name.display()
-                    ))
-                    .unwrap();
+                if !dest_name.exists() {
+                    std::fs::copy(&src_name, &dest_name)
+                        .context(format!(
+                            "copy {} -> {}",
+                            src_name.display(),
+                            dest_name.display()
+                        ))
+                        .unwrap();
+                }
             }
-        }
 
-        let angle_dir = windows_dir.join("angle");
-        for name in &["libEGL.dll", "libGLESv2.dll"] {
-            let dest_name = exe_output_dir.join(name);
-            let src_name = angle_dir.join(name);
+            let angle_dir = windows_dir.join("angle");
+            for name in &["libEGL.dll", "libGLESv2.dll"] {
+                let dest_name = exe_output_dir.join(name);
+                let src_name = angle_dir.join(name);
 
-            if !dest_name.exists() {
-                std::fs::copy(&src_name, &dest_name)
-                    .context(format!(
-                        "copy {} -> {}",
-                        src_name.display(),
-                        dest_name.display()
-                    ))
-                    .unwrap();
+                if !dest_name.exists() {
+                    std::fs::copy(&src_name, &dest_name)
+                        .context(format!(
+                            "copy {} -> {}",
+                            src_name.display(),
+                            dest_name.display()
+                        ))
+                        .unwrap();
+                }
             }
-        }
 
-        {
-            let dest_mesa = exe_output_dir.join("mesa");
-            let _ = std::fs::create_dir(&dest_mesa);
-            let dest_name = dest_mesa.join("opengl32.dll");
-            let src_name = windows_dir.join("mesa").join("opengl32.dll");
-            if !dest_name.exists() {
-                std::fs::copy(&src_name, &dest_name)
-                    .context(format!(
-                        "copy {} -> {}",
-                        src_name.display(),
-                        dest_name.display()
-                    ))
-                    .unwrap();
+            {
+                let dest_mesa = exe_output_dir.join("mesa");
+                let _ = std::fs::create_dir(&dest_mesa);
+                let dest_name = dest_mesa.join("opengl32.dll");
+                let src_name = windows_dir.join("mesa").join("opengl32.dll");
+                if !dest_name.exists() {
+                    std::fs::copy(&src_name, &dest_name)
+                        .context(format!(
+                            "copy {} -> {}",
+                            src_name.display(),
+                            dest_name.display()
+                        ))
+                        .unwrap();
+                }
             }
         }
 
