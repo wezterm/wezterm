@@ -434,6 +434,9 @@ rustup default {toolchain}
             return "PATH C:\\Strawberry\\perl\\bin;%PATH%\n" + cmd
         return cmd
 
+    def is_windows_arm(self):
+        return self.rust_target == "aarch64-pc-windows-msvc"
+
     def build_all_release(self):
         bin_crates = [
             "wezterm",
@@ -501,7 +504,11 @@ rustup default {toolchain}
                 "MACOS_APPLEID": "${{ secrets.MACOS_APPLEID }}",
                 "MACOS_APP_PW": "${{ secrets.MACOS_APP_PW }}",
             }
-        steps = [RunStep("Package", "bash ci/deploy.sh", env=deploy_env)]
+        if self.is_windows_arm():
+            deploy_env = deploy_env or {}
+            deploy_env["WIN_ARCH"] = "arm64"
+        deploy_cmd = "bash ci/deploy.sh"
+        steps = [RunStep("Package", deploy_cmd, env=deploy_env)]
         if self.app_image:
             # AppImage needs fuse
             steps += self.install_system_package("libfuse2")
@@ -726,7 +733,7 @@ rustup default {toolchain}
 
     def create_winget_pr(self):
         steps = []
-        if "windows" in self.name:
+        if "windows" in self.name and not self.is_windows_arm():
             steps += [
                 ActionStep(
                     "Checkout winget-pkgs",
@@ -1021,6 +1028,7 @@ TARGETS = [
     # Windows is on 2022 for the time being due to
     # https://github.com/actions/runner-images/issues/11644
     Target(name="windows", os="windows-2022", rust_target="x86_64-pc-windows-msvc"),
+    Target(name="windows_arm64", os="windows-11-arm", rust_target="aarch64-pc-windows-msvc"),
 ]
 
 
