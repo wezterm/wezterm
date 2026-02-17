@@ -18964,6 +18964,86 @@
   {
     "colors": {
       "ansi": [
+        "#1f2328",
+        "#ff8142",
+        "#32cd32",
+        "#ffd700",
+        "#1e90ff",
+        "#ff69b4",
+        "#00ced1",
+        "#ffffff"
+      ],
+      "background": "#191917",
+      "brights": [
+        "#808080",
+        "#ff5e26",
+        "#4ee44e",
+        "#ffeb3b",
+        "#42a5f5",
+        "#ff80ab",
+        "#4dd0e1",
+        "#ffffff"
+      ],
+      "cursor_bg": "#f3f3f3",
+      "cursor_border": "#f3f3f3",
+      "cursor_fg": "#191917",
+      "foreground": "#f3f3f3",
+      "indexed": {},
+      "selection_bg": "#ad7fa8",
+      "selection_fg": "#f3f3f3"
+    },
+    "metadata": {
+      "aliases": [],
+      "author": "Ender Bonnet (@enbonnet)",
+      "name": "Humans",
+      "origin_url": "https://github.com/enBonnet/humans-color-schemes",
+      "prefix": "h",
+      "wezterm_version": "20220807-113146-c2fee766"
+    }
+  },
+  {
+    "colors": {
+      "ansi": [
+        "#1f2328",
+        "#ff8142",
+        "#32cd32",
+        "#ffd700",
+        "#1e90ff",
+        "#ff69b4",
+        "#00ced1",
+        "#000000"
+      ],
+      "background": "#f6f8fa",
+      "brights": [
+        "#808080",
+        "#ff3c00",
+        "#32cd32",
+        "#ffd700",
+        "#1e90ff",
+        "#ff69b4",
+        "#00ced1",
+        "#000000"
+      ],
+      "cursor_bg": "#1f2328",
+      "cursor_border": "#1f2328",
+      "cursor_fg": "#f6f8fa",
+      "foreground": "#1f2328",
+      "indexed": {},
+      "selection_bg": "#75507b",
+      "selection_fg": "#1f2328"
+    },
+    "metadata": {
+      "aliases": [],
+      "author": "Ender Bonnet (@enbonnet)",
+      "name": "Humans Light",
+      "origin_url": "https://github.com/enBonnet/humans-color-schemes",
+      "prefix": "h",
+      "wezterm_version": "20220807-113146-c2fee766"
+    }
+  },
+  {
+    "colors": {
+      "ansi": [
         "#222222",
         "#e84f4f",
         "#b7ce42",
