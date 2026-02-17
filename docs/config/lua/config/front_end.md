@@ -16,7 +16,9 @@ possible values:
     The default is `"WebGpu"`. In earlier versions it was `"OpenGL"`
 
 {{since('20240128-202157-1e552d76', outline=true)}}
-    The default has been reverted to `"OpenGL"`.
+    The default has been reverted to `"OpenGL"` on most platforms.
+
+On Windows ARM64 builds, the default is `"WebGpu"`.
 
 You may wish (or need!) to select `Software` if there are issues with your
 GPU/OpenGL drivers.

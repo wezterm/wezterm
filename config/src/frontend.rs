@@ -1,12 +1,27 @@
 use luahelper::impl_lua_conversion_dynamic;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
 pub enum FrontEndSelection {
-    #[default]
     OpenGL,
     WebGpu,
     Software,
+}
+
+impl Default for FrontEndSelection {
+    fn default() -> Self {
+        #[cfg(all(windows, target_arch = "aarch64"))]
+        {
+            // Prefer wgpu's DX12 backend on Windows ARM64 rather than relying
+            // on OpenGL driver support for that platform.
+            Self::WebGpu
+        }
+
+        #[cfg(not(all(windows, target_arch = "aarch64")))]
+        {
+            Self::OpenGL
+        }
+    }
 }
 
 /// Corresponds to <https://docs.rs/wgpu/latest/wgpu/struct.AdapterInfo.html>
