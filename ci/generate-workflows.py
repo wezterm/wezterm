@@ -187,6 +187,7 @@ class Target(object):
         rust_target=None,
         continuous_only=False,
         app_image=False,
+        publish_winget=False,
         is_tag=False,
     ):
         if not name:
@@ -201,6 +202,7 @@ class Target(object):
         self.rust_target = rust_target
         self.continuous_only = continuous_only
         self.app_image = app_image
+        self.publish_winget = publish_winget
         self.env = {}
         self.is_tag = is_tag
 
@@ -726,7 +728,7 @@ rustup default {toolchain}
 
     def create_winget_pr(self):
         steps = []
-        if "windows" in self.name:
+        if self.publish_winget:
             steps += [
                 ActionStep(
                     "Checkout winget-pkgs",
@@ -1020,7 +1022,8 @@ TARGETS = [
 
     # Windows is on 2022 for the time being due to
     # https://github.com/actions/runner-images/issues/11644
-    Target(name="windows", os="windows-2022", rust_target="x86_64-pc-windows-msvc"),
+    Target(name="windows", os="windows-2022", rust_target="x86_64-pc-windows-msvc", publish_winget=True),
+    Target(name="windows_arm64", os="windows-11-arm", rust_target="aarch64-pc-windows-msvc"),
 ]
 
 
