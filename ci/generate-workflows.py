@@ -1018,9 +1018,7 @@ TARGETS = [
     Target(container="fedora:41"),
     # Target(container="alpine:3.15"),
 
-    # Windows is on 2022 for the time being due to
-    # https://github.com/actions/runner-images/issues/11644
-    Target(name="windows", os="windows-2022", rust_target="x86_64-pc-windows-msvc"),
+    Target(name="windows", os="windows-2025", rust_target="x86_64-pc-windows-msvc"),
 ]
 
 
