@@ -14,6 +14,7 @@ impl crate::TermWindow {
         match frame {
             RenderFrame::Glium(ref mut frame) => self.call_draw_glium(frame),
             RenderFrame::WebGpu => self.call_draw_webgpu(),
+            RenderFrame::PureCpu => self.call_draw_purecpu(),
         }
     }
 

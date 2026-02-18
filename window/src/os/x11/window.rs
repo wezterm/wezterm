@@ -2152,6 +2152,50 @@ impl WindowOps for XWindow {
         future
     }
 
+    fn present_software_frame_region(
+        &self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        dst_x: i16,
+        dst_y: i16,
+    ) -> anyhow::Result<()> {
+        let window_id = self.0;
+        let pixels = pixels.to_vec();
+        XConnection::with_window_inner(window_id, move |inner| {
+            let conn = inner.conn();
+            let xcb_conn = &conn.conn;
+            let target_window = inner.child_id;
+
+            let gc: xcb::x::Gcontext = xcb_conn.generate_id();
+            xcb_conn.send_request(&xcb::x::CreateGc {
+                cid: gc,
+                drawable: xcb::x::Drawable::Window(target_window),
+                value_list: &[],
+            });
+
+            let depth = conn.depth;
+            xcb_conn.send_request(&xcb::x::PutImage {
+                format: xcb::x::ImageFormat::ZPixmap,
+                drawable: xcb::x::Drawable::Window(target_window),
+                gc,
+                width: width as u16,
+                height: height as u16,
+                dst_x,
+                dst_y,
+                left_pad: 0,
+                depth,
+                data: &pixels,
+            });
+
+            xcb_conn.send_request(&xcb::x::FreeGc { gc });
+            xcb_conn.flush()?;
+
+            Ok(())
+        });
+        Ok(())
+    }
+
     /// Set some text in the clipboard
     fn set_clipboard(&self, clipboard: Clipboard, text: String) {
         let window_id = self.0;

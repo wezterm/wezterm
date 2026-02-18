@@ -349,6 +349,20 @@ pub trait WindowOps {
     ) -> anyhow::Result<Option<os::parameters::Parameters>> {
         Ok(None)
     }
+
+    /// Present a software-rendered frame region to the window.
+    /// pixels is BGRA32, row-major, with the given width/height.
+    /// dst_x/dst_y specify the destination offset in the window.
+    fn present_software_frame_region(
+        &self,
+        _pixels: &[u8],
+        _width: u32,
+        _height: u32,
+        _dst_x: i16,
+        _dst_y: i16,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default)]

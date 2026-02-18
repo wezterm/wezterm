@@ -408,4 +408,21 @@ impl WindowOps for Window {
             Self::Wayland(w) => w.set_clipboard(clipboard, text),
         }
     }
+
+    fn present_software_frame_region(
+        &self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        dst_x: i16,
+        dst_y: i16,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::X11(x) => x.present_software_frame_region(pixels, width, height, dst_x, dst_y),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(_) => {
+                anyhow::bail!("PureCpu software rendering is not yet supported on Wayland")
+            }
+        }
+    }
 }

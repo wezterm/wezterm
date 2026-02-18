@@ -462,6 +462,7 @@ pub struct TermWindow {
 
     gl: Option<Rc<glium::backend::Context>>,
     webgpu: Option<Rc<WebGpuState>>,
+    purecpu_state: Option<crate::termwindow::render::purecpu::PureCpuState>,
     config_subscription: Option<config::ConfigSubscription>,
 }
 
@@ -688,6 +689,7 @@ impl TermWindow {
             os_parameters: None,
             gl: None,
             webgpu: None,
+            purecpu_state: None,
             window: None,
             window_background,
             config: config.clone(),
@@ -845,7 +847,7 @@ impl TermWindow {
         });
 
         let gl = match config.front_end {
-            FrontEndSelection::WebGpu => None,
+            FrontEndSelection::WebGpu | FrontEndSelection::PureCpu => None,
             _ => Some(window.enable_opengl().await?),
         };
 
@@ -881,6 +883,15 @@ impl TermWindow {
             if let Some(webgpu) = webgpu {
                 myself.webgpu.replace(Rc::clone(&webgpu));
                 myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
+            }
+            if config.front_end == FrontEndSelection::PureCpu {
+                myself.purecpu_state.replace(
+                    crate::termwindow::render::purecpu::PureCpuState::new(
+                        dimensions.pixel_width as u32,
+                        dimensions.pixel_height as u32,
+                    ),
+                );
+                myself.created(RenderContext::PureCpu)?;
             }
             myself.load_os_parameters();
             window.show();
@@ -962,7 +973,9 @@ impl TermWindow {
                 self.resizes_pending -= 1;
                 if self.is_repaint_pending {
                     self.is_repaint_pending = false;
-                    if self.webgpu.is_some() {
+                    if self.purecpu_state.is_some() {
+                        self.do_paint_purecpu(window)?;
+                    } else if self.webgpu.is_some() {
                         self.do_paint_webgpu()?;
                     } else {
                         self.do_paint(window);
@@ -1002,6 +1015,8 @@ impl TermWindow {
                 if self.resizes_pending > 0 {
                     self.is_repaint_pending = true;
                     Ok(true)
+                } else if self.purecpu_state.is_some() {
+                    self.do_paint_purecpu(window)
                 } else if self.webgpu.is_some() {
                     self.do_paint_webgpu()
                 } else {
@@ -1102,6 +1117,18 @@ impl TermWindow {
 
     fn do_paint_webgpu_impl(&mut self) -> anyhow::Result<bool> {
         self.paint_impl(&mut RenderFrame::WebGpu);
+        Ok(true)
+    }
+
+    fn do_paint_purecpu(&mut self, _window: &Window) -> anyhow::Result<bool> {
+        // Resize framebuffer if needed
+        if let Some(state) = self.purecpu_state.as_mut() {
+            state.resize(
+                self.dimensions.pixel_width as u32,
+                self.dimensions.pixel_height as u32,
+            );
+        }
+        self.paint_impl(&mut RenderFrame::PureCpu);
         Ok(true)
     }
 
