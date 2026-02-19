@@ -152,7 +152,7 @@ impl crate::TermWindow {
                     left: Dimension::Cells(0.5),
                     right: Dimension::Cells(0.5),
                     top: Dimension::Cells(0.2),
-                    bottom: Dimension::Cells(0.25),
+                    bottom: Dimension::Cells(0.5),
                 })
                 .border(BoxDimension::new(Dimension::Pixels(1.)))
                 .colors(ElementColors {
@@ -171,29 +171,37 @@ impl crate::TermWindow {
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
-                        top: Dimension::Cells(0.2),
+                        top: Dimension::Cells(0.),
                         bottom: Dimension::Cells(0.),
                     })
                     .padding(BoxDimension {
                         left: Dimension::Cells(0.5),
                         right: Dimension::Cells(0.5),
-                        top: Dimension::Cells(0.2),
-                        bottom: Dimension::Cells(0.25),
+                        top: Dimension::Cells(0.5),
+                        bottom: Dimension::Cells(0.5),
                     })
                     .border(BoxDimension::new(Dimension::Pixels(1.)))
                     .border_corners(Some(Corners {
-                        top_left: SizedPoly {
+                        bottom_left: SizedPoly {
                             width: Dimension::Cells(0.5),
                             height: Dimension::Cells(0.5),
-                            poly: TOP_LEFT_ROUNDED_CORNER,
+                            poly: BOTTOM_LEFT_ROUNDED_CORNER,
+                        },
+                        bottom_right: SizedPoly {
+                            width: Dimension::Cells(0.5),
+                            height: Dimension::Cells(0.5),
+                            poly: BOTTOM_RIGHT_ROUNDED_CORNER,
+                        },
+                        top_left: SizedPoly {
+                            width: Dimension::Cells(0.5),
+                            height: Dimension::Cells(0.),
+                            poly: &[],
                         },
                         top_right: SizedPoly {
                             width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_RIGHT_ROUNDED_CORNER,
+                            height: Dimension::Cells(0.),
+                            poly: &[],
                         },
-                        bottom_left: SizedPoly::none(),
-                        bottom_right: SizedPoly::none(),
                     }))
                     .colors(ElementColors {
                         border: BorderColor::new(
@@ -216,35 +224,35 @@ impl crate::TermWindow {
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
-                        top: Dimension::Cells(0.2),
+                        top: Dimension::Cells(0.),
                         bottom: Dimension::Cells(0.),
                     })
                     .padding(BoxDimension {
                         left: Dimension::Cells(0.5),
                         right: Dimension::Cells(0.5),
-                        top: Dimension::Cells(0.2),
-                        bottom: Dimension::Cells(0.25),
+                        top: Dimension::Cells(0.5),
+                        bottom: Dimension::Cells(0.5),
                     })
                     .border(BoxDimension::new(Dimension::Pixels(1.)))
                     .border_corners(Some(Corners {
-                        top_left: SizedPoly {
+                        bottom_left: SizedPoly {
                             width: Dimension::Cells(0.5),
                             height: Dimension::Cells(0.5),
-                            poly: TOP_LEFT_ROUNDED_CORNER,
+                            poly: BOTTOM_LEFT_ROUNDED_CORNER,
+                        },
+                        bottom_right: SizedPoly {
+                            width: Dimension::Cells(0.5),
+                            height: Dimension::Cells(0.5),
+                            poly: BOTTOM_RIGHT_ROUNDED_CORNER,
+                        },
+                        top_left: SizedPoly {
+                            width: Dimension::Cells(0.5),
+                            height: Dimension::Cells(0.),
+                            poly: &[],
                         },
                         top_right: SizedPoly {
                             width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_RIGHT_ROUNDED_CORNER,
-                        },
-                        bottom_left: SizedPoly {
-                            width: Dimension::Cells(0.),
-                            height: Dimension::Cells(0.33),
-                            poly: &[],
-                        },
-                        bottom_right: SizedPoly {
-                            width: Dimension::Cells(0.),
-                            height: Dimension::Cells(0.33),
+                            height: Dimension::Cells(0.),
                             poly: &[],
                         },
                     }))
