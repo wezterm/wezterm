@@ -46,6 +46,27 @@ impl ColorEase {
         }
     }
 
+    /// Compute current intensity without side effects.
+    /// Returns None if the cycle has completed (caller should
+    /// trigger a real paint to restart the cycle).
+    pub fn peek_intensity(&self) -> Option<f32> {
+        let start = self.start?;
+        let elapsed = start.elapsed().as_secs_f32();
+        if elapsed < self.in_duration {
+            Some(
+                self.in_function
+                    .evaluate_at_position(elapsed / self.in_duration),
+            )
+        } else {
+            let completion = (elapsed - self.in_duration) / self.out_duration;
+            if completion >= 1.0 {
+                None
+            } else {
+                Some(1.0 - self.out_function.evaluate_at_position(completion))
+            }
+        }
+    }
+
     pub fn intensity_continuous(&mut self) -> (f32, Instant) {
         match self.intensity_one_shot() {
             Some(intensity) => intensity,
