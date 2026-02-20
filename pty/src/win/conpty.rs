@@ -6,8 +6,29 @@ use filedescriptor::{FileDescriptor, Pipe};
 use std::sync::{Arc, Mutex};
 use winapi::um::wincon::COORD;
 
-#[derive(Default)]
-pub struct ConPtySystem {}
+pub struct ConPtySystem {
+    inherit_cursor: bool,
+}
+
+impl Default for ConPtySystem {
+    fn default() -> Self {
+        Self {
+            inherit_cursor: true,
+        }
+    }
+}
+
+impl ConPtySystem {
+    /// Whether the cursor should be inherited, enabled by default.
+    ///
+    /// This corresponds to [`PSUEDOCONSOLE_INHERIT_CURSOR`]
+    ///
+    /// [`PSUEDOCONSOLE_INHERIT_CURSOR`]: https://learn.microsoft.com/en-us/windows/console/createpseudoconsole
+    pub fn inherit_cursor(mut self, inherit: bool) -> Self {
+        self.inherit_cursor = inherit;
+        self
+    }
+}
 
 impl PtySystem for ConPtySystem {
     fn openpty(&self, size: PtySize) -> anyhow::Result<PtyPair> {
@@ -21,6 +42,7 @@ impl PtySystem for ConPtySystem {
             },
             stdin.read,
             stdout.write,
+            self.inherit_cursor,
         )?;
 
         let master = ConPtyMasterPty {
