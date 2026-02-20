@@ -111,6 +111,54 @@ impl crate::TermWindow {
             let new_tab_hover = colors.new_tab_hover();
             let active_tab = colors.active_tab();
 
+            let corners = if self.config.tab_bar_at_bottom {
+                Corners {
+                    top_left: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.),
+                        poly: &[],
+                    },
+                    top_right: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.),
+                        poly: &[],
+                    },
+                    bottom_left: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.5),
+                        poly: BOTTOM_LEFT_ROUNDED_CORNER,
+                    },
+                    bottom_right: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.5),
+                        poly: BOTTOM_RIGHT_ROUNDED_CORNER,
+                    },
+                }
+            } else {
+                Corners {
+                    top_left: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.5),
+                        poly: TOP_LEFT_ROUNDED_CORNER,
+                    },
+                    top_right: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.5),
+                        poly: TOP_RIGHT_ROUNDED_CORNER,
+                    },
+                    bottom_left: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.),
+                        poly: &[],
+                    },
+                    bottom_right: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.),
+                        poly: &[],
+                    },
+                }
+            };
+
             match item.item {
                 TabBarItem::RightStatus | TabBarItem::LeftStatus | TabBarItem::None => element
                     .item_type(UIItemType::TabBar(TabBarItem::None))
@@ -145,14 +193,14 @@ impl crate::TermWindow {
                 .margin(BoxDimension {
                     left: Dimension::Cells(0.5),
                     right: Dimension::Cells(0.),
-                    top: Dimension::Cells(0.2),
+                    top: Dimension::Cells(0.),
                     bottom: Dimension::Cells(0.),
                 })
                 .padding(BoxDimension {
                     left: Dimension::Cells(0.5),
                     right: Dimension::Cells(0.5),
-                    top: Dimension::Cells(0.2),
-                    bottom: Dimension::Cells(0.25),
+                    top: Dimension::Cells(0.5),
+                    bottom: Dimension::Cells(0.5),
                 })
                 .border(BoxDimension::new(Dimension::Pixels(1.)))
                 .colors(ElementColors {
@@ -171,30 +219,17 @@ impl crate::TermWindow {
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
-                        top: Dimension::Cells(0.2),
+                        top: Dimension::Cells(0.),
                         bottom: Dimension::Cells(0.),
                     })
                     .padding(BoxDimension {
                         left: Dimension::Cells(0.5),
                         right: Dimension::Cells(0.5),
-                        top: Dimension::Cells(0.2),
-                        bottom: Dimension::Cells(0.25),
+                        top: Dimension::Cells(0.5),
+                        bottom: Dimension::Cells(0.5),
                     })
                     .border(BoxDimension::new(Dimension::Pixels(1.)))
-                    .border_corners(Some(Corners {
-                        top_left: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_LEFT_ROUNDED_CORNER,
-                        },
-                        top_right: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_RIGHT_ROUNDED_CORNER,
-                        },
-                        bottom_left: SizedPoly::none(),
-                        bottom_right: SizedPoly::none(),
-                    }))
+                    .border_corners(Some(corners))
                     .colors(ElementColors {
                         border: BorderColor::new(
                             bg_color
@@ -216,38 +251,17 @@ impl crate::TermWindow {
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
-                        top: Dimension::Cells(0.2),
+                        top: Dimension::Cells(0.),
                         bottom: Dimension::Cells(0.),
                     })
                     .padding(BoxDimension {
                         left: Dimension::Cells(0.5),
                         right: Dimension::Cells(0.5),
-                        top: Dimension::Cells(0.2),
-                        bottom: Dimension::Cells(0.25),
+                        top: Dimension::Cells(0.5),
+                        bottom: Dimension::Cells(0.5),
                     })
                     .border(BoxDimension::new(Dimension::Pixels(1.)))
-                    .border_corners(Some(Corners {
-                        top_left: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_LEFT_ROUNDED_CORNER,
-                        },
-                        top_right: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_RIGHT_ROUNDED_CORNER,
-                        },
-                        bottom_left: SizedPoly {
-                            width: Dimension::Cells(0.),
-                            height: Dimension::Cells(0.33),
-                            poly: &[],
-                        },
-                        bottom_right: SizedPoly {
-                            width: Dimension::Cells(0.),
-                            height: Dimension::Cells(0.33),
-                            poly: &[],
-                        },
-                    }))
+                    .border_corners(Some(corners))
                     .colors({
                         let inactive_tab = colors.inactive_tab();
                         let bg = bg_color
