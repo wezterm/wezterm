@@ -603,7 +603,7 @@ mod test {
         glyph_idx: 58,
         num_cells: 1,
         x_offset: 0.0,
-        bearing_x: -0.8333333,
+        bearing_x: -0.8,
         bitmap_pixel_width: 12,
     },
 ]
@@ -665,8 +665,8 @@ mod test {
         glyph_idx: 2712,
         num_cells: 2,
         x_offset: 0.0,
-        bearing_x: 0.0,
-        bitmap_pixel_width: 16,
+        bearing_x: 3.0,
+        bitmap_pixel_width: 5,
     },
 ]
 "
@@ -689,7 +689,7 @@ mod test {
         num_cells: 2,
         x_offset: 0.0,
         bearing_x: 0.0,
-        bitmap_pixel_width: 20,
+        bitmap_pixel_width: 8,
     },
 ]
 "

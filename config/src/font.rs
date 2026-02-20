@@ -672,6 +672,8 @@ pub enum FontLocatorSelection {
     CoreText,
     /// Use only the font_dirs configuration to locate fonts
     ConfigDirsOnly,
+    /// Use fontdb for font discovery (pure Rust, Linux only)
+    FontDb,
 }
 
 impl Default for FontLocatorSelection {
@@ -681,23 +683,25 @@ impl Default for FontLocatorSelection {
         } else if cfg!(target_os = "macos") {
             FontLocatorSelection::CoreText
         } else {
-            FontLocatorSelection::FontConfig
+            FontLocatorSelection::FontDb
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, FromDynamic, ToDynamic, Default)]
 pub enum FontRasterizerSelection {
-    #[default]
     FreeType,
     Harfbuzz,
+    #[default]
+    Swash,
 }
 
 #[derive(Debug, Clone, Copy, FromDynamic, ToDynamic, Default)]
 pub enum FontShaperSelection {
     Allsorts,
-    #[default]
     Harfbuzz,
+    #[default]
+    Harfrust,
 }
 
 #[cfg(test)]
