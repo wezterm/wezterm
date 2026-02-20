@@ -207,6 +207,8 @@ pub struct CommandBuilder {
     #[cfg(unix)]
     pub(crate) umask: Option<libc::mode_t>,
     controlling_tty: bool,
+    #[cfg(windows)]
+    pub(crate) creation_flags: u32,
 }
 
 impl CommandBuilder {
@@ -220,6 +222,8 @@ impl CommandBuilder {
             #[cfg(unix)]
             umask: None,
             controlling_tty: true,
+            #[cfg(windows)]
+            creation_flags: 0,
         }
     }
 
@@ -232,6 +236,8 @@ impl CommandBuilder {
             #[cfg(unix)]
             umask: None,
             controlling_tty: true,
+            #[cfg(windows)]
+            creation_flags: 0,
         }
     }
 
@@ -259,6 +265,8 @@ impl CommandBuilder {
             #[cfg(unix)]
             umask: None,
             controlling_tty: true,
+            #[cfg(windows)]
+            creation_flags: 0,
         }
     }
 
@@ -758,6 +766,15 @@ impl CommandBuilder {
             i += 1;
         }
         cmdline.push('"' as u16);
+    }
+
+    /// Sets the [process creation flags] to be passed to `CreateProcess`.
+    ///
+    /// These will always be ORed with `EXTENDED_STARTUPINFO_PRESENT |CREATE_UNICODE_ENVIRONMENT`.
+    ///
+    /// [process creation flags]: https://docs.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
+    pub fn creation_flags(&mut self, flags: u32) {
+        self.creation_flags = flags;
     }
 }
 

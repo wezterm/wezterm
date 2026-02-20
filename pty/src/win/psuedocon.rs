@@ -135,6 +135,9 @@ impl PsuedoCon {
 
         let cwd = cmd.current_directory();
 
+        let creation_flags =
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | cmd.creation_flags;
+
         let res = unsafe {
             CreateProcessW(
                 exe.as_mut_slice().as_mut_ptr(),
@@ -142,7 +145,7 @@ impl PsuedoCon {
                 ptr::null_mut(),
                 ptr::null_mut(),
                 0,
-                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+                creation_flags,
                 cmd.environment_block().as_mut_slice().as_mut_ptr() as *mut _,
                 cwd.as_ref()
                     .map(|c| c.as_slice().as_ptr())
