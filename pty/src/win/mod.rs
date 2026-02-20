@@ -20,6 +20,7 @@ use filedescriptor::OwnedHandle;
 #[derive(Debug)]
 pub struct WinChild {
     proc: Mutex<OwnedHandle>,
+    main_thread: Mutex<OwnedHandle>,
 }
 
 impl WinChild {
@@ -118,6 +119,12 @@ impl Child for WinChild {
     fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
         let proc = self.proc.lock().unwrap();
         Some(proc.as_raw_handle())
+    }
+
+    fn main_thread_handle(&self) -> Option<std::os::windows::io::BorrowedHandle<'_>> {
+        let main_thread = self.main_thread.lock().unwrap();
+        let raw_handle = main_thread.as_raw_handle();
+        Some(unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(raw_handle) })
     }
 }
 
