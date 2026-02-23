@@ -568,6 +568,10 @@ pub struct Config {
     #[dynamic(default)]
     pub kde_window_background_blur: bool,
 
+    /// Only works on Wayland compositors that support ext-background-effect-v1
+    #[dynamic(default)]
+    pub ext_background_effect_v1: bool,
+
     /// Only works on Windows
     #[dynamic(default)]
     pub win32_system_backdrop: SystemBackdrop,

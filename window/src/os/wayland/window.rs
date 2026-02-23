@@ -42,6 +42,8 @@ use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection as WConnection, Dispatch, Proxy, QueueHandle};
 use wayland_egl::{is_available as egl_is_available, WlEglSurface};
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1;
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwinBlurManager;
 use wezterm_font::FontConfiguration;
@@ -330,6 +332,7 @@ impl WaylandWindow {
 
             wegl_surface: None,
             gl_state: None,
+            ext_background_effect_surface: RefCell::new(None),
         }));
 
         let window_handle = Window::Wayland(WaylandWindow(window_id));
@@ -596,6 +599,7 @@ pub struct WaylandWindowInner {
     // libraries will segfault on shutdown
     wegl_surface: Option<WlEglSurface>,
     gl_state: Option<Rc<glium::backend::Context>>,
+    ext_background_effect_surface: RefCell<Option<ExtBackgroundEffectSurfaceV1>>,
 }
 
 impl WaylandWindowInner {
@@ -1280,6 +1284,39 @@ impl WaylandWindowInner {
                 kde_blur.release();
             }
             kde_blur.commit();
+        } else if let Some(manager) = &wayland_state.ext_background_effect_manager {
+            const BLUR_CAPABILITY: u32 = 1;
+            if wayland_state.ext_background_effect_capabilities & BLUR_CAPABILITY != 0 {
+                let ext_blur = {
+                    if self.ext_background_effect_surface.borrow().is_none() {
+                        let surface =
+                            manager.get_background_effect(self.surface(), &qh, GlobalData);
+                        *self.ext_background_effect_surface.borrow_mut() = Some(surface.clone());
+                    }
+                    self.ext_background_effect_surface
+                        .borrow()
+                        .as_ref()
+                        .unwrap()
+                        .clone()
+                };
+                if self.config.ext_background_effect_v1 {
+                    let region: WlRegion = wayland_state
+                        .compositor
+                        .wl_compositor()
+                        .create_region(&qh, GlobalData);
+                    region.add(
+                        0,
+                        0,
+                        self.dimensions.pixel_width as i32,
+                        self.dimensions.pixel_height as i32,
+                    );
+                    ext_blur.set_blur_region(Some(&region));
+                    region.destroy();
+                } else {
+                    ext_blur.destroy();
+                    *self.ext_background_effect_surface.borrow_mut() = None;
+                }
+            }
         }
     }
 }
@@ -1467,6 +1504,34 @@ impl Dispatch<WlRegion, GlobalData> for WaylandState {
         _state: &mut Self,
         _proxy: &WlRegion,
         _event: <WlRegion as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ExtBackgroundEffectManagerV1, GlobalData> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _proxy: &ExtBackgroundEffectManagerV1,
+        event: <ExtBackgroundEffectManagerV1 as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::Event;
+        if let Event::Capabilities { flags } = event {
+            state.ext_background_effect_capabilities = flags.into();
+        }
+    }
+}
+
+impl Dispatch<ExtBackgroundEffectSurfaceV1, GlobalData> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ExtBackgroundEffectSurfaceV1,
+        _event: <ExtBackgroundEffectSurfaceV1 as Proxy>::Event,
         _data: &GlobalData,
         _conn: &WConnection,
         _qhandle: &QueueHandle<Self>,
