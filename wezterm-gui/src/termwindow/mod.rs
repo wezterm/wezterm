@@ -1011,6 +1011,24 @@ impl TermWindow {
                 window.invalidate();
                 Ok(true)
             }
+            WindowEvent::Exposed => {
+                // The window was exposed by the window system (e.g. desktop
+                // switch).  Force a full repaint so the purecpu idle-skip
+                // optimisation doesn't suppress re-presenting the framebuffer.
+                if let Some(state) = self.purecpu_state.as_mut() {
+                    state.force_full_repaint = true;
+                }
+                if self.resizes_pending > 0 {
+                    self.is_repaint_pending = true;
+                    Ok(true)
+                } else if self.purecpu_state.is_some() {
+                    self.do_paint_purecpu(window)
+                } else if self.webgpu.is_some() {
+                    self.do_paint_webgpu()
+                } else {
+                    Ok(self.do_paint(window))
+                }
+            }
             WindowEvent::NeedRepaint => {
                 if self.resizes_pending > 0 {
                     self.is_repaint_pending = true;

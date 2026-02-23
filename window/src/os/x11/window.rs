@@ -206,7 +206,7 @@ impl XWindowInner {
             );
             self.sure_about_geometry = false;
         }
-        self.queue_pending(WindowEvent::NeedRepaint);
+        self.queue_pending(WindowEvent::Exposed);
     }
 
     fn cancel_drag(&mut self) -> bool {
@@ -285,6 +285,7 @@ impl XWindowInner {
         }
 
         let mut need_paint = false;
+        let mut was_exposed = false;
         let mut resize = None;
 
         for event in self.pending.drain(..) {
@@ -294,6 +295,13 @@ impl XWindowInner {
                         log::trace!("coalesce a repaint");
                     }
                     need_paint = true;
+                }
+                WindowEvent::Exposed => {
+                    if need_paint {
+                        log::trace!("coalesce an expose into repaint");
+                    }
+                    need_paint = true;
+                    was_exposed = true;
                 }
                 e @ WindowEvent::Resized { .. } => {
                     if resize.is_some() {
@@ -391,7 +399,11 @@ impl XWindowInner {
                     }
                 }
 
-                self.events.dispatch(WindowEvent::NeedRepaint);
+                if was_exposed {
+                    self.events.dispatch(WindowEvent::Exposed);
+                } else {
+                    self.events.dispatch(WindowEvent::NeedRepaint);
+                }
 
                 self.paint_throttled = true;
                 let window_id = self.window_id;

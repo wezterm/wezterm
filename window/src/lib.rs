@@ -179,6 +179,11 @@ pub enum WindowEvent {
     /// be repainted
     NeedRepaint,
 
+    /// Called when the window has been exposed by the window system
+    /// (e.g. desktop switch, overlapping window removed) and needs
+    /// its content re-presented even if nothing has changed.
+    Exposed,
+
     /// Called when the window gains/loses focus
     FocusChanged(bool),
 
