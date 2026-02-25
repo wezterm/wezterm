@@ -22,6 +22,8 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* Added [tab:move_to_window()](config/lua/MuxTab/move_to_window.md) method to move
+  entire tabs (including all panes and split layouts) between windows.
 * Wayland: currently being reimplemented, it maybe more unstable than usual.
   Please file GH issues for any problems you see.
   Many thanks to @tzx and @tmccombs! #4777 #5781
