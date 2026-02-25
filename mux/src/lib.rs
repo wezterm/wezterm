@@ -1304,6 +1304,82 @@ impl Mux {
         Ok((tab, window_id))
     }
 
+    pub fn get_window_containing_tab(&self, tab_id: TabId) -> Option<WindowId> {
+        for window in self.windows.read().values() {
+            if window.idx_by_id(tab_id).is_some() {
+                return Some(window.window_id());
+            }
+        }
+        None
+    }
+
+    pub fn move_tab_to_window(
+        &self,
+        tab_id: TabId,
+        target_window_id: WindowId,
+    ) -> anyhow::Result<bool> {
+        // Find which window currently contains this tab
+        let src_window_id = self
+            .get_window_containing_tab(tab_id)
+            .ok_or_else(|| anyhow::anyhow!("tab {} not found in any window", tab_id))?;
+
+        // No-op if already in target window
+        if src_window_id == target_window_id {
+            return Ok(false);
+        }
+
+        // Verify target window exists
+        if self.get_window(target_window_id).is_none() {
+            anyhow::bail!("target window {} not found", target_window_id);
+        }
+
+        // Get the tab reference before removing it
+        let tab = self
+            .get_tab(tab_id)
+            .ok_or_else(|| anyhow::anyhow!("tab {} not found", tab_id))?;
+
+        // Remove from source window
+        {
+            let mut src_window = self
+                .get_window_mut(src_window_id)
+                .ok_or_else(|| anyhow::anyhow!("source window {} not found", src_window_id))?;
+            src_window.remove_by_id(tab_id);
+        }
+
+        // Get the target window's active tab size to resize our moved tab
+        let target_size = {
+            let target_window = self
+                .get_window_mut(target_window_id)
+                .ok_or_else(|| anyhow::anyhow!("target window {} not found", target_window_id))?;
+            target_window
+                .get_active()
+                .map(|t| t.get_size())
+                .unwrap_or_else(|| tab.get_size())
+        };
+
+        // Add to target window
+        {
+            let mut target_window = self
+                .get_window_mut(target_window_id)
+                .ok_or_else(|| anyhow::anyhow!("target window {} not found", target_window_id))?;
+            target_window.push(&tab);
+        }
+
+        // Resize the tab to match the target window's dimensions
+        // This ensures panes reinitialize their graphics contexts for the new window
+        tab.resize(target_size);
+
+        self.recompute_pane_count();
+        self.notify(MuxNotification::TabAddedToWindow {
+            tab_id,
+            window_id: target_window_id,
+        });
+        self.notify(MuxNotification::WindowInvalidated(target_window_id));
+        self.prune_dead_windows();
+
+        Ok(true)
+    }
+
     pub async fn spawn_tab_or_window(
         &self,
         window_id: Option<WindowId>,
