@@ -159,9 +159,10 @@ impl UserData for MuxTab {
         methods.add_method("move_to_window", |_, this, target: mlua::AnyUserData| {
             let target: MuxWindow = *target.borrow()?;
             let mux = Mux::get();
-            mux.move_tab_to_window(this.0, target.0)
+            let moved = mux
+                .move_tab_to_window(this.0, target.0)
                 .map_err(|e| mlua::Error::external(format!("{:#}", e)))?;
-            Ok(true)
+            Ok(moved)
         });
     }
 }

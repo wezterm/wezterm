@@ -1317,7 +1317,7 @@ impl Mux {
         &self,
         tab_id: TabId,
         target_window_id: WindowId,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         // Find which window currently contains this tab
         let src_window_id = self
             .get_window_containing_tab(tab_id)
@@ -1325,7 +1325,7 @@ impl Mux {
 
         // No-op if already in target window
         if src_window_id == target_window_id {
-            return Ok(());
+            return Ok(false);
         }
 
         // Verify target window exists
@@ -1377,7 +1377,7 @@ impl Mux {
         self.notify(MuxNotification::WindowInvalidated(target_window_id));
         self.prune_dead_windows();
 
-        Ok(())
+        Ok(true)
     }
 
     pub async fn spawn_tab_or_window(

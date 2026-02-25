@@ -6,7 +6,8 @@ Moves the tab (including all its panes and split layout) from its current window
 to the specified target window. The tab is appended to the end of the target window's
 tab list.
 
-Returns `true` on success.
+Returns `true` if the tab moved to a different window and `false` if it was
+already in the target window.
 
 ## Parameters
 
@@ -15,7 +16,8 @@ Returns `true` on success.
 
 ## Returns
 
-Returns `true` on success. Raises a Lua error if the operation fails.
+Returns `true` if the tab moved, and `false` if it was already in the target
+window. Raises a Lua error if the operation fails.
 
 ## Example
 
