@@ -306,9 +306,10 @@ impl crate::TermWindow {
                 _ => 0.,
             })
             .sum();
+        let cell_width = metrics.cell_size.width as f32;
         let max_tab_width = ((self.dimensions.pixel_width as f32 / num_tabs)
-            - (1.5 * metrics.cell_size.width as f32))
-            .max(0.);
+            - (1.5 * cell_width))
+            .max(cell_width * 3.0);
 
         // Reserve space for the native titlebar buttons
         if self
@@ -538,13 +539,17 @@ impl crate::TermWindow {
                     &kid.item_type,
                     Some(UIItemType::TabBar(TabBarItem::Tab { .. }))
                 );
-                // Use bounds.width() as flex_basis: this is the full tab box size
-                // including padding/border/margin. Taffy distributes extra space
-                // proportionally, and adjust_width expands all rects uniformly.
+                // Tabs use flex_basis: 0 so Taffy distributes available space
+                // equally among all tabs (regardless of initial computed size).
+                // Non-tab items (e.g. NewTabButton) keep their natural size.
                 let style = taffy::Style {
                     flex_grow: if is_tab { 1.0 } else { 0.0 },
-                    flex_shrink: 1.0,
-                    flex_basis: TaffyDim::length(kid.bounds.width()),
+                    flex_shrink: if is_tab { 1.0 } else { 0.0 },
+                    flex_basis: if is_tab {
+                        TaffyDim::length(0.0)
+                    } else {
+                        TaffyDim::length(kid.bounds.width())
+                    },
                     size: TaffySize {
                         width: TaffyDim::auto(),
                         height: TaffyDim::length(kid.bounds.height()),

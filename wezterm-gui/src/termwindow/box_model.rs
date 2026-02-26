@@ -629,13 +629,20 @@ impl super::TermWindow {
 
         let max_width = match element.max_width {
             Some(w) => {
-                w.evaluate_as_pixels(context.width)
-                    .min(context.bounds.width())
-                    - border_and_padding_width
+                // When element has an explicit max_width, honour it directly
+                // without capping to context.bounds. This allows elements that
+                // overflow their parent (e.g. tab bar tabs) to still render
+                // content up to their declared width; a post-layout pass
+                // (such as Taffy flexbox) can resize them afterward.
+                w.evaluate_as_pixels(context.width) - border_and_padding_width
             }
-            None => context.bounds.width() - border_and_padding_width,
-        }
-        .min((context.width.pixel_max - context.bounds.min_x()) - border_and_padding_width);
+            None => {
+                let bounds_limited = context.bounds.width() - border_and_padding_width;
+                let pixel_limited =
+                    (context.width.pixel_max - context.bounds.min_x()) - border_and_padding_width;
+                bounds_limited.min(pixel_limited)
+            }
+        };
 
         match &element.content {
             ElementContent::Text(s) => {
@@ -744,12 +751,18 @@ impl super::TermWindow {
                     }
 
                     let bounds = match child.float {
-                        Float::None => euclid::rect(
-                            block_pixel_width,
-                            y_coord,
-                            context.bounds.max_x() - (context.bounds.min_x() + block_pixel_width),
-                            context.bounds.max_y() - (context.bounds.min_y() + y_coord),
-                        ),
+                        Float::None => {
+                            let remaining_width = context.bounds.max_x()
+                                - (context.bounds.min_x() + block_pixel_width);
+                            let remaining_height =
+                                context.bounds.max_y() - (context.bounds.min_y() + y_coord);
+                            euclid::rect(
+                                block_pixel_width,
+                                y_coord,
+                                remaining_width.max(context.width.pixel_cell),
+                                remaining_height.max(0.),
+                            )
+                        }
                         Float::Right => euclid::rect(
                             0.,
                             y_coord,
@@ -1369,7 +1382,8 @@ mod tests {
         assert!((elem.bounds.min_y() - 10.0).abs() < 0.01);
     }
 
-    /// Validates Taffy flex redistribution logic matching flex_fill_tab_bar
+    /// Validates Taffy flex redistribution logic matching flex_fill_tab_bar:
+    /// tabs use flex_basis: 0 so all get equal shares of available space.
     #[test]
     fn test_taffy_flex_distributes_space_evenly() {
         use taffy::TaffyTree;
@@ -1378,14 +1392,14 @@ mod tests {
 
         let mut tree: TaffyTree<()> = TaffyTree::new();
 
-        // 3 tabs, each 80px intrinsic, in a 400px container
-        // Extra space: 400 - 240 = 160px, 160/3 ≈ 53.33 each
+        // 3 tabs with flex_basis: 0 and flex_grow: 1 in a 400px container.
+        // Each should get 400 / 3 ≈ 133.33px regardless of intrinsic size.
         let tabs: Vec<_> = (0..3)
             .map(|_| {
                 tree.new_leaf(taffy::Style {
                     flex_grow: 1.0,
                     flex_shrink: 1.0,
-                    flex_basis: TaffyDim::length(80.0),
+                    flex_basis: TaffyDim::length(0.0),
                     size: TaffySize {
                         width: TaffyDim::auto(),
                         height: TaffyDim::length(30.0),
@@ -1420,7 +1434,7 @@ mod tests {
         )
         .unwrap();
 
-        // Each tab should get ~133.33px (400/3); Taffy may round
+        // Each tab should get ~133.33px (400/3)
         let total_tab_width: f32 = tabs.iter().map(|t| tree.layout(*t).unwrap().size.width).sum();
         assert!(
             (total_tab_width - 400.0).abs() < 1.0,
@@ -1445,7 +1459,73 @@ mod tests {
         assert!((l2.location.x - (l0.size.width + l1.size.width)).abs() < 0.5);
     }
 
-    /// Test mixed flex_grow: tabs grow, non-tab buttons don't
+    /// Many tabs should all get equal space (simulates 50 tabs)
+    #[test]
+    fn test_taffy_many_tabs_equal_distribution() {
+        use taffy::TaffyTree;
+        use taffy::style::{AvailableSpace, Dimension as TaffyDim, FlexDirection};
+        use taffy::geometry::Size as TaffySize;
+
+        let mut tree: TaffyTree<()> = TaffyTree::new();
+        let num_tabs = 50;
+        let container_width = 1800.0f32;
+        let expected_per_tab = container_width / num_tabs as f32;
+
+        let tabs: Vec<_> = (0..num_tabs)
+            .map(|_| {
+                tree.new_leaf(taffy::Style {
+                    flex_grow: 1.0,
+                    flex_shrink: 1.0,
+                    flex_basis: TaffyDim::length(0.0),
+                    ..Default::default()
+                })
+                .unwrap()
+            })
+            .collect();
+
+        let root = tree
+            .new_with_children(
+                taffy::Style {
+                    display: taffy::style::Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    size: TaffySize {
+                        width: TaffyDim::length(container_width),
+                        height: TaffyDim::auto(),
+                    },
+                    ..Default::default()
+                },
+                &tabs,
+            )
+            .unwrap();
+
+        tree.compute_layout(
+            root,
+            TaffySize {
+                width: AvailableSpace::Definite(container_width),
+                height: AvailableSpace::MaxContent,
+            },
+        )
+        .unwrap();
+
+        let total: f32 = tabs.iter().map(|t| tree.layout(*t).unwrap().size.width).sum();
+        assert!(
+            (total - container_width).abs() < 1.0,
+            "Total should equal container: got {}",
+            total
+        );
+        for (i, &tab) in tabs.iter().enumerate() {
+            let w = tree.layout(tab).unwrap().size.width;
+            assert!(
+                (w - expected_per_tab).abs() < 0.5,
+                "Tab {} expected ~{}px, got {}",
+                i,
+                expected_per_tab,
+                w
+            );
+        }
+    }
+
+    /// Test mixed flex_grow: tabs (flex_basis: 0) grow, non-tab buttons don't
     #[test]
     fn test_taffy_mixed_flex_grow() {
         use taffy::TaffyTree;
@@ -1454,25 +1534,28 @@ mod tests {
 
         let mut tree: TaffyTree<()> = TaffyTree::new();
 
-        // 2 tabs (80px each, flex_grow=1) + 1 button (40px, flex_grow=0)
+        // 2 tabs (flex_basis: 0, flex_grow=1) + 1 button (40px, flex_grow=0)
         // Container 400px. Button stays 40px. Remaining: 360px / 2 = 180px each tab
         let tab1 = tree
             .new_leaf(taffy::Style {
                 flex_grow: 1.0,
-                flex_basis: TaffyDim::length(80.0),
+                flex_shrink: 1.0,
+                flex_basis: TaffyDim::length(0.0),
                 ..Default::default()
             })
             .unwrap();
         let tab2 = tree
             .new_leaf(taffy::Style {
                 flex_grow: 1.0,
-                flex_basis: TaffyDim::length(80.0),
+                flex_shrink: 1.0,
+                flex_basis: TaffyDim::length(0.0),
                 ..Default::default()
             })
             .unwrap();
         let button = tree
             .new_leaf(taffy::Style {
                 flex_grow: 0.0,
+                flex_shrink: 0.0,
                 flex_basis: TaffyDim::length(40.0),
                 ..Default::default()
             })
