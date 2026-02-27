@@ -57,16 +57,12 @@ use wezterm_input_types::{is_ascii_control, IntegratedTitleButtonStyle, Keyboard
 const NSViewLayerContentsPlacementTopLeft: NSInteger = 11;
 #[allow(non_upper_case_globals)]
 const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
-
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGSMainConnectionID() -> id;
-    fn CGSSetWindowBackgroundBlurRadius(
-        connection_id: id,
-        window_id: NSInteger,
-        radius: i64,
-    ) -> i32;
-}
+#[allow(non_upper_case_globals)]
+const NSVisualEffectMaterialAppearanceBased: NSInteger = 0;
+#[allow(non_upper_case_globals)]
+const NSVisualEffectBlendingModeBehindWindow: NSInteger = 0;
+#[allow(non_upper_case_globals)]
+const NSVisualEffectStateFollowsWindowActiveState: NSInteger = 0;
 
 fn round_away_from_zerof(value: f64) -> f64 {
     if value > 0. {
@@ -372,8 +368,27 @@ mod cglbits {
 
 pub(crate) struct WindowInner {
     view: StrongPtr,
+    blur_view: StrongPtr,
     window: StrongPtr,
     config: ConfigHandle,
+}
+
+fn make_visual_effect_view(rect: NSRect) -> StrongPtr {
+    unsafe {
+        let blur_view: id = msg_send![class!(NSVisualEffectView), alloc];
+        let blur_view = StrongPtr::new(msg_send![blur_view, initWithFrame: rect]);
+        let () = msg_send![
+            *blur_view,
+            setAutoresizingMask: NSViewHeightSizable | NSViewWidthSizable
+        ];
+        let () = msg_send![*blur_view, setMaterial: NSVisualEffectMaterialAppearanceBased];
+        let () = msg_send![*blur_view, setBlendingMode: NSVisualEffectBlendingModeBehindWindow];
+        let () = msg_send![
+            *blur_view,
+            setState: NSVisualEffectStateFollowsWindowActiveState
+        ];
+        blur_view
+    }
 }
 
 fn function_key_to_keycode(function_key: char) -> KeyCode {
@@ -594,12 +609,18 @@ impl Window {
                 setLayerContentsPlacement: NSViewLayerContentsPlacementTopLeft
             ];
 
-            CGSSetWindowBackgroundBlurRadius(
-                CGSMainConnectionID(),
-                window.windowNumber(),
-                config.macos_window_background_blur,
-            );
-            window.setContentView_(*view);
+            let blur_view = make_visual_effect_view(rect);
+            let is_blur_enabled = config.macos_window_background_blur > 0;
+            let () = msg_send![*blur_view, setHidden: if is_blur_enabled { NO } else { YES }];
+
+            let content_container: id = msg_send![class!(NSView), alloc];
+            let content_container =
+                StrongPtr::new(msg_send![content_container, initWithFrame: rect]);
+            content_container.setAutoresizingMask_(NSViewHeightSizable | NSViewWidthSizable);
+            let () = msg_send![*content_container, addSubview: *blur_view];
+            let () = msg_send![*content_container, addSubview: *view];
+
+            window.setContentView_(*content_container);
             window.setDelegate_(*view);
 
             view.setWantsLayer(YES);
@@ -633,6 +654,7 @@ impl Window {
             let window_inner = Rc::new(RefCell::new(WindowInner {
                 window,
                 view,
+                blur_view,
                 config: config.clone(),
             }));
             inner.borrow_mut().window.replace(weak_window);
@@ -1152,11 +1174,8 @@ impl WindowInner {
 
     fn update_window_background_blur(&mut self) {
         unsafe {
-            CGSSetWindowBackgroundBlurRadius(
-                CGSMainConnectionID(),
-                self.window.windowNumber(),
-                self.config.macos_window_background_blur,
-            );
+            let enable_blur = self.config.macos_window_background_blur > 0;
+            let () = msg_send![*self.blur_view, setHidden: if enable_blur { NO } else { YES }];
         }
     }
 }
