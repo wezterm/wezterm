@@ -373,6 +373,12 @@ pub struct TerminalState {
     /// We don't want that, so we use this flag to remember
     /// whether we want to skip it or not.
     suppress_initial_title_change: bool,
+    /// When true, suppress device attribute responses (DA1, DA2, DA3).
+    /// Used for tmux control mode panes where tmux's own terminal
+    /// emulator already responds to DA queries. Without this,
+    /// wezterm's response arrives late via send-keys and leaks
+    /// as garbage characters in the shell.
+    suppress_device_attributes: bool,
 
     accumulating_title: Option<String>,
 
@@ -574,6 +580,7 @@ impl TerminalState {
             unicode_version_stack: vec![],
             suppress_initial_title_change: false,
             enable_conpty_quirks: false,
+            suppress_device_attributes: false,
             accumulating_title: None,
             lost_focus_seqno: seqno,
             lost_focus_alerted_seqno: seqno,
@@ -587,6 +594,10 @@ impl TerminalState {
     pub fn enable_conpty_quirks(&mut self) {
         self.enable_conpty_quirks = true;
         self.suppress_initial_title_change = true;
+    }
+
+    pub fn suppress_device_attributes(&mut self) {
+        self.suppress_device_attributes = true;
     }
 
     pub fn current_seqno(&self) -> SequenceNo {
@@ -1285,37 +1296,43 @@ impl TerminalState {
                 self.g1_charset = CharSet::Ascii;
             }
             Device::RequestPrimaryDeviceAttributes => {
-                let mut ident = "\x1b[?65".to_string(); // Vt500
-                ident.push_str(";4"); // Sixel graphics
-                ident.push_str(";6"); // Selective erase
-                ident.push_str(";18"); // windowing extensions
-                ident.push_str(";22"); // ANSI color, vt525
-                ident.push_str(";52"); // Clipboard access
-                ident.push('c');
+                if !self.suppress_device_attributes {
+                    let mut ident = "\x1b[?65".to_string(); // Vt500
+                    ident.push_str(";4"); // Sixel graphics
+                    ident.push_str(";6"); // Selective erase
+                    ident.push_str(";18"); // windowing extensions
+                    ident.push_str(";22"); // ANSI color, vt525
+                    ident.push_str(";52"); // Clipboard access
+                    ident.push('c');
 
-                self.writer.write(ident.as_bytes()).ok();
-                self.writer.flush().ok();
+                    self.writer.write(ident.as_bytes()).ok();
+                    self.writer.flush().ok();
+                }
             }
             Device::RequestSecondaryDeviceAttributes => {
-                // Response is: Pp ; Pv ; Pc
-                // Where Pp=1 means vt220
-                // and Pv is the firmware version.
-                // Pc is always 0.
-                // Because our default TERM is xterm, the firmware
-                // version will be considered to be equialent to xterm's
-                // patch levels, with the following effects:
-                // pv < 95 -> ttymouse=xterm
-                // pv >= 95 < 277 -> ttymouse=xterm2
-                // pv >= 277 -> ttymouse=sgr
-                // pv >= 279 - xterm will probe for additional device settings.
-                self.writer.write(b"\x1b[>1;277;0c").ok();
-                self.writer.flush().ok();
+                if !self.suppress_device_attributes {
+                    // Response is: Pp ; Pv ; Pc
+                    // Where Pp=1 means vt220
+                    // and Pv is the firmware version.
+                    // Pc is always 0.
+                    // Because our default TERM is xterm, the firmware
+                    // version will be considered to be equialent to xterm's
+                    // patch levels, with the following effects:
+                    // pv < 95 -> ttymouse=xterm
+                    // pv >= 95 < 277 -> ttymouse=xterm2
+                    // pv >= 277 -> ttymouse=sgr
+                    // pv >= 279 - xterm will probe for additional device settings.
+                    self.writer.write(b"\x1b[>1;277;0c").ok();
+                    self.writer.flush().ok();
+                }
             }
             Device::RequestTertiaryDeviceAttributes => {
-                self.writer
-                    .write(format!("\x1bP!|00000000{}", ST).as_bytes())
-                    .ok();
-                self.writer.flush().ok();
+                if !self.suppress_device_attributes {
+                    self.writer
+                        .write(format!("\x1bP!|00000000{}", ST).as_bytes())
+                        .ok();
+                    self.writer.flush().ok();
+                }
             }
             Device::RequestTerminalNameAndVersion => {
                 self.writer.write(DCS.as_bytes()).ok();
