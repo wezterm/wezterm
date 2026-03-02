@@ -2046,7 +2046,10 @@ pub enum DroppedFileQuoting {
     Windows,
     /// Always double quote the file name
     WindowsAlwaysQuoted,
+    // Serde JSON serialization 
+    SerdeJson,
 }
+impl_lua_conversion_dynamic!(DroppedFileQuoting);
 
 impl Default for DroppedFileQuoting {
     fn default() -> Self {
@@ -2076,6 +2079,12 @@ impl DroppedFileQuoting {
                 }
             }
             Self::WindowsAlwaysQuoted => format!("\"{}\"", s),
+            Self::SerdeJson => {
+                // Use serde_json to escape the string properly
+                serde_json::to_string(s)
+                    .map(|quoted| quoted.trim_matches('"').to_string())
+                    .unwrap_or_else(|_| s.to_string())
+            }
         }
     }
 }

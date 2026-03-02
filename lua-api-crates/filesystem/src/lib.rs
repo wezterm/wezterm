@@ -1,12 +1,99 @@
 use anyhow::anyhow;
-use config::lua::get_or_create_module;
 use config::lua::mlua::{self, Lua};
+use config::lua::{get_or_create_module, get_or_create_sub_module};
+use config::DroppedFileQuoting;
 use smol::prelude::*;
 
 pub fn register(lua: &Lua) -> anyhow::Result<()> {
+    // keep original module name for compatibility
     let wezterm_mod = get_or_create_module(lua, "wezterm")?;
     wezterm_mod.set("read_dir", lua.create_async_function(read_dir)?)?;
     wezterm_mod.set("glob", lua.create_async_function(glob)?)?;
+
+    // Create a submodule for filesystem operations include old and new functions
+    let wezterm_mod = get_or_create_sub_module(lua, "filesystem")?;
+    wezterm_mod.set("read_dir", lua.create_async_function(read_dir)?)?;
+    wezterm_mod.set("glob", lua.create_async_function(glob)?)?;
+    wezterm_mod.set(
+        "canonicalize_path",
+        lua.create_function(|_, path: String| {
+            let path = std::fs::canonicalize(path)?;
+            let path = path.to_string_lossy().to_string();
+            Ok(path)
+        })?,
+    )?;
+    wezterm_mod.set(
+        "dirname",
+        lua.create_function(|_, path: String| {
+            let path = std::path::Path::new(&path);
+            let path = path.parent().unwrap_or(path);
+            let path = path.to_string_lossy().to_string();
+            Ok(path)
+        })?,
+    )?;
+    wezterm_mod.set(
+        "basename",
+        lua.create_function(|_, path: String| {
+            let path = std::path::Path::new(&path);
+            let path = path.file_name().unwrap_or(path.as_ref());
+            let path = path.to_string_lossy().to_string();
+            Ok(path)
+        })?,
+    )?;
+    wezterm_mod.set(
+        "is_absolute_path",
+        lua.create_function(|_, path: String| {
+            let path = std::path::Path::new(&path);
+            let is_absolute = path.is_absolute();
+            Ok(is_absolute)
+        })?,
+    )?;
+    wezterm_mod.set(
+        "is_dir",
+        lua.create_function(|_, path: String| {
+            let path = std::fs::metadata(path)?;
+            let is_dir = path.is_dir();
+            Ok(is_dir)
+        })?,
+    )?;
+    wezterm_mod.set(
+        "is_file",
+        lua.create_function(|_, path: String| {
+            let path = std::fs::metadata(path)?;
+            let is_file = path.is_file();
+            Ok(is_file)
+        })?,
+    )?;
+    wezterm_mod.set(
+        "is_symlink",
+        lua.create_function(|_, path: String| {
+            let path = std::fs::symlink_metadata(path)?;
+            let is_symlink = path.file_type().is_symlink();
+            Ok(is_symlink)
+        })?,
+    )?;
+    wezterm_mod.set(
+        "exists",
+        lua.create_function(|_, path: String| {
+            let exists = std::path::Path::new(&path).exists();
+            Ok(exists)
+        })?,
+    )?;
+    wezterm_mod.set(
+        "size",
+        lua.create_function(|_, path: String| {
+            let size = std::fs::metadata(path)?.len();
+            Ok(size)
+        })?,
+    )?;
+    wezterm_mod.set(
+        "quote_path",
+        lua.create_function(|_, (s, quoting): (String, DroppedFileQuoting)| {
+            let result = quoting.escape(&s);
+            Ok(result)
+        })?,
+    )?;
+
     Ok(())
 }
 
