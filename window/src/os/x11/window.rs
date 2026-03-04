@@ -2187,18 +2187,37 @@ impl WindowOps for XWindow {
             });
 
             let depth = conn.depth;
-            xcb_conn.send_request(&xcb::x::PutImage {
-                format: xcb::x::ImageFormat::ZPixmap,
-                drawable: xcb::x::Drawable::Window(target_window),
-                gc,
-                width: width as u16,
-                height: height as u16,
-                dst_x,
-                dst_y,
-                left_pad: 0,
-                depth,
-                data: &pixels,
-            });
+            let bytes_per_row = width as usize * 4;
+
+            // PutImage header overhead is ~28 bytes; use a 256-byte margin
+            // to be safe.
+            const PUTIMAGE_HEADER_MARGIN: usize = 256;
+            let max_data_bytes =
+                conn.max_request_bytes as usize - PUTIMAGE_HEADER_MARGIN;
+            let max_rows_per_chunk =
+                (max_data_bytes / bytes_per_row).max(1) as u32;
+
+            let mut row_offset: u32 = 0;
+            while row_offset < height {
+                let chunk_height = max_rows_per_chunk.min(height - row_offset);
+                let data_start = row_offset as usize * bytes_per_row;
+                let data_end = data_start + chunk_height as usize * bytes_per_row;
+
+                xcb_conn.send_request(&xcb::x::PutImage {
+                    format: xcb::x::ImageFormat::ZPixmap,
+                    drawable: xcb::x::Drawable::Window(target_window),
+                    gc,
+                    width: width as u16,
+                    height: chunk_height as u16,
+                    dst_x,
+                    dst_y: dst_y + row_offset as i16,
+                    left_pad: 0,
+                    depth,
+                    data: &pixels[data_start..data_end],
+                });
+
+                row_offset += chunk_height;
+            }
 
             xcb_conn.send_request(&xcb::x::FreeGc { gc });
             xcb_conn.flush()?;

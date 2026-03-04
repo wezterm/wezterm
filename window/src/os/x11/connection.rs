@@ -105,6 +105,7 @@ pub struct XConnection {
     pub(crate) gl_connection: RefCell<Option<Rc<crate::egl::GlConnection>>>,
     pub(crate) ime: RefCell<std::pin::Pin<Box<xcb_imdkit::ImeClient>>>,
     pub(crate) ime_process_event_result: RefCell<anyhow::Result<()>>,
+    pub(crate) max_request_bytes: u32,
     pub(crate) has_randr: bool,
     pub(crate) atom_names: RefCell<HashMap<Atom, String>>,
     pub(crate) supported: RefCell<HashSet<Atom>>,
@@ -717,6 +718,9 @@ impl XConnection {
 
         let has_randr = conn.active_extensions().any(|e| e == xcb::Extension::RandR);
 
+        // X11 maximum_request_length is in 4-byte units; convert to bytes.
+        let max_request_bytes = conn.get_setup().maximum_request_length() as u32 * 4;
+
         let screen = conn
             .get_setup()
             .roots()
@@ -864,6 +868,7 @@ impl XConnection {
             gl_connection: RefCell::new(None),
             ime: RefCell::new(ime),
             ime_process_event_result: RefCell::new(Ok(())),
+            max_request_bytes,
             has_randr,
             atom_names: RefCell::new(HashMap::new()),
             supported: RefCell::new(HashSet::new()),
