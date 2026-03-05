@@ -45,6 +45,9 @@ async_ossl.workspace = true
 [target.'cfg(unix)'.dependencies]
 passfd.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+winapi = { workspace = true, features = ["winbase", "fileapi", "handleapi"] }
+
 [dev-dependencies]
 assert_fs.workspace = true
 clap.workspace = true
