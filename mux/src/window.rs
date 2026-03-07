@@ -203,7 +203,8 @@ impl Window {
     /// The saved tab id is not changed.
     pub fn set_active_without_saving(&mut self, idx: usize) {
         assert!(idx < self.tabs.len());
-        if self.active != idx {
+        let changed = self.active != idx;
+        if changed {
             if let Some(tab) = self.tabs.get(self.active) {
                 if let Some(pane) = tab.get_active_pane() {
                     pane.focus_changed(false);
@@ -212,6 +213,15 @@ impl Window {
         }
         self.active = idx;
         self.invalidate();
+        if changed {
+            if let Some(tab) = self.tabs.get(idx) {
+                let mux = Mux::get();
+                mux.notify(MuxNotification::ActiveTabChanged {
+                    window_id: self.id,
+                    tab_id: tab.tab_id(),
+                });
+            }
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Arc<Tab>> {

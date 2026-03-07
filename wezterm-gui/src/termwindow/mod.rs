@@ -1308,6 +1308,11 @@ impl TermWindow {
                 MuxNotification::TabTitleChanged { .. } => {
                     self.update_title_post_status();
                 }
+                MuxNotification::ActiveTabChanged { tab_id, .. } => {
+                    self.emit_window_event("window-tab-switched", None);
+                    window.invalidate();
+                    let _ = tab_id;
+                }
                 MuxNotification::PaneAdded(_)
                 | MuxNotification::WorkspaceRenamed { .. }
                 | MuxNotification::PaneRemoved(_)
@@ -1493,7 +1498,8 @@ impl TermWindow {
             }
             MuxNotification::TabAddedToWindow { window_id, .. }
             | MuxNotification::WindowTitleChanged { window_id, .. }
-            | MuxNotification::WindowInvalidated(window_id) => {
+            | MuxNotification::WindowInvalidated(window_id)
+            | MuxNotification::ActiveTabChanged { window_id, .. } => {
                 if window_id != mux_window_id {
                     return true;
                 }
