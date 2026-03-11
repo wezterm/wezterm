@@ -257,9 +257,12 @@ pub struct Palette {
     #[dynamic(default)]
     pub indexed: HashMap<u8, RgbaColor>,
     /// Whether to generate the extended 256 palette from your base16 colors.
-    /// This option is true by default but will not replace manually defined colors.
+    /// This will not replace manually defined colors.
     /// <https://gist.github.com/jake-stewart/0a8ea46159a7da2c808e5be2177e1783>
-    pub generate_indexed: Option<bool>,
+    pub palette_generate: Option<bool>,
+    /// Whether to invert generated light theme colors (see `palette_generate`).
+    /// This helps give the 256-color palette more semantic meaning.
+    pub palette_harmonious: Option<bool>,
     /// Configure the colors and styling of the tab bar
     pub tab_bar: Option<TabBarColors>,
     /// The color of the "thumb" of the scrollbar; the segment that
@@ -325,7 +328,8 @@ impl Palette {
                 }
                 map
             },
-            generate_indexed: overlay!(generate_indexed),
+            palette_generate: overlay!(palette_generate),
+            palette_harmonious: overlay!(palette_harmonious),
             scrollbar_thumb: overlay!(scrollbar_thumb),
             split: overlay!(split),
             visual_bell: overlay!(visual_bell),
@@ -425,30 +429,43 @@ impl From<Palette> for ColorPalette {
             }
             p.colors.0[idx as usize] = col.into();
         }
-        if cfg.generate_indexed.unwrap_or(true) {
-            p.colors = generate_indexed_colors(p.colors, &cfg.indexed, p.background, p.foreground);
+        if cfg.palette_generate.unwrap_or(false) {
+            p.colors = generate_palette(
+                p.colors, &cfg.indexed, p.background, p.foreground,
+                cfg.palette_harmonious.unwrap_or(false),
+            );
         }
         p
     }
 }
 
-pub fn generate_indexed_colors(
+pub fn generate_palette(
     mut palette: Palette256,
     indexed: &HashMap<u8, RgbaColor>,
     bg: SrgbaTuple,
     fg: SrgbaTuple,
+    harmonious: bool,
 ) -> Palette256 {
-    let base8_lab: [Lab; 8] = std::array::from_fn(|i| Lab::from_srgba(palette.0[i]));
     let bg_lab = Lab::from_srgba(bg);
     let fg_lab = Lab::from_srgba(fg);
+
+    let is_light_theme = fg_lab.l < bg_lab.l;
+    let invert = is_light_theme && !harmonious;
+
+    let base8_lab: [Lab; 8] = {
+        let mut base8: [Lab; 8] = std::array::from_fn(|i| Lab::from_srgba(palette.0[i]));
+        base8[0] = if invert { fg_lab } else { bg_lab };
+        base8[7] = if invert { bg_lab } else { fg_lab };
+        base8
+    };
 
     let mut idx = 16usize;
     for ri in 0..6 {
         let tr = ri as f32 / 5.0;
-        let c0 = Lab::lerp(tr, bg_lab, base8_lab[1]);
+        let c0 = Lab::lerp(tr, base8_lab[0], base8_lab[1]);
         let c1 = Lab::lerp(tr, base8_lab[2], base8_lab[3]);
         let c2 = Lab::lerp(tr, base8_lab[4], base8_lab[5]);
-        let c3 = Lab::lerp(tr, base8_lab[6], fg_lab);
+        let c3 = Lab::lerp(tr, base8_lab[6], base8_lab[7]);
         for gi in 0..6 {
             let tg = gi as f32 / 5.0;
             let c4 = Lab::lerp(tg, c0, c1);
@@ -466,7 +483,7 @@ pub fn generate_indexed_colors(
     for i in 0..24 {
         let t = (i + 1) as f32 / 25.0;
         if !indexed.contains_key(&(idx as u8)) {
-            palette.0[idx] = Lab::lerp(t, bg_lab, fg_lab).to_srgba();
+            palette.0[idx] = Lab::lerp(t, base8_lab[0], base8_lab[7]).to_srgba();
         }
         idx += 1;
     }
