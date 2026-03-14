@@ -322,11 +322,13 @@ impl GlState {
             wgl.wgl.MakeCurrent(hdc as *mut _, rc);
         }
 
-        Ok(Self {
+        let state = Self {
             wgl: Some(wgl),
             rc,
             hdc,
-        })
+        };
+        state.pre_fill_black();
+        Ok(state)
     }
 
     fn create_basic(wgl: WglWrapper, window: HWND) -> anyhow::Result<Self> {
@@ -370,11 +372,43 @@ impl GlState {
             wgl.wgl.MakeCurrent(hdc as *mut _, rc);
         }
 
-        Ok(Self {
+        let state = Self {
             wgl: Some(wgl),
             rc,
             hdc,
-        })
+        };
+        state.pre_fill_black();
+        Ok(state)
+    }
+
+    /// Pre-fill both front and back buffers with opaque black.
+    /// Must be called while the WGL context is current (right after creation).
+    /// This prevents DWM from compositing a transparent/uninitialized surface
+    /// when the window first becomes visible, which causes a white flash.
+    fn pre_fill_black(&self) {
+        type GlClearColorFn = unsafe extern "system" fn(f32, f32, f32, f32);
+        type GlClearFn = unsafe extern "system" fn(u32);
+        const GL_COLOR_BUFFER_BIT: u32 = 0x00004000;
+
+        let wgl = self.wgl.as_ref().unwrap();
+        unsafe {
+            let clear_color: libloading::Symbol<GlClearColorFn> =
+                match wgl.lib.get(b"glClearColor\0") {
+                    Ok(f) => f,
+                    Err(_) => return,
+                };
+            let clear: libloading::Symbol<GlClearFn> = match wgl.lib.get(b"glClear\0") {
+                Ok(f) => f,
+                Err(_) => return,
+            };
+
+            clear_color(0.0, 0.0, 0.0, 1.0);
+            clear(GL_COLOR_BUFFER_BIT);
+            SwapBuffers(self.hdc);
+            // Clear and swap again so both front and back buffers are black
+            clear(GL_COLOR_BUFFER_BIT);
+            SwapBuffers(self.hdc);
+        }
     }
 
     fn make_not_current(&self) {
