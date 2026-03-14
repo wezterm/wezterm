@@ -404,10 +404,15 @@ impl GlState {
 
             clear_color(0.0, 0.0, 0.0, 1.0);
             clear(GL_COLOR_BUFFER_BIT);
-            SwapBuffers(self.hdc);
+            if SwapBuffers(self.hdc) == 0 {
+                log::warn!("pre_fill_black: first SwapBuffers failed");
+                return;
+            }
             // Clear and swap again so both front and back buffers are black
             clear(GL_COLOR_BUFFER_BIT);
-            SwapBuffers(self.hdc);
+            if SwapBuffers(self.hdc) == 0 {
+                log::warn!("pre_fill_black: second SwapBuffers failed");
+            }
         }
     }
 
