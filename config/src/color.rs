@@ -259,10 +259,10 @@ pub struct Palette {
     /// Whether to generate the extended 256 palette from your base16 colors.
     /// This will not replace manually defined colors.
     /// <https://gist.github.com/jake-stewart/0a8ea46159a7da2c808e5be2177e1783>
-    pub palette_generate: Option<bool>,
-    /// Whether to invert generated light theme colors (see `palette_generate`).
+    pub generate_indexed: Option<bool>,
+    /// Whether to invert generated light theme colors (see `generate_indexed`).
     /// This helps give the 256-color palette more semantic meaning.
-    pub palette_harmonious: Option<bool>,
+    pub harmonious_palette: Option<bool>,
     /// Configure the colors and styling of the tab bar
     pub tab_bar: Option<TabBarColors>,
     /// The color of the "thumb" of the scrollbar; the segment that
@@ -328,8 +328,8 @@ impl Palette {
                 }
                 map
             },
-            palette_generate: overlay!(palette_generate),
-            palette_harmonious: overlay!(palette_harmonious),
+            generate_indexed: overlay!(generate_indexed),
+            harmonious_palette: overlay!(harmonious_palette),
             scrollbar_thumb: overlay!(scrollbar_thumb),
             split: overlay!(split),
             visual_bell: overlay!(visual_bell),
@@ -429,17 +429,17 @@ impl From<Palette> for ColorPalette {
             }
             p.colors.0[idx as usize] = col.into();
         }
-        if cfg.palette_generate.unwrap_or(false) {
-            p.colors = generate_palette(
+        if cfg.generate_indexed.unwrap_or(false) {
+            p.colors = generate_indexed_colors(
                 p.colors, &cfg.indexed, p.background, p.foreground,
-                cfg.palette_harmonious.unwrap_or(false),
+                cfg.harmonious_palette.unwrap_or(false),
             );
         }
         p
     }
 }
 
-pub fn generate_palette(
+pub fn generate_indexed_colors(
     mut palette: Palette256,
     indexed: &HashMap<u8, RgbaColor>,
     bg: SrgbaTuple,
