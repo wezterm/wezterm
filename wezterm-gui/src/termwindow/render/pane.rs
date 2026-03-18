@@ -337,8 +337,10 @@ impl crate::TermWindow {
                 error: Option<anyhow::Error>,
             }
 
+            let vertical_tab_bar_offset = self.tab_bar_pixel_width();
             let left_pixel_x = padding_left
                 + border.left.get() as f32
+                + vertical_tab_bar_offset
                 + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
 
             let mut render = LineRender {
@@ -647,7 +649,8 @@ impl crate::TermWindow {
 
         // Bounds for the terminal cells
         let content_rect = euclid::rect(
-            padding_left + border.left.get() as f32 - (cell_width / 2.0)
+            padding_left + border.left.get() as f32 + self.tab_bar_pixel_width()
+                - (cell_width / 2.0)
                 + (pos.left as f32 * cell_width),
             top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
             pos.width as f32 * cell_width,

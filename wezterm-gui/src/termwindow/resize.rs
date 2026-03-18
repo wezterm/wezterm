@@ -206,9 +206,15 @@ impl super::TermWindow {
                 + (border.top + border.bottom).get() as usize
                 + tab_bar_height as usize;
 
+            let vertical_tab_bar_width = if self.config.tab_bar_vertical && self.show_tab_bar {
+                self.config.tab_bar_vertical_width
+            } else {
+                0
+            };
             let pixel_width = (cols * self.render_metrics.cell_size.width as usize)
                 + (padding_left + padding_right)
-                + (border.left + border.right).get() as usize;
+                + (border.left + border.right).get() as usize
+                + vertical_tab_bar_width;
 
             let dims = Dimensions {
                 pixel_width: pixel_width as usize,
@@ -225,6 +231,7 @@ impl super::TermWindow {
                 padding_bottom: padding_bottom,
                 border: border,
                 tab_bar_height: tab_bar_height as usize,
+                tab_bar_width: vertical_tab_bar_width,
             };
 
             (size, dims, ri_calc)
@@ -247,10 +254,18 @@ impl super::TermWindow {
                 config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
             let padding_right = effective_right_padding(&config, h_context);
 
-            let avail_width = dimensions.pixel_width.saturating_sub(
-                (padding_left + padding_right) as usize
-                    + (border.left + border.right).get() as usize,
-            );
+            let vertical_tab_bar_width = if self.config.tab_bar_vertical && self.show_tab_bar {
+                self.config.tab_bar_vertical_width
+            } else {
+                0
+            };
+            let avail_width = dimensions
+                .pixel_width
+                .saturating_sub(
+                    (padding_left + padding_right) as usize
+                        + (border.left + border.right).get() as usize,
+                )
+                .saturating_sub(vertical_tab_bar_width);
             let avail_height = dimensions
                 .pixel_height
                 .saturating_sub(
@@ -283,6 +298,7 @@ impl super::TermWindow {
                 padding_bottom: padding_bottom,
                 border: border,
                 tab_bar_height: tab_bar_height as usize,
+                tab_bar_width: vertical_tab_bar_width,
             };
 
             (size, *dimensions, ri_calc)
@@ -509,10 +525,16 @@ impl super::TermWindow {
         let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
 
+        let vertical_tab_bar_width = if config.tab_bar_vertical && show_tab_bar {
+            config.tab_bar_vertical_width
+        } else {
+            0
+        };
         let dimensions = Dimensions {
             pixel_width: ((terminal_size.cols as usize * render_metrics.cell_size.width as usize)
                 + padding_left
-                + effective_right_padding(&config, h_context)),
+                + effective_right_padding(&config, h_context))
+                + vertical_tab_bar_width,
             pixel_height: ((terminal_size.rows as usize * render_metrics.cell_size.height as usize)
                 + padding_top
                 + padding_bottom) as usize

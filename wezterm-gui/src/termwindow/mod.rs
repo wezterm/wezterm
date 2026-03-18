@@ -159,6 +159,7 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
+    VerticalTabBarResize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -391,6 +392,8 @@ pub struct TermWindow {
     show_scroll_bar: bool,
     tab_bar: TabBarState,
     fancy_tab_bar: Option<box_model::ComputedElement>,
+    /// Dynamic override for vertical tab bar width (set by drag-resize)
+    vertical_tab_bar_width_override: Option<f32>,
     pub right_status: String,
     pub left_status: String,
     last_ui_item: Option<UIItem>,
@@ -712,6 +715,7 @@ impl TermWindow {
             show_scroll_bar: config.enable_scroll_bar,
             tab_bar: TabBarState::default(),
             fancy_tab_bar: None,
+            vertical_tab_bar_width_override: None,
             right_status: String::new(),
             left_status: String::new(),
             last_mouse_coords: (0, -1),
@@ -869,6 +873,11 @@ impl TermWindow {
                         padding_bottom: padding_bottom,
                         border: border,
                         tab_bar_height: tab_bar_height,
+                        tab_bar_width: if config.tab_bar_vertical && show_tab_bar {
+                            config.tab_bar_vertical_width
+                        } else {
+                            0
+                        },
                     }
                     .into(),
                 );

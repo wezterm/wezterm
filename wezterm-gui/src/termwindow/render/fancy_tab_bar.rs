@@ -10,6 +10,7 @@ use config::{Dimension, DimensionContext, TabBarColors};
 use std::rc::Rc;
 use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
+use window::color::LinearRgba;
 use window::{IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
 
 const X_BUTTON: &[Poly] = &[
@@ -56,6 +57,10 @@ impl crate::TermWindow {
     }
 
     pub fn build_fancy_tab_bar(&self, palette: &ColorPalette) -> anyhow::Result<ComputedElement> {
+        if self.config.tab_bar_vertical {
+            return self.build_vertical_fancy_tab_bar(palette);
+        }
+
         let tab_bar_height = self.tab_bar_pixel_height()?;
         let font = self.fonts.title_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
@@ -458,6 +463,310 @@ impl crate::TermWindow {
         Ok(computed)
     }
 
+    /// Build a vertical tab bar rendered on the left side of the window.
+    /// Each tab is a Block element so they stack vertically.
+    fn build_vertical_fancy_tab_bar(
+        &self,
+        palette: &ColorPalette,
+    ) -> anyhow::Result<ComputedElement> {
+        let tab_bar_width = self.vertical_tab_bar_width_override
+            .unwrap_or(self.config.tab_bar_vertical_width as f32);
+        let font = self.fonts.title_font()?;
+        let metrics = RenderMetrics::with_font_metrics(&font.metrics());
+        let items = self.tab_bar.items();
+        let colors = self
+            .config
+            .colors
+            .as_ref()
+            .and_then(|c| c.tab_bar.as_ref())
+            .cloned()
+            .unwrap_or_else(TabBarColors::default);
+
+        let bar_colors = ElementColors {
+            border: BorderColor::default(),
+            bg: if self.focused.is_some() {
+                self.config.window_frame.active_titlebar_bg
+            } else {
+                self.config.window_frame.inactive_titlebar_bg
+            }
+            .to_linear()
+            .into(),
+            text: if self.focused.is_some() {
+                self.config.window_frame.active_titlebar_fg
+            } else {
+                self.config.window_frame.inactive_titlebar_fg
+            }
+            .to_linear()
+            .into(),
+        };
+
+        let active_tab_colors = colors.active_tab();
+        let new_tab_colors = colors.new_tab();
+        let new_tab_hover_colors = colors.new_tab_hover();
+
+        let mut tab_children = vec![];
+
+        for item in items {
+            let element = Element::with_line(&font, &item.title, palette);
+
+            let bg_color = item
+                .title
+                .get_cell(0)
+                .and_then(|c| match c.attrs().background() {
+                    ColorAttribute::Default => None,
+                    col => Some(palette.resolve_bg(col)),
+                });
+            let fg_color = item
+                .title
+                .get_cell(0)
+                .and_then(|c| match c.attrs().foreground() {
+                    ColorAttribute::Default => None,
+                    col => Some(palette.resolve_fg(col)),
+                });
+
+            match item.item {
+                TabBarItem::Tab { tab_idx, active } => {
+                    let mut elem = element
+                        .item_type(UIItemType::TabBar(item.item.clone()))
+                        .display(DisplayType::Block)
+                        .max_width(Some(Dimension::Pixels(tab_bar_width)))
+                        .padding(BoxDimension {
+                            left: Dimension::Cells(0.5),
+                            right: Dimension::Cells(0.5),
+                            top: Dimension::Cells(0.2),
+                            bottom: Dimension::Cells(0.2),
+                        })
+                        .margin(BoxDimension {
+                            left: Dimension::Pixels(0.),
+                            right: Dimension::Pixels(0.),
+                            top: Dimension::Pixels(1.),
+                            bottom: Dimension::Pixels(0.),
+                        })
+                        .border(BoxDimension::new(Dimension::Pixels(1.)));
+
+                    if active {
+                        // Active tab: highlighted with a left border accent
+                        elem = elem.border_corners(Some(Corners {
+                            top_left: SizedPoly {
+                                width: Dimension::Cells(0.3),
+                                height: Dimension::Cells(0.3),
+                                poly: TOP_LEFT_ROUNDED_CORNER,
+                            },
+                            top_right: SizedPoly::none(),
+                            bottom_left: SizedPoly {
+                                width: Dimension::Cells(0.3),
+                                height: Dimension::Cells(0.3),
+                                poly: BOTTOM_LEFT_ROUNDED_CORNER,
+                            },
+                            bottom_right: SizedPoly::none(),
+                        }))
+                        .colors(ElementColors {
+                            border: BorderColor::new(
+                                bg_color
+                                    .unwrap_or_else(|| active_tab_colors.bg_color.into())
+                                    .to_linear(),
+                            ),
+                            bg: bg_color
+                                .unwrap_or_else(|| active_tab_colors.bg_color.into())
+                                .to_linear()
+                                .into(),
+                            text: fg_color
+                                .unwrap_or_else(|| active_tab_colors.fg_color.into())
+                                .to_linear()
+                                .into(),
+                        });
+                    } else {
+                        let inactive_tab = colors.inactive_tab();
+                        let inactive_tab_hover = colors.inactive_tab_hover();
+                        let bg = bg_color
+                            .unwrap_or_else(|| inactive_tab.bg_color.into())
+                            .to_linear();
+                        elem = elem.colors(ElementColors {
+                            border: BorderColor::new(bg),
+                            bg: bg.into(),
+                            text: fg_color
+                                .unwrap_or_else(|| inactive_tab.fg_color.into())
+                                .to_linear()
+                                .into(),
+                        })
+                        .hover_colors(Some(ElementColors {
+                            border: BorderColor::new(
+                                bg_color
+                                    .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
+                                    .to_linear(),
+                            ),
+                            bg: bg_color
+                                .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
+                                .to_linear()
+                                .into(),
+                            text: fg_color
+                                .unwrap_or_else(|| inactive_tab_hover.fg_color.into())
+                                .to_linear()
+                                .into(),
+                        }));
+                    }
+
+                    // Add close button (hidden by default, visible on hover)
+                    let tab_bg_linear = if active {
+                        bg_color
+                            .unwrap_or_else(|| active_tab_colors.bg_color.into())
+                            .to_linear()
+                    } else {
+                        bg_color
+                            .unwrap_or_else(|| colors.inactive_tab().bg_color.into())
+                            .to_linear()
+                    };
+                    elem.content = match elem.content {
+                        ElementContent::Children(mut kids) => {
+                            if self.config.show_close_tab_button_in_tabs {
+                                kids.push(make_vertical_x_button(
+                                    &font, &metrics, &colors, tab_idx, active,
+                                    tab_bg_linear,
+                                ));
+                            }
+                            ElementContent::Children(kids)
+                        }
+                        other => other,
+                    };
+
+                    tab_children.push(elem);
+                }
+                TabBarItem::NewTabButton => {
+                    // Wrap the + icon in a full-width block so it centers
+                    let icon = Element::new(
+                        &font,
+                        ElementContent::Poly {
+                            line_width: metrics.underline_height.max(2),
+                            poly: SizedPoly {
+                                poly: PLUS_BUTTON,
+                                width: Dimension::Pixels(
+                                    metrics.cell_size.height as f32 / 2.,
+                                ),
+                                height: Dimension::Pixels(
+                                    metrics.cell_size.height as f32 / 2.,
+                                ),
+                            },
+                        },
+                    )
+                    .vertical_align(VerticalAlign::Middle);
+
+                    let elem = Element::new(
+                        &font,
+                        ElementContent::Children(vec![icon]),
+                    )
+                    .display(DisplayType::Block)
+                    .item_type(UIItemType::TabBar(item.item.clone()))
+                    .max_width(Some(Dimension::Pixels(tab_bar_width)))
+                    .margin(BoxDimension {
+                        left: Dimension::Pixels(0.),
+                        right: Dimension::Pixels(0.),
+                        top: Dimension::Pixels(4.),
+                        bottom: Dimension::Pixels(0.),
+                    })
+                    .padding(BoxDimension {
+                        left: Dimension::Cells(0.5),
+                        right: Dimension::Cells(0.5),
+                        top: Dimension::Cells(0.2),
+                        bottom: Dimension::Cells(0.25),
+                    })
+                    .border(BoxDimension::new(Dimension::Pixels(1.)))
+                    .colors(ElementColors {
+                        border: BorderColor::new(
+                            new_tab_colors.bg_color.to_linear(),
+                        ),
+                        bg: new_tab_colors.bg_color.to_linear().into(),
+                        text: new_tab_colors.fg_color.to_linear().into(),
+                    })
+                    .hover_colors(Some(ElementColors {
+                        border: BorderColor::new(
+                            new_tab_hover_colors.bg_color.to_linear(),
+                        ),
+                        bg: new_tab_hover_colors.bg_color.to_linear().into(),
+                        text: new_tab_hover_colors.fg_color.to_linear().into(),
+                    }));
+                    tab_children.push(elem);
+                }
+                // Skip status items and window buttons in vertical mode
+                _ => {}
+            }
+        }
+
+        let content = ElementContent::Children(tab_children);
+
+        // Separator color from theme (configurable via colors.tab_bar.inactive_tab_edge)
+        let separator_color = colors.inactive_tab_edge().to_linear();
+        let bg_linear = if self.focused.is_some() {
+            self.config.window_frame.active_titlebar_bg
+        } else {
+            self.config.window_frame.inactive_titlebar_bg
+        }
+        .to_linear();
+
+        // Work around box_model bug: right border rendering uses border.left width,
+        // so we set both left and right border to 1px. Left border is bg-colored
+        // (invisible), right border is the visible separator.
+        let tabs = Element::new(&font, content)
+            .display(DisplayType::Block)
+            .item_type(UIItemType::TabBar(TabBarItem::None))
+            .min_width(Some(Dimension::Pixels(tab_bar_width)))
+            .max_width(Some(Dimension::Pixels(tab_bar_width)))
+            .min_height(Some(Dimension::Pixels(
+                self.dimensions.pixel_height as f32,
+            )))
+            .colors(ElementColors {
+                border: BorderColor {
+                    left: bg_linear,
+                    top: bg_linear,
+                    right: separator_color,
+                    bottom: bg_linear,
+                },
+                bg: bar_colors.bg,
+                text: bar_colors.text,
+            })
+            .border(BoxDimension {
+                left: Dimension::Pixels(1.),
+                right: Dimension::Pixels(1.),
+                top: Dimension::Pixels(0.),
+                bottom: Dimension::Pixels(0.),
+            })
+            .padding(BoxDimension {
+                left: Dimension::Pixels(3.),
+                right: Dimension::Pixels(3.),
+                top: Dimension::Pixels(4.),
+                bottom: Dimension::Pixels(4.),
+            });
+
+        let border = self.get_os_border();
+
+        let computed = self.compute_element(
+            &LayoutContext {
+                height: DimensionContext {
+                    dpi: self.dimensions.dpi as f32,
+                    pixel_max: self.dimensions.pixel_height as f32,
+                    pixel_cell: metrics.cell_size.height as f32,
+                },
+                width: DimensionContext {
+                    dpi: self.dimensions.dpi as f32,
+                    pixel_max: tab_bar_width,
+                    pixel_cell: metrics.cell_size.width as f32,
+                },
+                bounds: euclid::rect(
+                    border.left.get() as f32,
+                    border.top.get() as f32,
+                    tab_bar_width,
+                    self.dimensions.pixel_height as f32
+                        - (border.top + border.bottom).get() as f32,
+                ),
+                metrics: &metrics,
+                gl_state: self.render_state.as_ref().unwrap(),
+                zindex: 10,
+            },
+            &tabs,
+        )?;
+
+        Ok(computed)
+    }
+
     pub fn paint_fancy_tab_bar(&self) -> anyhow::Result<Vec<UIItem>> {
         let computed = self.fancy_tab_bar.as_ref().ok_or_else(|| {
             anyhow::anyhow!("paint_fancy_tab_bar called but fancy_tab_bar is None")
@@ -495,6 +804,73 @@ fn make_x_button(
     .vertical_align(VerticalAlign::Middle)
     .float(Float::Right)
     .item_type(UIItemType::CloseTab(tab_idx))
+    .hover_colors({
+        let inactive_tab_hover = colors.inactive_tab_hover();
+        let active_tab = colors.active_tab();
+
+        Some(ElementColors {
+            border: BorderColor::default(),
+            bg: (if active {
+                inactive_tab_hover.bg_color
+            } else {
+                active_tab.bg_color
+            })
+            .to_linear()
+            .into(),
+            text: (if active {
+                inactive_tab_hover.fg_color
+            } else {
+                active_tab.fg_color
+            })
+            .to_linear()
+            .into(),
+        })
+    })
+    .padding(BoxDimension {
+        left: Dimension::Cells(0.25),
+        right: Dimension::Cells(0.25),
+        top: Dimension::Cells(0.25),
+        bottom: Dimension::Cells(0.25),
+    })
+    .margin(BoxDimension {
+        left: Dimension::Cells(0.5),
+        right: Dimension::Cells(0.),
+        top: Dimension::Cells(0.),
+        bottom: Dimension::Cells(0.),
+    })
+}
+
+/// Close button for vertical tabs: hidden by default, visible on hover.
+fn make_vertical_x_button(
+    font: &Rc<LoadedFont>,
+    metrics: &RenderMetrics,
+    colors: &TabBarColors,
+    tab_idx: usize,
+    active: bool,
+    tab_bg: LinearRgba,
+) -> Element {
+    Element::new(
+        &font,
+        ElementContent::Poly {
+            line_width: metrics.underline_height.max(2),
+            poly: SizedPoly {
+                poly: X_BUTTON,
+                width: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
+                height: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
+            },
+        },
+    )
+    .zindex(1)
+    .vertical_align(VerticalAlign::Middle)
+    .float(Float::Right)
+    .item_type(UIItemType::CloseTab(tab_idx))
+    // Default: invisible (text and bg match the tab background)
+    .colors(ElementColors {
+        border: BorderColor::default(),
+        bg: tab_bg.into(),
+        text: tab_bg.into(),
+    })
+    // Hover: reveal the X button
     .hover_colors({
         let inactive_tab_hover = colors.inactive_tab_hover();
         let active_tab = colors.active_tab();

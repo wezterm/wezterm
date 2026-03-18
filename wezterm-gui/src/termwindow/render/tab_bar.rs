@@ -1,5 +1,6 @@
 use crate::quad::TripleLayerQuadAllocator;
 use crate::termwindow::render::RenderScreenLineParams;
+use crate::termwindow::UIItemType;
 use crate::utilsprites::RenderMetrics;
 use config::ConfigHandle;
 use mux::renderable::RenderableDimensions;
@@ -16,6 +17,20 @@ impl crate::TermWindow {
             }
 
             self.ui_items.append(&mut self.paint_fancy_tab_bar()?);
+
+            // Register resize handle for vertical tab bar
+            if self.config.tab_bar_vertical {
+                let tab_bar_width = self.tab_bar_pixel_width();
+                let handle_width: usize = 6;
+                self.ui_items.push(crate::termwindow::UIItem {
+                    x: (tab_bar_width as usize).saturating_sub(handle_width / 2),
+                    y: 0,
+                    width: handle_width,
+                    height: self.dimensions.pixel_height,
+                    item_type: UIItemType::VerticalTabBarResize,
+                });
+            }
+
             return Ok(());
         }
 
@@ -105,6 +120,10 @@ impl crate::TermWindow {
         fontconfig: &wezterm_font::FontConfiguration,
         render_metrics: &RenderMetrics,
     ) -> anyhow::Result<f32> {
+        // When vertical, tab bar doesn't consume vertical space
+        if config.tab_bar_vertical {
+            return Ok(0.);
+        }
         if config.use_fancy_tab_bar {
             let font = fontconfig.title_font()?;
             Ok((font.metrics().cell_height.get() as f32 * 1.75).ceil())
@@ -116,4 +135,23 @@ impl crate::TermWindow {
     pub fn tab_bar_pixel_height(&self) -> anyhow::Result<f32> {
         Self::tab_bar_pixel_height_impl(&self.config, &self.fonts, &self.render_metrics)
     }
+
+    /// Returns the pixel width consumed by the vertical tab bar, or 0 if not vertical.
+    pub fn tab_bar_pixel_width(&self) -> f32 {
+        if self.config.tab_bar_vertical && self.show_tab_bar {
+            self.vertical_tab_bar_width_override
+                .unwrap_or(self.config.tab_bar_vertical_width as f32)
+        } else {
+            0.
+        }
+    }
+
+    pub fn tab_bar_pixel_width_impl(config: &ConfigHandle, show_tab_bar: bool) -> f32 {
+        if config.tab_bar_vertical && show_tab_bar {
+            config.tab_bar_vertical_width as f32
+        } else {
+            0.
+        }
+    }
+
 }
