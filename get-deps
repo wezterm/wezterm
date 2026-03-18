@@ -48,6 +48,7 @@ alpine_deps() {
     'bash' \
     'build-base' \
     'coreutils' \
+    'dav1d-dev' \
     'fontconfig-dev' \
     'libssh2-dev' \
     'libx11-dev' \
@@ -87,6 +88,7 @@ fedora_deps() {
     'make' \
     'gcc' \
     'gcc-c++' \
+    'dav1d-devel' \
     'flatpak-builder' \
     'fontconfig-devel' \
     'openssl-devel' \
@@ -127,6 +129,7 @@ suse_deps() {
     'gcc' \
     'gcc-c++' \
     'fontconfig-devel' \
+    'libdav1d-devel' \
     'libopenssl-devel' \
     'perl' \
     'python3' \
@@ -156,6 +159,7 @@ debian_deps() {
     'fakeroot' \
     'gcc' \
     'g++' \
+    'libdav1d-dev' \
     'libegl1-mesa-dev' \
     'libssl-dev' \
     'libfontconfig1-dev' \
@@ -190,6 +194,7 @@ arch_deps() {
     'base-devel' \
     'cargo' \
     'cmake' \
+    'dav1d' \
     'fontconfig' \
     'git' \
     'hicolor-icon-theme' \
@@ -214,6 +219,7 @@ freebsd_deps() {
   $PKG install -y \
     'cmake' \
     'curl' \
+    'dav1d' \
     'egl-wayland' \
     'expat' \
     'fontconfig' \
@@ -244,6 +250,7 @@ netbsd_deps() {
   PKG="$SUDO pkgin"
   $PKG -y install \
     'bash' \
+    'dav1d' \
     'fontconfig' \
     'git-base' \
     'hicolor-icon-theme' \
@@ -264,6 +271,7 @@ gentoo_deps() {
   for pkg in \
     'cmake' \
     'fontconfig' \
+    'media-libs/dav1d' \
     'openssl' \
     'dev-vcs/git' \
     'libX11' \
@@ -287,6 +295,7 @@ void_deps() {
   $XBPS -S \
     'gcc' \
     'pkgconf' \
+    'dav1d-devel' \
     'fontconfig-devel' \
     'openssl-devel' \
     'wayland-devel' \
@@ -309,6 +318,7 @@ solus_deps() {
   EOPKG="$SUDO eopkg"
   $EOPKG install -y -c system.devel
   $EOPKG install -y \
+    dav1d-devel \
     xcb-util-devel \
     xcb-util-image-devel \
     libxkbcommon-devel \

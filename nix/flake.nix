@@ -62,6 +62,7 @@
         buildInputs =
           with pkgs;
           [
+            dav1d
             fontconfig
             openssl
             zlib
