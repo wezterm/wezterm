@@ -22,8 +22,16 @@ impl crate::TermWindow {
             if self.config.tab_bar_vertical {
                 let tab_bar_width = self.tab_bar_pixel_width();
                 let handle_width: usize = 6;
+                let on_right = self.config.tab_bar_vertical_position
+                    == config::VerticalTabBarPosition::Right;
+                let handle_x = if on_right {
+                    let bar_x = self.dimensions.pixel_width - tab_bar_width as usize;
+                    bar_x.saturating_sub(handle_width / 2)
+                } else {
+                    (tab_bar_width as usize).saturating_sub(handle_width / 2)
+                };
                 self.ui_items.push(crate::termwindow::UIItem {
-                    x: (tab_bar_width as usize).saturating_sub(handle_width / 2),
+                    x: handle_x,
                     y: 0,
                     width: handle_width,
                     height: self.dimensions.pixel_height,
@@ -141,6 +149,16 @@ impl crate::TermWindow {
         if self.config.tab_bar_vertical && self.show_tab_bar {
             self.vertical_tab_bar_width_override
                 .unwrap_or(self.config.tab_bar_vertical_width as f32)
+        } else {
+            0.
+        }
+    }
+
+    /// Returns the left-side pixel offset for content caused by the vertical tab bar.
+    /// Returns tab_bar_pixel_width when position is Left, 0 when Right.
+    pub fn tab_bar_left_offset(&self) -> f32 {
+        if self.config.tab_bar_vertical_position == config::VerticalTabBarPosition::Left {
+            self.tab_bar_pixel_width()
         } else {
             0.
         }

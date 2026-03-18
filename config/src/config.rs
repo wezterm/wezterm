@@ -476,8 +476,7 @@ pub struct Config {
     #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
 
-    /// If true, render the tab bar vertically on the left side of the window
-    /// instead of horizontally at the top or bottom.
+    /// If true, render the tab bar vertically instead of horizontally.
     #[dynamic(default)]
     pub tab_bar_vertical: bool,
 
@@ -485,6 +484,10 @@ pub struct Config {
     /// Defaults to 200.
     #[dynamic(default = "default_tab_bar_vertical_width")]
     pub tab_bar_vertical_width: usize,
+
+    /// Position of the vertical tab bar: "Left" or "Right". Defaults to "Left".
+    #[dynamic(default)]
+    pub tab_bar_vertical_position: VerticalTabBarPosition,
 
     #[dynamic(default = "default_true")]
     pub mouse_wheel_scrolls_tabs: bool,
@@ -1988,6 +1991,13 @@ pub enum VerticalWindowContentAlignment {
     Top,
     Center,
     Bottom,
+}
+
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VerticalTabBarPosition {
+    #[default]
+    Left,
+    Right,
 }
 
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, PartialEq, Eq)]

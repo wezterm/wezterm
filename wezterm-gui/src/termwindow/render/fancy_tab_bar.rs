@@ -702,9 +702,28 @@ impl crate::TermWindow {
         }
         .to_linear();
 
+        let on_right = self.config.tab_bar_vertical_position
+            == config::VerticalTabBarPosition::Right;
+
         // Work around box_model bug: right border rendering uses border.left width,
-        // so we set both left and right border to 1px. Left border is bg-colored
-        // (invisible), right border is the visible separator.
+        // so we set both left and right border to 1px. The separator side gets the
+        // visible color, the other side matches the background.
+        let border_colors = if on_right {
+            BorderColor {
+                left: separator_color,
+                top: bg_linear,
+                right: bg_linear,
+                bottom: bg_linear,
+            }
+        } else {
+            BorderColor {
+                left: bg_linear,
+                top: bg_linear,
+                right: separator_color,
+                bottom: bg_linear,
+            }
+        };
+
         let tabs = Element::new(&font, content)
             .display(DisplayType::Block)
             .item_type(UIItemType::TabBar(TabBarItem::None))
@@ -714,12 +733,7 @@ impl crate::TermWindow {
                 self.dimensions.pixel_height as f32,
             )))
             .colors(ElementColors {
-                border: BorderColor {
-                    left: bg_linear,
-                    top: bg_linear,
-                    right: separator_color,
-                    bottom: bg_linear,
-                },
+                border: border_colors,
                 bg: bar_colors.bg,
                 text: bar_colors.text,
             })
@@ -738,6 +752,13 @@ impl crate::TermWindow {
 
         let border = self.get_os_border();
 
+        // Position on left or right side of window
+        let bounds_x = if on_right {
+            self.dimensions.pixel_width as f32 - tab_bar_width - border.right.get() as f32
+        } else {
+            border.left.get() as f32
+        };
+
         let computed = self.compute_element(
             &LayoutContext {
                 height: DimensionContext {
@@ -751,7 +772,7 @@ impl crate::TermWindow {
                     pixel_cell: metrics.cell_size.width as f32,
                 },
                 bounds: euclid::rect(
-                    border.left.get() as f32,
+                    bounds_x,
                     border.top.get() as f32,
                     tab_bar_width,
                     self.dimensions.pixel_height as f32

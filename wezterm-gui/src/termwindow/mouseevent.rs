@@ -87,7 +87,7 @@ impl super::TermWindow {
             .max(0)
             / self.render_metrics.cell_size.height) as i64;
 
-        let vertical_tab_bar_width = self.tab_bar_pixel_width();
+        let vertical_tab_bar_width = self.tab_bar_left_offset();
         let x = (event
             .coords
             .x
@@ -429,15 +429,28 @@ impl super::TermWindow {
         event: MouseEvent,
         context: &dyn WindowOps,
     ) {
-        let new_width = (event.coords.x as f32)
-            .max(80.)
-            .min(self.dimensions.pixel_width as f32 * 0.5);
+        let on_right = self.config.tab_bar_vertical_position
+            == config::VerticalTabBarPosition::Right;
+        let new_width = if on_right {
+            (self.dimensions.pixel_width as f32 - event.coords.x as f32)
+                .max(80.)
+                .min(self.dimensions.pixel_width as f32 * 0.5)
+        } else {
+            (event.coords.x as f32)
+                .max(80.)
+                .min(self.dimensions.pixel_width as f32 * 0.5)
+        };
         self.vertical_tab_bar_width_override = Some(new_width);
         self.invalidate_fancy_tab_bar();
 
         // Update the hit area to follow the new separator position
         let handle_width: usize = 6;
-        item.x = (new_width as usize).saturating_sub(handle_width / 2);
+        if on_right {
+            let bar_x = self.dimensions.pixel_width - new_width as usize;
+            item.x = bar_x.saturating_sub(handle_width / 2);
+        } else {
+            item.x = (new_width as usize).saturating_sub(handle_width / 2);
+        }
 
         self.dragging.replace((item, start_event));
         context.invalidate();
