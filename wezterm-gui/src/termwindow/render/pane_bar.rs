@@ -1,11 +1,35 @@
+use crate::customglyph::*;
 use crate::tabbar::compute_pane_title;
+use crate::termwindow::box_model::*;
 use crate::termwindow::render::{RenderScreenLineParams, TripleLayerQuadAllocator};
+use crate::termwindow::resize;
 use crate::termwindow::{PaneInformation, TabInformation, UIItem, UIItemType};
-use config::{PaneBorderStatus, TabBarColors};
+use crate::utilsprites::RenderMetrics;
+use config::{Dimension, DimensionContext, PaneBorderStatus, TabBarColors};
 use mux::renderable::RenderableDimensions;
 use mux::tab::PositionedPane;
-use wezterm_term::CellAttributes;
 use window::color::LinearRgba;
+
+/// The X drawn in each pane close button — identical to the one used by the
+/// fancy tab bar in `fancy_tab_bar.rs`.
+const X_BUTTON: &[Poly] = &[
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::One, BlockCoord::Zero),
+            PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::One),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::Outline,
+    },
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Zero),
+            PolyCommand::LineTo(BlockCoord::One, BlockCoord::One),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::Outline,
+    },
+];
 
 impl crate::TermWindow {
     /// Paint a one-row title bar for a single split pane.
@@ -32,6 +56,15 @@ impl crate::TermWindow {
         let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
         let (padding_left, padding_top) = self.padding_left_top();
+
+        // Compute right padding so the close button doesn't spill into the OS
+        // border or window padding on the right side.
+        let h_context = DimensionContext {
+            dpi: self.dimensions.dpi as f32,
+            pixel_max: self.terminal_size.pixel_width as f32,
+            pixel_cell: cell_width,
+        };
+        let padding_right = resize::effective_right_padding(&config, h_context) as f32;
 
         let tab_bar_height = if self.show_tab_bar {
             self.tab_bar_pixel_height()?
@@ -97,10 +130,26 @@ impl crate::TermWindow {
 
         // Draw a solid background strip behind the title text so it is
         // legible even when a window background image is configured.
+        //
+        // Extend the fill by half a cell toward the adjacent split line to
+        // close the visual gap between the split border and the title bar.
+        // The split line is drawn at pos_y ± cell_height/2, so reaching out
+        // by that amount makes them flush.  Clamp to top_pixel_y so we never
+        // overdraw into the tab-bar area.
+        let (fill_y, fill_height) = match config.pane_border_status {
+            PaneBorderStatus::Top => {
+                let extend = cell_height / 2.0;
+                let y_start = (title_y - extend).max(top_pixel_y);
+                let h = cell_height + (title_y - y_start);
+                (y_start, h)
+            }
+            PaneBorderStatus::Bottom => (title_y, cell_height + cell_height / 2.0),
+            PaneBorderStatus::Off => return Ok(vec![]),
+        };
         self.filled_rectangle(
             layers,
             0,
-            euclid::rect(title_x, title_y, pixel_width, cell_height),
+            euclid::rect(title_x, fill_y, pixel_width, fill_height),
             default_bg,
         )?;
 
@@ -110,37 +159,148 @@ impl crate::TermWindow {
 
         let dims = pos.pane.get_dimensions();
 
-        // Reserve the rightmost cell for the close button when enabled.
+        // The close button uses the same Poly-based X as the fancy tab bar.
+        // We know the exact right-edge pixel position, so we place it
+        // absolutely rather than relying on Float::Right.  The container
+        // element is fully transparent so it never overwrites the title text
+        // rendered by render_screen_line below.
         let show_close = config.show_close_pane_button_in_pane_bar && pos.width >= 2;
-        let title_pixel_width = if show_close {
-            pixel_width - cell_width
+
+        let mut ui_items = vec![];
+
+        if show_close {
+            let font = self.fonts.title_font()?;
+            let metrics = RenderMetrics::with_font_metrics(&font.metrics());
+
+            let inactive_tab_hover = tab_colors.inactive_tab_hover();
+            let active_tab_color = tab_colors.active_tab();
+
+            // Button width: 0.5 left margin + 0.25 left pad + poly + 0.25 right pad + 0.25 right margin
+            let close_btn_width = cell_width * 1.75;
+            // Clamp the button's right edge so it never overflows into the OS
+            // border or window padding on the right side of the screen.
+            let window_right = self.dimensions.pixel_width as f32
+                - border.right.get() as f32
+                - padding_right;
+            let close_x = (title_x + pixel_width - close_btn_width).min(window_right - close_btn_width);
+
+            let x_btn = Element::new(
+                &font,
+                ElementContent::Poly {
+                    line_width: metrics.underline_height.max(2),
+                    poly: SizedPoly {
+                        poly: X_BUTTON,
+                        width: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
+                        height: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
+                    },
+                },
+            )
+            .zindex(1)
+            .vertical_align(VerticalAlign::Middle)
+            .item_type(UIItemType::ClosePane(pos.pane.pane_id()))
+            .hover_colors(Some(ElementColors {
+                border: BorderColor::default(),
+                bg: (if pos.is_active {
+                    inactive_tab_hover.bg_color
+                } else {
+                    active_tab_color.bg_color
+                })
+                .to_linear()
+                .into(),
+                text: (if pos.is_active {
+                    inactive_tab_hover.fg_color
+                } else {
+                    active_tab_color.fg_color
+                })
+                .to_linear()
+                .into(),
+            }))
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: default_bg.into(),
+                text: foreground.into(),
+            })
+            .padding(BoxDimension {
+                left: Dimension::Cells(0.25),
+                right: Dimension::Cells(0.25),
+                top: Dimension::Cells(0.25),
+                bottom: Dimension::Cells(0.25),
+            })
+            .margin(BoxDimension {
+                left: Dimension::Cells(0.5),
+                right: Dimension::Cells(0.25),
+                top: Dimension::Cells(0.),
+                bottom: Dimension::Cells(0.),
+            });
+
+            // Wrap in a transparent container positioned at the right edge.
+            // The container has no background so it never covers the title
+            // text rendered by render_screen_line.
+            let container = Element::new(&font, ElementContent::Children(vec![x_btn]))
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: LinearRgba(0., 0., 0., 0.).into(),
+                    text: foreground.into(),
+                })
+                .min_width(Some(Dimension::Pixels(close_btn_width)))
+                .min_height(Some(Dimension::Pixels(cell_height)));
+
+            let mut computed = self.compute_element(
+                &LayoutContext {
+                    height: DimensionContext {
+                        dpi: self.dimensions.dpi as f32,
+                        pixel_max: self.dimensions.pixel_height as f32,
+                        pixel_cell: metrics.cell_size.height as f32,
+                    },
+                    width: DimensionContext {
+                        dpi: self.dimensions.dpi as f32,
+                        pixel_max: self.dimensions.pixel_width as f32,
+                        pixel_cell: metrics.cell_size.width as f32,
+                    },
+                    bounds: euclid::rect(close_x, 0., close_btn_width, cell_height),
+                    metrics: &metrics,
+                    gl_state,
+                    zindex: 1,
+                },
+                &container,
+            )?;
+
+            // translate y into screen coordinates
+            computed.translate(euclid::vec2(0., title_y));
+
+            ui_items.extend(computed.ui_items());
+            self.render_element(&computed, gl_state, None)?;
+        }
+
+        // Title text — shrink by the exact close-button pixel width so the
+        // text clips precisely without leaving a visible gap or overlapping.
+        let close_btn_width = cell_width * 1.75;
+        let text_pixel_width = if show_close {
+            (pixel_width - close_btn_width).max(cell_width)
         } else {
             pixel_width
         };
+        let text_cols = (text_pixel_width / cell_width) as usize;
 
         self.render_screen_line(
             RenderScreenLineParams {
                 top_pixel_y: title_y,
                 left_pixel_x: title_x,
-                pixel_width: title_pixel_width,
+                pixel_width: text_pixel_width,
                 stable_line_idx: None,
                 line: &title_line,
                 selection: 0..0,
                 cursor: &Default::default(),
                 palette: &palette,
                 dims: &RenderableDimensions {
-                    cols: if show_close { pos.width - 1 } else { pos.width },
+                    cols: text_cols,
                     physical_top: 0,
                     scrollback_rows: 0,
                     scrollback_top: 0,
                     viewport_rows: 1,
                     dpi: dims.dpi,
                     pixel_height: self.render_metrics.cell_size.height as usize,
-                    pixel_width: if show_close {
-                        pos.pixel_width - self.render_metrics.cell_size.width as usize
-                    } else {
-                        pos.pixel_width
-                    },
+                    pixel_width: text_pixel_width as usize,
                     reverse_video: false,
                 },
                 config: &config,
@@ -166,73 +326,6 @@ impl crate::TermWindow {
             },
             layers,
         )?;
-
-        let mut ui_items = vec![];
-
-        if show_close {
-            let close_x = title_x + pixel_width - cell_width;
-            let close_line = {
-                use wezterm_term::color::AnsiColor;
-                let mut attr = CellAttributes::default();
-                attr.set_foreground(wezterm_term::color::ColorAttribute::PaletteIndex(
-                    AnsiColor::White as u8,
-                ));
-                crate::tabbar::parse_status_text("\u{00d7}", attr)
-            };
-
-            self.render_screen_line(
-                RenderScreenLineParams {
-                    top_pixel_y: title_y,
-                    left_pixel_x: close_x,
-                    pixel_width: cell_width,
-                    stable_line_idx: None,
-                    line: &close_line,
-                    selection: 0..0,
-                    cursor: &Default::default(),
-                    palette: &palette,
-                    dims: &RenderableDimensions {
-                        cols: 1,
-                        physical_top: 0,
-                        scrollback_rows: 0,
-                        scrollback_top: 0,
-                        viewport_rows: 1,
-                        dpi: dims.dpi,
-                        pixel_height: self.render_metrics.cell_size.height as usize,
-                        pixel_width: self.render_metrics.cell_size.width as usize,
-                        reverse_video: false,
-                    },
-                    config: &config,
-                    cursor_border_color: LinearRgba::default(),
-                    foreground,
-                    pane: None,
-                    is_active: pos.is_active,
-                    selection_fg: LinearRgba::default(),
-                    selection_bg: LinearRgba::default(),
-                    cursor_fg: LinearRgba::default(),
-                    cursor_bg: LinearRgba::default(),
-                    cursor_is_default_color: true,
-                    white_space,
-                    filled_box,
-                    window_is_transparent,
-                    default_bg,
-                    style: None,
-                    font: None,
-                    use_pixel_positioning: config.experimental_pixel_positioning,
-                    render_metrics: self.render_metrics,
-                    shape_key: None,
-                    password_input: false,
-                },
-                layers,
-            )?;
-
-            ui_items.push(UIItem {
-                x: close_x as usize,
-                y: title_y as usize,
-                width: cell_width as usize,
-                height: cell_height as usize,
-                item_type: UIItemType::ClosePane(pos.pane.pane_id()),
-            });
-        }
 
         Ok(ui_items)
     }
