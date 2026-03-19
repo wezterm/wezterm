@@ -272,8 +272,10 @@ impl crate::TermWindow {
             let pane_info = self.get_pane_information();
             let tab_info = self.get_tab_information();
             for pos in &panes {
-                self.paint_pane_title_bar(pos, &pane_info, &tab_info, &mut layers)
+                let items = self
+                    .paint_pane_title_bar(pos, &pane_info, &tab_info, &mut layers)
                     .context("paint_pane_title_bar")?;
+                self.ui_items.extend(items);
             }
         }
 

@@ -8,7 +8,7 @@ use ::window::{
 };
 use config::keyassignment::{KeyAssignment, MouseEventTrigger, SpawnTabDomain};
 use config::MouseEventAltScreen;
-use mux::pane::{Pane, WithPaneLines};
+use mux::pane::{Pane, PaneId, WithPaneLines};
 use mux::tab::SplitDirection;
 use mux::Mux;
 use mux_lua::MuxPane;
@@ -40,6 +40,7 @@ impl super::TermWindow {
                 self.update_title_post_status();
             }
             UIItemType::CloseTab(_)
+            | UIItemType::ClosePane(_)
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
@@ -51,6 +52,7 @@ impl super::TermWindow {
         match item.item_type {
             UIItemType::TabBar(_) => {}
             UIItemType::CloseTab(_)
+            | UIItemType::ClosePane(_)
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
@@ -382,7 +384,22 @@ impl super::TermWindow {
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
             }
+            UIItemType::ClosePane(pane_id) => {
+                self.mouse_event_close_pane(pane_id, event, context);
+            }
         }
+    }
+
+    pub fn mouse_event_close_pane(
+        &mut self,
+        pane_id: PaneId,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        if let WMEK::Press(MousePress::Left) = event.kind {
+            self.close_specific_pane(pane_id);
+        }
+        context.set_cursor(Some(MouseCursor::Arrow));
     }
 
     pub fn mouse_event_close_tab(

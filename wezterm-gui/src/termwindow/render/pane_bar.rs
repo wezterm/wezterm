@@ -1,10 +1,10 @@
 use crate::tabbar::compute_pane_title;
 use crate::termwindow::render::{RenderScreenLineParams, TripleLayerQuadAllocator};
-use crate::termwindow::{PaneInformation, TabInformation};
-use config::PaneBorderStatus;
+use crate::termwindow::{PaneInformation, TabInformation, UIItem, UIItemType};
+use config::{PaneBorderStatus, TabBarColors};
 use mux::renderable::RenderableDimensions;
 use mux::tab::PositionedPane;
-use wezterm_term::color::ColorAttribute;
+use wezterm_term::CellAttributes;
 use window::color::LinearRgba;
 
 impl crate::TermWindow {
@@ -18,13 +18,15 @@ impl crate::TermWindow {
     /// The text content comes from the `format-pane-title` Lua event (see
     /// `compute_pane_title`).  When no callback is registered the pane's
     /// window title is used as a fallback.
+    ///
+    /// Returns `UIItem` records for any clickable regions (e.g. close button).
     pub fn paint_pane_title_bar(
         &mut self,
         pos: &PositionedPane,
         pane_info: &[PaneInformation],
         tab_info: &[TabInformation],
         layers: &mut TripleLayerQuadAllocator,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<UIItem>> {
         let config = self.config.clone();
 
         let cell_width = self.render_metrics.cell_size.width as f32;
@@ -54,7 +56,7 @@ impl crate::TermWindow {
         let title_y = match config.pane_border_status {
             PaneBorderStatus::Top => top_pixel_y + pos.top as f32 * cell_height,
             PaneBorderStatus::Bottom => top_pixel_y + (pos.top + pos.height) as f32 * cell_height,
-            PaneBorderStatus::Off => return Ok(()),
+            PaneBorderStatus::Off => return Ok(vec![]),
         };
 
         // Left edge of this pane in pixels.
@@ -64,23 +66,34 @@ impl crate::TermWindow {
         // Look up the PaneInformation so we can call the Lua callback.
         let pane_info_item = match pane_info.iter().find(|p| p.pane_id == pos.pane.pane_id()) {
             Some(p) => p,
-            None => return Ok(()),
+            None => return Ok(vec![]),
         };
 
         let title_line = compute_pane_title(pane_info_item, pane_info, tab_info, &config);
 
         let palette = pos.pane.palette();
-        let foreground = palette.foreground.to_linear();
         let window_is_transparent =
             !self.window_background.is_empty() || config.window_background_opacity != 1.0;
-        let default_bg = palette
-            .resolve_bg(ColorAttribute::Default)
+
+        // Use the tab bar's active/inactive colors so the pane title bar is
+        // visually distinct from the terminal content and consistent with the
+        // tab bar styling.
+        let tab_colors = config
+            .resolved_palette
+            .tab_bar
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(TabBarColors::default);
+        let bar_color = if pos.is_active {
+            tab_colors.active_tab()
+        } else {
+            tab_colors.inactive_tab()
+        };
+        let foreground = bar_color.fg_color.to_linear();
+        let default_bg = bar_color
+            .bg_color
             .to_linear()
-            .mul_alpha(if window_is_transparent {
-                0.
-            } else {
-                config.text_background_opacity
-            });
+            .mul_alpha(if window_is_transparent { 0. } else { 1.0 });
 
         // Draw a solid background strip behind the title text so it is
         // legible even when a window background image is configured.
@@ -97,25 +110,37 @@ impl crate::TermWindow {
 
         let dims = pos.pane.get_dimensions();
 
+        // Reserve the rightmost cell for the close button when enabled.
+        let show_close = config.show_close_pane_button_in_pane_bar && pos.width >= 2;
+        let title_pixel_width = if show_close {
+            pixel_width - cell_width
+        } else {
+            pixel_width
+        };
+
         self.render_screen_line(
             RenderScreenLineParams {
                 top_pixel_y: title_y,
                 left_pixel_x: title_x,
-                pixel_width,
+                pixel_width: title_pixel_width,
                 stable_line_idx: None,
                 line: &title_line,
                 selection: 0..0,
                 cursor: &Default::default(),
                 palette: &palette,
                 dims: &RenderableDimensions {
-                    cols: pos.width,
+                    cols: if show_close { pos.width - 1 } else { pos.width },
                     physical_top: 0,
                     scrollback_rows: 0,
                     scrollback_top: 0,
                     viewport_rows: 1,
                     dpi: dims.dpi,
                     pixel_height: self.render_metrics.cell_size.height as usize,
-                    pixel_width: pos.pixel_width,
+                    pixel_width: if show_close {
+                        pos.pixel_width - self.render_metrics.cell_size.width as usize
+                    } else {
+                        pos.pixel_width
+                    },
                     reverse_video: false,
                 },
                 config: &config,
@@ -142,6 +167,73 @@ impl crate::TermWindow {
             layers,
         )?;
 
-        Ok(())
+        let mut ui_items = vec![];
+
+        if show_close {
+            let close_x = title_x + pixel_width - cell_width;
+            let close_line = {
+                use wezterm_term::color::AnsiColor;
+                let mut attr = CellAttributes::default();
+                attr.set_foreground(wezterm_term::color::ColorAttribute::PaletteIndex(
+                    AnsiColor::White as u8,
+                ));
+                crate::tabbar::parse_status_text("\u{00d7}", attr)
+            };
+
+            self.render_screen_line(
+                RenderScreenLineParams {
+                    top_pixel_y: title_y,
+                    left_pixel_x: close_x,
+                    pixel_width: cell_width,
+                    stable_line_idx: None,
+                    line: &close_line,
+                    selection: 0..0,
+                    cursor: &Default::default(),
+                    palette: &palette,
+                    dims: &RenderableDimensions {
+                        cols: 1,
+                        physical_top: 0,
+                        scrollback_rows: 0,
+                        scrollback_top: 0,
+                        viewport_rows: 1,
+                        dpi: dims.dpi,
+                        pixel_height: self.render_metrics.cell_size.height as usize,
+                        pixel_width: self.render_metrics.cell_size.width as usize,
+                        reverse_video: false,
+                    },
+                    config: &config,
+                    cursor_border_color: LinearRgba::default(),
+                    foreground,
+                    pane: None,
+                    is_active: pos.is_active,
+                    selection_fg: LinearRgba::default(),
+                    selection_bg: LinearRgba::default(),
+                    cursor_fg: LinearRgba::default(),
+                    cursor_bg: LinearRgba::default(),
+                    cursor_is_default_color: true,
+                    white_space,
+                    filled_box,
+                    window_is_transparent,
+                    default_bg,
+                    style: None,
+                    font: None,
+                    use_pixel_positioning: config.experimental_pixel_positioning,
+                    render_metrics: self.render_metrics,
+                    shape_key: None,
+                    password_input: false,
+                },
+                layers,
+            )?;
+
+            ui_items.push(UIItem {
+                x: close_x as usize,
+                y: title_y as usize,
+                width: cell_width as usize,
+                height: cell_height as usize,
+                item_type: UIItemType::ClosePane(pos.pane.pane_id()),
+            });
+        }
+
+        Ok(ui_items)
     }
 }

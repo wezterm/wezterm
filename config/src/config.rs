@@ -513,6 +513,12 @@ pub struct Config {
     #[dynamic(default)]
     pub pane_border_status: PaneBorderStatus,
 
+    /// When `pane_border_status` is not `Off`, controls whether a close
+    /// button (`×`) is rendered at the right edge of each pane title bar.
+    /// Clicking it closes (kills) that pane.  Defaults to `true`.
+    #[dynamic(default = "default_true")]
+    pub show_close_pane_button_in_pane_bar: bool,
+
     #[dynamic(default)]
     pub enable_scroll_bar: bool,
 
