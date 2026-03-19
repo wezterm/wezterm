@@ -36,7 +36,7 @@ use config::keyassignment::{
 use config::window::WindowLevel;
 use config::{
     configuration, AudibleBell, ConfigHandle, Dimension, DimensionContext, FrontEndSelection,
-    GeometryOrigin, GuiPosition, TermConfig, WindowCloseConfirmation,
+    GeometryOrigin, GuiPosition, PaneBorderStatus, TermConfig, WindowCloseConfirmation,
 };
 use lfucache::*;
 use mlua::{FromLua, LuaSerdeExt, UserData, UserDataFields};
@@ -3523,6 +3523,33 @@ impl TermWindow {
                     p.pane = Arc::clone(&overlay.pane);
                 }
             }
+
+            // When a pane title bar is active, each terminal process should
+            // see one fewer row than the cell area allocated to it by the
+            // split layout.  Resize here (lazily, only when the current size
+            // differs) so that the process never writes into the title bar row.
+            if self.config.pane_border_status != PaneBorderStatus::Off {
+                let cell_height = self.render_metrics.cell_size.height as usize;
+                let cell_width = self.render_metrics.cell_size.width as usize;
+                for p in &mut panes {
+                    if p.height > 1 {
+                        let target_rows = p.height - 1;
+                        let dims = p.pane.get_dimensions();
+                        if dims.viewport_rows != target_rows {
+                            let _ = p.pane.resize(TerminalSize {
+                                rows: target_rows,
+                                cols: p.width,
+                                pixel_height: target_rows * cell_height,
+                                pixel_width: p.width * cell_width,
+                                dpi: dims.dpi,
+                            });
+                        }
+                        p.height = target_rows;
+                        p.pixel_height = target_rows * cell_height;
+                    }
+                }
+            }
+
             panes
         }
     }

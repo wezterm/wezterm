@@ -11,10 +11,9 @@ impl crate::TermWindow {
     /// Paint a one-row title bar for a single split pane.
     ///
     /// The bar is drawn at the top or bottom of the pane's allocated cell
-    /// space (controlled by `config.pane_border_status`).  Terminal content
-    /// is rendered on top of it in `paint_pane`; this function draws the
-    /// background and text before the pane content so that on the default
-    /// `Top` position the title sits above the scrollback.
+    /// space (controlled by `config.pane_border_status`).  `paint_pane`
+    /// reserves this row by shifting terminal content down (Top) or
+    /// truncating the last visible row (Bottom), so there is no overlap.
     ///
     /// The text content comes from the `format-pane-title` Lua event (see
     /// `compute_pane_title`).  When no callback is registered the pane's
@@ -47,11 +46,14 @@ impl crate::TermWindow {
         let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
 
         // Pixel y-coordinate of the title bar row.
+        //
+        // pos.height has already been reduced by one by get_pos_panes_for_tab
+        // so that it equals the number of terminal rows.  The title bar
+        // therefore sits at pos.top (Top) or pos.top + pos.height (Bottom),
+        // which is the row immediately adjacent to the terminal content.
         let title_y = match config.pane_border_status {
             PaneBorderStatus::Top => top_pixel_y + pos.top as f32 * cell_height,
-            PaneBorderStatus::Bottom => {
-                top_pixel_y + (pos.top + pos.height.saturating_sub(1)) as f32 * cell_height
-            }
+            PaneBorderStatus::Bottom => top_pixel_y + (pos.top + pos.height) as f32 * cell_height,
             PaneBorderStatus::Off => return Ok(()),
         };
 
