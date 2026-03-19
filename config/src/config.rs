@@ -506,6 +506,13 @@ pub struct Config {
     #[dynamic(default)]
     pub hide_tab_bar_if_only_one_tab: bool,
 
+    /// Controls whether a title bar is shown at the top or bottom of each
+    /// split pane.  When enabled, the `format-pane-title` event is called to
+    /// produce the title text.  Defaults to `Off`.
+    /// See <https://wezterm.org/config/lua/config/pane_border_status.html>
+    #[dynamic(default)]
+    pub pane_border_status: PaneBorderStatus,
+
     #[dynamic(default)]
     pub enable_scroll_bar: bool,
 
@@ -2141,6 +2148,18 @@ pub enum ImePreeditRendering {
     Builtin,
     /// IME preedit is rendered by system
     System,
+}
+
+/// Controls whether each split pane has a title bar, and where it is placed.
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaneBorderStatus {
+    /// No pane title bars (default).
+    #[default]
+    Off,
+    /// Show a one-row title bar above each pane's content.
+    Top,
+    /// Show a one-row title bar below each pane's content.
+    Bottom,
 }
 
 #[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
