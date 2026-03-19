@@ -529,7 +529,7 @@ impl crate::TermWindow {
                     let mut elem = element
                         .item_type(UIItemType::TabBar(item.item.clone()))
                         .display(DisplayType::Block)
-                        .max_width(Some(Dimension::Pixels(tab_bar_width)))
+                        .max_width(Some(Dimension::Pixels(tab_bar_width - 10.)))
                         .padding(BoxDimension {
                             left: Dimension::Cells(0.5),
                             right: Dimension::Cells(0.5),
@@ -656,7 +656,6 @@ impl crate::TermWindow {
                     )
                     .display(DisplayType::Block)
                     .item_type(UIItemType::TabBar(item.item.clone()))
-                    .max_width(Some(Dimension::Pixels(tab_bar_width)))
                     .margin(BoxDimension {
                         left: Dimension::Pixels(0.),
                         right: Dimension::Pixels(0.),
@@ -752,14 +751,9 @@ impl crate::TermWindow {
 
         let border = self.get_os_border();
 
-        // Position on left or right side of window
-        let bounds_x = if on_right {
-            self.dimensions.pixel_width as f32 - tab_bar_width - border.right.get() as f32
-        } else {
-            border.left.get() as f32
-        };
-
-        let computed = self.compute_element(
+        // Always compute layout at x=0 (left edge), then translate if Right.
+        // This ensures internal layout is identical to the working Left case.
+        let mut computed = self.compute_element(
             &LayoutContext {
                 height: DimensionContext {
                     dpi: self.dimensions.dpi as f32,
@@ -772,7 +766,7 @@ impl crate::TermWindow {
                     pixel_cell: metrics.cell_size.width as f32,
                 },
                 bounds: euclid::rect(
-                    bounds_x,
+                    border.left.get() as f32,
                     border.top.get() as f32,
                     tab_bar_width,
                     self.dimensions.pixel_height as f32
@@ -784,6 +778,15 @@ impl crate::TermWindow {
             },
             &tabs,
         )?;
+
+        // Translate to right side if needed
+        if on_right {
+            let right_x = self.dimensions.pixel_width as f32
+                - tab_bar_width
+                - border.right.get() as f32
+                - border.left.get() as f32;
+            computed.translate(euclid::vec2(right_x, 0.));
+        }
 
         Ok(computed)
     }
