@@ -130,26 +130,10 @@ impl crate::TermWindow {
 
         // Draw a solid background strip behind the title text so it is
         // legible even when a window background image is configured.
-        //
-        // Extend the fill by half a cell toward the adjacent split line to
-        // close the visual gap between the split border and the title bar.
-        // The split line is drawn at pos_y ± cell_height/2, so reaching out
-        // by that amount makes them flush.  Clamp to top_pixel_y so we never
-        // overdraw into the tab-bar area.
-        let (fill_y, fill_height) = match config.pane_border_status {
-            PaneBorderStatus::Top => {
-                let extend = cell_height / 2.0;
-                let y_start = (title_y - extend).max(top_pixel_y);
-                let h = cell_height + (title_y - y_start);
-                (y_start, h)
-            }
-            PaneBorderStatus::Bottom => (title_y, cell_height + cell_height / 2.0),
-            PaneBorderStatus::Off => return Ok(vec![]),
-        };
         self.filled_rectangle(
             layers,
             0,
-            euclid::rect(title_x, fill_y, pixel_width, fill_height),
+            euclid::rect(title_x, title_y, pixel_width, cell_height),
             default_bg,
         )?;
 
