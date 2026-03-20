@@ -431,20 +431,21 @@ impl super::TermWindow {
     ) {
         let on_right = self.config.tab_bar_vertical_position
             == config::VerticalTabBarPosition::Right;
+        let max_width = self.dimensions.pixel_width as f32 * super::MAX_VERTICAL_TAB_BAR_WIDTH_RATIO;
         let new_width = if on_right {
             (self.dimensions.pixel_width as f32 - event.coords.x as f32)
-                .max(80.)
-                .min(self.dimensions.pixel_width as f32 * 0.5)
+                .max(super::MIN_VERTICAL_TAB_BAR_WIDTH)
+                .min(max_width)
         } else {
             (event.coords.x as f32)
-                .max(80.)
-                .min(self.dimensions.pixel_width as f32 * 0.5)
+                .max(super::MIN_VERTICAL_TAB_BAR_WIDTH)
+                .min(max_width)
         };
         self.vertical_tab_bar_width_override = Some(new_width);
         self.invalidate_fancy_tab_bar();
 
         // Update the hit area to follow the new separator position
-        let handle_width: usize = 6;
+        let handle_width = super::RESIZE_HANDLE_WIDTH;
         if on_right {
             let bar_x = self.dimensions.pixel_width - new_width as usize;
             item.x = bar_x.saturating_sub(handle_width / 2);

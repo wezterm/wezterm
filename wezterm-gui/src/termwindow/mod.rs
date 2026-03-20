@@ -162,6 +162,13 @@ pub enum UIItemType {
     VerticalTabBarResize,
 }
 
+/// Minimum width (px) when drag-resizing the vertical tab bar.
+pub const MIN_VERTICAL_TAB_BAR_WIDTH: f32 = 80.;
+/// Maximum ratio of window width the vertical tab bar can occupy.
+pub const MAX_VERTICAL_TAB_BAR_WIDTH_RATIO: f32 = 0.5;
+/// Width (px) of the invisible resize handle hit area on the separator edge.
+pub const RESIZE_HANDLE_WIDTH: usize = 6;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UIItem {
     pub x: usize,

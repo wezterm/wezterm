@@ -21,7 +21,7 @@ impl crate::TermWindow {
             // Register resize handle for vertical tab bar
             if self.config.tab_bar_vertical {
                 let tab_bar_width = self.tab_bar_pixel_width();
-                let handle_width: usize = 6;
+                let handle_width = crate::termwindow::RESIZE_HANDLE_WIDTH;
                 let on_right = self.config.tab_bar_vertical_position
                     == config::VerticalTabBarPosition::Right;
                 let handle_x = if on_right {

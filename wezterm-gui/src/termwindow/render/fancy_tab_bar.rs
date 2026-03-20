@@ -56,6 +56,38 @@ impl crate::TermWindow {
         self.fancy_tab_bar.take();
     }
 
+    fn tab_bar_colors(&self) -> TabBarColors {
+        self.config
+            .colors
+            .as_ref()
+            .and_then(|c| c.tab_bar.as_ref())
+            .cloned()
+            .unwrap_or_else(TabBarColors::default)
+    }
+
+    fn titlebar_bg_linear(&self) -> LinearRgba {
+        if self.focused.is_some() {
+            self.config.window_frame.active_titlebar_bg
+        } else {
+            self.config.window_frame.inactive_titlebar_bg
+        }
+        .to_linear()
+    }
+
+    fn bar_element_colors(&self) -> ElementColors {
+        ElementColors {
+            border: BorderColor::default(),
+            bg: self.titlebar_bg_linear().into(),
+            text: if self.focused.is_some() {
+                self.config.window_frame.active_titlebar_fg
+            } else {
+                self.config.window_frame.inactive_titlebar_fg
+            }
+            .to_linear()
+            .into(),
+        }
+    }
+
     pub fn build_fancy_tab_bar(&self, palette: &ColorPalette) -> anyhow::Result<ComputedElement> {
         if self.config.tab_bar_vertical {
             return self.build_vertical_fancy_tab_bar(palette);
@@ -65,34 +97,12 @@ impl crate::TermWindow {
         let font = self.fonts.title_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
         let items = self.tab_bar.items();
-        let colors = self
-            .config
-            .colors
-            .as_ref()
-            .and_then(|c| c.tab_bar.as_ref())
-            .cloned()
-            .unwrap_or_else(TabBarColors::default);
+        let colors = self.tab_bar_colors();
 
         let mut left_status = vec![];
         let mut left_eles = vec![];
         let mut right_eles = vec![];
-        let bar_colors = ElementColors {
-            border: BorderColor::default(),
-            bg: if self.focused.is_some() {
-                self.config.window_frame.active_titlebar_bg
-            } else {
-                self.config.window_frame.inactive_titlebar_bg
-            }
-            .to_linear()
-            .into(),
-            text: if self.focused.is_some() {
-                self.config.window_frame.active_titlebar_fg
-            } else {
-                self.config.window_frame.inactive_titlebar_fg
-            }
-            .to_linear()
-            .into(),
-        };
+        let bar_colors = self.bar_element_colors();
 
         let item_to_elem = |item: &TabEntry| -> Element {
             let element = Element::with_line(&font, &item.title, palette);
@@ -469,36 +479,12 @@ impl crate::TermWindow {
         &self,
         palette: &ColorPalette,
     ) -> anyhow::Result<ComputedElement> {
-        let tab_bar_width = self.vertical_tab_bar_width_override
-            .unwrap_or(self.config.tab_bar_vertical_width as f32);
+        let tab_bar_width = self.tab_bar_pixel_width();
         let font = self.fonts.title_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
         let items = self.tab_bar.items();
-        let colors = self
-            .config
-            .colors
-            .as_ref()
-            .and_then(|c| c.tab_bar.as_ref())
-            .cloned()
-            .unwrap_or_else(TabBarColors::default);
-
-        let bar_colors = ElementColors {
-            border: BorderColor::default(),
-            bg: if self.focused.is_some() {
-                self.config.window_frame.active_titlebar_bg
-            } else {
-                self.config.window_frame.inactive_titlebar_bg
-            }
-            .to_linear()
-            .into(),
-            text: if self.focused.is_some() {
-                self.config.window_frame.active_titlebar_fg
-            } else {
-                self.config.window_frame.inactive_titlebar_fg
-            }
-            .to_linear()
-            .into(),
-        };
+        let colors = self.tab_bar_colors();
+        let bar_colors = self.bar_element_colors();
 
         let active_tab_colors = colors.active_tab();
         let new_tab_colors = colors.new_tab();
@@ -694,19 +680,14 @@ impl crate::TermWindow {
 
         // Separator color from theme (configurable via colors.tab_bar.inactive_tab_edge)
         let separator_color = colors.inactive_tab_edge().to_linear();
-        let bg_linear = if self.focused.is_some() {
-            self.config.window_frame.active_titlebar_bg
-        } else {
-            self.config.window_frame.inactive_titlebar_bg
-        }
-        .to_linear();
+        let bg_linear = self.titlebar_bg_linear();
 
         let on_right = self.config.tab_bar_vertical_position
             == config::VerticalTabBarPosition::Right;
 
-        // Work around box_model bug: right border rendering uses border.left width,
-        // so we set both left and right border to 1px. The separator side gets the
-        // visible color, the other side matches the background.
+        // Work around box_model bug (box_model.rs:1236): right border rendering
+        // uses border.left width, so both sides must be 1px. The separator side
+        // gets the visible color; the other side matches the background.
         let border_colors = if on_right {
             BorderColor {
                 left: separator_color,
