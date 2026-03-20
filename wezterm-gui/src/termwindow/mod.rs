@@ -3544,28 +3544,22 @@ impl TermWindow {
                 }
             }
 
-            // When a pane title bar is active, each terminal process should
-            // see one fewer row than the cell area allocated to it by the
-            // split layout.  Resize here (lazily, only when the current size
-            // differs) so that the process never writes into the title bar row.
+            // When a pane title bar is active, reduce the displayed row count
+            // by one so the render loop clips the pane content to the rows
+            // below (Top) or above (Bottom) the title bar.
+            //
+            // We adjust only the local PositionedPane values used by the
+            // renderer; we do NOT call p.pane.resize() here.  Calling resize
+            // from the paint loop triggers rebuild_splits_sizes_from_contained_panes
+            // on the mux server, which updates the split tree to the reduced
+            // height, causing every subsequent frame to reduce by one more row
+            // until all panes collapse to a single row.
             if self.config.pane_border_status != PaneBorderStatus::Off {
                 let cell_height = self.render_metrics.cell_size.height as usize;
-                let cell_width = self.render_metrics.cell_size.width as usize;
                 for p in &mut panes {
                     if p.height > 1 {
-                        let target_rows = p.height - 1;
-                        let dims = p.pane.get_dimensions();
-                        if dims.viewport_rows != target_rows {
-                            let _ = p.pane.resize(TerminalSize {
-                                rows: target_rows,
-                                cols: p.width,
-                                pixel_height: target_rows * cell_height,
-                                pixel_width: p.width * cell_width,
-                                dpi: dims.dpi,
-                            });
-                        }
-                        p.height = target_rows;
-                        p.pixel_height = target_rows * cell_height;
+                        p.height -= 1;
+                        p.pixel_height = p.height * cell_height;
                     }
                 }
             }
