@@ -5,6 +5,7 @@ use ::window::{
 use anyhow::Context;
 use config::keyassignment::{KeyAssignment, KeyTableEntry};
 use mux::pane::{Pane, PerformAssignmentResult};
+use mux::Mux;
 use smol::Timer;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -264,6 +265,15 @@ impl super::TermWindow {
                     })
                     .detach();
                 }
+                return true;
+            }
+        }
+
+        if is_down
+            && self.sidebar_rename_active.is_some()
+            && only_key_bindings == OnlyKeyBindings::No
+        {
+            if self.handle_sidebar_rename_key(keycode) {
                 return true;
             }
         }
@@ -865,5 +875,54 @@ impl super::TermWindow {
             WK::KeyPadPageDown => KC::KeyPadPageDown,
         };
         Key::Code(code)
+    }
+
+    /// Handle key events when the sidebar rename text field is active.
+    /// Returns `true` if the key was consumed.
+    fn handle_sidebar_rename_key(&mut self, keycode: &KeyCode) -> bool {
+        match keycode {
+            KeyCode::Char(c) if !c.is_control() => {
+                self.sidebar_rename_buffer.push(*c);
+                self.invalidate_sidebar();
+                self.window.as_ref().unwrap().invalidate();
+                true
+            }
+            // Backspace is represented as Char('\u{8}')
+            KeyCode::Char('\u{8}') => {
+                self.sidebar_rename_buffer.pop();
+                self.invalidate_sidebar();
+                self.window.as_ref().unwrap().invalidate();
+                true
+            }
+            // Enter is represented as Char('\r')
+            KeyCode::Char('\r') => {
+                if let Some(target) = self.sidebar_rename_active.take() {
+                    let mux = Mux::get();
+                    match target {
+                        crate::termwindow::SidebarRenameTarget::Workspace(old_name) => {
+                            mux.rename_workspace(&old_name, &self.sidebar_rename_buffer);
+                        }
+                        crate::termwindow::SidebarRenameTarget::Tab(tab_id) => {
+                            if let Some(tab) = mux.get_tab(tab_id) {
+                                tab.set_title(&self.sidebar_rename_buffer);
+                            }
+                        }
+                    }
+                }
+                self.sidebar_rename_buffer.clear();
+                self.invalidate_sidebar();
+                self.window.as_ref().unwrap().invalidate();
+                true
+            }
+            // Escape is represented as Char('\u{1b}')
+            KeyCode::Char('\u{1b}') => {
+                self.sidebar_rename_active = None;
+                self.sidebar_rename_buffer.clear();
+                self.invalidate_sidebar();
+                self.window.as_ref().unwrap().invalidate();
+                true
+            }
+            _ => false,
+        }
     }
 }

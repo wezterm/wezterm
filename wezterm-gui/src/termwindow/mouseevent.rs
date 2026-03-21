@@ -1,12 +1,15 @@
 use crate::tabbar::TabBarItem;
 use crate::termwindow::{
-    GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
+    save_sidebar_state, GuiWin, MouseCapture, PositionedSplit, ScrollHit, SidebarItem, SidebarRenameTarget,
+    TermWindowNotif, UIItem, UIItemType, TMB,
 };
 use ::window::{
     MouseButtons as WMB, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
     WindowDecorations, WindowOps, WindowState,
 };
-use config::keyassignment::{KeyAssignment, MouseEventTrigger, SpawnTabDomain};
+use crate::spawn::SpawnWhere;
+use config::keyassignment::{KeyAssignment, MouseEventTrigger, SpawnCommand, SpawnTabDomain};
+use config::{SidebarPosition, TermConfig};
 use config::MouseEventAltScreen;
 use mux::pane::{Pane, WithPaneLines};
 use mux::tab::SplitDirection;
@@ -43,7 +46,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::Sidebar(_) => {}
         }
     }
 
@@ -54,7 +58,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::Sidebar(_) => {}
         }
     }
 
@@ -185,6 +190,39 @@ impl super::TermWindow {
                 }
             }
             _ => {}
+        }
+
+        // Intercept scroll events over the sidebar region so they don't
+        // fall through to the terminal pane.
+        if self.sidebar_visible {
+            let h_context = config::DimensionContext {
+                dpi: self.dimensions.dpi as f32,
+                pixel_max: self.dimensions.pixel_width as f32,
+                pixel_cell: self.render_metrics.cell_size.width as f32,
+            };
+            let sidebar_px =
+                self.config.sidebar_width.evaluate_as_pixels(h_context) as usize;
+            let is_over_sidebar = if self.config.sidebar_position == SidebarPosition::Right {
+                event.coords.x as usize
+                    > self.dimensions.pixel_width.saturating_sub(sidebar_px)
+            } else {
+                (event.coords.x as usize) < sidebar_px
+            };
+            if is_over_sidebar {
+                if let Some(item) = self.resolve_ui_item(&event) {
+                    if let UIItemType::Sidebar(_) = &item.item_type {
+                        if let WMEK::VertWheel(amount) = event.kind {
+                            self.sidebar_scroll_offset -= amount as f32 * 20.0;
+                            if self.sidebar_scroll_offset < 0.0 {
+                                self.sidebar_scroll_offset = 0.0;
+                            }
+                            self.invalidate_sidebar();
+                            self.window.as_ref().unwrap().invalidate();
+                            return;
+                        }
+                    }
+                }
+            }
         }
 
         let prior_ui_item = self.last_ui_item.clone();
@@ -382,6 +420,9 @@ impl super::TermWindow {
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
             }
+            UIItemType::Sidebar(sidebar_item) => {
+                self.mouse_event_sidebar(sidebar_item, event, context);
+            }
         }
     }
 
@@ -395,6 +436,224 @@ impl super::TermWindow {
             WMEK::Press(MousePress::Left) => {
                 log::debug!("Should close tab {}", idx);
                 self.close_specific_tab(idx, true);
+            }
+            _ => {}
+        }
+        context.set_cursor(Some(MouseCursor::Arrow));
+    }
+
+    /// If a rename is in progress, commit it (save the current buffer).
+    fn commit_sidebar_rename(&mut self) {
+        if let Some(target) = self.sidebar_rename_active.take() {
+            let mux = Mux::get();
+            match target {
+                SidebarRenameTarget::Workspace(old_name) => {
+                    mux.rename_workspace(&old_name, &self.sidebar_rename_buffer);
+                }
+                SidebarRenameTarget::Tab(tab_id) => {
+                    if let Some(tab) = mux.get_tab(tab_id) {
+                        tab.set_title(&self.sidebar_rename_buffer);
+                    }
+                }
+            }
+            self.sidebar_rename_buffer.clear();
+        }
+    }
+
+    fn mouse_event_sidebar(
+        &mut self,
+        item: SidebarItem,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        // Any click while renaming commits the rename first
+        if self.sidebar_rename_active.is_some() {
+            if matches!(event.kind, WMEK::Press(MousePress::Left)) {
+                // Don't commit if clicking the rename text field itself
+                if !matches!(item, SidebarItem::RenameTextField) {
+                    self.commit_sidebar_rename();
+                }
+            }
+        }
+
+        match (&item, &event.kind) {
+            (SidebarItem::WorkspaceHeader { name }, WMEK::Press(MousePress::Left)) => {
+                let now = std::time::Instant::now();
+                let click_key = format!("ws:{}", name);
+                let is_double_click = self
+                    .sidebar_last_click_time
+                    .map(|t| now.duration_since(t).as_millis() < 400)
+                    .unwrap_or(false)
+                    && self.sidebar_last_click_item.as_deref() == Some(click_key.as_str());
+
+                if is_double_click {
+                    // Double-click: enter rename mode
+                    self.sidebar_rename_active =
+                        Some(SidebarRenameTarget::Workspace(name.clone()));
+                    self.sidebar_rename_buffer = name.clone();
+                    self.sidebar_last_click_time = None;
+                    self.sidebar_last_click_item = None;
+                } else {
+                    // Single click: switch workspace
+                    let mux = Mux::get();
+                    let switcher = crate::frontend::WorkspaceSwitcher::new(name);
+                    mux.set_active_workspace(name);
+                    drop(switcher);
+                    self.sidebar_last_click_time = Some(now);
+                    self.sidebar_last_click_item = Some(click_key);
+                }
+                self.invalidate_sidebar();
+            }
+            (SidebarItem::WorkspaceDisclosure { name }, WMEK::Press(MousePress::Left)) => {
+                if !self.sidebar_collapsed.remove(name) {
+                    self.sidebar_collapsed.insert(name.clone());
+                }
+                save_sidebar_state(self.sidebar_visible, &self.sidebar_collapsed);
+                self.invalidate_sidebar();
+                self.window.as_ref().unwrap().invalidate();
+            }
+            (
+                SidebarItem::TabEntry {
+                    workspace,
+                    window_id,
+                    tab_id,
+                },
+                WMEK::Press(MousePress::Left),
+            ) => {
+                let now = std::time::Instant::now();
+                let click_key = format!("tab:{}", tab_id);
+                let is_double_click = self
+                    .sidebar_last_click_time
+                    .map(|t| now.duration_since(t).as_millis() < 400)
+                    .unwrap_or(false)
+                    && self.sidebar_last_click_item.as_deref() == Some(click_key.as_str());
+
+                if is_double_click {
+                    // Double-click: enter rename mode
+                    let mux = Mux::get();
+                    let current_title = mux
+                        .get_tab(*tab_id)
+                        .map(|tab| {
+                            let t = tab.get_title();
+                            if t.is_empty() {
+                                tab.get_active_pane()
+                                    .map(|p| p.get_title())
+                                    .unwrap_or_default()
+                            } else {
+                                t
+                            }
+                        })
+                        .unwrap_or_default();
+                    self.sidebar_rename_active = Some(SidebarRenameTarget::Tab(*tab_id));
+                    self.sidebar_rename_buffer = current_title;
+                    self.sidebar_last_click_time = None;
+                    self.sidebar_last_click_item = None;
+                } else {
+                    // Single click: switch to tab
+                    let mux = Mux::get();
+                    let active_ws = mux.active_workspace();
+                    if active_ws != *workspace {
+                        let switcher = crate::frontend::WorkspaceSwitcher::new(workspace);
+                        mux.set_active_workspace(workspace);
+                        drop(switcher);
+                    }
+                    if let Some(mut window) = mux.get_window_mut(*window_id) {
+                        if let Some(idx) = window.idx_by_id(*tab_id) {
+                            window.save_and_then_set_active(idx);
+                        }
+                        drop(window);
+                    }
+                    self.update_title();
+                    self.update_scrollbar();
+                    self.sidebar_last_click_time = Some(now);
+                    self.sidebar_last_click_item = Some(click_key);
+                }
+                self.invalidate_sidebar();
+                self.window.as_ref().unwrap().invalidate();
+            }
+            (SidebarItem::NewWorkspaceButton, WMEK::Press(MousePress::Left)) => {
+                let mux = Mux::get();
+                let name = mux.generate_workspace_name();
+                let switcher = crate::frontend::WorkspaceSwitcher::new(&name);
+                mux.set_active_workspace(&name);
+
+                if mux.iter_windows_in_workspace(&name).is_empty() {
+                    let spawn = SpawnCommand::default();
+                    let size = self.terminal_size;
+                    let term_config = Arc::new(TermConfig::with_config(self.config.clone()));
+                    let src_window_id = self.mux_window_id;
+
+                    promise::spawn::spawn(async move {
+                        if let Err(err) = crate::spawn::spawn_command_internal(
+                            spawn,
+                            SpawnWhere::NewWindow,
+                            size,
+                            Some(src_window_id),
+                            term_config,
+                        )
+                        .await
+                        {
+                            log::error!("Failed to spawn: {:#}", err);
+                        }
+                        switcher.do_switch();
+                    })
+                    .detach();
+                } else {
+                    switcher.do_switch();
+                }
+
+                self.sidebar_rename_active = Some(SidebarRenameTarget::Workspace(name.clone()));
+                self.sidebar_rename_buffer = name;
+                self.invalidate_sidebar();
+                self.window.as_ref().unwrap().invalidate();
+            }
+            (SidebarItem::NewTabButton { workspace }, WMEK::Press(MousePress::Left)) => {
+                let mux = Mux::get();
+                let active_ws = mux.active_workspace();
+                if active_ws != *workspace {
+                    let switcher = crate::frontend::WorkspaceSwitcher::new(workspace);
+                    mux.set_active_workspace(workspace);
+                    drop(switcher);
+                }
+                let spawn = SpawnCommand {
+                    domain: SpawnTabDomain::CurrentPaneDomain,
+                    ..Default::default()
+                };
+                let size = self.terminal_size;
+                let term_config =
+                    std::sync::Arc::new(TermConfig::with_config(self.config.clone()));
+                let src_window_id = self.mux_window_id;
+                promise::spawn::spawn(async move {
+                    if let Err(err) = crate::spawn::spawn_command_internal(
+                        spawn,
+                        SpawnWhere::NewTab,
+                        size,
+                        Some(src_window_id),
+                        term_config,
+                    )
+                    .await
+                    {
+                        log::error!("Failed to spawn new tab: {:#}", err);
+                    }
+                })
+                .detach();
+                self.invalidate_sidebar();
+                self.window.as_ref().unwrap().invalidate();
+            }
+            (SidebarItem::WorkspaceCloseButton { name }, WMEK::Press(MousePress::Left)) => {
+                let mux = Mux::get();
+                let window_ids = mux.iter_windows_in_workspace(name);
+                for wid in window_ids {
+                    mux.kill_window(wid);
+                }
+                self.invalidate_sidebar();
+                self.window.as_ref().unwrap().invalidate();
+            }
+            (SidebarItem::TabCloseButton { tab_id }, WMEK::Press(MousePress::Left)) => {
+                let mux = Mux::get();
+                mux.remove_tab(*tab_id);
+                self.invalidate_sidebar();
+                self.window.as_ref().unwrap().invalidate();
             }
             _ => {}
         }

@@ -512,6 +512,18 @@ pub struct Config {
     #[dynamic(try_from = "crate::units::PixelUnit", default = "default_half_cell")]
     pub min_scroll_bar_height: Dimension,
 
+    #[dynamic(
+        try_from = "crate::units::PixelUnit",
+        default = "default_sidebar_width"
+    )]
+    pub sidebar_width: Dimension,
+
+    #[dynamic(default)]
+    pub sidebar_position: SidebarPosition,
+
+    #[dynamic(default)]
+    pub sidebar_default_visible: bool,
+
     /// If false, do not try to use a Wayland protocol connection
     /// when starting the gui frontend, and instead use X11.
     /// This option is only considered on X11/Wayland systems and
@@ -1927,6 +1939,10 @@ const fn default_half_cell() -> Dimension {
     Dimension::Cells(0.5)
 }
 
+const fn default_sidebar_width() -> Dimension {
+    Dimension::Pixels(220.0)
+}
+
 const fn default_reverse_video_cursor_min_contrast() -> f32 {
     2.5
 }
@@ -1958,6 +1974,13 @@ impl Default for WindowPadding {
 pub struct WindowContentAlignment {
     pub horizontal: HorizontalWindowContentAlignment,
     pub vertical: VerticalWindowContentAlignment,
+}
+
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SidebarPosition {
+    #[default]
+    Right,
+    Left,
 }
 
 #[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]

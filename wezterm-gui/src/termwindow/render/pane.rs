@@ -9,7 +9,7 @@ use crate::termwindow::{ScrollHit, UIItem, UIItemType};
 use ::window::bitmaps::TextureRect;
 use ::window::DeadKeyStatus;
 use anyhow::Context;
-use config::VisualBellTarget;
+use config::{DimensionContext, VisualBellTarget};
 use mux::pane::{PaneId, WithPaneLines};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::PositionedPane;
@@ -247,7 +247,22 @@ impl crate::TermWindow {
             let config = &self.config;
             let padding = self.effective_right_padding(&config) as f32;
 
-            let thumb_x = self.dimensions.pixel_width - padding as usize - border.right.get();
+            let sidebar_px = if self.sidebar_visible {
+                self.config.sidebar_width.evaluate_as_pixels(
+                    DimensionContext {
+                        dpi: self.dimensions.dpi as f32,
+                        pixel_max: self.dimensions.pixel_width as f32,
+                        pixel_cell: self.render_metrics.cell_size.width as f32,
+                    }
+                ) as usize
+            } else {
+                0
+            };
+
+            let thumb_x = self.dimensions.pixel_width
+                - padding as usize
+                - border.right.get()
+                - sidebar_px;
 
             // Register the scroll bar location
             self.ui_items.push(UIItem {

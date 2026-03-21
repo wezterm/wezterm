@@ -69,6 +69,7 @@ As features stabilize some brief notes about them will accumulate here.
   @mgpinf! #6801
 
 #### New
+* Added workspace sidebar panel — a toggleable tree view showing all workspaces and their tabs. Toggle with `CTRL+SHIFT+E` (configurable). Features include click-to-switch, double-click to rename workspaces and tabs, per-item hover close buttons, new tab/workspace creation, and theme-aware colors. Configure position, width, and default visibility via [sidebar_width](config/lua/config/sidebar_width.md), [sidebar_position](config/lua/config/sidebar_position.md), and [sidebar_default_visible](config/lua/config/sidebar_default_visible.md). [See Sidebar Guide](sidebar.md).
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
   and deserialization of JSON, TOML and YAML. Thanks to @expnn! #4969
 * `wezterm ssh` now supports agent forwarding. Thanks to @Riatre! #5345

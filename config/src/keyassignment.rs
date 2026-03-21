@@ -646,6 +646,7 @@ pub enum KeyAssignment {
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
     Confirmation(Confirmation),
+    ToggleSidebar,
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

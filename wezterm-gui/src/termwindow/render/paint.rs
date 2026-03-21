@@ -272,6 +272,11 @@ impl crate::TermWindow {
         self.paint_window_borders(&mut layers)
             .context("paint_window_borders")?;
         drop(layers);
+
+        if self.sidebar_visible {
+            self.paint_sidebar().context("paint_sidebar")?;
+        }
+
         self.paint_modal().context("paint_modal")?;
 
         Ok(())

@@ -681,6 +681,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["View"],
             icon: Some("md_fullscreen"),
         },
+        ToggleSidebar => CommandDef {
+            brief: "Toggle workspace sidebar".into(),
+            doc: "Toggles the workspace sidebar panel".into(),
+            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "e".into())],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: None,
+        },
         ToggleAlwaysOnTop => CommandDef {
             brief: "Toggle always on Top".into(),
             doc: "Toggles the window between floating and non-floating states to stay on top of other windows.".into(),
@@ -2064,6 +2072,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ScrollToTop,
         ScrollToBottom,
         // ----------------- Window
+        ToggleSidebar,
         ToggleFullScreen,
         ToggleAlwaysOnTop,
         ToggleAlwaysOnBottom,

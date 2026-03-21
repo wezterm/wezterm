@@ -54,7 +54,7 @@ use mux_lua::MuxPane;
 use smol::channel::Sender;
 use smol::Timer;
 use std::cell::{RefCell, RefMut};
-use std::collections::{HashMap, LinkedList};
+use std::collections::{HashMap, HashSet, LinkedList};
 use std::ops::Add;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -85,8 +85,42 @@ pub mod spawn;
 pub mod webgpu;
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 const ATLAS_SIZE: usize = 128;
+
+#[derive(Serialize, Deserialize, Default)]
+struct SidebarPersistentState {
+    visible: bool,
+    collapsed: Vec<String>,
+}
+
+fn sidebar_state_path() -> PathBuf {
+    config::DATA_DIR.join("sidebar_state.json")
+}
+
+pub(crate) fn save_sidebar_state(visible: bool, collapsed: &HashSet<String>) {
+    let state = SidebarPersistentState {
+        visible,
+        collapsed: collapsed.iter().cloned().collect(),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&state) {
+        let path = sidebar_state_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(&path, json).ok();
+    }
+}
+
+fn load_sidebar_state() -> SidebarPersistentState {
+    let path = sidebar_state_path();
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
 
 lazy_static::lazy_static! {
     static ref WINDOW_CLASS: Mutex<String> = Mutex::new(wezterm_gui_subcommands::DEFAULT_WINDOW_CLASS.to_owned());
@@ -152,6 +186,26 @@ pub enum TermWindowNotif {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SidebarItem {
+    Background,
+    WorkspaceHeader { name: String },
+    WorkspaceDisclosure { name: String },
+    WorkspaceCloseButton { name: String },
+    TabEntry { workspace: String, window_id: MuxWindowId, tab_id: TabId },
+    TabCloseButton { tab_id: TabId },
+    NewTabButton { workspace: String },
+    NewWorkspaceButton,
+    RenameTextField,
+}
+
+/// Tracks what is currently being renamed in the sidebar
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SidebarRenameTarget {
+    Workspace(String),
+    Tab(TabId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UIItemType {
     TabBar(TabBarItem),
     CloseTab(usize),
@@ -159,6 +213,7 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
+    Sidebar(SidebarItem),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -391,6 +446,17 @@ pub struct TermWindow {
     show_scroll_bar: bool,
     tab_bar: TabBarState,
     fancy_tab_bar: Option<box_model::ComputedElement>,
+    sidebar_visible: bool,
+    sidebar_collapsed: HashSet<String>,
+    sidebar_rename_active: Option<SidebarRenameTarget>,
+    sidebar_rename_buffer: String,
+    #[allow(dead_code)] // Used in future hover tracking
+    sidebar_hover_item: Option<SidebarItem>,
+    sidebar_scroll_offset: f32,
+    sidebar_element: Option<box_model::ComputedElement>,
+    sidebar_footer_element: Option<box_model::ComputedElement>,
+    sidebar_last_click_time: Option<std::time::Instant>,
+    sidebar_last_click_item: Option<String>,
     pub right_status: String,
     pub left_status: String,
     last_ui_item: Option<UIItem>,
@@ -677,6 +743,9 @@ impl TermWindow {
 
         let connection_name = Connection::get().unwrap().name();
 
+        let persisted_sidebar = load_sidebar_state();
+        let has_persisted_sidebar = sidebar_state_path().exists();
+
         let myself = Self {
             created: Instant::now(),
             connection_name,
@@ -712,6 +781,20 @@ impl TermWindow {
             show_scroll_bar: config.enable_scroll_bar,
             tab_bar: TabBarState::default(),
             fancy_tab_bar: None,
+            sidebar_visible: if has_persisted_sidebar {
+                persisted_sidebar.visible
+            } else {
+                config.sidebar_default_visible
+            },
+            sidebar_collapsed: persisted_sidebar.collapsed.into_iter().collect(),
+            sidebar_rename_active: None,
+            sidebar_rename_buffer: String::new(),
+            sidebar_hover_item: None,
+            sidebar_scroll_offset: 0.0,
+            sidebar_element: None,
+            sidebar_footer_element: None,
+            sidebar_last_click_time: None,
+            sidebar_last_click_item: None,
             right_status: String::new(),
             left_status: String::new(),
             last_mouse_coords: (0, -1),
@@ -1213,6 +1296,7 @@ impl TermWindow {
                     ..
                 } => {
                     self.update_title();
+                    self.invalidate_sidebar();
                 }
                 MuxNotification::Alert {
                     alert: Alert::PaletteChanged,
@@ -1242,8 +1326,11 @@ impl TermWindow {
                     log::trace!("Ding! (this is the bell) in pane {}", pane_id);
                     self.emit_window_event("bell", Some(pane_id));
 
-                    let mut per_pane = self.pane_state(pane_id);
-                    per_pane.bell_start.replace(Instant::now());
+                    {
+                        let mut per_pane = self.pane_state(pane_id);
+                        per_pane.bell_start.replace(Instant::now());
+                    }
+                    self.invalidate_sidebar();
                     window.invalidate();
                 }
                 MuxNotification::Alert {
@@ -1789,6 +1876,8 @@ impl TermWindow {
             .borrow_mut()
             .update_config(&config);
         self.fancy_tab_bar.take();
+        self.sidebar_element.take();
+        self.sidebar_footer_element.take();
         self.invalidate_fancy_tab_bar();
         self.invalidate_modal();
         self.input_map = InputMap::new(&config);
@@ -1848,6 +1937,11 @@ impl TermWindow {
                 window.invalidate();
             }
         }
+    }
+
+    pub fn invalidate_sidebar(&mut self) {
+        self.sidebar_element.take();
+        self.sidebar_footer_element.take();
     }
 
     pub fn cancel_modal(&self) {
@@ -2672,6 +2766,17 @@ impl TermWindow {
                         top_level: false,
                     }),
                 );
+            }
+            ToggleSidebar => {
+                self.sidebar_visible = !self.sidebar_visible;
+                save_sidebar_state(self.sidebar_visible, &self.sidebar_collapsed);
+                self.sidebar_element.take();
+                self.sidebar_footer_element.take();
+                self.update_title();
+                let dims = self.dimensions;
+                let window = self.window.as_ref().unwrap().clone();
+                window.invalidate();
+                self.apply_dimensions(&dims, None, &window);
             }
             ToggleFullScreen => {
                 self.window.as_ref().unwrap().toggle_fullscreen();

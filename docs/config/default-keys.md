@@ -87,6 +87,7 @@ in a form that you can copy and paste into your own configuration.
 | `CTRL+SHIFT` | `UpArrow`    | `ActivatePaneDirection="Up"` |
 | `CTRL+SHIFT` | `DownArrow`    | `ActivatePaneDirection="Down"` |
 | `CTRL+SHIFT` | `Z`    | `TogglePaneZoomState` |
+| `CTRL+SHIFT` | `E`    | `ToggleSidebar` |
 
 If you don't want the default assignments to be registered, you can
 disable all of them with this configuration; if you chose to do this,
