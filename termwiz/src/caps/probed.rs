@@ -9,6 +9,9 @@ use std::io::{Read, Write};
 
 const TMUX_BEGIN: &str = "\u{1b}Ptmux;\u{1b}";
 const TMUX_END: &str = "\u{1b}\\";
+const INCOMPLETE_DYNAMIC_COLOR_RESPONSE: &str =
+    "terminal returned an incomplete dynamic color response";
+const NO_DYNAMIC_COLOR_RESPONSE: &str = "terminal did not respond to dynamic color query";
 
 /// Represents a terminal name and version.
 /// The name XtVersion is because this value is produced
@@ -46,6 +49,7 @@ impl XtVersion {
 mod test {
     use super::*;
     use crate::color::SrgbaTuple;
+    use crate::escape::csi::DeviceAttributes;
     use crate::escape::osc::{ColorOrQuery, DynamicColorNumber, OperatingSystemCommand};
     use std::io::Cursor;
     use std::str::FromStr;
@@ -84,11 +88,12 @@ mod test {
         assert_eq!(
             String::from_utf8(write).unwrap(),
             format!(
-                "{}",
+                "{}{}",
                 OperatingSystemCommand::ChangeDynamicColors(
                     DynamicColorNumber::TextForegroundColor,
                     vec![ColorOrQuery::Query],
-                )
+                ),
+                CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes)),
             )
         );
     }
@@ -115,11 +120,12 @@ mod test {
         assert_eq!(
             String::from_utf8(write).unwrap(),
             format!(
-                "{}",
+                "{}{}",
                 OperatingSystemCommand::ChangeDynamicColors(
                     DynamicColorNumber::TextCursorColor,
                     vec![ColorOrQuery::Query],
-                )
+                ),
+                CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes)),
             )
         );
     }
@@ -144,6 +150,48 @@ mod test {
         assert_eq!(
             err.to_string(),
             "terminal returned an incomplete dynamic color response"
+        );
+        assert_eq!(
+            String::from_utf8(write).unwrap(),
+            format!(
+                "{}{}",
+                OperatingSystemCommand::ChangeDynamicColors(
+                    DynamicColorNumber::TextCursorColor,
+                    vec![ColorOrQuery::Query],
+                ),
+                CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes)),
+            )
+        );
+    }
+
+    #[test]
+    fn test_dynamic_color_stops_after_primary_device_attributes() {
+        let response = format!(
+            "{}",
+            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102)))
+        );
+        let mut read = Cursor::new(response.into_bytes());
+        let mut write = vec![];
+        let mut probe = ProbeCapabilities::new(&mut read, &mut write);
+
+        let err = probe
+            .dynamic_color(DynamicColorNumber::TextCursorColor)
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "terminal did not respond to dynamic color query"
+        );
+        assert_eq!(
+            String::from_utf8(write).unwrap(),
+            format!(
+                "{}{}",
+                OperatingSystemCommand::ChangeDynamicColors(
+                    DynamicColorNumber::TextCursorColor,
+                    vec![ColorOrQuery::Query],
+                ),
+                CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes)),
+            )
         );
     }
 }
@@ -177,11 +225,9 @@ impl<'a> ProbeCapabilities<'a> {
 
     /// Probe the terminal for the current value of a dynamic color.
     pub fn dynamic_color(&mut self, which: DynamicColorNumber) -> Result<SrgbaTuple> {
-        let query = OperatingSystemCommand::ChangeDynamicColors(
-            which,
-            vec![ColorOrQuery::Query],
-        );
-        write!(self.write, "{query}")?;
+        let query = OperatingSystemCommand::ChangeDynamicColors(which, vec![ColorOrQuery::Query]);
+        let dev_attributes = CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes));
+        write!(self.write, "{query}{dev_attributes}")?;
         self.write.flush()?;
 
         let mut parser = Parser::new();
@@ -193,7 +239,16 @@ impl<'a> ProbeCapabilities<'a> {
 
             let mut matched = None;
             parser.parse(&byte, |action| {
-                matched = matching_dynamic_color_action(action, which);
+                if matched.is_some() {
+                    return;
+                }
+
+                if is_primary_device_attributes_response(&action) {
+                    matched = Some(Err(dynamic_color_probe_err(NO_DYNAMIC_COLOR_RESPONSE)));
+                    return;
+                }
+
+                matched = parse_dynamic_color_response(action, which);
             });
 
             if let Some(color) = matched {
@@ -358,13 +413,10 @@ impl<'a> ProbeCapabilities<'a> {
     }
 }
 
-fn matching_dynamic_color_action(
+fn parse_dynamic_color_response(
     action: Action,
     requested: DynamicColorNumber,
 ) -> Option<Result<SrgbaTuple>> {
-    const INCOMPLETE_DYNAMIC_COLOR_RESPONSE: &str =
-        "terminal returned an incomplete dynamic color response";
-
     let Action::OperatingSystemCommand(osc) = action else {
         return None;
     };
@@ -378,15 +430,26 @@ fn matching_dynamic_color_action(
     }
 
     let [color] = response_colors.as_slice() else {
-        return Some(Err(
-            crate::error::StringWrap(INCOMPLETE_DYNAMIC_COLOR_RESPONSE.into()).into(),
-        ));
+        return Some(Err(dynamic_color_probe_err(
+            INCOMPLETE_DYNAMIC_COLOR_RESPONSE,
+        )));
     };
 
     match color {
         ColorOrQuery::Color(color) => Some(Ok(*color)),
-        ColorOrQuery::Query => Some(Err(
-            crate::error::StringWrap(INCOMPLETE_DYNAMIC_COLOR_RESPONSE.into()).into(),
-        )),
+        ColorOrQuery::Query => Some(Err(dynamic_color_probe_err(
+            INCOMPLETE_DYNAMIC_COLOR_RESPONSE,
+        ))),
     }
+}
+
+fn is_primary_device_attributes_response(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::CSI(CSI::Device(device)) if matches!(**device, Device::DeviceAttributes(_))
+    )
+}
+
+fn dynamic_color_probe_err(message: &str) -> crate::Error {
+    crate::error::StringWrap(message.into()).into()
 }
