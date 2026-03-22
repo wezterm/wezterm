@@ -1,6 +1,8 @@
+use crate::color::SrgbaTuple;
 use crate::escape::csi::{Device, Window};
+use crate::escape::osc::{ColorOrQuery, DynamicColorNumber};
 use crate::escape::parser::Parser;
-use crate::escape::{Action, DeviceControlMode, Esc, EscCode, CSI};
+use crate::escape::{Action, DeviceControlMode, Esc, EscCode, OperatingSystemCommand, CSI};
 use crate::terminal::ScreenSize;
 use crate::{bail, Result};
 use std::io::{Read, Write};
@@ -43,6 +45,10 @@ impl XtVersion {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::color::SrgbaTuple;
+    use crate::escape::osc::{ColorOrQuery, DynamicColorNumber, OperatingSystemCommand};
+    use std::io::Cursor;
+    use std::str::FromStr;
 
     #[test]
     fn test_xtversion_name() {
@@ -54,6 +60,91 @@ mod test {
             let version = XtVersion(input.to_string());
             assert_eq!(version.name_and_version(), result, "{input}");
         }
+    }
+
+    #[test]
+    fn test_dynamic_color() {
+        let expected = SrgbaTuple::from_str("rgb:1212/3434/5656").unwrap();
+        let response = format!(
+            "{}",
+            OperatingSystemCommand::ChangeDynamicColors(
+                DynamicColorNumber::TextForegroundColor,
+                vec![ColorOrQuery::Color(expected)],
+            )
+        );
+        let mut read = Cursor::new(response.into_bytes());
+        let mut write = vec![];
+        let mut probe = ProbeCapabilities::new(&mut read, &mut write);
+
+        let color = probe
+            .dynamic_color(DynamicColorNumber::TextForegroundColor)
+            .unwrap();
+
+        assert_eq!(color, expected);
+        assert_eq!(
+            String::from_utf8(write).unwrap(),
+            format!(
+                "{}",
+                OperatingSystemCommand::ChangeDynamicColors(
+                    DynamicColorNumber::TextForegroundColor,
+                    vec![ColorOrQuery::Query],
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn test_dynamic_cursor_color() {
+        let expected = SrgbaTuple::from_str("rgb:aaaa/bbbb/cccc").unwrap();
+        let response = format!(
+            "{}",
+            OperatingSystemCommand::ChangeDynamicColors(
+                DynamicColorNumber::TextCursorColor,
+                vec![ColorOrQuery::Color(expected)],
+            )
+        );
+        let mut read = Cursor::new(response.into_bytes());
+        let mut write = vec![];
+        let mut probe = ProbeCapabilities::new(&mut read, &mut write);
+
+        let color = probe
+            .dynamic_color(DynamicColorNumber::TextCursorColor)
+            .unwrap();
+
+        assert_eq!(color, expected);
+        assert_eq!(
+            String::from_utf8(write).unwrap(),
+            format!(
+                "{}",
+                OperatingSystemCommand::ChangeDynamicColors(
+                    DynamicColorNumber::TextCursorColor,
+                    vec![ColorOrQuery::Query],
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn test_dynamic_color_rejects_incomplete_response() {
+        let response = format!(
+            "{}",
+            OperatingSystemCommand::ChangeDynamicColors(
+                DynamicColorNumber::TextCursorColor,
+                vec![ColorOrQuery::Query],
+            )
+        );
+        let mut read = Cursor::new(response.into_bytes());
+        let mut write = vec![];
+        let mut probe = ProbeCapabilities::new(&mut read, &mut write);
+
+        let err = probe
+            .dynamic_color(DynamicColorNumber::TextCursorColor)
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "terminal returned an incomplete dynamic color response"
+        );
     }
 }
 
@@ -82,6 +173,33 @@ impl<'a> ProbeCapabilities<'a> {
     /// of its outer terminal.
     pub fn outer_xt_version(&mut self) -> Result<XtVersion> {
         self.xt_version_impl(true)
+    }
+
+    /// Probe the terminal for the current value of a dynamic color.
+    pub fn dynamic_color(&mut self, which: DynamicColorNumber) -> Result<SrgbaTuple> {
+        let query = OperatingSystemCommand::ChangeDynamicColors(
+            which,
+            vec![ColorOrQuery::Query],
+        );
+        write!(self.write, "{query}")?;
+        self.write.flush()?;
+
+        let mut parser = Parser::new();
+        loop {
+            let mut byte = [0u8];
+            if self.read.read(&mut byte)? == 0 {
+                bail!("terminal closed while waiting for dynamic color response");
+            }
+
+            let mut matched = None;
+            parser.parse(&byte, |action| {
+                matched = matching_dynamic_color_action(action, which);
+            });
+
+            if let Some(color) = matched {
+                break color;
+            }
+        }
     }
 
     fn xt_version_impl(&mut self, tmux_escape: bool) -> Result<XtVersion> {
@@ -237,5 +355,38 @@ impl<'a> ProbeCapabilities<'a> {
         }
 
         Ok(size)
+    }
+}
+
+fn matching_dynamic_color_action(
+    action: Action,
+    requested: DynamicColorNumber,
+) -> Option<Result<SrgbaTuple>> {
+    const INCOMPLETE_DYNAMIC_COLOR_RESPONSE: &str =
+        "terminal returned an incomplete dynamic color response";
+
+    let Action::OperatingSystemCommand(osc) = action else {
+        return None;
+    };
+
+    let OperatingSystemCommand::ChangeDynamicColors(response_which, response_colors) = &*osc else {
+        return None;
+    };
+
+    if *response_which != requested {
+        return None;
+    }
+
+    let [color] = response_colors.as_slice() else {
+        return Some(Err(
+            crate::error::StringWrap(INCOMPLETE_DYNAMIC_COLOR_RESPONSE.into()).into(),
+        ));
+    };
+
+    match color {
+        ColorOrQuery::Color(color) => Some(Ok(*color)),
+        ColorOrQuery::Query => Some(Err(
+            crate::error::StringWrap(INCOMPLETE_DYNAMIC_COLOR_RESPONSE.into()).into(),
+        )),
     }
 }
