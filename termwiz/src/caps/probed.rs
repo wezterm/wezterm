@@ -51,8 +51,65 @@ mod test {
     use crate::color::SrgbaTuple;
     use crate::escape::csi::DeviceAttributes;
     use crate::escape::osc::{ColorOrQuery, DynamicColorNumber, OperatingSystemCommand};
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
     use std::io::Cursor;
+    use std::io::{Read, Write};
+    use std::rc::Rc;
     use std::str::FromStr;
+
+    #[derive(Default)]
+    struct DynamicColorIoState {
+        pending_write: Vec<u8>,
+        read_data: VecDeque<u8>,
+    }
+
+    struct DynamicColorReader {
+        state: Rc<RefCell<DynamicColorIoState>>,
+    }
+
+    impl Read for DynamicColorReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let mut state = self.state.borrow_mut();
+            let Some(byte) = state.read_data.pop_front() else {
+                return Ok(0);
+            };
+            buf[0] = byte;
+            Ok(1)
+        }
+    }
+
+    struct DynamicColorWriter {
+        state: Rc<RefCell<DynamicColorIoState>>,
+        query: String,
+        response: String,
+        dev_attributes_query: String,
+        dev_attributes: String,
+    }
+
+    impl Write for DynamicColorWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.state.borrow_mut().pending_write.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            let mut state = self.state.borrow_mut();
+            let pending = String::from_utf8_lossy(&state.pending_write);
+
+            if pending == self.query {
+                state.read_data.extend(self.response.bytes());
+            } else if pending == format!("{}{}", self.query, self.dev_attributes_query) {
+                state.read_data.extend(self.dev_attributes.bytes());
+                state.read_data.extend(self.response.bytes());
+            } else if pending == self.dev_attributes_query {
+                state.read_data.extend(self.dev_attributes.bytes());
+            }
+
+            state.pending_write.clear();
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_xtversion_name() {
@@ -231,6 +288,45 @@ mod test {
         assert_eq!(foreground, first);
         assert_eq!(cursor, second);
     }
+
+    #[test]
+    fn test_dynamic_color_avoids_primary_device_attributes_reordering() {
+        let expected = SrgbaTuple::from_str("rgb:1212/3434/5656").unwrap();
+        let which = DynamicColorNumber::TextForegroundColor;
+        let query = format!(
+            "{}",
+            OperatingSystemCommand::ChangeDynamicColors(which, vec![ColorOrQuery::Query])
+        );
+        let response = format!(
+            "{}",
+            OperatingSystemCommand::ChangeDynamicColors(which, vec![ColorOrQuery::Color(expected)])
+        );
+        let dev_attributes = format!(
+            "{}",
+            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102)))
+        );
+        let dev_attributes_query = format!(
+            "{}",
+            CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes))
+        );
+
+        let state = Rc::new(RefCell::new(DynamicColorIoState::default()));
+        let mut read = DynamicColorReader {
+            state: Rc::clone(&state),
+        };
+        let mut write = DynamicColorWriter {
+            state,
+            query,
+            response,
+            dev_attributes_query,
+            dev_attributes,
+        };
+        let mut probe = ProbeCapabilities::new(&mut read, &mut write);
+
+        let color = probe.dynamic_color(which).unwrap();
+
+        assert_eq!(color, expected);
+    }
 }
 
 /// This struct is a helper that uses probing to determine specific capabilities
@@ -264,7 +360,16 @@ impl<'a> ProbeCapabilities<'a> {
     pub fn dynamic_color(&mut self, which: DynamicColorNumber) -> Result<SrgbaTuple> {
         let query = OperatingSystemCommand::ChangeDynamicColors(which, vec![ColorOrQuery::Query]);
         let dev_attributes = CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes));
-        write!(self.write, "{query}{dev_attributes}")?;
+        write!(self.write, "{query}")?;
+        self.write.flush()?;
+
+        // In tmux and ConPTY, the primary device attributes response can be
+        // reordered ahead of the dynamic color reply if we send it immediately.
+        // Delay a little before using it as a sentinel, matching the style used
+        // by the other probes in this module.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        write!(self.write, "{dev_attributes}")?;
         self.write.flush()?;
 
         let mut parser = Parser::new();
