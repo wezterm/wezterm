@@ -53,8 +53,7 @@ mod test {
     use crate::escape::osc::{ColorOrQuery, DynamicColorNumber, OperatingSystemCommand};
     use std::cell::RefCell;
     use std::collections::VecDeque;
-    use std::io::Cursor;
-    use std::io::{Read, Write};
+    use std::io::{Cursor, Read, Write};
     use std::rc::Rc;
     use std::str::FromStr;
 
