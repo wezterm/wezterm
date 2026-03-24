@@ -70,11 +70,12 @@ mod test {
     fn test_dynamic_color() {
         let expected = SrgbaTuple::from_str("rgb:1212/3434/5656").unwrap();
         let response = format!(
-            "{}",
+            "{}{}",
             OperatingSystemCommand::ChangeDynamicColors(
                 DynamicColorNumber::TextForegroundColor,
                 vec![ColorOrQuery::Color(expected)],
-            )
+            ),
+            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102))),
         );
         let mut read = Cursor::new(response.into_bytes());
         let mut write = vec![];
@@ -102,11 +103,12 @@ mod test {
     fn test_dynamic_cursor_color() {
         let expected = SrgbaTuple::from_str("rgb:aaaa/bbbb/cccc").unwrap();
         let response = format!(
-            "{}",
+            "{}{}",
             OperatingSystemCommand::ChangeDynamicColors(
                 DynamicColorNumber::TextCursorColor,
                 vec![ColorOrQuery::Color(expected)],
-            )
+            ),
+            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102))),
         );
         let mut read = Cursor::new(response.into_bytes());
         let mut write = vec![];
@@ -133,11 +135,12 @@ mod test {
     #[test]
     fn test_dynamic_color_rejects_incomplete_response() {
         let response = format!(
-            "{}",
+            "{}{}",
             OperatingSystemCommand::ChangeDynamicColors(
                 DynamicColorNumber::TextCursorColor,
                 vec![ColorOrQuery::Query],
-            )
+            ),
+            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102))),
         );
         let mut read = Cursor::new(response.into_bytes());
         let mut write = vec![];
@@ -194,6 +197,40 @@ mod test {
             )
         );
     }
+
+    #[test]
+    fn test_dynamic_color_consumes_primary_device_attributes_before_returning() {
+        let first = SrgbaTuple::from_str("rgb:1111/2222/3333").unwrap();
+        let second = SrgbaTuple::from_str("rgb:4444/5555/6666").unwrap();
+        let dev_attributes =
+            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102)));
+        let response = format!(
+            "{}{}{}{}",
+            OperatingSystemCommand::ChangeDynamicColors(
+                DynamicColorNumber::TextForegroundColor,
+                vec![ColorOrQuery::Color(first)],
+            ),
+            dev_attributes,
+            OperatingSystemCommand::ChangeDynamicColors(
+                DynamicColorNumber::TextCursorColor,
+                vec![ColorOrQuery::Color(second)],
+            ),
+            dev_attributes,
+        );
+        let mut read = Cursor::new(response.into_bytes());
+        let mut write = vec![];
+        let mut probe = ProbeCapabilities::new(&mut read, &mut write);
+
+        let foreground = probe
+            .dynamic_color(DynamicColorNumber::TextForegroundColor)
+            .unwrap();
+        let cursor = probe
+            .dynamic_color(DynamicColorNumber::TextCursorColor)
+            .unwrap();
+
+        assert_eq!(foreground, first);
+        assert_eq!(cursor, second);
+    }
 }
 
 /// This struct is a helper that uses probing to determine specific capabilities
@@ -231,28 +268,30 @@ impl<'a> ProbeCapabilities<'a> {
         self.write.flush()?;
 
         let mut parser = Parser::new();
+        let mut color = None;
         loop {
             let mut byte = [0u8];
             if self.read.read(&mut byte)? == 0 {
                 bail!("terminal closed while waiting for dynamic color response");
             }
 
-            let mut matched = None;
+            let mut saw_dev_attributes = false;
             parser.parse(&byte, |action| {
-                if matched.is_some() {
-                    return;
-                }
-
                 if is_primary_device_attributes_response(&action) {
-                    matched = Some(Err(dynamic_color_probe_err(NO_DYNAMIC_COLOR_RESPONSE)));
+                    saw_dev_attributes = true;
                     return;
                 }
 
-                matched = parse_dynamic_color_response(action, which);
+                if color.is_none() {
+                    color = parse_dynamic_color_response(action, which);
+                }
             });
 
-            if let Some(color) = matched {
-                break color;
+            if saw_dev_attributes {
+                break match color {
+                    Some(color) => color,
+                    None => Err(dynamic_color_probe_err(NO_DYNAMIC_COLOR_RESPONSE)),
+                };
             }
         }
     }
