@@ -723,10 +723,18 @@ impl super::TermWindow {
                 }
                 column = column.saturating_sub(pos.left);
                 row = row.saturating_sub(pos.top as i64);
+                // The title bar occupies row 0 of the pane's visual area;
+                // subtract it so that row 0 maps to the first terminal line.
+                if self.config.pane_border_status != config::PaneBorderStatus::Off {
+                    row = row.saturating_sub(1);
+                }
                 break;
             } else if is_already_captured && pane.pane_id() == pos.pane.pane_id() {
                 column = column.saturating_sub(pos.left);
                 row = row.saturating_sub(pos.top as i64).max(0);
+                if self.config.pane_border_status != config::PaneBorderStatus::Off {
+                    row = row.saturating_sub(1);
+                }
 
                 if position.column < pos.left {
                     x_pixel_offset -= self.render_metrics.cell_size.width

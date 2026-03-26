@@ -3544,26 +3544,6 @@ impl TermWindow {
                 }
             }
 
-            // When a pane title bar is active, reduce the displayed row count
-            // by one so the render loop clips the pane content to the rows
-            // below (Top) or above (Bottom) the title bar.
-            //
-            // We adjust only the local PositionedPane values used by the
-            // renderer; we do NOT call p.pane.resize() here.  Calling resize
-            // from the paint loop triggers rebuild_splits_sizes_from_contained_panes
-            // on the mux server, which updates the split tree to the reduced
-            // height, causing every subsequent frame to reduce by one more row
-            // until all panes collapse to a single row.
-            if self.config.pane_border_status != PaneBorderStatus::Off {
-                let cell_height = self.render_metrics.cell_size.height as usize;
-                for p in &mut panes {
-                    if p.height > 1 {
-                        p.height -= 1;
-                        p.pixel_height = p.height * cell_height;
-                    }
-                }
-            }
-
             panes
         }
     }
