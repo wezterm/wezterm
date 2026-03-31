@@ -3,6 +3,10 @@ use crate::shaper::GlyphInfo;
 use config::{FontAttributes, FontStyle, FreeTypeLoadFlags, FreeTypeLoadTarget};
 pub use config::{FontStretch, FontWeight};
 use rangeset::RangeSet;
+use read_fonts::types::GlyphId16;
+use read_fonts::types::NameId;
+use read_fonts::TableProvider as ReadFontsTableProvider;
+use skrifa::MetadataProvider;
 use std::cmp::Ordering;
 use std::sync::Mutex;
 
@@ -137,72 +141,79 @@ pub struct Names {
     pub aliases: Vec<String>,
 }
 
-/// Returns the "best" name from a set of records.
-/// Best is English from a MS entry if available, as freetype's
-/// source claims that a number of Mac entries have somewhat
-/// broken encodings.
-fn best_name(records: &[crate::ftwrap::NameRecord]) -> String {
-    let mut win = None;
-    let mut uni = None;
-    let mut apple = None;
-
-    for rec in records {
-        match rec.platform_id as u32 {
-            freetype::TT_PLATFORM_APPLE_UNICODE | freetype::TT_PLATFORM_ISO => {
-                uni.replace(rec);
-            }
-            freetype::TT_PLATFORM_MACINTOSH => {
-                apple.replace(rec);
-            }
-            freetype::TT_PLATFORM_MICROSOFT => {
-                let is_english = (rec.language_id & 0x3ff) == 0x9;
-                if is_english {
-                    return rec.name.clone();
-                }
-                win.replace(rec);
-            }
-            _ => {}
-        }
-    }
-
-    if let Some(rec) = apple {
-        return rec.name.clone();
-    }
-    if let Some(rec) = win {
-        return rec.name.clone();
-    }
-    if let Some(rec) = uni {
-        return rec.name.clone();
-    }
-    records[0].name.clone()
+/// Helper: load font data from a FontDataHandle
+fn load_font_data(handle: &FontDataHandle) -> anyhow::Result<Vec<u8>> {
+    Ok(handle.source.load_data()?.into_owned())
 }
 
-/// Return a single name from a table.
-/// The list of ids are tried in order: the first id with corresponding
-/// names is taken, and the "best" of those names is returned.
-fn name_from_table(
-    names: &std::collections::HashMap<u32, Vec<crate::ftwrap::NameRecord>>,
-    ids: &[u32],
-) -> Option<String> {
-    for id in ids {
-        if let Some(name_list) = names.get(id) {
-            return Some(best_name(name_list));
+/// Helper: create a skrifa FontRef from raw data and index
+fn make_font_ref<'a>(data: &'a [u8], index: u32) -> anyhow::Result<skrifa::FontRef<'a>> {
+    skrifa::FontRef::from_index(data, index)
+        .map_err(|e| anyhow::anyhow!("Failed to load font at index {}: {}", index, e))
+}
+
+/// Count the number of font faces in font data (TTC collection or single font)
+fn count_faces(data: &[u8]) -> u32 {
+    let mut count = 0;
+    while skrifa::FontRef::from_index(data, count).is_ok() {
+        count += 1;
+    }
+    count
+}
+
+/// Find the best localized string for a set of name IDs.
+/// Tries each ID in order, preferring English.
+fn find_name(font_ref: &skrifa::FontRef<'_>, ids: &[NameId]) -> Option<String> {
+    for &id in ids {
+        // Prefer English
+        for ls in font_ref.localized_strings(id) {
+            if ls.language() == Some("en") {
+                let text: String = ls.chars().collect();
+                if !text.is_empty() {
+                    return Some(text);
+                }
+            }
+        }
+        // Fall back to any language
+        if let Some(ls) = font_ref.localized_strings(id).next() {
+            let text: String = ls.chars().collect();
+            if !text.is_empty() {
+                return Some(text);
+            }
         }
     }
     None
 }
 
-/// Returns the sorted, deduplicated set of names across the list of ids
-fn names_from_table(
-    names: &std::collections::HashMap<u32, Vec<crate::ftwrap::NameRecord>>,
-    ids: &[u32],
-) -> Vec<String> {
-    let mut result = vec![];
+/// Find name by a specific NameId
+fn find_name_by_string_id(font_ref: &skrifa::FontRef<'_>, id: NameId) -> Option<String> {
+    // Prefer English
+    for ls in font_ref.localized_strings(id) {
+        if ls.language() == Some("en") {
+            let text: String = ls.chars().collect();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    // Fall back to any language
+    if let Some(ls) = font_ref.localized_strings(id).next() {
+        let text: String = ls.chars().collect();
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
+    None
+}
 
-    for id in ids {
-        if let Some(name_list) = names.get(id) {
-            for rec in name_list {
-                result.push(rec.name.clone());
+/// Collect all name strings for given IDs (for aliases)
+fn collect_all_names(font_ref: &skrifa::FontRef<'_>, ids: &[NameId]) -> Vec<String> {
+    let mut result = vec![];
+    for &id in ids {
+        for ls in font_ref.localized_strings(id) {
+            let text: String = ls.chars().collect();
+            if !text.is_empty() {
+                result.push(text);
             }
         }
     }
@@ -211,50 +222,138 @@ fn names_from_table(
     result
 }
 
+/// Check if a font's table directory contains a given table tag.
+/// Works for both standalone fonts and TrueType Collections.
+fn has_table_tag(data: &[u8], index: u32, tag: [u8; 4]) -> bool {
+    let tag_u32 = u32::from_be_bytes(tag);
+
+    // Determine the offset of the table directory for this font index
+    let dir_offset = if data.len() >= 12 && data[0..4] == *b"ttcf" {
+        // TrueType Collection
+        let num_fonts =
+            u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        let idx = index as usize;
+        if idx >= num_fonts {
+            return false;
+        }
+        let off_pos = 12 + idx * 4;
+        if off_pos + 4 > data.len() {
+            return false;
+        }
+        u32::from_be_bytes([
+            data[off_pos],
+            data[off_pos + 1],
+            data[off_pos + 2],
+            data[off_pos + 3],
+        ]) as usize
+    } else {
+        0
+    };
+
+    if dir_offset + 12 > data.len() {
+        return false;
+    }
+
+    let num_tables =
+        u16::from_be_bytes([data[dir_offset + 4], data[dir_offset + 5]]) as usize;
+    let records_start = dir_offset + 12;
+
+    for i in 0..num_tables {
+        let rec_offset = records_start + i * 16;
+        if rec_offset + 4 > data.len() {
+            return false;
+        }
+        let rec_tag = u32::from_be_bytes([
+            data[rec_offset],
+            data[rec_offset + 1],
+            data[rec_offset + 2],
+            data[rec_offset + 3],
+        ]);
+        if rec_tag == tag_u32 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Map a width percentage to OpenType width class (1-9).
+fn stretch_pct_to_width_class(pct: u16) -> u16 {
+    if pct <= 56 {
+        1
+    } else if pct <= 69 {
+        2
+    } else if pct <= 81 {
+        3
+    } else if pct <= 93 {
+        4
+    } else if pct <= 106 {
+        5
+    } else if pct <= 118 {
+        6
+    } else if pct <= 137 {
+        7
+    } else if pct <= 174 {
+        8
+    } else {
+        9
+    }
+}
+
+/// Map skrifa Stretch (percentage as f32) to OpenType width class (1-9).
+fn skrifa_stretch_to_width_class(stretch: skrifa::attribute::Stretch) -> u16 {
+    let pct = stretch.percentage() as u16;
+    stretch_pct_to_width_class(pct)
+}
+
+/// Look up the name of a glyph by its position/ID.
+/// Uses the 'post' table from the font via read-fonts.
+pub fn get_glyph_name(handle: &FontDataHandle, glyph_pos: u32) -> Option<String> {
+    let data = handle.source.load_data().ok()?;
+    let font = read_fonts::FontRef::from_index(&data, handle.index).ok()?;
+    let post = font.post().ok()?;
+    post.glyph_name(GlyphId16::new(glyph_pos as u16))
+        .map(|s| s.to_string())
+}
+
+/// Compute codepoint coverage from font charmap.
+/// Uses charmap.mappings() to walk only mapped codepoints from the cmap table
+/// rather than probing all ~1.1M Unicode codepoints individually.
+pub(crate) fn compute_coverage(font_ref: &skrifa::FontRef<'_>) -> RangeSet<u32> {
+    let charmap = font_ref.charmap();
+    let mut coverage = RangeSet::new();
+    for (cp, _glyph_id) in charmap.mappings() {
+        coverage.add(cp);
+    }
+    coverage
+}
+
 impl Names {
-    pub fn from_ft_face(face: &crate::ftwrap::Face) -> Names {
-        // We don't simply use the freetype functions to retrieve names,
-        // as freetype has a limited set of encodings that it supports.
-        // We process the name table for ourselves to increase our chances
-        // of returning a good version of the name.
-        // See <https://github.com/wezterm/wezterm/issues/1761#issuecomment-1079150560>
-        // for a case where freetype returns `?????` for a name.
-        let names = face.get_sfnt_names();
-
-        let family = name_from_table(
-            &names,
-            &[
-                freetype::TT_NAME_ID_TYPOGRAPHIC_FAMILY,
-                freetype::TT_NAME_ID_FONT_FAMILY,
-            ],
+    pub fn from_font_ref(font_ref: &skrifa::FontRef<'_>) -> Names {
+        let family = find_name(
+            font_ref,
+            &[NameId::TYPOGRAPHIC_FAMILY_NAME, NameId::FAMILY_NAME],
         )
-        .unwrap_or_else(|| face.family_name());
+        .unwrap_or_default();
 
-        let sub_family = name_from_table(
-            &names,
-            &[
-                freetype::TT_NAME_ID_TYPOGRAPHIC_SUBFAMILY,
-                freetype::TT_NAME_ID_FONT_SUBFAMILY,
-            ],
+        let sub_family = find_name(
+            font_ref,
+            &[NameId::TYPOGRAPHIC_SUBFAMILY_NAME, NameId::SUBFAMILY_NAME],
         )
-        .unwrap_or_else(|| face.style_name());
+        .unwrap_or_default();
 
-        let postscript_name = name_from_table(&names, &[freetype::TT_NAME_ID_PS_NAME])
-            .unwrap_or_else(|| face.postscript_name());
+        let postscript_name =
+            find_name(font_ref, &[NameId::POSTSCRIPT_NAME]).unwrap_or_default();
 
-        let full_name = if sub_family.is_empty() {
-            family.to_string()
-        } else {
-            format!("{} {}", family, sub_family)
-        };
+        let full_name = find_name(font_ref, &[NameId::FULL_NAME]).unwrap_or_else(|| {
+            if sub_family.is_empty() {
+                family.clone()
+            } else {
+                format!("{} {}", family, sub_family)
+            }
+        });
 
-        let mut aliases = names_from_table(
-            &names,
-            &[
-                freetype::TT_NAME_ID_TYPOGRAPHIC_FAMILY,
-                freetype::TT_NAME_ID_FONT_FAMILY,
-            ],
-        );
+        let mut aliases =
+            collect_all_names(font_ref, &[NameId::TYPOGRAPHIC_FAMILY_NAME, NameId::FAMILY_NAME]);
         aliases.retain(|n| *n != full_name && *n != family);
 
         Names {
@@ -269,9 +368,9 @@ impl Names {
 
 impl ParsedFont {
     pub fn from_locator(handle: &FontDataHandle) -> anyhow::Result<Self> {
-        let lib = crate::ftwrap::Library::new()?;
-        let face = lib.face_from_locator(handle)?;
-        Self::from_face(&face, handle.clone())
+        let data = load_font_data(handle)?;
+        let font_ref = make_font_ref(&data, handle.index)?;
+        Self::from_font_ref(&font_ref, handle.clone(), &data)
     }
 
     pub fn aka(&self) -> String {
@@ -382,54 +481,108 @@ impl ParsedFont {
         code
     }
 
-    pub fn from_face(face: &crate::ftwrap::Face, handle: FontDataHandle) -> anyhow::Result<Self> {
-        let style = if face.italic() {
-            FontStyle::Italic
-        } else {
-            FontStyle::Normal
+    pub fn from_font_ref(
+        font_ref: &skrifa::FontRef<'_>,
+        handle: FontDataHandle,
+        data: &[u8],
+    ) -> anyhow::Result<Self> {
+        let attrs = font_ref.attributes();
+
+        // Style from skrifa attributes
+        let style = match attrs.style {
+            skrifa::attribute::Style::Normal => FontStyle::Normal,
+            skrifa::attribute::Style::Italic => FontStyle::Italic,
+            skrifa::attribute::Style::Oblique(_) => FontStyle::Oblique,
         };
-        let (ot_weight, width) = face.weight_and_width();
+
+        // Weight and width from skrifa attributes
+        let ot_weight = attrs.weight.value() as u16;
         let weight = FontWeight::from_opentype_weight(ot_weight);
+        let width = skrifa_stretch_to_width_class(attrs.stretch);
         let stretch = FontStretch::from_opentype_stretch(width);
-        let cap_height = face.cap_height();
-        let pixel_sizes = face.pixel_sizes();
 
-        let palettes = match face.get_palette_data() {
-            Ok(info) => info
-                .palettes
-                .iter()
-                .map(|p| FontPaletteInfo {
-                    name: p.name.to_string(),
-                    palette_index: p.palette_index,
-                    usable_with_light_bg: (p.flags
-                        & crate::ftwrap::FT_PALETTE_FOR_LIGHT_BACKGROUND as u16)
-                        != 0,
-                    usable_with_dark_bg: (p.flags
-                        & crate::ftwrap::FT_PALETTE_FOR_DARK_BACKGROUND as u16)
-                        != 0,
-                })
-                .collect(),
-            Err(_) => vec![],
-        };
+        // Cap height from metrics
+        let metrics = font_ref.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+        let cap_height = metrics.cap_height.and_then(|ch| {
+            if ch > 0.0 {
+                Some(ch as f64 / metrics.units_per_em as f64)
+            } else {
+                None
+            }
+        });
 
-        let has_svg = unsafe {
-            (((*face.face).face_flags as u32) & (crate::ftwrap::FT_FACE_FLAG_SVG as u32)) != 0
-        };
-
-        if has_svg {
-            if config::configuration().ignore_svg_fonts {
-                anyhow::bail!("skipping svg font because ignore_svg_fonts=true");
+        // Pixel sizes from bitmap strikes (unified in skrifa)
+        let mut pixel_sizes: Vec<u16> = vec![];
+        for strike in font_ref.bitmap_strikes().iter() {
+            let ppem = strike.ppem() as u16;
+            if !pixel_sizes.contains(&ppem) {
+                pixel_sizes.push(ppem);
             }
         }
+        pixel_sizes.sort();
+        pixel_sizes.dedup();
 
-        let has_color = unsafe {
-            (((*face.face).face_flags as u32) & (crate::ftwrap::FT_FACE_FLAG_COLOR as u32)) != 0
+        // Palette data from CPAL table via read-fonts
+        let palettes: Vec<FontPaletteInfo> = if let Ok(cpal) = font_ref.cpal() {
+            let num_palettes = cpal.num_palettes();
+            let labels = cpal.palette_labels_array();
+            let types = cpal.palette_types_array();
+            (0..num_palettes)
+                .map(|idx| {
+                    let name = labels
+                        .as_ref()
+                        .and_then(|arr| arr.as_ref().ok())
+                        .and_then(|arr| arr.get(idx as usize))
+                        .and_then(|nid| {
+                            let nid = nid.get();
+                            if nid != NameId::COPYRIGHT_NOTICE {
+                                find_name_by_string_id(font_ref, nid)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| format!("Palette {}", idx));
+                    let (usable_with_light_bg, usable_with_dark_bg) = types
+                        .as_ref()
+                        .and_then(|arr| arr.as_ref().ok())
+                        .and_then(|arr| arr.get(idx as usize))
+                        .map(|flags| {
+                            use read_fonts::tables::cpal::PaletteType;
+                            let pt = flags.get();
+                            (
+                                pt.contains(PaletteType::USABLE_WITH_LIGHT_BACKGROUND),
+                                pt.contains(PaletteType::USABLE_WITH_DARK_BACKGROUND),
+                            )
+                        })
+                        .unwrap_or((false, false));
+                    FontPaletteInfo {
+                        name,
+                        palette_index: idx as usize,
+                        usable_with_light_bg,
+                        usable_with_dark_bg,
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
         };
+
+        // SVG table detection: check for "SVG " table tag in the font
+        let has_svg = has_table_tag(data, handle.index, *b"SVG ");
+
+        if has_svg && config::configuration().ignore_svg_fonts {
+            anyhow::bail!("skipping svg font because ignore_svg_fonts=true");
+        }
+
+        let has_cpal = font_ref.cpal().is_ok();
+        let has_color_bitmaps =
+            has_table_tag(data, handle.index, *b"CBDT") || has_table_tag(data, handle.index, *b"sbix");
+        let has_color = has_cpal || has_color_bitmaps;
         let assume_emoji_presentation = has_color;
 
-        let names = Names::from_ft_face(&face);
-        // Objectively gross, but freetype's italic property is very coarse grained.
-        // fontconfig resorts to name matching, so we do too :-/
+        let names = Names::from_font_ref(font_ref);
+
+        // Style refinement from name (same heuristic as before)
         let style = match style {
             FontStyle::Normal => {
                 let lower = names.full_name.to_lowercase();
@@ -449,10 +602,10 @@ impl ParsedFont {
                     FontStyle::Italic
                 }
             }
-            // Currently "impossible" because freetype only knows italic or normal
             FontStyle::Oblique => FontStyle::Oblique,
         };
 
+        // Weight refinement from name
         let weight = match weight {
             FontWeight::REGULAR => {
                 let lower = names.full_name.to_lowercase();
@@ -483,6 +636,7 @@ impl ParsedFont {
             weight => weight,
         };
 
+        // Stretch refinement from name
         let stretch = match stretch {
             FontStretch::Normal => {
                 let lower = names.full_name.to_lowercase();
@@ -510,6 +664,8 @@ impl ParsedFont {
             stretch => stretch,
         };
 
+        let initial_coverage = handle.coverage.clone().unwrap_or_default();
+
         Ok(Self {
             names,
             weight,
@@ -521,7 +677,7 @@ impl ParsedFont {
             is_built_in_fallback: false,
             assume_emoji_presentation,
             handle,
-            coverage: Mutex::new(RangeSet::new()),
+            coverage: Mutex::new(initial_coverage),
             cap_height,
             pixel_sizes,
             harfbuzz_features: None,
@@ -541,9 +697,9 @@ impl ParsedFont {
         let mut cov = self.coverage.lock().unwrap();
         if cov.is_empty() {
             let t = std::time::Instant::now();
-            let lib = crate::ftwrap::Library::new()?;
-            let face = lib.face_from_locator(&self.handle)?;
-            *cov = face.compute_coverage();
+            let data = load_font_data(&self.handle)?;
+            let font_ref = make_font_ref(&data, self.handle.index)?;
+            *cov = compute_coverage(&font_ref);
             let elapsed = t.elapsed();
             metrics::histogram!("font.compute.codepoint.coverage").record(elapsed);
             log::debug!(
@@ -628,8 +784,6 @@ impl ParsedFont {
         {
             attr.stretch
         } else if attr.stretch <= FontStretch::Normal {
-            // Find the closest stretch, looking at narrower first before
-            // looking at wider candidates
             match candidates
                 .iter()
                 .filter(|&&idx| fonts[idx].stretch < attr.stretch)
@@ -644,7 +798,6 @@ impl ParsedFont {
                 }
             }
         } else {
-            // Look at wider values, then narrower values
             match candidates
                 .iter()
                 .filter(|&&idx| fonts[idx].stretch > attr.stretch)
@@ -689,20 +842,14 @@ impl ParsedFont {
                 .iter()
                 .any(|&idx| fonts[idx].weight == FontWeight::MEDIUM)
         {
-            // https://drafts.csswg.org/css-fonts-3/#font-style-matching says
-            // that if they want weight=400 and we don't have 400,
-            // look at weight 500 first
             FontWeight::MEDIUM
         } else if attr.weight == FontWeight::MEDIUM
             && candidates
                 .iter()
                 .any(|&idx| fonts[idx].weight == FontWeight::REGULAR)
         {
-            // Similarly, look at regular before Medium if they wanted
-            // Medium and we didn't have it
             FontWeight::REGULAR
         } else if attr.weight <= FontWeight::MEDIUM {
-            // Find best lighter weight, else best heavier weight
             match candidates
                 .iter()
                 .filter(|&&idx| fonts[idx].weight <= attr.weight)
@@ -717,7 +864,6 @@ impl ParsedFont {
                 }
             }
         } else {
-            // Find best heavier weight, else best lighter weight
             match candidates
                 .iter()
                 .filter(|&&idx| fonts[idx].weight >= attr.weight)
@@ -736,8 +882,7 @@ impl ParsedFont {
         // Reduce to matching weight
         candidates.retain(|&idx| fonts[idx].weight == weight);
 
-        // Check for best matching pixel strike, but only if all
-        // candidates have pixel strikes
+        // Check for best matching pixel strike
         if candidates
             .iter()
             .all(|&idx| !fonts[idx].pixel_sizes.is_empty())
@@ -759,7 +904,6 @@ impl ParsedFont {
             }
         }
 
-        // The first one in this set is our best match
         candidates.into_iter().next()
     }
 
@@ -795,11 +939,6 @@ impl ParsedFont {
                 self.assume_emoji_presentation = assume;
             }
             None => {
-                // If they explicitly list an emoji font, assume that they
-                // want it to be used for emoji presentation.
-                // We match on "moji" rather than "emoji" as there are
-                // emoji fonts that are moji rather than emoji :-/
-                // This heuristic is awful, TBH.
                 if !self.is_built_in_fallback
                     && !attr.is_synthetic
                     && self.names.full_name.to_lowercase().contains("moji")
@@ -824,7 +963,6 @@ pub(crate) fn load_built_in_fonts(font_info: &mut Vec<ParsedFont>) -> anyhow::Re
             (include_bytes!($font) as &'static [u8], $font)
         };
     }
-    let lib = crate::ftwrap::Library::new()?;
 
     let built_ins: &[&[(&[u8], &str)]] = &[
         #[cfg(any(test, feature = "vendor-jetbrains"))]
@@ -875,8 +1013,9 @@ pub(crate) fn load_built_in_fonts(font_info: &mut Vec<ParsedFont>) -> anyhow::Re
                 origin: FontOrigin::BuiltIn,
                 coverage: None,
             };
-            let face = lib.face_from_locator(&locator)?;
-            let mut parsed = ParsedFont::from_face(&face, locator)?;
+            let font_ref = skrifa::FontRef::from_index(data, 0)
+                .map_err(|e| anyhow::anyhow!("Failed to load built-in font {}: {}", name, e))?;
+            let mut parsed = ParsedFont::from_font_ref(&font_ref, locator, data)?;
             parsed.is_built_in_fallback = true;
             font_info.push(parsed);
         }
@@ -902,38 +1041,92 @@ pub(crate) fn parse_and_collect_font_info(
     font_info: &mut Vec<ParsedFont>,
     origin: FontOrigin,
 ) -> anyhow::Result<()> {
-    let lib = crate::ftwrap::Library::new()?;
-    let num_faces = lib.query_num_faces(&source)?;
+    let data = source.load_data()?;
+    let num_faces = count_faces(&data);
 
     fn load_one(
-        lib: &crate::ftwrap::Library,
+        data: &[u8],
         source: &FontDataSource,
         index: u32,
         font_info: &mut Vec<ParsedFont>,
         origin: &FontOrigin,
     ) -> anyhow::Result<()> {
-        let locator = FontDataHandle {
-            source: source.clone(),
-            index,
-            variation: 0,
-            origin: origin.clone(),
-            coverage: None,
-        };
+        let font_ref = make_font_ref(data, index)?;
 
-        let face = lib.face_from_locator(&locator)?;
-        if let Ok(variations) = face.variations() {
-            for parsed in variations {
-                font_info.push(parsed);
+        // Check for named instances (variable fonts)
+        let instances = font_ref.named_instances();
+        if instances.len() > 0 {
+            let axes: Vec<_> = font_ref.axes().iter().collect();
+            for var_idx in 0..instances.len() {
+                let instance = match instances.get(var_idx) {
+                    Some(inst) => inst,
+                    None => continue,
+                };
+                let var_handle = FontDataHandle {
+                    source: source.clone(),
+                    index,
+                    variation: (var_idx + 1) as u32,
+                    origin: origin.clone(),
+                    coverage: None,
+                };
+                match ParsedFont::from_font_ref(&font_ref, var_handle, data) {
+                    Ok(mut parsed) => {
+                        // Override weight/style from instance axis values.
+                        for (i, val) in instance.user_coords().enumerate() {
+                            if i >= axes.len() {
+                                break;
+                            }
+                            let tag_bytes = axes[i].tag().to_be_bytes();
+                            if &tag_bytes == b"wght" {
+                                parsed.weight =
+                                    FontWeight::from_opentype_weight(val as u16);
+                            } else if &tag_bytes == b"wdth" {
+                                let width_class =
+                                    stretch_pct_to_width_class(val as u16);
+                                parsed.stretch =
+                                    FontStretch::from_opentype_stretch(width_class);
+                            } else if &tag_bytes == b"ital" {
+                                if val > 0.5 {
+                                    parsed.style = FontStyle::Italic;
+                                }
+                            } else if &tag_bytes == b"slnt" {
+                                if val.abs() > 0.5 {
+                                    parsed.style = FontStyle::Oblique;
+                                }
+                            }
+                        }
+                        // Update names from instance subfamily
+                        let name_id = instance.subfamily_name_id();
+                        if let Some(instance_name) = find_name_by_string_id(&font_ref, name_id) {
+                            if !instance_name.is_empty() {
+                                parsed.names.full_name =
+                                    format!("{} {}", parsed.names.family, instance_name);
+                                parsed.names.sub_family = Some(instance_name);
+                            }
+                        }
+                        font_info.push(parsed);
+                    }
+                    Err(err) => {
+                        log::trace!("error parsing variation {}: {}", var_idx, err);
+                    }
+                }
             }
         } else {
-            let parsed = ParsedFont::from_locator(&locator)?;
+            let locator = FontDataHandle {
+                source: source.clone(),
+                index,
+                variation: 0,
+                origin: origin.clone(),
+                coverage: None,
+            };
+            let parsed = ParsedFont::from_font_ref(&font_ref, locator, data)?;
             font_info.push(parsed);
         }
         Ok(())
     }
 
     for index in 0..num_faces {
-        if let Err(err) = load_one(&lib, &source, index, font_info, &origin) {
+        if let Err(err) = load_one(&data, &source, index, font_info, &origin) {
             log::trace!("error while parsing {:?} index {}: {}", source, index, err);
         }
     }
