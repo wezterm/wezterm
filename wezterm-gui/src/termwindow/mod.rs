@@ -844,19 +844,42 @@ impl TermWindow {
             }
         });
 
-        let gl = match config.front_end {
-            FrontEndSelection::WebGpu => None,
-            _ => Some(window.enable_opengl().await?),
-        };
+        let mut gl = None;
+        let mut webgpu = None;
+
+        match config.front_end {
+            FrontEndSelection::WebGpu => {
+                webgpu.replace(Rc::new(
+                    WebGpuState::new(&window, dimensions, &config).await?,
+                ));
+            }
+            _ => match window.enable_opengl().await {
+                Ok(gl_state) => {
+                    gl.replace(gl_state);
+                }
+                Err(err) => {
+                    #[cfg(all(windows, target_arch = "aarch64"))]
+                    if config.front_end == FrontEndSelection::OpenGL {
+                        log::warn!(
+                            "OpenGL init failed on Windows ARM64 ({err:#}); falling back to WebGpu"
+                        );
+                        webgpu.replace(Rc::new(
+                            WebGpuState::new(&window, dimensions, &config).await?,
+                        ));
+                    } else {
+                        return Err(err);
+                    }
+
+                    #[cfg(not(all(windows, target_arch = "aarch64")))]
+                    {
+                        return Err(err);
+                    }
+                }
+            },
+        }
 
         {
             let mut myself = tw.borrow_mut();
-            let webgpu = match config.front_end {
-                FrontEndSelection::WebGpu => Some(Rc::new(
-                    WebGpuState::new(&window, dimensions, &config).await?,
-                )),
-                _ => None,
-            };
             myself.config_subscription.replace(config_subscription);
             if config.use_resize_increments {
                 window.set_resize_increments(

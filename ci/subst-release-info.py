@@ -19,8 +19,10 @@ CATEGORIZE = {
     r"^wezterm-\d+-\d+-[a-f0-9]+.tar.xz$": "linux_raw_bin",
     r"src.tar.gz$": "src",
     r"^WezTerm-macos-.*.zip$": "macos_zip",
-    r"^WezTerm-windows-.*.zip$": "windows_zip",
-    r"^WezTerm-.*.setup.exe$": "windows_exe",
+    r"^WezTerm-windows-arm64-.*\.zip$": "windows_arm64_zip",
+    r"^WezTerm-windows-(?!arm64-).*.zip$": "windows_zip",
+    r"^WezTerm-arm64-.*-setup\.exe$": "windows_arm64_exe",
+    r"^WezTerm-(?!arm64-).*-setup\.exe$": "windows_exe",
     r"alpine(\d+)\.(\d+)(:?-\S+)?.apk": "alpine\\1_\\2_apk",
 }
 
@@ -55,6 +57,13 @@ def build_subst(subst, stable, categorized):
         subst[kind] = url
         subst[f"{kind}_asset"] = name
         subst[f"{kind}_dir"] = dir
+
+    # ARM64 Windows artifacts may not exist for older releases.
+    for kind in ("windows_arm64_zip", "windows_arm64_exe"):
+        kind = f"{kind}_{stable}"
+        subst.setdefault(kind, "")
+        subst.setdefault(f"{kind}_asset", "")
+        subst.setdefault(f"{kind}_dir", "")
 
 
 def load_release_info():

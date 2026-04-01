@@ -101,13 +101,19 @@ case $OSTYPE in
 
     ;;
   msys)
-    zipdir=WezTerm-windows-$TAG_NAME
+    win_arch=${WIN_ARCH:-x64}
+    if [[ "$win_arch" == "arm64" ]] ; then
+      arch_suffix="-arm64"
+    else
+      arch_suffix=""
+    fi
+    zipdir=WezTerm-windows${arch_suffix}-$TAG_NAME
     if [[ "$BUILD_REASON" == "Schedule" ]] ; then
-      zipname=WezTerm-windows-nightly.zip
-      instname=WezTerm-nightly-setup
+      zipname=WezTerm-windows${arch_suffix}-nightly.zip
+      instname=WezTerm${arch_suffix}-nightly-setup
     else
       zipname=$zipdir.zip
-      instname=WezTerm-${TAG_NAME}-setup
+      instname=WezTerm${arch_suffix}-${TAG_NAME}-setup
     fi
     rm -rf $zipdir $zipname
     mkdir $zipdir
@@ -116,16 +122,23 @@ case $OSTYPE in
       $TARGET_DIR/release/wezterm-gui.exe \
       $TARGET_DIR/release/strip-ansi-escapes.exe \
       $TARGET_DIR/release/wezterm.pdb \
-      assets/windows/conhost/conpty.dll \
-      assets/windows/conhost/OpenConsole.exe \
-      assets/windows/angle/libEGL.dll \
-      assets/windows/angle/libGLESv2.dll \
       $zipdir
-    mkdir $zipdir/mesa
-    cp $TARGET_DIR/release/mesa/opengl32.dll \
-        $zipdir/mesa
+    if [[ "$win_arch" != "arm64" ]] ; then
+      cp assets/windows/conhost/conpty.dll \
+        assets/windows/conhost/OpenConsole.exe \
+        assets/windows/angle/libEGL.dll \
+        assets/windows/angle/libGLESv2.dll \
+        $zipdir
+      mkdir $zipdir/mesa
+      cp $TARGET_DIR/release/mesa/opengl32.dll \
+          $zipdir/mesa
+    fi
     7z a -tzip $zipname $zipdir
-    iscc.exe -DMyAppVersion=${TAG_NAME#nightly} -F${instname} ci/windows-installer.iss
+    if [[ "$win_arch" == "arm64" ]] ; then
+      iscc.exe -DMyAppVersion=${TAG_NAME#nightly} -DArm64Package -DNoExtraDLLs -F${instname} ci/windows-installer.iss
+    else
+      iscc.exe -DMyAppVersion=${TAG_NAME#nightly} -F${instname} ci/windows-installer.iss
+    fi
     ;;
   linux-gnu|linux)
     distro=$(lsb_release -is 2>/dev/null || sh -c "source /etc/os-release && echo \$NAME")

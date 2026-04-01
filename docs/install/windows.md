@@ -9,8 +9,14 @@ You can download a setup.exe style installer to guide the installation
 (requires admin privileges) or a simple zip file and manage the files for
 yourself (no special privileges required).
 
-[:fontawesome-brands-windows: Windows (setup.exe) :material-tray-arrow-down:]({{ windows_exe_stable }}){ .md-button }
-[:fontawesome-brands-windows: Nightly Windows (setup.exe) :material-tray-arrow-down:]({{ windows_exe_nightly }}){ .md-button }
+[:fontawesome-brands-windows: Windows x64 (setup.exe) :material-tray-arrow-down:]({{ windows_exe_stable }}){ .md-button }
+[:fontawesome-brands-windows: Nightly Windows x64 (setup.exe) :material-tray-arrow-down:]({{ windows_exe_nightly }}){ .md-button }
+{% if windows_arm64_exe_stable %}
+[:fontawesome-brands-windows: Windows ARM64 (setup.exe) :material-tray-arrow-down:]({{ windows_arm64_exe_stable }}){ .md-button }
+{% endif %}
+{% if windows_arm64_exe_nightly %}
+[:fontawesome-brands-windows: Nightly Windows ARM64 (setup.exe) :material-tray-arrow-down:]({{ windows_arm64_exe_nightly }}){ .md-button }
+{% endif %}
 
 WezTerm is available in a setup.exe style installer; the installer is produced
 with Inno Setup and will install wezterm to your program files directory and
@@ -19,14 +25,20 @@ as a GUI to guide you through the install, but also offers the [standard
 Inno Setup command line options](https://jrsoftware.org/ishelp/index.php?topic=setupcmdline)
 to configure/script the installation process.
 
-[:fontawesome-brands-windows: Windows (zip) :material-tray-arrow-down:]({{ windows_zip_stable }}){ .md-button }
-[:fontawesome-brands-windows: Nightly Windows (zip) :material-tray-arrow-down:]({{ windows_zip_nightly }}){ .md-button }
+[:fontawesome-brands-windows: Windows x64 (zip) :material-tray-arrow-down:]({{ windows_zip_stable }}){ .md-button }
+[:fontawesome-brands-windows: Nightly Windows x64 (zip) :material-tray-arrow-down:]({{ windows_zip_nightly }}){ .md-button }
+{% if windows_arm64_zip_stable %}
+[:fontawesome-brands-windows: Windows ARM64 (zip) :material-tray-arrow-down:]({{ windows_arm64_zip_stable }}){ .md-button }
+{% endif %}
+{% if windows_arm64_zip_nightly %}
+[:fontawesome-brands-windows: Nightly Windows ARM64 (zip) :material-tray-arrow-down:]({{ windows_arm64_zip_nightly }}){ .md-button }
+{% endif %}
 
 WezTerm is also available in a simple zip file that can be extracted and
 run from anywhere, including a flash drive for a portable/relocatable
 installation.
 
-1. Download <a href="{{ windows_zip_stable }}">Release</a>
+1. Download the zip for your architecture (`x64` or `ARM64`) from the buttons above
 2. Extract the zipfile and double-click `wezterm.exe` to run the UI
 3. Configuration instructions can be [found here](../config/files.md)
 
