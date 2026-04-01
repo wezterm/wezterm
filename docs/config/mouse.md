@@ -61,6 +61,16 @@ local act = wezterm.action
 | Single Left Drag | `SUPER` | `act.StartWindowDrag` (*since 20210314-114017-04b7cedd*) |
 | Single Left Drag | `CTRL+SHIFT` | `act.StartWindowDrag` (*since 20210314-114017-04b7cedd*) |
 
+## Tab Bar Mouse Interactions
+
+The tab bar supports the following mouse interactions:
+
+* **Click on a tab**: Activates the tab
+* **Drag a tab horizontally**: Reorders the tab within the tab bar
+* **Drag a tab outside the window**: Detaches the tab into a new window
+
+These interactions are built-in and are not configurable via `mouse_bindings`.
+
 If you don't want the default assignments to be registered, you can
 disable all of them with this configuration; if you chose to do this,
 you must explicitly register every binding.
