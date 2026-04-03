@@ -83,7 +83,7 @@ impl OpenSSLNetListener {
                                 break;
                             }
                             spawn_into_main_thread(async move {
-                                log::error!("Making new AsyncSslStream");
+                                log::info!("Making new AsyncSslStream");
                                 wezterm_mux_server_impl::dispatch::process(AsyncSslStream::new(
                                     stream,
                                 ))

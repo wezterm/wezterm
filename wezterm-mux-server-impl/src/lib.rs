@@ -25,6 +25,11 @@ fn client_domains(config: &config::ConfigHandle) -> Vec<ClientDomainConfig> {
     for tls_client in &config.tls_clients {
         domains.push(ClientDomainConfig::Tls(tls_client.clone()));
     }
+
+    for quic_client in &config.quic_clients {
+        domains.push(ClientDomainConfig::Quic(quic_client.clone()));
+    }
+
     domains
 }
 

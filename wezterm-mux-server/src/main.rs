@@ -306,6 +306,7 @@ fn terminate_with_error(err: anyhow::Error) -> ! {
 }
 
 mod ossl;
+mod quic_server;
 
 pub fn spawn_listener() -> anyhow::Result<()> {
     let config = configuration();
@@ -319,6 +320,14 @@ pub fn spawn_listener() -> anyhow::Result<()> {
 
     for tls_server in &config.tls_servers {
         ossl::spawn_tls_listener(tls_server)?;
+    }
+
+    #[cfg(feature = "quic")]
+    for quic_server in &config.quic_servers {
+        quic_server::spawn_quic_listener(quic_server)?;
+    }
+    if cfg!(not(feature = "quic")) && !config.quic_servers.is_empty() {
+        log::warn!("QUIC servers defined but `quic` feature not enabled");
     }
 
     Ok(())

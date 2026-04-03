@@ -2,7 +2,6 @@ use crate::domain::{ClientDomain, ClientDomainConfig};
 use crate::pane::ClientPane;
 use anyhow::{anyhow, bail, Context};
 use async_ossl::AsyncSslStream;
-use async_trait::async_trait;
 use codec::*;
 use config::{configuration, SshDomain, TlsDomainClient, UnixDomain, UnixTarget};
 use filedescriptor::FileDescriptor;
@@ -35,6 +34,8 @@ use std::time::Duration;
 use thiserror::Error;
 use wezterm_uds::UnixStream;
 
+mod quic_client;
+
 #[derive(Error, Debug)]
 #[error("Timeout")]
 struct Timeout;
@@ -43,17 +44,16 @@ struct Timeout;
 #[error("ChannelSendError")]
 struct ChannelSendError;
 
-enum ReaderMessage {
-    SendPdu {
-        pdu: Pdu,
-        promise: Sender<anyhow::Result<Pdu>>,
-    },
-    Readable,
+/// Message to send a PDU and get a response
+#[derive(Debug)]
+struct SendPduMessage {
+    pdu: Pdu,
+    promise: Sender<anyhow::Result<Pdu>>,
 }
 
 #[derive(Clone)]
 pub struct Client {
-    sender: Sender<ReaderMessage>,
+    sender: Sender<SendPduMessage>,
     local_domain_id: Option<DomainId>,
     pub client_id: ClientId,
     client_domain_config: ClientDomainConfig,
@@ -340,7 +340,7 @@ enum NotReconnectableError {
 fn client_thread(
     reconnectable: &mut Reconnectable,
     local_domain_id: Option<DomainId>,
-    rx: &mut Receiver<ReaderMessage>,
+    rx: &mut Receiver<SendPduMessage>,
 ) -> anyhow::Result<()> {
     block_on(client_thread_async(reconnectable, local_domain_id, rx))
 }
@@ -348,7 +348,7 @@ fn client_thread(
 async fn client_thread_async(
     reconnectable: &mut Reconnectable,
     local_domain_id: Option<DomainId>,
-    rx: &mut Receiver<ReaderMessage>,
+    rx: &mut Receiver<SendPduMessage>,
 ) -> anyhow::Result<()> {
     let mut next_serial = 1u64;
 
@@ -374,27 +374,28 @@ async fn client_thread_async(
         map: HashMap::new(),
     };
 
-    let mut stream = reconnectable.take_stream().unwrap();
+    let mut stream = StreamPeek::new(reconnectable.take_stream().unwrap());
 
     loop {
-        let rx_msg = rx.recv();
-        let wait_for_read = stream
-            .wait_for_readable()
-            .map(|_| Ok(ReaderMessage::Readable));
+        futures::select! {
+            msg = rx.recv().fuse() => {
+                match msg {
+                    Ok(SendPduMessage { pdu, promise }) => {
+                        let serial = next_serial;
+                        next_serial += 1;
+                        promises.map.insert(serial, promise);
 
-        match smol::future::or(rx_msg, wait_for_read).await {
-            Ok(ReaderMessage::SendPdu { pdu, promise }) => {
-                let serial = next_serial;
-                next_serial += 1;
-                promises.map.insert(serial, promise);
-
-                pdu.encode_async(&mut stream, serial)
-                    .await
-                    .context("encoding a PDU to send to the server")?;
-                stream.flush().await.context("flushing PDU to server")?;
+                        pdu.encode_async(&mut stream, serial)
+                            .await
+                            .context("encoding a PDU to send to the server")?;
+                        stream.flush().await.context("flushing PDU to server")?;
+                    }
+                    Err(_) => return Err(NotReconnectableError::ClientWasDestroyed.into()),
+                }
             }
-            Ok(ReaderMessage::Readable) => {
-                match Pdu::decode_async(&mut stream, Some(next_serial)).await {
+            _ = stream.peek().fuse() => {
+                let pdu = Pdu::decode_async(&mut stream, Some(next_serial)).await;
+                match pdu {
                     Ok(decoded) => {
                         log::debug!(
                             "decoded serial {} {}",
@@ -426,9 +427,6 @@ async fn client_thread_async(
                         return Err(err).context("Error while decoding response pdu");
                     }
                 }
-            }
-            Err(_) => {
-                return Err(NotReconnectableError::ClientWasDestroyed.into());
             }
         }
     }
@@ -516,24 +514,9 @@ pub fn unix_connect_with_retry(
     error.expect("only get here after at least one unix fail")
 }
 
-#[async_trait(?Send)]
-pub trait AsyncReadAndWrite: Unpin + AsyncRead + AsyncWrite + std::fmt::Debug + Send {
-    async fn wait_for_readable(&self) -> anyhow::Result<()>;
-}
+pub trait AsyncReadAndWrite: Unpin + AsyncRead + AsyncWrite + std::fmt::Debug + Send {}
 
-#[async_trait(?Send)]
-impl<T> AsyncReadAndWrite for Async<T>
-where
-    T: std::fmt::Debug,
-    T: std::io::Write,
-    T: std::io::Read,
-    T: Send,
-    T: async_io::IoSafe,
-{
-    async fn wait_for_readable(&self) -> anyhow::Result<()> {
-        Ok(self.readable().await?)
-    }
-}
+impl<T> AsyncReadAndWrite for T where T: Unpin + AsyncRead + AsyncWrite + std::fmt::Debug + Send {}
 
 #[derive(Debug)]
 struct Reconnectable {
@@ -621,6 +604,21 @@ impl Reconnectable {
         Ok(self.tls_creds_path()?.join("cert.pem"))
     }
 
+    /// Validate that a certificate in PEM format is parseable
+    fn is_certificate_valid(cert_pem: &str) -> bool {
+        use openssl::x509::X509;
+
+        // Basic validation: certificate must be parseable.
+        // Expiry and other checks are performed by QUIC/TLS during handshake.
+        match X509::from_pem(cert_pem.as_bytes()) {
+            Ok(_) => true,
+            Err(e) => {
+                log::debug!("Certificate failed to parse: {:?}", e);
+                false
+            }
+        }
+    }
+
     fn take_stream(&mut self) -> Option<Box<dyn AsyncReadAndWrite>> {
         self.stream.take()
     }
@@ -642,6 +640,7 @@ impl Reconnectable {
             // level disconnect, because we will otherwise throw up authentication
             // dialogs that would be annoying
             ClientDomainConfig::Ssh(_) => false,
+            ClientDomainConfig::Quic(_) => true,
         }
     }
 
@@ -657,6 +656,7 @@ impl Reconnectable {
             }
             ClientDomainConfig::Tls(tls) => self.tls_connect(tls, initial, ui),
             ClientDomainConfig::Ssh(ssh) => self.ssh_connect(ssh, initial, ui),
+            ClientDomainConfig::Quic(quic) => self.quic_connect(quic, initial, ui),
         }
     }
 
@@ -859,25 +859,7 @@ impl Reconnectable {
         if let Some(Ok(ssh_params)) = tls_client.ssh_parameters() {
             if self.tls_creds.is_none() {
                 // We need to bootstrap via an ssh session
-
-                let mut ssh_config = wezterm_ssh::Config::new();
-                ssh_config.add_default_config_files();
-
-                let mut fields = ssh_params.host_and_port.split(':');
-                let host = fields
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("no host component somehow"))?;
-                let port = fields.next();
-
-                let mut ssh_config = ssh_config.for_host(host);
-                if let Some(username) = &ssh_params.username {
-                    ssh_config.insert("user".to_string(), username.to_string());
-                }
-                if let Some(port) = port {
-                    ssh_config.insert("port".to_string(), port.to_string());
-                }
-
-                let sess = ssh_connect_with_ui(ssh_config, ui)?;
+                let sess = crate::ssh_bootstrap::establish_ssh_session(&ssh_params, ui)?;
 
                 let creds = ui.run_and_log_error(|| {
                     // The `tlscreds` command will start the server if needed and then
@@ -886,48 +868,35 @@ impl Reconnectable {
                         "{} cli tlscreds",
                         Self::wezterm_bin_path(&tls_client.remote_wezterm_path)
                     );
-
                     ui.output_str(&format!("Running: {}\n", cmd));
-                    let mut exec = smol::block_on(sess.exec(&cmd, None))
-                        .with_context(|| format!("executing `{}` on remote host", cmd))?;
 
-                    log::debug!("waiting for command to finish");
-                    let status = exec.child.wait()?;
-                    if !status.success() {
-                        anyhow::bail!("{} failed", cmd);
-                    }
-
-                    drop(exec.stdin);
-
-                    let mut stderr = exec.stderr;
-                    thread::spawn(move || {
-                        // stderr is ideally empty
-                        let mut err = String::new();
-                        let _ = stderr.read_to_string(&mut err);
-                        if !err.is_empty() {
-                            log::error!("remote: `{}` stderr -> `{}`", cmd, err);
+                    crate::ssh_bootstrap::execute_remote_command_for_pdu(&sess, &cmd, |pdu| {
+                        match pdu {
+                            Pdu::GetTlsCredsResponse(creds) => {
+                                log::info!("got TLS creds");
+                                // Save the credentials to disk, as that is currently the easiest
+                                // way to get them into openssl.  Ideally we'd keep these entirely
+                                // in memory.
+                                std::fs::write(
+                                    &self.tls_creds_ca_path()?,
+                                    creds.ca_cert_pem.as_bytes(),
+                                )?;
+                                std::fs::write(
+                                    &self.tls_creds_cert_path()?,
+                                    creds.client_cert_pem.as_bytes(),
+                                )?;
+                                Ok(creds)
+                            }
+                            _ => bail!("unexpected response to tlscreds"),
                         }
-                    });
-
-                    let creds = match Pdu::decode(exec.stdout)
-                        .context("reading tlscreds response")?
-                        .pdu
-                    {
-                        Pdu::GetTlsCredsResponse(creds) => creds,
-                        _ => bail!("unexpected response to tlscreds"),
-                    };
-
-                    // Save the credentials to disk, as that is currently the easiest
-                    // way to get them into openssl.  Ideally we'd keep these entirely
-                    // in memory.
-                    std::fs::write(&self.tls_creds_ca_path()?, creds.ca_cert_pem.as_bytes())?;
-                    std::fs::write(
-                        &self.tls_creds_cert_path()?,
-                        creds.client_cert_pem.as_bytes(),
-                    )?;
-                    log::info!("got TLS creds");
-                    Ok(creds)
+                    })
                 })?;
+
+                // Validate credentials before using them
+                if !Self::is_certificate_valid(&creds.client_cert_pem) {
+                    bail!("TLS credentials from SSH bootstrap are invalid");
+                }
+
                 self.tls_creds.replace(creds);
             }
         }
@@ -981,26 +950,27 @@ impl Reconnectable {
                 key_file.display()
             ))?;
 
-        fn load_cert(name: &Path) -> anyhow::Result<X509> {
-            let cert_bytes = std::fs::read(name)?;
-            log::trace!("loaded {}", name.display());
+        // Helper to load certificate from PEM file
+        fn load_cert_from_file(path: &Path) -> anyhow::Result<X509> {
+            let cert_bytes = std::fs::read(path)?;
+            log::trace!("loaded {}", path.display());
             Ok(X509::from_pem(&cert_bytes)?)
         }
-        for name in &tls_client.pem_root_certs {
-            if name.is_dir() {
-                for entry in std::fs::read_dir(name)? {
-                    if let Ok(cert) = load_cert(&entry?.path()) {
-                        connector.cert_store_mut().add_cert(cert).ok();
-                    }
-                }
-            } else {
-                connector.cert_store_mut().add_cert(load_cert(name)?)?;
+
+        // Load root certificates from pem_root_certs
+        let _ = config::pem_util::load_pem_root_certs(&tls_client.pem_root_certs, |data| {
+            if let Ok(cert) = X509::from_pem(&data) {
+                connector.cert_store_mut().add_cert(cert).ok();
+                log::trace!("loaded certificate from pem_root_certs");
             }
-        }
+            Ok(())
+        });
 
         if let Ok(ca_path) = self.tls_creds_ca_path() {
             if ca_path.exists() {
-                connector.cert_store_mut().add_cert(load_cert(&ca_path)?)?;
+                connector
+                    .cert_store_mut()
+                    .add_cert(load_cert_from_file(&ca_path)?)?;
             }
         }
 
@@ -1034,6 +1004,19 @@ impl Reconnectable {
         ))?);
         ui.output_str("TLS Connected!\n");
         Ok(stream)
+    }
+
+    #[cfg(not(feature = "quic"))]
+    pub fn quic_connect(
+        &mut self,
+        _quic_client: config::QuicDomainClient,
+        _initial: bool,
+        ui: &mut ConnectionUI,
+    ) -> anyhow::Result<()> {
+        ui.output_str(
+            "QUIC support is not compiled in. Rebuild wezterm with: cargo build --features quic\n",
+        );
+        bail!("QUIC support is not compiled in. Rebuild wezterm with: cargo build --features quic");
     }
 }
 
@@ -1301,10 +1284,22 @@ impl Client {
         Ok(Self::new(Some(local_domain_id), reconnectable))
     }
 
+    pub fn new_quic(
+        local_domain_id: DomainId,
+        quic_client: &config::QuicDomainClient,
+        ui: &mut ConnectionUI,
+    ) -> anyhow::Result<Self> {
+        let mut reconnectable =
+            Reconnectable::new(ClientDomainConfig::Quic(quic_client.clone()), None);
+        let no_auto_start = true;
+        reconnectable.connect(true, ui, no_auto_start)?;
+        Ok(Self::new(Some(local_domain_id), reconnectable))
+    }
+
     pub async fn send_pdu(&self, pdu: Pdu) -> anyhow::Result<Pdu> {
         let (promise, rx) = bounded(1);
         self.sender
-            .send(ReaderMessage::SendPdu { pdu, promise })
+            .send(SendPduMessage { pdu, promise })
             .await
             .map_err(|_| ChannelSendError)
             .context("send_pdu send")?;

@@ -12,6 +12,7 @@ publish = false
 anyhow.workspace = true
 async_ossl.workspace = true
 clap.workspace = true
+codec.workspace = true
 config.workspace = true
 env-bootstrap.workspace = true
 libc.workspace = true
@@ -26,6 +27,12 @@ wezterm-blob-leases = {workspace=true, features=["simple_tempdir"]}
 wezterm-mux-server-impl.workspace = true
 wezterm-gui-subcommands.workspace = true
 wezterm-term.workspace = true
+quinn = { workspace = true, optional = true }
+rustls-pemfile = { workspace = true, optional = true }
+smol = { workspace = true, optional = true }
+
+[features]
+quic = ["quinn", "rustls-pemfile", "smol"]
 
 [target."cfg(windows)".dependencies]
 winapi = { workspace=true, features = [ "winuser" ]}

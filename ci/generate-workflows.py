@@ -490,6 +490,22 @@ rustup default {toolchain}
             else RunStep(name="Test", run=run),
         ]
 
+    def test_quic(self):
+        """Test with QUIC feature enabled"""
+        run = "cargo nextest run --all --no-fail-fast --features quic"
+        if "macos" in self.name:
+            run += " --target=x86_64-apple-darwin"
+        if self.name == "centos7":
+            run = "source /opt/rh/devtoolset-9/enable\n" + run
+        return [
+            # Install cargo-nextest
+            InstallCrateStep("cargo-nextest", key=f"{self.name}-quic"),
+            # Run tests with QUIC feature
+            RunStep(name="Test with QUIC feature", run=self.fixup_windows_path(run), shell="cmd")
+            if "win" in self.name
+            else RunStep(name="Test with QUIC feature", run=run),
+        ]
+
     def package(self, trusted=False):
         steps = []
         deploy_env = None
@@ -921,21 +937,33 @@ rustup default {toolchain}
         return steps
 
     def pull_request(self):
+        # Default features job
         steps = self.prep_environment()
         steps += self.build_all_release()
         steps += self.test_all()
         steps += self.package()
         steps += self.upload_artifact()
 
-        return (
-            Job(
-                runs_on=self.os,
-                container=self.container,
-                steps=steps,
-                env=self.env,
-            ),
-            None,
+        build_job = Job(
+            runs_on=self.os,
+            container=self.container,
+            steps=steps,
+            env=self.env,
         )
+
+        # QUIC feature job
+        quic_steps = self.prep_environment()
+        quic_steps += self.build_all_release()
+        quic_steps += self.test_quic()
+
+        quic_job = Job(
+            runs_on=self.os,
+            container=self.container,
+            steps=quic_steps,
+            env=self.env,
+        )
+
+        return (build_job, quic_job, None)
 
     def checkout(self, submodules=True):
         steps = []
@@ -950,6 +978,7 @@ rustup default {toolchain}
         return steps
 
     def continuous(self):
+        # Default features job
         steps = self.prep_environment()
         steps += self.build_all_release()
         steps += self.test_all()
@@ -958,27 +987,58 @@ rustup default {toolchain}
 
         self.env["BUILD_REASON"] = "Schedule"
 
+        build_job = Job(
+            runs_on=self.os,
+            container=self.container,
+            steps=steps,
+            env=self.env,
+        )
+
+        # QUIC feature job
+        quic_steps = self.prep_environment()
+        quic_steps += self.build_all_release()
+        quic_steps += self.test_quic()
+
+        quic_job = Job(
+            runs_on=self.os,
+            container=self.container,
+            steps=quic_steps,
+            env=self.env,
+        )
+
         uploader = Job(
             runs_on="ubuntu-latest",
             steps=self.checkout(submodules=False) + self.upload_asset_nightly(),
         )
 
-        return (
-            Job(
-                runs_on=self.os,
-                container=self.container,
-                steps=steps,
-                env=self.env,
-            ),
-            uploader,
-        )
+        return (build_job, quic_job, uploader)
 
     def tag(self):
+        # Default features job
         steps = self.prep_environment()
         steps += self.build_all_release()
         steps += self.test_all()
         steps += self.package(trusted=True)
         steps += self.upload_artifact()
+
+        build_job = Job(
+            runs_on=self.os,
+            container=self.container,
+            steps=steps,
+            env=self.env,
+        )
+
+        # QUIC feature job
+        quic_steps = self.prep_environment()
+        quic_steps += self.build_all_release()
+        quic_steps += self.test_quic()
+
+        quic_job = Job(
+            runs_on=self.os,
+            container=self.container,
+            steps=quic_steps,
+            env=self.env,
+        )
 
         uploader = Job(
             runs_on="ubuntu-latest",
@@ -989,15 +1049,7 @@ rustup default {toolchain}
             + self.create_flathub_pr(),
         )
 
-        return (
-            Job(
-                runs_on=self.os,
-                container=self.container,
-                steps=steps,
-                env=self.env,
-            ),
-            uploader,
-        )
+        return (build_job, quic_job, uploader)
 
 
 TARGETS = [
@@ -1036,14 +1088,21 @@ def generate_actions(namer, jobber, trigger, is_continuous, is_tag=False):
         #    continue
         name = namer(t).replace(":", "")
         print(name)
-        job, uploader = jobber(t)
+        result = jobber(t)
+
+        # Unpack: (build_job, quic_job, uploader) or (build_job, uploader) for backward compat
+        if len(result) == 3:
+            build_job, quic_job, uploader = result
+        else:
+            build_job, uploader = result
+            quic_job = None
 
         file_name = f".github/workflows/gen_{name}.yml"
-        if job.container:
+        if build_job.container:
             if t.app_image:
-                container = f"container:\n      image: {yv(job.container)}\n      options: --privileged"
+                container = f"container:\n      image: {yv(build_job.container)}\n      options: --privileged"
             else:
-                container = f"container: {yv(job.container)}"
+                container = f"container: {yv(build_job.container)}"
 
         else:
             container = ""
@@ -1068,25 +1127,41 @@ def generate_actions(namer, jobber, trigger, is_continuous, is_tag=False):
 {trigger_with_paths}
 jobs:
   build:
-    runs-on: {yv(job.runs_on)}
+    runs-on: {yv(build_job.runs_on)}
     {container}
 """
             )
 
             t.render_env(f)
 
-            job.render(f, 3)
+            build_job.render(f, 3)
+
+            # QUIC feature job
+            if quic_job:
+                f.write(
+                    f"""
+  quic:
+    runs-on: {yv(quic_job.runs_on)}
+    {container}
+"""
+                )
+                quic_job.render(f, 3)
 
             # We upload using a native runner as github API access
             # inside a container is really unreliable and can result
             # in broken releases that can't automatically be repaired
             # <https://github.com/cli/cli/issues/4863>
             if uploader:
+                # Determine what to depend on
+                needs = "build"
+                if quic_job:
+                    needs = "[build, quic]"
+
                 f.write(
-                    """
+                    f"""
   upload:
     runs-on: ubuntu-latest
-    needs: build
+    needs: {needs}
     if: github.repository == 'wezterm/wezterm'
     permissions:
       contents: write
