@@ -1,3 +1,8 @@
+//! This example shows how to query the terminal default foreground
+//! and background colors via `OSC 10` and `OSC 11`.
+//! It then transforms and blends those RGB colors to drive a
+//! smooth animated text effect.
+
 use std::f32::consts::PI;
 use std::thread;
 use std::time::{Duration, Instant};
