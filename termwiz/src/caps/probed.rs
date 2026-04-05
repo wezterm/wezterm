@@ -355,6 +355,46 @@ impl<'a> ProbeCapabilities<'a> {
         self.xt_version_impl(true)
     }
 
+    fn xt_version_impl(&mut self, tmux_escape: bool) -> Result<XtVersion> {
+        let xt_version = CSI::Device(Box::new(Device::RequestTerminalNameAndVersion));
+        let dev_attributes = CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes));
+
+        if tmux_escape {
+            write!(self.write, "{TMUX_BEGIN}{xt_version}{TMUX_END}")?;
+            self.write.flush()?;
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            write!(self.write, "{dev_attributes}")?;
+        } else {
+            write!(self.write, "{xt_version}{dev_attributes}")?;
+        }
+        self.write.flush()?;
+        let mut term = vec![];
+        let mut parser = Parser::new();
+        let mut done = false;
+
+        while !done {
+            let mut byte = [0u8];
+            self.read.read(&mut byte)?;
+
+            parser.parse(&byte, |action| {
+                // print!("{action:?}\r\n");
+                match action {
+                    Action::Esc(Esc::Code(EscCode::StringTerminator)) => {}
+                    Action::DeviceControl(dev) => {
+                        if let DeviceControlMode::Data(b) = dev {
+                            term.push(b);
+                        }
+                    }
+                    _ => {
+                        done = true;
+                    }
+                }
+            });
+        }
+
+        Ok(XtVersion(String::from_utf8_lossy(&term).into()))
+    }
+
     /// Probe the terminal for the current value of a dynamic color.
     pub fn dynamic_color(&mut self, which: DynamicColorNumber) -> Result<SrgbaTuple> {
         let query = OperatingSystemCommand::ChangeDynamicColors(which, vec![ColorOrQuery::Query]);
@@ -398,46 +438,6 @@ impl<'a> ProbeCapabilities<'a> {
                 };
             }
         }
-    }
-
-    fn xt_version_impl(&mut self, tmux_escape: bool) -> Result<XtVersion> {
-        let xt_version = CSI::Device(Box::new(Device::RequestTerminalNameAndVersion));
-        let dev_attributes = CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes));
-
-        if tmux_escape {
-            write!(self.write, "{TMUX_BEGIN}{xt_version}{TMUX_END}")?;
-            self.write.flush()?;
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            write!(self.write, "{dev_attributes}")?;
-        } else {
-            write!(self.write, "{xt_version}{dev_attributes}")?;
-        }
-        self.write.flush()?;
-        let mut term = vec![];
-        let mut parser = Parser::new();
-        let mut done = false;
-
-        while !done {
-            let mut byte = [0u8];
-            self.read.read(&mut byte)?;
-
-            parser.parse(&byte, |action| {
-                // print!("{action:?}\r\n");
-                match action {
-                    Action::Esc(Esc::Code(EscCode::StringTerminator)) => {}
-                    Action::DeviceControl(dev) => {
-                        if let DeviceControlMode::Data(b) = dev {
-                            term.push(b);
-                        }
-                    }
-                    _ => {
-                        done = true;
-                    }
-                }
-            });
-        }
-
-        Ok(XtVersion(String::from_utf8_lossy(&term).into()))
     }
 
     /// Probe the terminal and determine the ScreenSize.
