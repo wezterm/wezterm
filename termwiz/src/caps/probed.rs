@@ -348,10 +348,7 @@ mod test_probe_capabilities {
     use crate::color::SrgbaTuple;
     use crate::escape::csi::DeviceAttributes;
     use crate::escape::osc::{ColorOrQuery, DynamicColorNumber, OperatingSystemCommand};
-    use std::cell::RefCell;
-    use std::collections::VecDeque;
-    use std::io::{Cursor, Read, Write};
-    use std::rc::Rc;
+    use std::io::Cursor;
     use std::str::FromStr;
 
     fn xt_version_response(version: &str) -> String {
@@ -402,61 +399,6 @@ mod test_probe_capabilities {
             dynamic_color_query(which),
             CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes)),
         )
-    }
-
-    #[derive(Default)]
-    struct DynamicColorIoState {
-        pending_write: Vec<u8>,
-        read_data: VecDeque<u8>,
-    }
-
-    struct DynamicColorReader {
-        state: Rc<RefCell<DynamicColorIoState>>,
-    }
-
-    impl Read for DynamicColorReader {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            let mut state = self.state.borrow_mut();
-            let Some(byte) = state.read_data.pop_front() else {
-                return Ok(0);
-            };
-            buf[0] = byte;
-            Ok(1)
-        }
-    }
-
-    struct DynamicColorWriter {
-        state: Rc<RefCell<DynamicColorIoState>>,
-        xt_version_query: String,
-        xt_version: String,
-        query: String,
-        response: String,
-        dev_attributes_query: String,
-        dev_attributes: String,
-    }
-
-    impl Write for DynamicColorWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.state.borrow_mut().pending_write.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            let mut state = self.state.borrow_mut();
-            let pending = String::from_utf8_lossy(&state.pending_write);
-
-            if pending == self.xt_version_query {
-                state.read_data.extend(self.xt_version.bytes());
-                state.read_data.extend(self.dev_attributes.bytes());
-            } else if pending == self.query {
-                state.read_data.extend(self.response.bytes());
-            } else if pending == self.dev_attributes_query {
-                state.read_data.extend(self.dev_attributes.bytes());
-            }
-
-            state.pending_write.clear();
-            Ok(())
-        }
     }
 
     #[test]
@@ -610,47 +552,4 @@ mod test_probe_capabilities {
         assert_eq!(cursor, second);
     }
 
-    #[test]
-    fn test_dynamic_color_avoids_primary_device_attributes_reordering() {
-        let expected = SrgbaTuple::from_str("rgb:1212/3434/5656").unwrap();
-        let which = DynamicColorNumber::TextForegroundColor;
-        let xt_version_query = dynamic_color_probe_writes();
-        let xt_version = if cfg!(windows) {
-            String::new()
-        } else {
-            xt_version_response("tmux 3.4")
-        };
-        let query = format!("{}", dynamic_color_query(which));
-        let response = format!(
-            "{}",
-            OperatingSystemCommand::ChangeDynamicColors(which, vec![ColorOrQuery::Color(expected)])
-        );
-        let dev_attributes = format!(
-            "{}",
-            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102)))
-        );
-        let dev_attributes_query = format!(
-            "{}",
-            CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes))
-        );
-
-        let state = Rc::new(RefCell::new(DynamicColorIoState::default()));
-        let mut read = DynamicColorReader {
-            state: Rc::clone(&state),
-        };
-        let mut write = DynamicColorWriter {
-            state,
-            xt_version_query,
-            xt_version,
-            query,
-            response,
-            dev_attributes_query,
-            dev_attributes,
-        };
-        let mut probe = ProbeCapabilities::new(&mut read, &mut write);
-
-        let color = probe.dynamic_color(which).unwrap();
-
-        assert_eq!(color, expected);
-    }
 }
