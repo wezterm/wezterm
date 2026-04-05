@@ -458,31 +458,38 @@ impl<'a> ProbeCapabilities<'a> {
         self.write.flush()?;
 
         let mut parser = Parser::new();
+        let mut done = false;
         let mut color = None;
-        loop {
+        while !done {
             let mut byte = [0u8];
             if self.read.read(&mut byte)? == 0 {
                 bail!("terminal closed while waiting for dynamic color response");
             }
 
-            let mut saw_dev_attributes = false;
             parser.parse(&byte, |action| {
+                if matches!(action, Action::Esc(Esc::Code(EscCode::StringTerminator))) {
+                    return;
+                }
+
                 if is_primary_device_attributes_response(&action) {
-                    saw_dev_attributes = true;
+                    done = true;
                     return;
                 }
 
                 if color.is_none() {
-                    color = parse_dynamic_color_response(action, which);
+                    if let Some(parsed) = parse_dynamic_color_response(action, which) {
+                        color = Some(parsed);
+                        return;
+                    }
                 }
-            });
 
-            if saw_dev_attributes {
-                break match color {
-                    Some(color) => color,
-                    None => Err(dynamic_color_probe_err(NO_DYNAMIC_COLOR_RESPONSE)),
-                };
-            }
+                done = true;
+            });
+        }
+
+        match color {
+            Some(color) => color,
+            None => Err(dynamic_color_probe_err(NO_DYNAMIC_COLOR_RESPONSE)),
         }
     }
 
