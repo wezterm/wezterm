@@ -136,19 +136,26 @@ impl crate::sessioninner::SessionInner {
         // Set the callback for pubkey auth
         sess.set_auth_callback(move |prompt, echo, _verify, identity| {
             let (reply, answers) = bounded(1);
-            tx.try_send(SessionEvent::Authenticate(AuthenticationEvent {
-                username: "".to_string(),
-                instructions: "".to_string(),
-                prompts: vec![AuthenticationPrompt {
-                    prompt: match identity {
-                        Some(ident) => format!("{} ({}): ", prompt, ident),
-                        None => prompt.to_string(),
-                    },
-                    echo,
-                }],
-                reply,
-            }))
-            .unwrap();
+            // Use ok() instead of unwrap(): the UI receiver may have been dropped
+            // (e.g. during shutdown or window restore), in which case we return
+            // an error rather than panicking.
+            if tx
+                .try_send(SessionEvent::Authenticate(AuthenticationEvent {
+                    username: "".to_string(),
+                    instructions: "".to_string(),
+                    prompts: vec![AuthenticationPrompt {
+                        prompt: match identity {
+                            Some(ident) => format!("{} ({}): ", prompt, ident),
+                            None => prompt.to_string(),
+                        },
+                        echo,
+                    }],
+                    reply,
+                }))
+                .is_err()
+            {
+                return Err(libssh_rs::Error::fatal("authentication UI is not available"));
+            }
 
             let mut answers = smol::block_on(answers.recv())
                 .context("waiting for authentication answers from user")
