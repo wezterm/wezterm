@@ -1567,9 +1567,16 @@ unsafe fn wm_size(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> O
     let mut should_pump = false;
 
     if let Some(inner) = rc_from_hwnd(hwnd) {
-        let mut inner = inner.borrow_mut();
-        should_paint = inner.check_and_call_resize_if_needed();
-        should_pump = inner.in_size_move;
+        // Use try_borrow_mut to gracefully handle re-entrant calls.
+        // WM_WINDOWPOSCHANGED can be dispatched synchronously while the RefCell
+        // is already borrowed (e.g. via TranslateMessage -> IME/TSF initialization
+        // -> NtUserSetWindowPos -> WM_WINDOWPOSCHANGED), causing a double-borrow
+        // panic. Skipping the re-entrant call is safe: the outer borrow will
+        // process the resize when it completes.
+        if let Ok(mut inner) = inner.try_borrow_mut() {
+            should_paint = inner.check_and_call_resize_if_needed();
+            should_pump = inner.in_size_move;
+        }
     }
 
     if should_paint {
