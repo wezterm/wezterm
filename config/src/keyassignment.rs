@@ -482,6 +482,8 @@ fn default_prompt() -> String {
 pub struct InputSelectorEntry {
     pub label: String,
     pub id: Option<String>,
+    #[dynamic(default)]
+    pub priority: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
@@ -503,6 +505,9 @@ pub struct InputSelector {
 
     #[dynamic(default = "default_fuzzy_description")]
     pub fuzzy_description: String,
+
+    #[dynamic(default = "default_score_per_priority")]
+    pub score_per_priority: u32,
 }
 
 fn default_num_alphabet() -> String {
@@ -515,6 +520,10 @@ fn default_description() -> String {
 
 fn default_fuzzy_description() -> String {
     "Fuzzy matching: ".to_string()
+}
+
+fn default_score_per_priority() -> u32 {
+    20
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
