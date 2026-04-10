@@ -70,12 +70,12 @@
             libxkbcommon
             wayland
 
-            xorg.libX11
-            xorg.libxcb
-            xorg.xcbutil
-            xorg.xcbutilimage
-            xorg.xcbutilkeysyms
-            xorg.xcbutilwm # contains xcb-ewmh among others
+            libx11
+            libxcb
+            libxcb-util
+            libxcb-image
+            libxcb-keysyms
+            libxcb-wm # contains xcb-ewmh among others
           ]
           ++ lib.optionals stdenv.isDarwin ([
             libiconv
@@ -84,7 +84,7 @@
         libPath = lib.makeLibraryPath (
           with pkgs;
           [
-            xorg.xcbutilimage
+            libxcb-image
             libGL
             vulkan-loader
           ]
