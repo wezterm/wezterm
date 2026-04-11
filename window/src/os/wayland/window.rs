@@ -1004,6 +1004,17 @@ impl WaylandWindowInner {
         self.do_paint().unwrap();
     }
 
+    /// Whether to use wl_surface frame callbacks for paint throttling.
+    /// For OpenGL/EGL, eglSwapBuffers commits the wl_surface synchronously
+    /// and reliably fires frame callbacks. For WebGPU/Vulkan, the driver's
+    /// WSI layer manages surface commits independently and may conflict
+    /// with SCTK-registered frame callbacks (e.g. NVIDIA Vulkan on
+    /// Wayland). In that case, wgpu's FIFO present mode provides vsync
+    /// throttling via get_current_texture() blocking.
+    fn use_frame_callbacks(&self) -> bool {
+        self.gl_state.is_some()
+    }
+
     fn set_text_cursor_position(&mut self, rect: Rect) {
         let conn = WaylandConnection::get().unwrap().wayland();
         let state = conn.wayland_state.borrow();
@@ -1075,38 +1086,39 @@ impl WaylandWindowInner {
 
     fn do_paint(&mut self) -> anyhow::Result<()> {
         if self.window.is_none() {
-            // We're likely in the middle of closing/destroying
-            // the window; we've nothing to do here.
             return Ok(());
         }
 
-        if self.frame_callback.is_some() {
-            // Painting now won't be productive, so skip it but
-            // remember that we need to be painted so that when
-            // the compositor is ready for us, we can paint then.
-            self.invalidated = true;
-            return Ok(());
+        if self.use_frame_callbacks() {
+            // OpenGL/EGL path: use frame callbacks for throttling.
+            // eglSwapBuffers commits the wl_surface synchronously,
+            // which reliably fires SCTK-registered frame callbacks.
+            if self.frame_callback.is_some() {
+                self.invalidated = true;
+                return Ok(());
+            }
+
+            self.invalidated = false;
+
+            let conn = WaylandConnection::get().unwrap().wayland();
+            let qh = conn.event_queue.borrow().handle();
+            let callback = self.surface().frame(&qh, self.surface().clone());
+            log::trace!("do_paint - callback: {:?}", callback);
+            self.frame_callback.replace(callback);
+
+            // <https://github.com/wezterm/wezterm/issues/3468>
+            // <https://github.com/wezterm/wezterm/issues/3126>
+            self.events.dispatch(WindowEvent::NeedRepaint);
+        } else {
+            // WebGPU/Vulkan path: skip frame callbacks entirely.
+            // The Vulkan WSI layer manages surface commits independently
+            // and may conflict with SCTK-registered frame callbacks
+            // (observed on NVIDIA Vulkan). wgpu's FIFO present mode
+            // provides natural vsync throttling via get_current_texture()
+            // blocking when no swapchain image is available.
+            self.invalidated = false;
+            self.events.dispatch(WindowEvent::NeedRepaint);
         }
-
-        self.invalidated = false;
-
-        // Ask the compositor to wake us up when its time to paint the next frame,
-        // note that this only happens _after_ the next commit
-        let conn = WaylandConnection::get().unwrap().wayland();
-        let qh = conn.event_queue.borrow().handle();
-
-        let callback = self.surface().frame(&qh, self.surface().clone());
-
-        log::trace!("do_paint - callback: {:?}", callback);
-        self.frame_callback.replace(callback);
-
-        // The repaint has the side of effect of committing the surface,
-        // which is necessary for the frame callback to get triggered.
-        // Ordering the repaint after requesting the callback ensures that
-        // we will get woken at the appropriate time.
-        // <https://github.com/wezterm/wezterm/issues/3468>
-        // <https://github.com/wezterm/wezterm/issues/3126>
-        self.events.dispatch(WindowEvent::NeedRepaint);
 
         Ok(())
     }
