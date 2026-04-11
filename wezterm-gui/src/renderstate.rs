@@ -191,7 +191,7 @@ pub struct MappedQuads<'a> {
 }
 
 pub struct WebGpuMappedVertexBuffer {
-    mapping: wgpu::BufferViewMut<'static>,
+    mapping: wgpu::BufferViewMut,
     // Owner mapping, must be dropped after mapping
     _slice: wgpu::BufferSlice<'static>,
 }

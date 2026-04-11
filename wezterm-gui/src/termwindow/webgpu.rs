@@ -333,6 +333,7 @@ impl WebGpuState {
                 label: None,
                 memory_hints: Default::default(),
                 trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
             })
             .await?;
 
