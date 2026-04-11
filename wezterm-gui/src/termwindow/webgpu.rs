@@ -360,12 +360,28 @@ impl WebGpuState {
             vec![]
         };
 
+        // Prefer Mailbox over Fifo when available. On Wayland, Mailbox
+        // is always supported (Wayland is inherently a mailbox system)
+        // and does not block in get_current_texture(), which prevents
+        // multi-window stalls on a single-threaded event loop. The
+        // compositor still handles vsync so there is no tearing.
+        // Fifo blocks for up to one vsync interval per window, which
+        // serializes rendering across windows.
+        let present_mode = if caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: dimensions.pixel_width as u32,
             height: dimensions.pixel_height as u32,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode: if caps
                 .alpha_modes
                 .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
@@ -380,7 +396,7 @@ impl WebGpuState {
                 wgpu::CompositeAlphaMode::Auto
             },
             view_formats,
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
         };
         surface.configure(&device, &config);
 
