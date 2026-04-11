@@ -260,7 +260,7 @@ wezterm-term = { path = "term" }
 wezterm-toast-notification = { path = "wezterm-toast-notification" }
 wezterm-uds = { path = "wezterm-uds" }
 wezterm-version = { path = "wezterm-version" }
-wgpu = "25.0.2"
+wgpu = "27.0.1"
 whoami = "1.5"
 winapi = "0.3.9"
 window = {path="window"}
