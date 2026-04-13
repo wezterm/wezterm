@@ -1,6 +1,6 @@
 WezTerm provides a searchable scrollback buffer with a configurable maximum
 size limit that allows you to review information that doesn't fit in the
-physical window size.  As content is printed to the display the display may be
+physical window size.  As content is printed to the display, it may be
 scrolled up to accommodate newly added lines.  The scrolled lines are moved
 into the scrollback buffer and can be reviewed by scrolling the window up or
 down.

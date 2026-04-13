@@ -22,6 +22,9 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* DECRQCRA is now disabled by default to prevent silent screen scraping.
+  Set `enable_checksum_rectangular_area = true` to re-enable it.
+  Thanks to @jquast! #7701
 * Wayland: currently being reimplemented, it maybe more unstable than usual.
   Please file GH issues for any problems you see.
   Many thanks to @tzx and @tmccombs! #4777 #5781
@@ -245,6 +248,15 @@ As features stabilize some brief notes about them will accumulate here.
 * `libssh` based ssh sessions will now respect `ServerAliveInterval`. #4023
 * macOS: prevent infinite loop in `Services` menu validation. Thanks to @cpick!
   #7098 #6738 #6833 #6864
+* Wayland: fixed issue with fractional scaling. Thanks to @kalebo! #7277
+* Incorrect boundary condition in renderstate. Thanks to @I-Info! #7274
+* MacOS: fix memory leak in macOS MetalLayer management. Thanks to @I-Info!
+  #7283
+* [max_fps](config/lua/config/max_fps.md) can now be set to values larger than
+  `255`. Thanks to @beckend! #7366
+* macOS: Fix toast notifications. Thanks to @nikhilm! #7483
+* termwiz: Fixed parsing of fragmented mouse reporting sequence. Thanks to
+  @jgiannuzzi! #7076 #7504
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg

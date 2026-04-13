@@ -1492,12 +1492,19 @@ impl TermWindow {
                 return mux.get_window(mux_window_id).is_some();
             }
             MuxNotification::TabAddedToWindow { window_id, .. }
-            | MuxNotification::WindowRemoved(window_id)
             | MuxNotification::WindowTitleChanged { window_id, .. }
             | MuxNotification::WindowInvalidated(window_id) => {
                 if window_id != mux_window_id {
                     return true;
                 }
+            }
+            MuxNotification::WindowRemoved(window_id) => {
+                if window_id != mux_window_id {
+                    return true;
+                }
+                // Set the window as dead to unsubscribe from further notifications
+                dead.store(true, Ordering::Relaxed);
+                return false;
             }
             MuxNotification::TabResized(tab_id)
             | MuxNotification::TabTitleChanged { tab_id, .. } => {
@@ -1538,6 +1545,9 @@ impl TermWindow {
         let mux = Mux::get();
         let dead = Arc::new(AtomicBool::new(false));
         mux.subscribe(move |n| {
+            if dead.load(Ordering::Relaxed) {
+                return false;
+            }
             let mux_window_id = *mux_window_id.lock().unwrap();
             let window = window.clone();
             let dead = dead.clone();

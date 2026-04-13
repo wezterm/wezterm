@@ -102,7 +102,11 @@ jobs:
         run: "bash ci/deploy.sh"
       - name: "Move RPM"
         shell: bash
-        run: "mv ~/rpmbuild/RPMS/*/*.rpm wezterm-nightly-fedora40.rpm"
+        run: |
+          mv ~/rpmbuild/RPMS/*/wezterm-common-*.rpm wezterm-common-nightly-fedora40.rpm
+          mv ~/rpmbuild/RPMS/*/wezterm-gui-*.rpm wezterm-gui-nightly-fedora40.rpm
+          mv ~/rpmbuild/RPMS/*/wezterm-mux-server-*.rpm wezterm-mux-server-nightly-fedora40.rpm
+          mv ~/rpmbuild/RPMS/*/wezterm-*.rpm wezterm-nightly-fedora40.rpm
       - name: "Upload artifact"
         uses: actions/upload-artifact@v4
         with:
