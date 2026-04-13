@@ -131,22 +131,8 @@ impl<'a> ProbeCapabilities<'a> {
 
     /// Probe the terminal for the current value of a dynamic color.
     pub fn dynamic_color(&mut self, which: DynamicColorNumber) -> Result<SrgbaTuple> {
-        let needs_delay = cfg!(windows) || self.xt_version()?.is_tmux();
-
         let query = OperatingSystemCommand::ChangeDynamicColors(which, vec![ColorOrQuery::Query]);
-        let dev_attributes = CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes));
         write!(self.write, "{query}")?;
-        self.write.flush()?;
-
-        if needs_delay {
-            // In tmux and ConPTY, the primary device attributes response can be
-            // reordered ahead of the dynamic color reply if we send it immediately.
-            // Delay a little before using it as a sentinel, matching the style used
-            // by the other probes in this module.
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
-        write!(self.write, "{dev_attributes}")?;
         self.write.flush()?;
 
         let mut parser = Parser::new();
@@ -155,7 +141,7 @@ impl<'a> ProbeCapabilities<'a> {
         while !done {
             let mut byte = [0u8];
             if self.read.read(&mut byte)? == 0 {
-                bail!("terminal closed while waiting for dynamic color response");
+                return Err(dynamic_color_probe_err(NO_DYNAMIC_COLOR_RESPONSE));
             }
 
             parser.parse(&byte, |action| {
@@ -163,14 +149,10 @@ impl<'a> ProbeCapabilities<'a> {
                     return;
                 }
 
-                if is_primary_device_attributes_response(&action) {
-                    done = true;
-                    return;
-                }
-
                 if color.is_none() {
                     if let Some(parsed) = parse_dynamic_color_response(action, which) {
                         color = Some(parsed);
+                        done = true;
                         return;
                     }
                 }
@@ -331,13 +313,6 @@ fn parse_dynamic_color_response(
     }
 }
 
-fn is_primary_device_attributes_response(action: &Action) -> bool {
-    matches!(
-        action,
-        Action::CSI(CSI::Device(device)) if matches!(**device, Device::DeviceAttributes(_))
-    )
-}
-
 fn dynamic_color_probe_err(message: &str) -> crate::Error {
     crate::error::StringWrap(message.into()).into()
 }
@@ -346,74 +321,27 @@ fn dynamic_color_probe_err(message: &str) -> crate::Error {
 mod test_probe_capabilities {
     use super::*;
     use crate::color::SrgbaTuple;
-    use crate::escape::csi::DeviceAttributes;
     use crate::escape::osc::{ColorOrQuery, DynamicColorNumber, OperatingSystemCommand};
     use std::io::Cursor;
     use std::str::FromStr;
-
-    fn xt_version_response(version: &str) -> String {
-        format!("\u{1b}P>|{version}\u{1b}\\")
-    }
 
     fn dynamic_color_query(which: DynamicColorNumber) -> OperatingSystemCommand {
         OperatingSystemCommand::ChangeDynamicColors(which, vec![ColorOrQuery::Query])
     }
 
-    fn dynamic_color_probe_writes() -> String {
-        #[cfg(windows)]
-        {
-            String::new()
-        }
-
-        #[cfg(not(windows))]
-        {
-            format!(
-                "{}{}",
-                CSI::Device(Box::new(Device::RequestTerminalNameAndVersion)),
-                CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes)),
-            )
-        }
-    }
-
-    fn dynamic_color_probe_response(version: &str) -> String {
-        #[cfg(windows)]
-        {
-            let _ = version;
-            String::new()
-        }
-
-        #[cfg(not(windows))]
-        {
-            format!(
-                "{}{}",
-                xt_version_response(version),
-                CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102))),
-            )
-        }
-    }
-
     fn dynamic_color_writes(which: DynamicColorNumber) -> String {
-        format!(
-            "{}{}{}",
-            dynamic_color_probe_writes(),
-            dynamic_color_query(which),
-            CSI::Device(Box::new(Device::RequestPrimaryDeviceAttributes)),
-        )
+        format!("{}", dynamic_color_query(which))
     }
 
     #[test]
     fn test_dynamic_color() {
         let expected = SrgbaTuple::from_str("rgb:1212/3434/5656").unwrap();
-        let dev_attributes =
-            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102)));
         let response = format!(
-            "{}{}{}",
-            dynamic_color_probe_response("WezTerm test"),
+            "{}",
             OperatingSystemCommand::ChangeDynamicColors(
                 DynamicColorNumber::TextForegroundColor,
                 vec![ColorOrQuery::Color(expected)],
             ),
-            dev_attributes,
         );
         let mut read = Cursor::new(response.into_bytes());
         let mut write = vec![];
@@ -433,16 +361,12 @@ mod test_probe_capabilities {
     #[test]
     fn test_dynamic_cursor_color() {
         let expected = SrgbaTuple::from_str("rgb:aaaa/bbbb/cccc").unwrap();
-        let dev_attributes =
-            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102)));
         let response = format!(
-            "{}{}{}",
-            dynamic_color_probe_response("WezTerm test"),
+            "{}",
             OperatingSystemCommand::ChangeDynamicColors(
                 DynamicColorNumber::TextCursorColor,
                 vec![ColorOrQuery::Color(expected)],
             ),
-            dev_attributes,
         );
         let mut read = Cursor::new(response.into_bytes());
         let mut write = vec![];
@@ -461,16 +385,12 @@ mod test_probe_capabilities {
 
     #[test]
     fn test_dynamic_color_rejects_incomplete_response() {
-        let dev_attributes =
-            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102)));
         let response = format!(
-            "{}{}{}",
-            dynamic_color_probe_response("WezTerm test"),
+            "{}",
             OperatingSystemCommand::ChangeDynamicColors(
                 DynamicColorNumber::TextCursorColor,
                 vec![ColorOrQuery::Query],
             ),
-            dev_attributes,
         );
         let mut read = Cursor::new(response.into_bytes());
         let mut write = vec![];
@@ -491,13 +411,8 @@ mod test_probe_capabilities {
     }
 
     #[test]
-    fn test_dynamic_color_stops_after_primary_device_attributes() {
-        let dev_attributes =
-            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102)));
-        let response = format!(
-            "{}{dev_attributes}",
-            dynamic_color_probe_response("WezTerm test")
-        );
+    fn test_dynamic_color_errors_when_terminal_does_not_respond() {
+        let response = String::new();
         let mut read = Cursor::new(response.into_bytes());
         let mut write = vec![];
         let mut probe = ProbeCapabilities::new(&mut read, &mut write);
@@ -515,41 +430,4 @@ mod test_probe_capabilities {
             dynamic_color_writes(DynamicColorNumber::TextCursorColor)
         );
     }
-
-    #[test]
-    fn test_dynamic_color_consumes_primary_device_attributes_before_returning() {
-        let first = SrgbaTuple::from_str("rgb:1111/2222/3333").unwrap();
-        let second = SrgbaTuple::from_str("rgb:4444/5555/6666").unwrap();
-        let dev_attributes =
-            CSI::Device(Box::new(Device::DeviceAttributes(DeviceAttributes::Vt102)));
-        let response = format!(
-            "{}{}{}{}{}{}",
-            dynamic_color_probe_response("WezTerm test"),
-            OperatingSystemCommand::ChangeDynamicColors(
-                DynamicColorNumber::TextForegroundColor,
-                vec![ColorOrQuery::Color(first)],
-            ),
-            dev_attributes,
-            dynamic_color_probe_response("WezTerm test"),
-            OperatingSystemCommand::ChangeDynamicColors(
-                DynamicColorNumber::TextCursorColor,
-                vec![ColorOrQuery::Color(second)],
-            ),
-            dev_attributes,
-        );
-        let mut read = Cursor::new(response.into_bytes());
-        let mut write = vec![];
-        let mut probe = ProbeCapabilities::new(&mut read, &mut write);
-
-        let foreground = probe
-            .dynamic_color(DynamicColorNumber::TextForegroundColor)
-            .unwrap();
-        let cursor = probe
-            .dynamic_color(DynamicColorNumber::TextCursorColor)
-            .unwrap();
-
-        assert_eq!(foreground, first);
-        assert_eq!(cursor, second);
-    }
-
 }
