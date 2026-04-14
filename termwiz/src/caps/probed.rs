@@ -2,15 +2,15 @@ use crate::color::SrgbaTuple;
 use crate::escape::csi::{Device, Window};
 use crate::escape::osc::{ColorOrQuery, DynamicColorNumber};
 use crate::escape::parser::Parser;
-use crate::escape::{Action, DeviceControlMode, Esc, EscCode, OperatingSystemCommand, CSI};
+use crate::escape::{
+    Action, ControlCode, DeviceControlMode, Esc, EscCode, OperatingSystemCommand, CSI,
+};
 use crate::terminal::ScreenSize;
 use crate::{bail, Result};
 use std::io::{Read, Write};
 
 const TMUX_BEGIN: &str = "\u{1b}Ptmux;\u{1b}";
 const TMUX_END: &str = "\u{1b}\\";
-const INCOMPLETE_DYNAMIC_COLOR_RESPONSE: &str =
-    "terminal returned an incomplete dynamic color response";
 const NO_DYNAMIC_COLOR_RESPONSE: &str = "terminal did not respond to dynamic color query";
 
 /// Represents a terminal name and version.
@@ -136,35 +136,34 @@ impl<'a> ProbeCapabilities<'a> {
         self.write.flush()?;
 
         let mut parser = Parser::new();
-        let mut done = false;
-        let mut color = None;
-        while !done {
+        let mut outcome = None;
+        let mut waiting_st = false;
+
+        while outcome.is_none() || waiting_st {
             let mut byte = [0u8];
             if self.read.read(&mut byte)? == 0 {
-                return Err(dynamic_color_probe_err(NO_DYNAMIC_COLOR_RESPONSE));
+                return Err(no_dynamic_color_response_err());
             }
 
             parser.parse(&byte, |action| {
-                if matches!(action, Action::Esc(Esc::Code(EscCode::StringTerminator))) {
+                if waiting_st { 
+                    waiting_st = false;
+                    if !matches!(action, Action::Esc(Esc::Code(EscCode::StringTerminator))) {
+                        outcome = Some(Err(no_dynamic_color_response_err()));
+                    }
                     return;
                 }
 
-                if color.is_none() {
-                    if let Some(parsed) = parse_dynamic_color_response(action, which) {
-                        color = Some(parsed);
-                        done = true;
-                        return;
-                    }
+                if let Some(color) = parse_dynamic_color_response(action, which) {
+                    waiting_st = byte[0] == ControlCode::Escape as u8;
+                    outcome = Some(Ok(color));
+                } else {
+                    outcome = Some(Err(no_dynamic_color_response_err()));
                 }
-
-                done = true;
             });
         }
 
-        match color {
-            Some(color) => color,
-            None => Err(dynamic_color_probe_err(NO_DYNAMIC_COLOR_RESPONSE)),
-        }
+        outcome.expect("outcome should be set at this point")
     }
 
     /// Probe the terminal and determine the ScreenSize.
@@ -286,7 +285,7 @@ impl<'a> ProbeCapabilities<'a> {
 fn parse_dynamic_color_response(
     action: Action,
     requested: DynamicColorNumber,
-) -> Option<Result<SrgbaTuple>> {
+) -> Option<SrgbaTuple> {
     let Action::OperatingSystemCommand(osc) = action else {
         return None;
     };
@@ -299,22 +298,15 @@ fn parse_dynamic_color_response(
         return None;
     }
 
-    let [color] = response_colors.as_slice() else {
-        return Some(Err(dynamic_color_probe_err(
-            INCOMPLETE_DYNAMIC_COLOR_RESPONSE,
-        )));
-    };
-
-    match color {
-        ColorOrQuery::Color(color) => Some(Ok(*color)),
-        ColorOrQuery::Query => Some(Err(dynamic_color_probe_err(
-            INCOMPLETE_DYNAMIC_COLOR_RESPONSE,
-        ))),
+    if let [ColorOrQuery::Color(color)] = response_colors.as_slice() {
+        Some(*color)
+    } else {
+        None
     }
 }
 
-fn dynamic_color_probe_err(message: &str) -> crate::Error {
-    crate::error::StringWrap(message.into()).into()
+fn no_dynamic_color_response_err() -> crate::Error {
+    crate::error::StringWrap(NO_DYNAMIC_COLOR_RESPONSE.into()).into()
 }
 
 #[cfg(test)]
@@ -402,7 +394,7 @@ mod test_probe_capabilities {
 
         assert_eq!(
             err.to_string(),
-            "terminal returned an incomplete dynamic color response"
+            "terminal did not respond to dynamic color query"
         );
         assert_eq!(
             String::from_utf8(write).unwrap(),
@@ -428,6 +420,72 @@ mod test_probe_capabilities {
         assert_eq!(
             String::from_utf8(write).unwrap(),
             dynamic_color_writes(DynamicColorNumber::TextCursorColor)
+        );
+    }
+
+    #[test]
+    fn test_dynamic_color_supports_consecutive_st_terminated_probes() {
+        let foreground = SrgbaTuple::from_str("rgb:1212/3434/5656").unwrap();
+        let background = SrgbaTuple::from_str("rgb:abab/cdcd/efef").unwrap();
+        let response = format!(
+            "{}{}",
+            OperatingSystemCommand::ChangeDynamicColors(
+                DynamicColorNumber::TextForegroundColor,
+                vec![ColorOrQuery::Color(foreground)],
+            ),
+            OperatingSystemCommand::ChangeDynamicColors(
+                DynamicColorNumber::TextBackgroundColor,
+                vec![ColorOrQuery::Color(background)],
+            ),
+        );
+        let mut read = Cursor::new(response.into_bytes());
+        let mut write = vec![];
+        let mut probe = ProbeCapabilities::new(&mut read, &mut write);
+
+        let parsed_foreground = probe
+            .dynamic_color(DynamicColorNumber::TextForegroundColor)
+            .unwrap();
+        let parsed_background = probe
+            .dynamic_color(DynamicColorNumber::TextBackgroundColor)
+            .unwrap();
+
+        assert_eq!(parsed_foreground, foreground);
+        assert_eq!(parsed_background, background);
+        assert_eq!(
+            String::from_utf8(write).unwrap(),
+            format!(
+                "{}{}",
+                dynamic_color_writes(DynamicColorNumber::TextForegroundColor),
+                dynamic_color_writes(DynamicColorNumber::TextBackgroundColor),
+            )
+        );
+    }
+
+    #[test]
+    fn test_dynamic_color_supports_consecutive_bel_terminated_probes() {
+        let foreground = SrgbaTuple::from_str("rgb:1212/3434/5656").unwrap();
+        let background = SrgbaTuple::from_str("rgb:abab/cdcd/efef").unwrap();
+        let response = "\x1b]10;rgb:1212/3434/5656\x07\x1b]11;rgb:abab/cdcd/efef\x07";
+        let mut read = Cursor::new(response.as_bytes());
+        let mut write = vec![];
+        let mut probe = ProbeCapabilities::new(&mut read, &mut write);
+
+        let parsed_foreground = probe
+            .dynamic_color(DynamicColorNumber::TextForegroundColor)
+            .unwrap();
+        let parsed_background = probe
+            .dynamic_color(DynamicColorNumber::TextBackgroundColor)
+            .unwrap();
+
+        assert_eq!(parsed_foreground, foreground);
+        assert_eq!(parsed_background, background);
+        assert_eq!(
+            String::from_utf8(write).unwrap(),
+            format!(
+                "{}{}",
+                dynamic_color_writes(DynamicColorNumber::TextForegroundColor),
+                dynamic_color_writes(DynamicColorNumber::TextBackgroundColor),
+            )
         );
     }
 }
