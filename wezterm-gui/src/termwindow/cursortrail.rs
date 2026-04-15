@@ -197,6 +197,9 @@ pub struct CursorTrailState {
     /// Shape-adjusted corner offsets computed once per frame in update().
     /// Used by has_smear_animation() and paint_animated_cursor().
     cached_corner_offsets: [(f32, f32); 4],
+    /// (cursor_shape, cell_width bits, cell_height bits) that produced
+    /// `cached_corner_offsets`.  Re-computed only when this key changes.
+    cached_corner_key: (CursorShape, u32, u32),
     prev_pos: StableCursorPosition,
     last_tick: Instant,
     /// Fractional carry so density is respected across frames.
@@ -239,6 +242,7 @@ impl CursorTrailState {
             highlight: None,
             smear_corners: std::array::from_fn(|_| SmearCorner::new()),
             cached_corner_offsets: CORNER_OFFSETS,
+            cached_corner_key: (CursorShape::Default, 0, 0),
             prev_pos: StableCursorPosition::default(),
             last_tick: Instant::now(),
             count_remainder: 0.0,
@@ -334,7 +338,11 @@ impl CursorTrailState {
         let dt = now.duration_since(self.last_tick).as_secs_f32().min(0.1);
         self.last_tick = now;
 
-        self.cached_corner_offsets = shape_corner_offsets(cursor_shape, cell_width, cell_height);
+        let corner_key = (cursor_shape, cell_width.to_bits(), cell_height.to_bits());
+        if corner_key != self.cached_corner_key {
+            self.cached_corner_offsets = shape_corner_offsets(cursor_shape, cell_width, cell_height);
+            self.cached_corner_key = corner_key;
+        }
 
         let target_x = current.x as f32 * cell_width;
         let target_y = current.y as f32 * cell_height;

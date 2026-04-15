@@ -866,73 +866,100 @@ impl crate::TermWindow {
                 (0.0, 1.0, 0.0, 1.0)
             };
 
-            let mut batch: Vec<Vertex> =
-                Vec::with_capacity(trail_state.particles.len() * VERTICES_PER_CELL);
+            // ── Hoist frame-constant values out of the per-particle loop ──────
+            // screen_base_{x,y}: common screen-space offset, computed once.
+            let screen_base_x = left_offset + pane_left;
+            // viewport_top_px is already folded in so the loop only adds p.y.
+            let screen_base_y = top_pixel_y + pane_top - viewport_top_px;
+            // Viewport culling bounds (particle centre coordinates, not clip).
+            let y_cull_min = top_pixel_y + pane_top - cell_height;
+            let y_cull_max = top_pixel_y + pane_top + viewport_h_px;
+            // For PixieDust size is independent of life_frac; precompute both paths.
+            let is_pixie_dust =
+                matches!(config.cursor_trail_style, Some(config::CursorTrailStyle::PixieDust));
+            // particle_half_base = cell_width * particle_size * 0.5;
+            // For non-PixieDust: half = particle_half_base * life_frac
+            // For PixieDust:     half = pixie_half (constant per frame)
+            let particle_half_base = cell_width * particle_size * 0.5;
+            let pixie_half = particle_half_base * 0.4;
 
-            for p in &trail_state.particles {
-                let life_frac = p.lifetime / p.max_lifetime;
-                let alpha = start_opacity * life_frac;
-                if alpha <= 0.005 {
-                    continue;
-                }
-
-                let screen_x = left_offset + pane_left + p.x;
-                let screen_y = top_pixel_y + pane_top + (p.y - viewport_top_px);
-
-                if screen_y < top_pixel_y + pane_top - cell_height
-                    || screen_y > top_pixel_y + pane_top + viewport_h_px
-                {
-                    continue;
-                }
-
-                let col = [r, g, b, alpha];
-                let hsv = [1.0f32, 1.0, 1.0];
-
-                let size = match config.cursor_trail_style {
-                    Some(config::CursorTrailStyle::PixieDust) => cell_width * particle_size * 0.4,
-                    _ => cell_width * particle_size * life_frac,
-                };
-                let half = size * 0.5;
-
-                let mk = |px: f32, py: f32, u: f32, v: f32| Vertex {
-                    position: [px, py],
-                    tex: [u, v],
-                    fg_color: col,
-                    alt_color: col,
-                    hsv,
-                    has_color,
-                    mix_value: mix_val,
-                };
-
-                batch.push(mk(
-                    screen_x - half - half_win_w,
-                    screen_y - half - half_win_h,
-                    tx1,
-                    ty1,
-                ));
-                batch.push(mk(
-                    screen_x + half - half_win_w,
-                    screen_y - half - half_win_h,
-                    tx2,
-                    ty1,
-                ));
-                batch.push(mk(
-                    screen_x - half - half_win_w,
-                    screen_y + half - half_win_h,
-                    tx1,
-                    ty2,
-                ));
-                batch.push(mk(
-                    screen_x + half - half_win_w,
-                    screen_y + half - half_win_h,
-                    tx2,
-                    ty2,
-                ));
+            // ── Thread-local scratch buffer: zero heap allocation per frame ───
+            // The Vec grows to the high-water mark and is reused across frames,
+            // eliminating the malloc/free pair that previously occurred every
+            // animation frame (60 Hz × ~27 KB for a full 256-particle batch).
+            thread_local! {
+                static PARTICLE_VERTS: std::cell::RefCell<Vec<Vertex>> =
+                    std::cell::RefCell::new(Vec::new());
             }
 
-            if !batch.is_empty() {
-                layers.extend_with(layer_num, &batch);
-            }
+            PARTICLE_VERTS.with(|scratch| {
+                let mut batch = scratch.borrow_mut();
+                batch.clear();
+                batch.reserve(trail_state.particles.len() * VERTICES_PER_CELL);
+
+                for p in &trail_state.particles {
+                    let life_frac = p.lifetime / p.max_lifetime;
+                    let alpha = start_opacity * life_frac;
+                    if alpha <= 0.005 {
+                        continue;
+                    }
+
+                    let screen_x = screen_base_x + p.x;
+                    let screen_y = screen_base_y + p.y;
+
+                    if screen_y < y_cull_min || screen_y > y_cull_max {
+                        continue;
+                    }
+
+                    let col = [r, g, b, alpha];
+                    let hsv = [1.0f32, 1.0, 1.0];
+
+                    let half = if is_pixie_dust {
+                        pixie_half
+                    } else {
+                        particle_half_base * life_frac
+                    };
+
+                    let mk = |px: f32, py: f32, u: f32, v: f32| Vertex {
+                        position: [px, py],
+                        tex: [u, v],
+                        fg_color: col,
+                        alt_color: col,
+                        hsv,
+                        has_color,
+                        mix_value: mix_val,
+                    };
+
+                    batch.push(mk(
+                        screen_x - half - half_win_w,
+                        screen_y - half - half_win_h,
+                        tx1,
+                        ty1,
+                    ));
+                    batch.push(mk(
+                        screen_x + half - half_win_w,
+                        screen_y - half - half_win_h,
+                        tx2,
+                        ty1,
+                    ));
+                    batch.push(mk(
+                        screen_x - half - half_win_w,
+                        screen_y + half - half_win_h,
+                        tx1,
+                        ty2,
+                    ));
+                    batch.push(mk(
+                        screen_x + half - half_win_w,
+                        screen_y + half - half_win_h,
+                        tx2,
+                        ty2,
+                    ));
+                }
+
+                if !batch.is_empty() {
+                    layers.extend_with(layer_num, &batch);
+                }
+            });
         }
 
         // ── Highlight (SonicBoom / Ripple / Wireframe) ───────────────────────
@@ -1056,9 +1083,10 @@ impl crate::TermWindow {
 
         // Schedule the next repaint immediately; the presentation engine
         // (PresentMode::Fifo) will vsync to the actual display refresh rate.
-        if trail_state.has_active_animation() {
-            self.update_next_frame_time(Some(now));
-        }
+        // has_active_animation() was confirmed true at the top of this function
+        // (early-return path). Nothing mutates trail_state during paint, so it
+        // remains true here — call unconditionally to avoid a redundant check.
+        self.update_next_frame_time(Some(now));
 
         Ok(())
     }
