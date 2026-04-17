@@ -644,10 +644,18 @@ impl WaylandWindowInner {
                 .ok_or(anyhow!("Window does not exist"))?;
             let object_id = window.wl_surface().id();
 
+            // Align pixel dimensions to the integer buffer scale factor
+            // to satisfy the Wayland protocol requirement that buffer
+            // dimensions must be an integer multiple of the buffer_scale.
+            let surface_udata = SurfaceUserData::from_wl(window.wl_surface());
+            let scale = surface_udata.surface_data.scale_factor().max(1);
+            let pixel_width = (self.dimensions.pixel_width as i32 / scale) * scale;
+            let pixel_height = (self.dimensions.pixel_height as i32 / scale) * scale;
+
             wegl_surface = Some(WlEglSurface::new(
                 object_id,
-                self.dimensions.pixel_width as i32,
-                self.dimensions.pixel_height as i32,
+                pixel_width,
+                pixel_height,
             )?);
 
             log::trace!("WEGL Surface here {:?}", wegl_surface);
@@ -874,6 +882,15 @@ impl WaylandWindowInner {
                         pixel_width = self.surface_to_pixels(w.try_into().unwrap());
                         pixel_height = self.surface_to_pixels(h.try_into().unwrap());
                     }
+                }
+
+                // Align pixel dimensions to the integer buffer scale factor
+                // to satisfy the Wayland protocol requirement that buffer
+                // dimensions must be an integer multiple of the buffer_scale.
+                let scale = factor as i32;
+                if scale > 1 {
+                    pixel_width = (pixel_width / scale) * scale;
+                    pixel_height = (pixel_height / scale) * scale;
                 }
 
                 log::trace!("Resizing frame");
