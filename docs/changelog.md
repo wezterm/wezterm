@@ -22,6 +22,9 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* DECRQCRA is now disabled by default to prevent silent screen scraping.
+  Set `enable_checksum_rectangular_area = true` to re-enable it.
+  Thanks to @jquast! #7701
 * Wayland: currently being reimplemented, it maybe more unstable than usual.
   Please file GH issues for any problems you see.
   Many thanks to @tzx and @tmccombs! #4777 #5781
