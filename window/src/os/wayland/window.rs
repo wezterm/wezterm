@@ -648,7 +648,7 @@ impl WaylandWindowInner {
             // to satisfy the Wayland protocol requirement that buffer
             // dimensions must be an integer multiple of the buffer_scale.
             let surface_udata = SurfaceUserData::from_wl(window.wl_surface());
-            let scale = surface_udata.surface_data.scale_factor().max(1);
+            let scale = surface_udata.surface_data.scale_factor();
             let pixel_width = (self.dimensions.pixel_width as i32 / scale) * scale;
             let pixel_height = (self.dimensions.pixel_height as i32 / scale) * scale;
 
