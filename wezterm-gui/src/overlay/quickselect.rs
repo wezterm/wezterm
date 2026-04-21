@@ -125,6 +125,13 @@ fn compute_labels_for_alphabet_impl(
         .collect()
 }
 
+/// Returns true if a label should be displayed given the current selection prefix.
+/// When the prefix is empty, all labels are shown. Otherwise, only labels that
+/// start with the lowercased prefix are shown.
+fn label_matches_selection(label: &str, lowered_prefix: &str) -> bool {
+    lowered_prefix.is_empty() || label.starts_with(lowered_prefix)
+}
+
 #[cfg(test)]
 mod alphabet_test {
     use super::*;
@@ -190,6 +197,101 @@ mod alphabet_test {
             compute_labels_for_alphabet_with_preserved_case("abc123", 12),
             compute_labels_for_alphabet("abc123", 12)
         );
+    }
+}
+
+#[cfg(test)]
+mod label_filter_test {
+    use super::*;
+
+    #[test]
+    fn empty_prefix_matches_all() {
+        for label in &["a", "fq", "db", "av", "ac"] {
+            assert!(label_matches_selection(label, ""));
+        }
+    }
+
+    #[test]
+    fn single_char_prefix_filters_non_matching() {
+        // Pressing 'a' should keep labels starting with 'a' and remove others
+        let labels = vec!["ai", "fq", "db", "av", "ac"];
+        let visible: Vec<&&str> = labels
+            .iter()
+            .filter(|l| label_matches_selection(l, "a"))
+            .collect();
+        assert_eq!(visible, vec![&"ai", &"av", &"ac"]);
+    }
+
+    #[test]
+    fn full_prefix_matches_exact_label() {
+        assert!(label_matches_selection("ai", "ai"));
+        assert!(!label_matches_selection("ac", "ai"));
+    }
+
+    #[test]
+    fn prefix_is_case_insensitive_via_lowered_input() {
+        // The caller lowercases the prefix before passing it in;
+        // labels are already lowercase from compute_labels_for_alphabet
+        assert!(label_matches_selection("ab", "a"));
+        assert!(!label_matches_selection("ab", "b"));
+    }
+
+    #[test]
+    fn single_char_labels_filtered_by_prefix() {
+        // With few matches, labels are single characters (a, b, c, d)
+        let labels = compute_labels_for_alphabet("abcd", 4);
+        assert_eq!(labels, vec!["a", "b", "c", "d"]);
+
+        // Typing 'a' should match only "a", not "b", "c", "d"
+        let visible: Vec<&String> = labels
+            .iter()
+            .filter(|l| label_matches_selection(l, "a"))
+            .collect();
+        assert_eq!(visible, vec!["a"]);
+    }
+
+    #[test]
+    fn two_char_labels_narrowed_by_first_char() {
+        // With more matches than alphabet, two-char labels are generated
+        let labels = compute_labels_for_alphabet("abcd", 6);
+        // Expected: ["a", "b", "c", "da", "db", "dc"]
+        assert_eq!(labels, vec!["a", "b", "c", "da", "db", "dc"]);
+
+        // Typing 'd' should keep "da", "db", "dc" and remove "a", "b", "c"
+        let visible: Vec<&String> = labels
+            .iter()
+            .filter(|l| label_matches_selection(l, "d"))
+            .collect();
+        assert_eq!(visible, vec!["da", "db", "dc"]);
+    }
+
+    #[test]
+    fn no_labels_match_unknown_prefix() {
+        let labels = vec!["ai", "fq", "db"];
+        let visible: Vec<&&str> = labels
+            .iter()
+            .filter(|l| label_matches_selection(l, "z"))
+            .collect();
+        assert!(visible.is_empty());
+    }
+
+    #[test]
+    fn backspace_restores_all_labels() {
+        // Simulates: type 'a' (filters), then backspace (prefix becomes empty, all visible)
+        let labels = vec!["ai", "fq", "db", "av", "ac"];
+
+        let after_a: Vec<&&str> = labels
+            .iter()
+            .filter(|l| label_matches_selection(l, "a"))
+            .collect();
+        assert_eq!(after_a.len(), 3);
+
+        // After backspace, prefix is empty again
+        let after_backspace: Vec<&&str> = labels
+            .iter()
+            .filter(|l| label_matches_selection(l, ""))
+            .collect();
+        assert_eq!(after_backspace.len(), 5);
     }
 }
 
@@ -420,17 +522,21 @@ impl Pane for QuickSelectOverlay {
                 if let Some(result_index) = r.by_label.get(&lowered).cloned() {
                     r.select_and_copy_match_number(result_index, paste);
                     r.close();
+                } else {
+                    r.mark_all_matches_dirty();
                 }
             }
             (KeyCode::Backspace, KeyModifiers::NONE) => {
                 // Backspace to edit the selection
                 let mut r = self.renderer.lock();
                 r.selection.pop();
+                r.mark_all_matches_dirty();
             }
             (KeyCode::Char('u'), KeyModifiers::CTRL) => {
                 // CTRL-u to clear the selection
                 let mut r = self.renderer.lock();
                 r.selection.clear();
+                r.mark_all_matches_dirty();
             }
             _ => {}
         }
@@ -584,7 +690,11 @@ impl Pane for QuickSelectOverlay {
                         self.renderer.last_bar_pos = Some(self.search_row);
                         line.clear_appdata();
                     } else if let Some(matches) = self.renderer.by_line.get(&stable_idx) {
+                        let prefix = self.renderer.selection.to_lowercase();
                         for m in matches {
+                            if !label_matches_selection(&m.label, &prefix) {
+                                continue;
+                            }
                             // highlight
                             for cell_idx in m.range.clone() {
                                 if let Some(cell) =
@@ -734,6 +844,12 @@ impl QuickSelectRenderable {
         let top = self.viewport.unwrap_or_else(|| dims.physical_top);
         let bottom = (top + dims.viewport_rows as StableRowIndex).saturating_sub(1);
         bottom
+    }
+
+    fn mark_all_matches_dirty(&mut self) {
+        for idx in self.by_line.keys() {
+            self.dirty_results.add(*idx);
+        }
     }
 
     fn close(&self) {
