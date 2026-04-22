@@ -281,13 +281,17 @@ hide:
 
     ```console
     $ brew tap wezterm/wezterm-linuxbrew
-    $ brew install wezterm
+    $ brew install wezterm/wezterm-linuxbrew/wezterm
     ```
+
+    The fully-qualified `wezterm/wezterm-linuxbrew/wezterm` form is required
+    on Linux: a plain `brew install wezterm` resolves to the macOS-only cask
+    and fails with `Error: macOS is required for this software`.
 
     If you'd like to use a nightly build you can perform a head install:
 
     ```console
-    $ brew install --HEAD wezterm
+    $ brew install --HEAD wezterm/wezterm-linuxbrew/wezterm
     ```
 
     to upgrade to a newer nightly, it is simplest to remove then
