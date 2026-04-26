@@ -423,9 +423,13 @@ impl CopyRenderable {
         let pane_id = self.delegate.pane_id();
         self.window
             .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                let mux = mux::Mux::get();
                 let mut selection = term_window.selection(pane_id);
                 selection.origin.take();
                 selection.range.take();
+                if let Some(pane) = mux.get_pane(pane_id) {
+                    selection.seqno = pane.get_current_seqno();
+                }
             })));
     }
 
@@ -514,10 +518,14 @@ impl CopyRenderable {
         let mode = self.selection_mode;
         self.window
             .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                let mux = mux::Mux::get();
                 let mut selection = term_window.selection(pane_id);
                 selection.origin = Some(start);
                 selection.range = Some(range);
                 selection.rectangular = mode == SelectionMode::Block;
+                if let Some(pane) = mux.get_pane(pane_id) {
+                    selection.seqno = pane.get_current_seqno();
+                }
                 window.invalidate();
             })));
         self.adjust_viewport_for_cursor_position();
