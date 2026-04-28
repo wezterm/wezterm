@@ -888,10 +888,8 @@ impl WaylandWindowInner {
                 // to satisfy the Wayland protocol requirement that buffer
                 // dimensions must be an integer multiple of the buffer_scale.
                 let scale = factor as i32;
-                if scale > 1 {
-                    pixel_width = (pixel_width / scale) * scale;
-                    pixel_height = (pixel_height / scale) * scale;
-                }
+                pixel_width = (pixel_width / scale) * scale;
+                pixel_height = (pixel_height / scale) * scale;
 
                 log::trace!("Resizing frame");
                 if !self.window_frame.is_hidden() {
