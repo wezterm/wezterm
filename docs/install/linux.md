@@ -281,13 +281,19 @@ hide:
 
     ```console
     $ brew tap wezterm/wezterm-linuxbrew
-    $ brew install wezterm
+    $ brew install wezterm/wezterm-linuxbrew/wezterm
     ```
+
+    !!! note
+        The fully-qualified `wezterm/wezterm-linuxbrew/wezterm` name is
+        required on Linux because `wezterm` in `homebrew-core` is a
+        macOS-only cask and `brew install wezterm` would resolve to
+        that and fail with "macOS is required for this software".
 
     If you'd like to use a nightly build you can perform a head install:
 
     ```console
-    $ brew install --HEAD wezterm
+    $ brew install --HEAD wezterm/wezterm-linuxbrew/wezterm
     ```
 
     to upgrade to a newer nightly, it is simplest to remove then
@@ -295,7 +301,7 @@ hide:
 
     ```console
     $ brew rm wezterm
-    $ brew install --HEAD wezterm
+    $ brew install --HEAD wezterm/wezterm-linuxbrew/wezterm
     ```
 === "Nix/NixOS"
 
