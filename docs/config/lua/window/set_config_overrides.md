@@ -95,25 +95,21 @@ local function adjust_opacity(window, delta)
   window:set_config_overrides(overrides)
 end
 
-wezterm.on('increase-opacity', function(window, _)
-  adjust_opacity(window, 0.1)
-end)
-
-wezterm.on('decrease-opacity', function(window, _)
-  adjust_opacity(window, -0.1)
-end)
-
 return {
   keys = {
     {
       key = 'PageUp',
       mods = 'CTRL|SHIFT',
-      action = wezterm.action.EmitEvent 'increase-opacity',
+      action = wezterm.action_callback(function(window, _)
+        adjust_opacity(window, 0.1)
+      end),
     },
     {
       key = 'PageDown',
       mods = 'CTRL|SHIFT',
-      action = wezterm.action.EmitEvent 'decrease-opacity',
+      action = wezterm.action_callback(function(window, _)
+        adjust_opacity(window, -0.1)
+      end),
     },
   },
 }
