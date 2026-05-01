@@ -356,13 +356,23 @@ impl CursorTrailState {
         }
 
         // ── Tick particles ────────────────────────────────────────────────────
+        // A tiny (rotation_speed, sin, cos) cache avoids recomputing sin_cos for
+        // every particle.  Railgun particles all share rotation_speed = π, so
+        // the cache turns ~256 sin_cos calls per frame into just one.
+        let mut sincos_cache: (f32, f32, f32) = (f32::NAN, 0.0, 1.0);
         for p in &mut self.particles {
             p.lifetime -= dt;
             p.x += p.vx * dt;
             p.y += p.vy * dt;
 
             if p.rotation_speed != 0.0 {
-                let (sin_a, cos_a) = (p.rotation_speed * dt).sin_cos();
+                let (sin_a, cos_a) = if p.rotation_speed == sincos_cache.0 {
+                    (sincos_cache.1, sincos_cache.2)
+                } else {
+                    let (s, c) = (p.rotation_speed * dt).sin_cos();
+                    sincos_cache = (p.rotation_speed, s, c);
+                    (s, c)
+                };
                 let vx = p.vx * cos_a - p.vy * sin_a;
                 let vy = p.vx * sin_a + p.vy * cos_a;
                 p.vx = vx;
@@ -405,7 +415,9 @@ impl CursorTrailState {
 
             // Particle styles: trigger when cursor moves at least min_distance cells.
             Some(
-                CursorTrailStyle::Railgun | CursorTrailStyle::Torpedo | CursorTrailStyle::PixieDust,
+                inner @ (CursorTrailStyle::Railgun
+                | CursorTrailStyle::Torpedo
+                | CursorTrailStyle::PixieDust),
             ) => {
                 if dx + dy >= min_distance {
                     let from_px = self.prev_pos.x as f32 * cell_width + half_w;
@@ -425,7 +437,7 @@ impl CursorTrailState {
                         density,
                         lifetime,
                         speed,
-                        style.unwrap(),
+                        inner,
                     );
                 }
             }

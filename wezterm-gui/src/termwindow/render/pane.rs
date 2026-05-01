@@ -303,6 +303,54 @@ impl crate::TermWindow {
         let cursor_is_default_color =
             palette.cursor_fg == global_cursor_fg && palette.cursor_bg == global_cursor_bg;
 
+        // Tick the cursor trail / smear state BEFORE line rendering so the
+        // line-render path knows whether to suppress the static cursor.
+        //
+        // We only suppress while a multi-cell jump is being *deferred* for
+        // snap-back detection — during that window the cursor has actually
+        // moved but we want the user to still see it parked at the pre-jump
+        // cell (drawn by the frozen smear quad), so showing the static
+        // cursor at its new position would betray the deferred destination.
+        //
+        // During an ordinary smear animation we deliberately do NOT
+        // suppress: the static cursor draws at its target with full
+        // cursor_fg / cursor_bg / inversion styling, while the smear quad
+        // streaks behind it on layer 0. Both the smear and the cursor cell
+        // bg use cursor_bg, so the layered draw is visually seamless and
+        // cursor_fg becomes visible the moment the cursor reaches its new
+        // cell instead of after the smear has finished.
+        let cursor_anim_enabled = pos.is_active
+            && (config.cursor_smear
+                || config.cursor_trail_style.is_some()
+                || config.cursor_animation_length > 0.0);
+        let now = Instant::now();
+        let cursor_visible = cursor.visibility == CursorVisibility::Visible;
+        let mut suppress_static_cursor = false;
+        if cursor_anim_enabled {
+            let mut trails = self.cursor_trail_states.borrow_mut();
+            let trail = trails.entry(pane_id).or_insert_with(CursorTrailState::new);
+            if cursor_visible {
+                trail.update(
+                    &cursor,
+                    cell_width,
+                    cell_height,
+                    config.cursor_trail_min_distance,
+                    config.cursor_trail_style,
+                    config.cursor_vfx_particle_density,
+                    config.cursor_vfx_particle_lifetime,
+                    config.cursor_vfx_particle_speed,
+                    config.cursor_smear,
+                    config.cursor_animation_length,
+                    config.cursor_trail_size,
+                    config.default_cursor_style.effective_shape(cursor.shape),
+                    now,
+                );
+                suppress_static_cursor = trail.is_smear_deferred();
+            } else {
+                trail.advance_hidden(&cursor);
+            }
+        }
+
         {
             let stable_range = match current_viewport {
                 Some(top) => top..top + dims.viewport_rows as StableRowIndex,
@@ -369,14 +417,12 @@ impl crate::TermWindow {
                 window_is_transparent,
                 layers,
                 error: None,
-                // For the active pane only: suppress the static cursor from line
-                // rendering so it is drawn separately by paint_animated_cursor.
-                // Inactive panes must keep their cursor in line rendering because
-                // paint_animated_cursor is not called for them.
-                suppress_cursor: pos.is_active
-                    && (config.cursor_smear
-                        || config.cursor_trail_style.is_some()
-                        || config.cursor_animation_length > 0.0),
+                // Suppress the static cursor only while the smear is actively
+                // animating or deferred — at rest, the line render path is the
+                // only place that applies cursor_fg / cursor_bg / inversion to
+                // the glyph beneath the cursor, so unconditional suppression
+                // would silently break those palette colours.
+                suppress_cursor: suppress_static_cursor,
             };
 
             impl<'a, 'b> LineRender<'a, 'b> {
@@ -393,7 +439,9 @@ impl crate::TermWindow {
                     // Constrain to the pane width!
                     let selrange = selrange.start..selrange.end.min(self.dims.cols);
 
-                    let (cursor, composing, password_input) = if self.cursor.y == stable_row {
+                    let (cursor, composing, password_input) = if self.cursor.y == stable_row
+                        && !self.suppress_cursor
+                    {
                         (
                             Some(CursorProperties {
                                 position: StableCursorPosition {
@@ -602,43 +650,10 @@ impl crate::TermWindow {
             }
         }
 
-        if pos.is_active
-            && (config.cursor_smear
-                || config.cursor_trail_style.is_some()
-                || config.cursor_animation_length > 0.0)
-        {
-            let now = Instant::now();
-            let cursor_visible = cursor.visibility == CursorVisibility::Visible;
-
-            {
-                let cell_width = self.render_metrics.cell_size.width as f32;
-                let cell_height = self.render_metrics.cell_size.height as f32;
-                let mut trails = self.cursor_trail_states.borrow_mut();
-                let trail = trails.entry(pane_id).or_insert_with(CursorTrailState::new);
-                if cursor_visible {
-                    trail.update(
-                        &cursor,
-                        cell_width,
-                        cell_height,
-                        config.cursor_trail_min_distance,
-                        config.cursor_trail_style,
-                        config.cursor_vfx_particle_density,
-                        config.cursor_vfx_particle_lifetime,
-                        config.cursor_vfx_particle_speed,
-                        config.cursor_smear,
-                        config.cursor_animation_length,
-                        config.cursor_trail_size,
-                        config.default_cursor_style.effective_shape(cursor.shape),
-                        now,
-                    );
-                } else {
-                    // Cursor hidden (e.g. paru, btop output phase): skip all
-                    // animation work so no trail or smear is painted. Position
-                    // is tracked silently so no jump-smear fires on reappear.
-                    trail.advance_hidden(&cursor);
-                }
-            }
-
+        if cursor_anim_enabled {
+            // Trail state was already ticked above (before line rendering)
+            // so we could decide on suppress_static_cursor for the cache key.
+            // Here we only paint based on that already-up-to-date state.
             if cursor_visible {
                 let trail_states = self.cursor_trail_states.borrow();
                 let trail_state = match trail_states.get(&pane_id) {
@@ -879,9 +894,10 @@ impl crate::TermWindow {
                 matches!(config.cursor_trail_style, Some(config::CursorTrailStyle::PixieDust));
             // particle_half_base = cell_width * particle_size * 0.5;
             // For non-PixieDust: half = particle_half_base * life_frac
-            // For PixieDust:     half = pixie_half (constant per frame)
+            // For PixieDust:     half = pixie_half (constant per frame, min 2px so
+            //                    particles remain visible at small cell sizes)
             let particle_half_base = cell_width * particle_size * 0.5;
-            let pixie_half = particle_half_base * 0.4;
+            let pixie_half = particle_half_base.max(2.0);
 
             // ── Thread-local scratch buffer: zero heap allocation per frame ───
             // The Vec grows to the high-water mark and is reused across frames,
@@ -896,6 +912,9 @@ impl crate::TermWindow {
                 let mut batch = scratch.borrow_mut();
                 batch.clear();
                 batch.reserve(trail_state.particles.len() * VERTICES_PER_CELL);
+
+                // hsv is identical for every particle; hoist it out of the loop.
+                const HSV: [f32; 3] = [1.0, 1.0, 1.0];
 
                 for p in &trail_state.particles {
                     let life_frac = p.lifetime / p.max_lifetime;
@@ -912,7 +931,6 @@ impl crate::TermWindow {
                     }
 
                     let col = [r, g, b, alpha];
-                    let hsv = [1.0f32, 1.0, 1.0];
 
                     let half = if is_pixie_dust {
                         pixie_half
@@ -925,7 +943,7 @@ impl crate::TermWindow {
                         tex: [u, v],
                         fg_color: col,
                         alt_color: col,
-                        hsv,
+                        hsv: HSV,
                         has_color,
                         mix_value: mix_val,
                     };
@@ -1161,25 +1179,6 @@ impl crate::TermWindow {
         let screen_off_x = left_offset + pane_left;
         let screen_off_y = top_pixel_y + pane_top - viewport_top_px;
 
-        // Per-shape: cursor rect size, cell-relative TL offset, render layer.
-        let (rect_w, rect_h, off_x, off_y, layer) = match shape {
-            termwiz::surface::CursorShape::Default
-            | termwiz::surface::CursorShape::BlinkingBlock
-            | termwiz::surface::CursorShape::SteadyBlock => {
-                (cell_width, cell_height, 0.0f32, 0.0f32, 0usize)
-            }
-            termwiz::surface::CursorShape::BlinkingUnderline
-            | termwiz::surface::CursorShape::SteadyUnderline => {
-                let h = (cell_height * 0.1).max(2.0);
-                (cell_width, h, 0.0, cell_height - h, 0)
-            }
-            termwiz::surface::CursorShape::BlinkingBar
-            | termwiz::surface::CursorShape::SteadyBar => {
-                let w = (cell_width * 0.15).max(2.0);
-                (w, cell_height, 0.0, 0.0, 2)
-            }
-        };
-
         // ── Neovide-style deforming smear (all shapes) ───────────────────────
         // Four corners animate at different speeds — leading edge races ahead,
         // trailing edge lags — producing the characteristic stretched-body look.
@@ -1215,26 +1214,18 @@ impl crate::TermWindow {
             self.update_next_frame_time(Some(now));
         }
 
-        // Draw the cursor rect at the target position with the actual cursor
-        // shape. When animating this caps the smear's deformed front face,
-        // making the cursor head appear straight and undistorted. When at rest
-        // (no smear) this is the sole cursor draw.
+        // No cap rect: the static cursor drawn by the line render path is
+        // the canonical cursor draw at the target cell and already applies
+        // cursor_fg / cursor_bg / inversion to the underlying glyph. The
+        // smear quad streaks behind it on layer 0 using the same cursor_bg
+        // colour, so the head reads as a clean cursor cell with a trailing
+        // smear and cursor_fg is visible immediately on arrival rather than
+        // after the smear finishes.
         //
-        // Suppressed while a multi-cell jump is being deferred for snap-back
-        // detection: drawing it would betray the deferred destination, since
-        // the smear quad is still frozen at the pre-jump cell. The smear quad
-        // alone is enough — at rest it forms a regular cursor block at the
-        // pre-jump cell, which is exactly what we want the user to see.
-        if !trail_state.is_smear_deferred() {
-            let screen_x = screen_off_x + target_x + off_x;
-            let screen_y = screen_off_y + target_y + off_y;
-            self.filled_rectangle(
-                layers,
-                layer,
-                euclid::rect(screen_x, screen_y, rect_w, rect_h),
-                cursor_color,
-            )?;
-        }
+        // While a multi-cell jump is deferred, the static cursor is
+        // suppressed in line rendering (see suppress_static_cursor in
+        // paint_pane) so the frozen smear quad alone forms the visible
+        // cursor block at the pre-jump cell.
 
         Ok(())
     }
