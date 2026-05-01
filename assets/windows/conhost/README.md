@@ -22,14 +22,15 @@ When updating, replace both files from the same package build:
 - `build/native/runtimes/x64/OpenConsole.exe`
 - `runtimes/win-x64/native/conpty.dll`
 
-These assets were built by cloning the ms-terminal repo and running:
+Alternatively, these assets can be built manually by cloning the ms-terminal
+repo and running:
 
 ```
 .\tools\razzle.cmd
 bcz rel
 ```
 
-then the files can be copied from `bin/x64/Release` to this location.
+then the matching files can be copied from `bin/x64/Release` to this location.
 
 It's possible that you'll need to download this runtime support package
 from MS in order for this to work:
