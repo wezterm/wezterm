@@ -22,6 +22,10 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* Windows: Updated the bundled ConPTY pair, `conpty.dll` and
+  `OpenConsole.exe`, to v1.24.260402001. This fixes a PowerShell
+  FailFast crash with exit code 0x80131623 when exiting TUI applications
+  that use the alternate screen buffer. #7774
 * DECRQCRA is now disabled by default to prevent silent screen scraping.
   Set `enable_checksum_rectangular_area = true` to re-enable it.
   Thanks to @jquast! #7701

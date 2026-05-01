@@ -14,6 +14,14 @@ and/or the build for the terminal project make some more progress.
 
 https://github.com/wezterm/wezterm/issues/1927
 
+The bundled Windows ConPTY pair is sourced from the Microsoft.Windows.Console.ConPTY
+NuGet package. The current version used here is 1.24.260402001.
+
+When updating, replace both files from the same package build:
+
+- `build/native/runtimes/x64/OpenConsole.exe`
+- `runtimes/win-x64/native/conpty.dll`
+
 These assets were built by cloning the ms-terminal repo and running:
 
 ```
