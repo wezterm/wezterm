@@ -1,10 +1,33 @@
 use crate::quad::TripleLayerQuadAllocator;
 use crate::termwindow::render::RenderScreenLineParams;
 use crate::utilsprites::RenderMetrics;
-use config::ConfigHandle;
+use config::{ConfigHandle, TabBarPosition};
 use mux::renderable::RenderableDimensions;
 use wezterm_term::color::ColorAttribute;
 use window::color::LinearRgba;
+
+/// Pixel insets carved out of the window for the tab bar.
+///
+/// Exactly one of `top` / `bottom` / `left` is non-zero in practice
+/// (or all zero if the tab bar is hidden). Consumers should treat
+/// the struct uniformly so that switching position is a pure data
+/// change.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TabBarInsets {
+    pub top: f32,
+    pub bottom: f32,
+    pub left: f32,
+    pub right: f32,
+}
+
+impl TabBarInsets {
+    pub fn horizontal(&self) -> f32 {
+        self.left + self.right
+    }
+    pub fn vertical(&self) -> f32 {
+        self.top + self.bottom
+    }
+}
 
 impl crate::TermWindow {
     pub fn paint_tab_bar(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
@@ -23,7 +46,7 @@ impl crate::TermWindow {
 
         let palette = self.palette().clone();
         let tab_bar_height = self.tab_bar_pixel_height()?;
-        let tab_bar_y = if self.config.tab_bar_at_bottom {
+        let tab_bar_y = if self.effective_tab_bar_position() == TabBarPosition::Bottom {
             ((self.dimensions.pixel_height as f32) - (tab_bar_height + border.bottom.get() as f32))
                 .max(0.)
         } else {
@@ -115,5 +138,71 @@ impl crate::TermWindow {
 
     pub fn tab_bar_pixel_height(&self) -> anyhow::Result<f32> {
         Self::tab_bar_pixel_height_impl(&self.config, &self.fonts, &self.render_metrics)
+    }
+
+    /// Width of the tab bar when it is rendered as a vertical strip
+    /// down the side of the window.
+    ///
+    /// Currently a fixed value. A future iteration can promote this
+    /// to a config knob, or derive it from the longest tab title.
+    pub fn tab_bar_pixel_width(&self) -> f32 {
+        220.0
+    }
+
+    /// Resolve the effective tab-bar position from the two config
+    /// fields. `tab_bar_position` wins when non-default; otherwise
+    /// the legacy `tab_bar_at_bottom` boolean controls.
+    pub fn effective_tab_bar_position(&self) -> TabBarPosition {
+        Self::effective_tab_bar_position_impl(&self.config)
+    }
+
+    pub fn effective_tab_bar_position_impl(config: &ConfigHandle) -> TabBarPosition {
+        match config.tab_bar_position {
+            TabBarPosition::Top if config.tab_bar_at_bottom => TabBarPosition::Bottom,
+            other => other,
+        }
+    }
+
+    /// Pixel insets reserved for the tab bar. Returns all-zero when
+    /// the tab bar is hidden. Vertical tab bars are only supported
+    /// in fancy mode; in non-fancy mode they fall back to Top.
+    pub fn tab_bar_insets(&self) -> TabBarInsets {
+        if !self.show_tab_bar {
+            return TabBarInsets::default();
+        }
+        Self::tab_bar_insets_impl(
+            &self.config,
+            self.tab_bar_pixel_height().unwrap_or(0.0),
+            self.tab_bar_pixel_width(),
+        )
+    }
+
+    pub fn tab_bar_insets_impl(
+        config: &ConfigHandle,
+        tab_bar_pixel_height: f32,
+        tab_bar_pixel_width: f32,
+    ) -> TabBarInsets {
+        let pos = Self::effective_tab_bar_position_impl(config);
+        let pos = if pos == TabBarPosition::Left && !config.use_fancy_tab_bar {
+            // Non-fancy bar cannot render vertically. Quietly fall back
+            // to Top. A user-visible warning is logged at config load.
+            TabBarPosition::Top
+        } else {
+            pos
+        };
+        match pos {
+            TabBarPosition::Top => TabBarInsets {
+                top: tab_bar_pixel_height,
+                ..Default::default()
+            },
+            TabBarPosition::Bottom => TabBarInsets {
+                bottom: tab_bar_pixel_height,
+                ..Default::default()
+            },
+            TabBarPosition::Left => TabBarInsets {
+                left: tab_bar_pixel_width,
+                ..Default::default()
+            },
+        }
     }
 }

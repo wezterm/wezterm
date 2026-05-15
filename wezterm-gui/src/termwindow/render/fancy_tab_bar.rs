@@ -6,7 +6,7 @@ use crate::termwindow::render::corners::*;
 use crate::termwindow::render::window_buttons::window_button_element;
 use crate::termwindow::{UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
-use config::{Dimension, DimensionContext, TabBarColors};
+use config::{Dimension, DimensionContext, TabBarColors, TabBarPosition};
 use std::rc::Rc;
 use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
@@ -56,6 +56,9 @@ impl crate::TermWindow {
     }
 
     pub fn build_fancy_tab_bar(&self, palette: &ColorPalette) -> anyhow::Result<ComputedElement> {
+        if self.effective_tab_bar_position() == TabBarPosition::Left {
+            return self.build_fancy_tab_bar_vertical(palette);
+        }
         let tab_bar_height = self.tab_bar_pixel_height()?;
         let font = self.fonts.title_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
@@ -447,12 +450,190 @@ impl crate::TermWindow {
 
         computed.translate(euclid::vec2(
             0.,
-            if self.config.tab_bar_at_bottom {
+            if self.effective_tab_bar_position() == TabBarPosition::Bottom {
                 self.dimensions.pixel_height as f32
                     - (computed.bounds.height() + border.bottom.get() as f32)
             } else {
                 border.top.get() as f32
             },
+        ));
+
+        Ok(computed)
+    }
+
+    /// Build the fancy tab bar laid out as a vertical strip down the
+    /// left edge. Mirrors the horizontal builder above, with three
+    /// structural differences:
+    ///
+    /// 1. Each tab is set to `DisplayType::Block` so children stack
+    ///    top-to-bottom in the box model.
+    /// 2. The outer container is sized to `tab_bar_pixel_width` x
+    ///    `pixel_height` and placed at the window's top-left.
+    /// 3. Right-floated decorations (RightStatus, NewTabButton) flow
+    ///    after the tabs rather than to the right of them.
+    pub fn build_fancy_tab_bar_vertical(
+        &self,
+        palette: &ColorPalette,
+    ) -> anyhow::Result<ComputedElement> {
+        let font = self.fonts.title_font()?;
+        let metrics = RenderMetrics::with_font_metrics(&font.metrics());
+        let items = self.tab_bar.items();
+        let colors = self
+            .config
+            .colors
+            .as_ref()
+            .and_then(|c| c.tab_bar.as_ref())
+            .cloned()
+            .unwrap_or_else(TabBarColors::default);
+
+        let bar_colors = ElementColors {
+            border: BorderColor::default(),
+            bg: if self.focused.is_some() {
+                self.config.window_frame.active_titlebar_bg
+            } else {
+                self.config.window_frame.inactive_titlebar_bg
+            }
+            .to_linear()
+            .into(),
+            text: if self.focused.is_some() {
+                self.config.window_frame.active_titlebar_fg
+            } else {
+                self.config.window_frame.inactive_titlebar_fg
+            }
+            .to_linear()
+            .into(),
+        };
+
+        let tab_bar_width = self.tab_bar_pixel_width();
+
+        let make_tab = |item: &TabEntry, active: bool| -> Element {
+            let inactive_tab = colors.inactive_tab();
+            let active_tab = colors.active_tab();
+            let bg = if active {
+                active_tab.bg_color
+            } else {
+                inactive_tab.bg_color
+            };
+            let fg = if active {
+                active_tab.fg_color
+            } else {
+                inactive_tab.fg_color
+            };
+            Element::with_line(&font, &item.title, palette)
+                .item_type(UIItemType::TabBar(item.item.clone()))
+                .display(DisplayType::Block)
+                .min_width(Some(Dimension::Pixels(tab_bar_width)))
+                .padding(BoxDimension {
+                    left: Dimension::Cells(0.5),
+                    right: Dimension::Cells(0.5),
+                    top: Dimension::Cells(0.3),
+                    bottom: Dimension::Cells(0.3),
+                })
+                .margin(BoxDimension {
+                    left: Dimension::Cells(0.),
+                    right: Dimension::Cells(0.),
+                    top: Dimension::Cells(0.),
+                    bottom: Dimension::Pixels(1.),
+                })
+                .border(BoxDimension::new(Dimension::Pixels(0.)))
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: bg.to_linear().into(),
+                    text: fg.to_linear().into(),
+                })
+                .hover_colors({
+                    let hover = if active {
+                        colors.inactive_tab_hover()
+                    } else {
+                        colors.inactive_tab_hover()
+                    };
+                    Some(ElementColors {
+                        border: BorderColor::default(),
+                        bg: hover.bg_color.to_linear().into(),
+                        text: hover.fg_color.to_linear().into(),
+                    })
+                })
+        };
+
+        let mut children = vec![];
+        for item in items {
+            match item.item {
+                TabBarItem::Tab { active, .. } => {
+                    children.push(make_tab(item, active));
+                }
+                TabBarItem::NewTabButton => {
+                    let new_tab = colors.new_tab();
+                    let new_tab_hover = colors.new_tab_hover();
+                    children.push(
+                        Element::new(&font, ElementContent::Text("+".to_string()))
+                            .item_type(UIItemType::TabBar(item.item.clone()))
+                            .display(DisplayType::Block)
+                            .min_width(Some(Dimension::Pixels(tab_bar_width)))
+                            .padding(BoxDimension {
+                                left: Dimension::Cells(0.5),
+                                right: Dimension::Cells(0.5),
+                                top: Dimension::Cells(0.3),
+                                bottom: Dimension::Cells(0.3),
+                            })
+                            .colors(ElementColors {
+                                border: BorderColor::default(),
+                                bg: new_tab.bg_color.to_linear().into(),
+                                text: new_tab.fg_color.to_linear().into(),
+                            })
+                            .hover_colors(Some(ElementColors {
+                                border: BorderColor::default(),
+                                bg: new_tab_hover.bg_color.to_linear().into(),
+                                text: new_tab_hover.fg_color.to_linear().into(),
+                            })),
+                    );
+                }
+                // Status / window-button items are noisy in vertical
+                // layout; skip them for the first cut. We can plumb
+                // them through later once basic stacking is solid.
+                _ => {}
+            }
+        }
+
+        let content = ElementContent::Children(children);
+
+        let tabs = Element::new(&font, content)
+            .display(DisplayType::Block)
+            .item_type(UIItemType::TabBar(TabBarItem::None))
+            .min_width(Some(Dimension::Pixels(tab_bar_width)))
+            .min_height(Some(Dimension::Pixels(self.dimensions.pixel_height as f32)))
+            .colors(bar_colors);
+
+        let border = self.get_os_border();
+
+        let mut computed = self.compute_element(
+            &LayoutContext {
+                height: DimensionContext {
+                    dpi: self.dimensions.dpi as f32,
+                    pixel_max: self.dimensions.pixel_height as f32,
+                    pixel_cell: metrics.cell_size.height as f32,
+                },
+                width: DimensionContext {
+                    dpi: self.dimensions.dpi as f32,
+                    pixel_max: tab_bar_width,
+                    pixel_cell: metrics.cell_size.width as f32,
+                },
+                bounds: euclid::rect(
+                    border.left.get() as f32,
+                    border.top.get() as f32,
+                    tab_bar_width,
+                    self.dimensions.pixel_height as f32
+                        - (border.top + border.bottom).get() as f32,
+                ),
+                metrics: &metrics,
+                gl_state: self.render_state.as_ref().unwrap(),
+                zindex: 10,
+            },
+            &tabs,
+        )?;
+
+        computed.translate(euclid::vec2(
+            border.left.get() as f32,
+            border.top.get() as f32,
         ));
 
         Ok(computed)

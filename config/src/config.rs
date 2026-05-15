@@ -482,6 +482,9 @@ pub struct Config {
     #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
 
+    #[dynamic(default)]
+    pub tab_bar_position: TabBarPosition,
+
     #[dynamic(default = "default_true")]
     pub mouse_wheel_scrolls_tabs: bool,
 
@@ -1891,6 +1894,26 @@ fn default_inactive_pane_hsb() -> HsbTransform {
         brightness: 0.8,
         saturation: 0.9,
         hue: 1.0,
+    }
+}
+
+/// Position of the tab bar relative to the terminal pane area.
+///
+/// `Top` and `Bottom` correspond to the legacy horizontal strip
+/// (also reachable via `tab_bar_at_bottom`). `Left` renders the
+/// tab bar as a vertical strip down the left edge, and currently
+/// requires `use_fancy_tab_bar = true`.
+#[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TabBarPosition {
+    #[default]
+    Top,
+    Bottom,
+    Left,
+}
+
+impl TabBarPosition {
+    pub fn is_vertical(self) -> bool {
+        matches!(self, TabBarPosition::Left)
     }
 }
 

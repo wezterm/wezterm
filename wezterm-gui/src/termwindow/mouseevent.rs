@@ -69,11 +69,9 @@ impl super::TermWindow {
 
         let border = self.get_os_border();
 
-        let first_line_offset = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
-            self.tab_bar_pixel_height().unwrap_or(0.) as isize
-        } else {
-            0
-        } + border.top.get() as isize;
+        let insets = self.tab_bar_insets();
+        let first_line_offset = insets.top as isize + border.top.get() as isize;
+        let first_col_offset = insets.left as isize + border.left.get() as isize;
 
         let (padding_left, padding_top) = self.padding_left_top();
 
@@ -88,7 +86,7 @@ impl super::TermWindow {
         let x = (event
             .coords
             .x
-            .sub((padding_left + border.left.get() as f32) as isize)
+            .sub(padding_left as isize + first_col_offset)
             .max(0) as f32)
             / self.render_metrics.cell_size.width as f32;
         let x = if !pane.is_mouse_grabbed() {
@@ -295,16 +293,9 @@ impl super::TermWindow {
         let dims = pane.get_dimensions();
         let current_viewport = self.get_viewport(pane.pane_id());
 
-        let tab_bar_height = if self.show_tab_bar {
-            self.tab_bar_pixel_height().unwrap_or(0.)
-        } else {
-            0.
-        };
-        let (top_bar_height, bottom_bar_height) = if self.config.tab_bar_at_bottom {
-            (0.0, tab_bar_height)
-        } else {
-            (tab_bar_height, 0.0)
-        };
+        let insets = self.tab_bar_insets();
+        let top_bar_height = insets.top;
+        let bottom_bar_height = insets.bottom;
 
         let border = self.get_os_border();
         let y_offset = top_bar_height + border.top.get() as f32;
