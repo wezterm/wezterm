@@ -150,8 +150,9 @@
               # macOS will only recognize our application bundle
               # if the binaries are inside of it. Move them there
               # and create symbolic links for them in bin/.
-              mv $out/bin/{wezterm,wezterm-mux-server,wezterm-gui,strip-ansi-escapes} "$OUT_APP"
-              ln -s "$OUT_APP"/{wezterm,wezterm-mux-server,wezterm-gui,strip-ansi-escapes} "$out/bin"
+              mkdir -p "$OUT_APP/Contents/MacOS"
+              mv $out/bin/{wezterm,wezterm-mux-server,wezterm-gui,strip-ansi-escapes} "$OUT_APP/Contents/MacOS"
+              ln -s "$OUT_APP/Contents/MacOS"/{wezterm,wezterm-mux-server,wezterm-gui,strip-ansi-escapes} "$out/bin"
             '';
 
           postInstall = ''
