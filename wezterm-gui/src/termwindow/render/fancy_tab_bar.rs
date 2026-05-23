@@ -1,3 +1,9 @@
+//! Fancy tab bar renderer (GPU box-model path).
+//!
+//! Reads the logical tab bar regions produced by [`crate::tabbar`] and
+//! converts them into a GPU box-model element tree: rounded tab corners,
+//! pixel-accurate sizing, custom-drawn vector icons, hover states.
+
 use crate::customglyph::*;
 use crate::tabbar::{TabBarItem, TabEntry};
 use crate::termwindow::box_model::*;
@@ -12,6 +18,10 @@ use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
 use window::{IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
 
+// Polygon definitions for the custom-drawn tab bar icons.
+// Each poly is rendered as a line drawing scaled to the cell height.
+
+// "×" icon used for the tab close button
 const X_BUTTON: &[Poly] = &[
     Poly {
         path: &[
@@ -31,6 +41,7 @@ const X_BUTTON: &[Poly] = &[
     },
 ];
 
+// "+" icon used for the new-tab button
 const PLUS_BUTTON: &[Poly] = &[
     Poly {
         path: &[
@@ -51,10 +62,14 @@ const PLUS_BUTTON: &[Poly] = &[
 ];
 
 impl crate::TermWindow {
+    /// Clears the cached fancy tab bar, forcing a rebuild on the next render.
     pub fn invalidate_fancy_tab_bar(&mut self) {
         self.fancy_tab_bar.take();
     }
 
+    /// Builds the full fancy tab bar as a `ComputedElement` tree.
+    /// Assembles left-side tabs, left/right status areas, window buttons, and
+    /// the new-tab button into a single laid-out element ready for painting.
     pub fn build_fancy_tab_bar(&self, palette: &ColorPalette) -> anyhow::Result<ComputedElement> {
         let tab_bar_height = self.tab_bar_pixel_height()?;
         let font = self.fonts.title_font()?;
@@ -68,6 +83,9 @@ impl crate::TermWindow {
             .cloned()
             .unwrap_or_else(TabBarColors::default);
 
+        // left_status: items pinned before the tab list (left-status text, macOS button spacer)
+        // left_eles:   tabs and left-aligned window buttons
+        // right_eles:  right-status text and right-aligned window buttons
         let mut left_status = vec![];
         let mut left_eles = vec![];
         let mut right_eles = vec![];
@@ -89,6 +107,8 @@ impl crate::TermWindow {
             .into(),
         };
 
+        // Closure that converts a single TabEntry into an Element with the
+        // correct styling for its role (status, tab, new-tab button, window button).
         let item_to_elem = |item: &TabEntry| -> Element {
             let element = Element::with_line(&font, &item.title, palette);
 
@@ -141,7 +161,7 @@ impl crate::TermWindow {
                     },
                 )
                 .vertical_align(VerticalAlign::Middle)
-                .item_type(UIItemType::TabBar(item.item.clone()))
+                .item_type(UIItemType::TabBar(item.item))
                 .margin(BoxDimension {
                     left: Dimension::Cells(0.5),
                     right: Dimension::Cells(0.),
@@ -167,7 +187,7 @@ impl crate::TermWindow {
                 })),
                 TabBarItem::Tab { active, .. } if active => element
                     .vertical_align(VerticalAlign::Bottom)
-                    .item_type(UIItemType::TabBar(item.item.clone()))
+                    .item_type(UIItemType::TabBar(item.item))
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
@@ -212,7 +232,7 @@ impl crate::TermWindow {
                     }),
                 TabBarItem::Tab { .. } => element
                     .vertical_align(VerticalAlign::Bottom)
-                    .item_type(UIItemType::TabBar(item.item.clone()))
+                    .item_type(UIItemType::TabBar(item.item))
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
@@ -296,6 +316,8 @@ impl crate::TermWindow {
             }
         };
 
+        // Divide available width evenly across all tabs and the new-tab button.
+        // We subtract a small gutter so tabs don't crowd each other.
         let num_tabs: f32 = items
             .iter()
             .map(|item| match item.item {
@@ -366,6 +388,8 @@ impl crate::TermWindow {
             );
         }
 
+        // Determine whether integrated title buttons appear on the left side
+        // (macOS-style or explicitly configured left alignment).
         let window_buttons_at_left = self
             .config
             .window_decorations
@@ -445,6 +469,8 @@ impl crate::TermWindow {
             &tabs,
         )?;
 
+        // Move the computed element to its final Y position:
+        // flush to the bottom edge when tab_bar_at_bottom, otherwise just below the OS border.
         computed.translate(euclid::vec2(
             0.,
             if self.config.tab_bar_at_bottom {
@@ -458,6 +484,8 @@ impl crate::TermWindow {
         Ok(computed)
     }
 
+    /// Renders previously-built fancy tab bar to the GPU.
+    /// Returns list of UI hit-regions (tabs, buttons, etc.) for input handling.
     pub fn paint_fancy_tab_bar(&self) -> anyhow::Result<Vec<UIItem>> {
         let computed = self.fancy_tab_bar.as_ref().ok_or_else(|| {
             anyhow::anyhow!("paint_fancy_tab_bar called but fancy_tab_bar is None")
@@ -465,12 +493,15 @@ impl crate::TermWindow {
         let ui_items = computed.ui_items();
 
         let gl_state = self.render_state.as_ref().unwrap();
-        self.render_element(&computed, gl_state, None)?;
+        self.render_element(computed, gl_state, None)?;
 
         Ok(ui_items)
     }
 }
 
+/// Builds the close ("x") button element appended to each tab.
+/// `active` controls hover color inversion: active tabs swap to inactive
+/// colors on hover and vice-versa, so the button always contrasts its tab.
 fn make_x_button(
     font: &Rc<LoadedFont>,
     metrics: &RenderMetrics,
@@ -479,7 +510,7 @@ fn make_x_button(
     active: bool,
 ) -> Element {
     Element::new(
-        &font,
+        font,
         ElementContent::Poly {
             line_width: metrics.underline_height.max(2),
             poly: SizedPoly {

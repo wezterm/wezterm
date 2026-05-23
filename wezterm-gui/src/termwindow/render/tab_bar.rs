@@ -1,3 +1,15 @@
+//! Tab bar paint dispatch and height calculation.
+//!
+//! Entry point for tab bar rendering each frame.
+//!
+//! Delegates to one of two paths:
+//! - Fancy (when `use_fancy_tab_bar = true`): builds a cached GPU box-model
+//!   element tree, based on the logical regions from [`crate::tabbar`].
+//! - Classic: renders the pre-built cell-grid line from [`crate::tabbar`]
+//!   directly through the terminal's `render_screen_line` pipeline.
+//!
+//! Also owns the tab bar height calculation, shared by both paths.
+
 use crate::quad::TripleLayerQuadAllocator;
 use crate::termwindow::render::RenderScreenLineParams;
 use crate::utilsprites::RenderMetrics;
@@ -7,6 +19,7 @@ use wezterm_term::color::ColorAttribute;
 use window::color::LinearRgba;
 
 impl crate::TermWindow {
+    /// Renders tab bar into window's rendering `layers`.
     pub fn paint_tab_bar(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
         if self.config.use_fancy_tab_bar {
             if self.fancy_tab_bar.is_none() {
@@ -100,6 +113,11 @@ impl crate::TermWindow {
         Ok(())
     }
 
+    /// Computes the tab bar height in physical pixels.
+    /// Fancy mode uses a slightly bigger height compared to title font's cell height.
+    /// Classic mode uses the standard cell height, like the rest of the terminal.
+    ///
+    /// NOTE: Accepts explicit arguments so callers without a `TermWindow` can use it.
     pub fn tab_bar_pixel_height_impl(
         config: &ConfigHandle,
         fontconfig: &wezterm_font::FontConfiguration,
@@ -113,6 +131,11 @@ impl crate::TermWindow {
         }
     }
 
+    /// Computes the tab bar height in physical pixels.
+    /// Fancy mode uses a slightly bigger height compared to title font's cell height.
+    /// Classic mode uses the standard cell height, like the rest of the terminal.
+    ///
+    /// NOTE: This is a convenience wrapper around `tab_bar_pixel_height_impl` using self's fields.
     pub fn tab_bar_pixel_height(&self) -> anyhow::Result<f32> {
         Self::tab_bar_pixel_height_impl(&self.config, &self.fonts, &self.render_metrics)
     }

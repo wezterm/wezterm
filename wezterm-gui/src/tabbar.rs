@@ -1,3 +1,13 @@
+//! Tab bar shared data model.
+//!
+//! [`TabBarState`] is rebuilt on every frame from the current window state
+//! (tabs, panes, status text, mouse position).
+//! It produces a list of logical regions (tabs, new-tab button, status areas, window buttons)
+//! that is consumed by both renderers for hit-testing and for building their visual output.
+//!
+//! WARNING: this file currently has mixed responsibility, as it also builds the cell-grid buffer
+//! alongside the list of logical elements, used for the classic (non-fancy) tab bar.
+
 use crate::termwindow::{PaneInformation, TabInformation, UIItem, UIItemType};
 use config::{ConfigHandle, TabBarColors};
 use finl_unicode::grapheme_clusters::Graphemes;
@@ -42,6 +52,8 @@ struct TitleText {
     len: usize,
 }
 
+/// Invokes the Lua `format-tab-title` event synchronously.
+/// Returns `None` if no Lua config is loaded or the callback returned nil.
 fn call_format_tab_title(
     tab: &TabInformation,
     tab_info: &[TabInformation],
@@ -56,7 +68,7 @@ fn call_format_tab_title(
             let panes = lua.create_sequence_from(pane_info.iter().cloned())?;
 
             let v = config::lua::emit_sync_callback(
-                &*lua,
+                &lua,
                 (
                     "format-tab-title".to_string(),
                     (
@@ -72,7 +84,7 @@ fn call_format_tab_title(
             match &v {
                 mlua::Value::Nil => Ok(None),
                 mlua::Value::Table(_) => {
-                    let items = <Vec<FormatItem>>::from_lua(v, &*lua)?;
+                    let items = <Vec<FormatItem>>::from_lua(v, &lua)?;
 
                     let esc = format_as_escapes(items.clone())?;
                     let line = parse_status_text(&esc, CellAttributes::default());
@@ -83,7 +95,7 @@ fn call_format_tab_title(
                     }))
                 }
                 _ => {
-                    let s = String::from_lua(v, &*lua)?;
+                    let s = String::from_lua(v, &lua)?;
                     let line = parse_status_text(&s, CellAttributes::default());
                     Ok(Some(TitleText {
                         len: line.len(),
@@ -130,6 +142,9 @@ fn pct_to_glyph(pct: u8) -> char {
     }
 }
 
+/// Resolves the display title for a tab.
+/// Tries the Lua `format-tab-title` callback first; falls back to a built-in
+/// default that shows optional tab index, a progress glyph, and the pane title.
 fn compute_tab_title(
     tab: &TabInformation,
     tab_info: &[TabInformation],
@@ -212,13 +227,15 @@ fn compute_tab_title(
     }
 }
 
+/// Returns true when the mouse cursor falls within the cell range [x, x+tab_title_len).
 fn is_tab_hover(mouse_x: Option<usize>, x: usize, tab_title_len: usize) -> bool {
-    return mouse_x
+    mouse_x
         .map(|mouse_x| mouse_x >= x && mouse_x < x + tab_title_len)
-        .unwrap_or(false);
+        .unwrap_or(false)
 }
 
 impl TabBarState {
+    /// Returns a minimal placeholder state used before the first real build.
     pub fn default() -> Self {
         Self {
             line: Line::with_width(1, SEQ_ZERO),
@@ -231,14 +248,20 @@ impl TabBarState {
         }
     }
 
+    /// Returns the flat cell-grid line used by the classic (non-fancy) renderer.
     pub fn line(&self) -> &Line {
         &self.line
     }
 
+    /// Returns the ordered list of logical regions used for hit-testing
+    /// and fancy tab bar rendering.
     pub fn items(&self) -> &[TabEntry] {
         &self.items
     }
 
+    /// Appends integrated window-control button entries (hide/maximize/close) to
+    /// `items` and `line`, advancing `x` past each one.
+    /// Applies hover colors when the mouse cursor overlaps a button.
     fn integrated_title_buttons(
         mouse_x: Option<usize>,
         x: &mut usize,
@@ -312,6 +335,8 @@ impl TabBarState {
                 }
             };
 
+            // Keep the rendered line in sync with the item list for the classic tab bar.
+            // (In the fancy tab bar the box-model element tree is used instead, so this is a no-op there.)
             line.append_line(title.to_owned(), SEQ_ZERO);
 
             let width = title.len();
@@ -330,6 +355,7 @@ impl TabBarState {
     /// mouse_x is some if the mouse is on the same row as the tab bar.
     /// title_width is the total number of cell columns in the window.
     /// window allows access to the tabs associated with the window.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         title_width: usize,
         mouse_x: Option<usize>,
@@ -404,17 +430,21 @@ impl TabBarState {
             title_width.saturating_sub(number_of_tabs.saturating_sub(1) + new_tab.len());
         let tab_width_max = if config.use_fancy_tab_bar || available_cells >= titles_len {
             // We can render each title with its full width
-            usize::max_value()
+            usize::MAX
         } else {
             // We need to clamp the length to balance them out
             available_cells / number_of_tabs
         }
         .min(config.tab_max_width);
 
+        // `line` is the flat cell buffer rendered by the classic tab bar.
+        // `items` is the list of logical regions (tabs, buttons, status)
+        //   used for hit-testing mouse events. Both are built left-to-right in lockstep.
         let mut line = Line::with_width(0, SEQ_ZERO);
-
-        let mut x = 0;
         let mut items = vec![];
+        // Track the current cell-column (X coordinate) cursor shared by both;
+        // every element records its start offset and advances x by its width.
+        let mut x = 0;
 
         let black_cell = Cell::blank_with_attrs(
             CellAttributes::default()
@@ -424,10 +454,11 @@ impl TabBarState {
 
         if use_integrated_title_buttons
             && config.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
-            && config.use_fancy_tab_bar == false
-            && config.tab_bar_at_bottom == false
+            && !config.use_fancy_tab_bar
+            && !config.tab_bar_at_bottom
         {
-            for _ in 0..10 as usize {
+            // Leave space on the left of the classic tab bar for the window title buttons
+            for _ in 0..10 {
                 line.insert_cell(0, black_cell.clone(), title_width, SEQ_ZERO);
                 x += 1;
             }
@@ -606,6 +637,8 @@ impl TabBarState {
         Self { line, items }
     }
 
+    /// Converts the logical tab entries into pixel-space `UIItem` hit regions
+    /// at the given row `y` (in pixels).
     pub fn compute_ui_items(&self, y: usize, cell_height: usize, cell_width: usize) -> Vec<UIItem> {
         let mut items = vec![];
 
@@ -623,10 +656,13 @@ impl TabBarState {
     }
 }
 
+/// Parses an ANSI/escape-coded string (e.g. from `wezterm.format`) into a `Line`
+/// of styled cells. `default_cell` provides the baseline attributes; SGR Reset
+/// restores to those defaults rather than to a blank slate.
+/// Stops at the first CR or LF (single-line output only).
 pub fn parse_status_text(text: &str, default_cell: CellAttributes) -> Line {
     let mut pen = default_cell.clone();
     let mut cells = vec![];
-    let mut ignoring = false;
     let mut print_buffer = String::new();
 
     fn flush_print(buf: &mut String, cells: &mut Vec<Cell>, pen: &CellAttributes) {
@@ -643,6 +679,7 @@ pub fn parse_status_text(text: &str, default_cell: CellAttributes) -> Line {
         buf.clear();
     }
 
+    let mut ignoring = false;
     let mut parser = Parser::new();
     parser.parse(text.as_bytes(), |action| {
         if ignoring {
@@ -655,6 +692,8 @@ pub fn parse_status_text(text: &str, default_cell: CellAttributes) -> Line {
                 flush_print(&mut print_buffer, &mut cells, &pen);
                 match c {
                     ControlCode::CarriageReturn | ControlCode::LineFeed => {
+                        // NOTE: the parser cannot be stopped, so we just ignore all remaining
+                        // actions after a CR/LF.
                         ignoring = true;
                     }
                     _ => {}
@@ -662,8 +701,8 @@ pub fn parse_status_text(text: &str, default_cell: CellAttributes) -> Line {
             }
             Action::CSI(csi) => {
                 flush_print(&mut print_buffer, &mut cells, &pen);
-                match csi {
-                    CSI::Sgr(sgr) => match sgr {
+                if let CSI::Sgr(sgr) = csi {
+                    match sgr {
                         Sgr::Reset => pen = default_cell.clone(),
                         Sgr::Intensity(i) => {
                             pen.set_intensity(i);
@@ -710,8 +749,7 @@ pub fn parse_status_text(text: &str, default_cell: CellAttributes) -> Line {
                             pen.set_underline_color(col);
                         }
                         Sgr::Font(_) => {}
-                    },
-                    _ => {}
+                    }
                 }
             }
             Action::OperatingSystemCommand(_)
