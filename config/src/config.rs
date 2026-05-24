@@ -508,6 +508,12 @@ pub struct Config {
     #[dynamic(default = "default_tab_max_width")]
     pub tab_max_width: usize,
 
+    /// Controls how tab widths are distributed across the tab bar.
+    /// `Content` (default) sizes each tab to its content; `Stretch` makes
+    /// tabs share the bar width equally so the bar is fully covered.
+    #[dynamic(default)]
+    pub tab_bar_width: TabBarWidth,
+
     /// If true, hide the tab bar if the window only has a single tab.
     #[dynamic(default)]
     pub hide_tab_bar_if_only_one_tab: bool,
@@ -1980,6 +1986,13 @@ pub enum VerticalWindowContentAlignment {
     Top,
     Center,
     Bottom,
+}
+
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabBarWidth {
+    #[default]
+    Content,
+    Stretch,
 }
 
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, PartialEq, Eq)]
