@@ -169,32 +169,47 @@ impl ParsedConfigFile {
     }
 
     fn do_include(
-        pattern: &str,
+        value: &str,
         cwd: Option<&Path>,
         options: &mut ConfigMap,
         groups: &mut Vec<MatchGroup>,
         loaded_files: &mut Vec<PathBuf>,
     ) {
-        match filenamegen::Glob::new(&pattern) {
-            Ok(g) => {
-                match cwd
-                    .as_ref()
-                    .map(|p| p.to_path_buf())
-                    .or_else(|| std::env::current_dir().ok())
-                {
-                    Some(cwd) => {
-                        for path in g.walk(&cwd) {
+        // the Include directive can list multiple whitespace-separated paths,
+        // and a leading `~/` should be expanded to the user's home directory
+        for pattern in value.split_ascii_whitespace() {
+            let (expanded, base): (String, Option<PathBuf>) =
+                if let Some(rest) = pattern.strip_prefix("~/") {
+                    match dirs_next::home_dir() {
+                        Some(home) => (rest.to_string(), Some(home)),
+                        None => (pattern.to_string(), None),
+                    }
+                } else {
+                    (pattern.to_string(), None)
+                };
+
+            let walk_base = base
+                .or_else(|| cwd.as_ref().map(|p| p.to_path_buf()))
+                .or_else(|| std::env::current_dir().ok());
+
+            match filenamegen::Glob::new(&expanded) {
+                Ok(g) => match walk_base {
+                    Some(walk_base) => {
+                        // glob results should be processed in lexical order
+                        let mut matched: Vec<PathBuf> = g.walk(&walk_base).into_iter().collect();
+                        matched.sort();
+                        for path in matched {
                             let path = if path.is_absolute() {
                                 path
                             } else {
-                                cwd.join(path)
+                                walk_base.join(path)
                             };
                             match std::fs::read_to_string(&path) {
                                 Ok(data) => {
                                     loaded_files.push(path.clone());
                                     Self::parse_impl(
                                         &data,
-                                        Some(&cwd),
+                                        path.parent(),
                                         options,
                                         groups,
                                         loaded_files,
@@ -217,10 +232,10 @@ impl ParsedConfigFile {
                             pattern
                         );
                     }
+                },
+                Err(err) => {
+                    log::error!("error expanding `Include {}`: {:#}", pattern, err);
                 }
-            }
-            Err(err) => {
-                log::error!("error expanding `Include {}`: {:#}", pattern, err);
             }
         }
     }
