@@ -181,15 +181,7 @@ impl SessionInner {
         sess.set_option(libssh_rs::SshOption::User(Some(user)))?;
         sess.set_option(libssh_rs::SshOption::Port(port))?;
         sess.options_parse_config(None)?; // FIXME: overridden config path?
-        let identities_only = self
-            .config
-            .get("identitiesonly")
-            .map(|v| v == "yes")
-            .unwrap_or(false);
-        if identities_only {
-            // disable the ssh agent
-            sess.set_option(libssh_rs::SshOption::IdentityAgent(None))?;
-        } else if let Some(agent) = self.config.get("identityagent") {
+        if let Some(agent) = self.config.get("identityagent") {
             sess.set_option(libssh_rs::SshOption::IdentityAgent(Some(agent.clone())))?;
         }
         if let Some(files) = self.config.get("identityfile") {
