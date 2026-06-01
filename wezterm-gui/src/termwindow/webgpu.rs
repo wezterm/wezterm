@@ -359,11 +359,17 @@ impl WebGpuState {
             vec![]
         };
 
+        let max_dim = device.limits().max_texture_dimension_2d;
+        let (init_width, init_height) = clamp_surface_dimensions(
+            dimensions.pixel_width as u32,
+            dimensions.pixel_height as u32,
+            max_dim,
+        );
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: dimensions.pixel_width as u32,
-            height: dimensions.pixel_height as u32,
+            width: init_width,
+            height: init_height,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: if caps
                 .alpha_modes
@@ -547,15 +553,94 @@ impl WebGpuState {
         if dims == *self.dimensions.borrow() {
             return;
         }
+        // Store the unclamped dims: this field is only used to dedup resize
+        // events against the size the window actually requested. Clamping is
+        // applied below, only to the values handed to Surface::configure.
         *self.dimensions.borrow_mut() = dims;
         let mut config = self.config.borrow_mut();
-        config.width = dims.pixel_width as u32;
-        config.height = dims.pixel_height as u32;
+        let max = self.device.limits().max_texture_dimension_2d;
+        let (clamped_width, clamped_height) =
+            clamp_surface_dimensions(dims.pixel_width as u32, dims.pixel_height as u32, max);
+        config.width = clamped_width;
+        config.height = clamped_height;
         if config.width > 0 && config.height > 0 {
             // Avoid reconfiguring with a 0 sized surface, as webgpu will
             // panic in that case
             // <https://github.com/wezterm/wezterm/issues/2881>
             self.surface.configure(&self.device, &config);
         }
+    }
+}
+
+/// Clamp a requested surface size to the adapter's maximum texture dimension.
+///
+/// `Surface::configure` raises a validation error (which becomes a fatal panic
+/// when called from an Objective-C → Rust FFI callback) if either dimension
+/// exceeds `max`. This is reachable on macOS with tiling window managers that
+/// transiently compute window geometry spanning multiple Retina displays.
+fn clamp_surface_dimensions(width: u32, height: u32, max: u32) -> (u32, u32) {
+    // A degenerate adapter reporting max == 0 would clamp everything to zero,
+    // bypassing the > 0 guard that skips surface.configure. Pass through
+    // unchanged in that case and let wgpu surface validation surface the error.
+    if max == 0 {
+        return (width, height);
+    }
+    let clamped_w = width.min(max);
+    let clamped_h = height.min(max);
+    if clamped_w != width || clamped_h != height {
+        log::warn!(
+            "Clamped surface size from {}x{} to {}x{} (max_texture_dimension_2d={})",
+            width,
+            height,
+            clamped_w,
+            clamped_h,
+            max
+        );
+    }
+    (clamped_w, clamped_h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_surface_dimensions;
+
+    #[test]
+    fn no_clamp_when_within_limit() {
+        assert_eq!(clamp_surface_dimensions(1920, 1080, 16384), (1920, 1080));
+    }
+
+    #[test]
+    fn clamps_width_exceeding_max() {
+        // Reproduces the exact dimensions seen in crash reports:
+        // Aerospace spanning two Retina displays → 19872 x 2260, max = 16384.
+        assert_eq!(clamp_surface_dimensions(19872, 2260, 16384), (16384, 2260));
+    }
+
+    #[test]
+    fn clamps_height_exceeding_max() {
+        assert_eq!(clamp_surface_dimensions(1920, 20000, 16384), (1920, 16384));
+    }
+
+    #[test]
+    fn clamps_both_dimensions() {
+        assert_eq!(clamp_surface_dimensions(20000, 20000, 16384), (16384, 16384));
+    }
+
+    #[test]
+    fn zero_dimensions_pass_through() {
+        // Zero is handled separately by the > 0 guard before surface.configure.
+        assert_eq!(clamp_surface_dimensions(0, 0, 16384), (0, 0));
+    }
+
+    #[test]
+    fn degenerate_max_zero_passes_through() {
+        // If the adapter reports max == 0, don't clamp everything to zero —
+        // pass through and let wgpu surface validation handle it.
+        assert_eq!(clamp_surface_dimensions(1920, 1080, 0), (1920, 1080));
+    }
+
+    #[test]
+    fn exact_limit_is_not_clamped() {
+        assert_eq!(clamp_surface_dimensions(16384, 16384, 16384), (16384, 16384));
     }
 }
