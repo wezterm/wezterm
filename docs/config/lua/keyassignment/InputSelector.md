@@ -45,6 +45,13 @@ These additional fields are also available:
 * `fuzzy_description` - a string to display when in fuzzy finding mode. Defaults to:
   `"Fuzzy matching: "`.
 
+{{since('nightly')}}
+
+* `selected_idx` - the index (0-based) of the entry to highlight when the
+  selector first opens. Defaults to `0` (the first entry). An out-of-range
+  value falls back to `0`. The selected row is scrolled into view if the list
+  is longer than the visible area.
+
 
 ### Key Assignments
 

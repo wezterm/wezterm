@@ -103,6 +103,15 @@ impl SelectorState {
             self.max_items = max_items;
         }
 
+        // Keep the active row within the visible window. Covers a configured
+        // initial `selected_idx` (set before the first render) as well as any
+        // other change to active_idx that didn't go through move_up/move_down.
+        if self.active_idx < self.top_row {
+            self.top_row = self.active_idx;
+        } else if self.active_idx > self.top_row + max_items {
+            self.top_row = self.active_idx.saturating_sub(max_items);
+        }
+
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
@@ -443,6 +452,11 @@ pub fn selector(
     term.set_raw_mode()?;
     term.render(&[Change::Title(state.args.title.to_string())])?;
     state.update_filter();
+    // Honour a configured initial selection, validated against the entry count:
+    // an out-of-range index falls back to 0 (already set above).
+    if state.args.selected_idx < state.filtered_entries.len() {
+        state.active_idx = state.args.selected_idx;
+    }
     state.render(&mut term)?;
     state.run_loop(&mut term)
 }

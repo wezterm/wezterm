@@ -503,6 +503,11 @@ pub struct InputSelector {
 
     #[dynamic(default = "default_fuzzy_description")]
     pub fuzzy_description: String,
+
+    /// Index of the entry to highlight when the selector first opens.
+    /// Defaults to 0 (the first entry). An out-of-range value falls back to 0.
+    #[dynamic(default)]
+    pub selected_idx: usize,
 }
 
 fn default_num_alphabet() -> String {
