@@ -500,8 +500,10 @@ impl Window {
                 config: config.clone(),
                 ime_state: ImeDisposition::None,
                 ime_last_event: None,
+                ime_input_was_sent: false,
                 live_resizing: false,
                 ime_text: String::new(),
+                macos_forwarded_marked_text: String::new(),
             }));
 
             let window: id = msg_send![get_window_class(), alloc];
@@ -1567,11 +1569,13 @@ struct Inner {
     /// where the IME mysteriously swallows repeats but only
     /// for certain keys.
     ime_last_event: Option<KeyEvent>,
+    ime_input_was_sent: bool,
 
     /// Whether we're in live resize
     live_resizing: bool,
 
     ime_text: String,
+    macos_forwarded_marked_text: String,
 }
 
 #[repr(C)]
@@ -1982,6 +1986,75 @@ impl WindowView {
         NSRange::new(NSNotFound as _, 0)
     }
 
+    fn input_event_for_text(text: String, key_is_down: bool) -> KeyEvent {
+        KeyEvent {
+            key: KeyCode::Composed(text),
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down,
+            raw: None,
+        }
+    }
+
+    fn dispatch_text_to_pane(inner: &mut Inner, text: String, key_is_down: bool) {
+        if text.is_empty() {
+            return;
+        }
+
+        let event = Self::input_event_for_text(text, key_is_down);
+        inner.ime_input_was_sent = true;
+        // Live marked text updates are incremental edits, so they are not safe
+        // candidates for the key repeat replay path.
+        inner.events.dispatch(WindowEvent::KeyEvent(event));
+    }
+
+    fn byte_index_for_char(text: &str, char_idx: usize) -> usize {
+        text.char_indices()
+            .nth(char_idx)
+            .map(|(idx, _)| idx)
+            .unwrap_or(text.len())
+    }
+
+    fn marked_text_update(previous: &str, current: &str) -> String {
+        let common_prefix = previous
+            .chars()
+            .zip(current.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let delete_count = previous.chars().count().saturating_sub(common_prefix);
+        let suffix = &current[Self::byte_index_for_char(current, common_prefix)..];
+
+        let mut update = "\u{7f}".repeat(delete_count);
+        update.push_str(suffix);
+        update
+    }
+
+    fn forward_marked_text_to_pane(inner: &mut Inner, text: &str, key_is_down: bool) {
+        let has_forwarded_text = !inner.macos_forwarded_marked_text.is_empty() || !text.is_empty();
+        let update = Self::marked_text_update(&inner.macos_forwarded_marked_text, text);
+        inner.macos_forwarded_marked_text = text.to_string();
+        if update.is_empty() {
+            if has_forwarded_text {
+                inner.ime_input_was_sent = true;
+            }
+        } else {
+            Self::dispatch_text_to_pane(inner, update, key_is_down);
+        }
+    }
+
+    fn reconcile_forwarded_marked_text(inner: &mut Inner, text: &str, key_is_down: bool) -> bool {
+        if inner.macos_forwarded_marked_text.is_empty() {
+            return false;
+        }
+
+        let update = Self::marked_text_update(&inner.macos_forwarded_marked_text, text);
+        inner.macos_forwarded_marked_text.clear();
+        inner.ime_input_was_sent = true;
+        Self::dispatch_text_to_pane(inner, update, key_is_down);
+        true
+    }
+
     // Called by the IME when inserting composed text and/or emoji
     extern "C" fn insert_text_replacement_range(
         this: &mut Object,
@@ -2000,23 +2073,26 @@ impl WindowView {
 
             let key_is_down = inner.key_is_down.take().unwrap_or(true);
 
-            let key = KeyCode::composed(s);
-
-            let event = KeyEvent {
-                key,
-                modifiers: Modifiers::NONE,
-                leds: KeyboardLedStatus::empty(),
-                repeat_count: 1,
-                key_is_down,
-                raw: None,
-            };
-
             inner.ime_text.clear();
+            if !Self::reconcile_forwarded_marked_text(&mut inner, s, key_is_down) {
+                let key = KeyCode::composed(s);
+
+                let event = KeyEvent {
+                    key,
+                    modifiers: Modifiers::NONE,
+                    leds: KeyboardLedStatus::empty(),
+                    repeat_count: 1,
+                    key_is_down,
+                    raw: None,
+                };
+
+                inner.ime_input_was_sent = true;
+                inner.ime_last_event.replace(event.clone());
+                inner.events.dispatch(WindowEvent::KeyEvent(event));
+            }
             inner
                 .events
                 .dispatch(WindowEvent::AdviseDeadKeyStatus(DeadKeyStatus::None));
-            inner.ime_last_event.replace(event.clone());
-            inner.events.dispatch(WindowEvent::KeyEvent(event));
             inner.ime_state = ImeDisposition::Acted;
         }
     }
@@ -2039,23 +2115,15 @@ impl WindowView {
             let mut inner = myself.inner.borrow_mut();
             inner.ime_text = s.to_string();
 
-            /*
-            let key_is_down = inner.key_is_down.take().unwrap_or(true);
-
-            let key = KeyCode::composed(s);
-
-            let event = KeyEvent {
-                key,
-                modifiers: Modifiers::NONE,
-                repeat_count: 1,
-                key_is_down,
+            if inner.config.macos_forward_marked_text_to_pane {
+                let key_is_down = inner.key_is_down.unwrap_or(true);
+                Self::forward_marked_text_to_pane(&mut inner, s, key_is_down);
+                inner
+                    .events
+                    .dispatch(WindowEvent::AdviseDeadKeyStatus(DeadKeyStatus::None));
+            } else {
+                inner.ime_last_event.take();
             }
-            .normalize_shift();
-
-            inner.ime_last_event.replace(event.clone());
-            inner.events.dispatch(WindowEvent::KeyEvent(event));
-            */
-            inner.ime_last_event.take();
             inner.ime_state = ImeDisposition::Acted;
         }
     }
@@ -2067,8 +2135,18 @@ impl WindowView {
             // FIXME: docs say to insert the text here,
             // but iterm doesn't... and we've never seen
             // this get called so far?
+            let was_forwarded = !inner.macos_forwarded_marked_text.is_empty();
+            if was_forwarded {
+                inner.ime_input_was_sent = true;
+            }
             inner.ime_text.clear();
+            inner.macos_forwarded_marked_text.clear();
             inner.ime_last_event.take();
+            if was_forwarded || inner.config.macos_forward_marked_text_to_pane {
+                inner
+                    .events
+                    .dispatch(WindowEvent::AdviseDeadKeyStatus(DeadKeyStatus::None));
+            }
             inner.ime_state = ImeDisposition::Acted;
         }
     }
@@ -2646,6 +2724,7 @@ impl WindowView {
                 inner.key_is_down.replace(key_is_down);
                 inner.ime_state = ImeDisposition::None;
                 inner.ime_text.clear();
+                inner.ime_input_was_sent = false;
             }
 
             unsafe {
@@ -2672,11 +2751,12 @@ impl WindowView {
                             // stashed it into ime_last_event.
                             // If it didn't generate an event, then a composition
                             // is pending.
-                            let status = if inner.ime_last_event.is_none() {
-                                DeadKeyStatus::Composing(inner.ime_text.clone())
-                            } else {
-                                DeadKeyStatus::None
-                            };
+                            let status =
+                                if inner.ime_last_event.is_none() && !inner.ime_input_was_sent {
+                                    DeadKeyStatus::Composing(inner.ime_text.clone())
+                                } else {
+                                    DeadKeyStatus::None
+                                };
                             inner
                                 .events
                                 .dispatch(WindowEvent::AdviseDeadKeyStatus(status));
@@ -3436,5 +3516,26 @@ impl WindowView {
         }
 
         cls.register()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WindowView;
+
+    #[test]
+    fn marked_text_update_appends_suffix() {
+        assert_eq!(
+            WindowView::marked_text_update("hello", "hello world"),
+            " world"
+        );
+    }
+
+    #[test]
+    fn marked_text_update_replaces_changed_suffix() {
+        assert_eq!(
+            WindowView::marked_text_update("hello", "hey"),
+            "\u{7f}\u{7f}\u{7f}y"
+        );
     }
 }

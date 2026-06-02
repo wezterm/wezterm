@@ -721,6 +721,8 @@ pub struct Config {
     pub xim_im_name: Option<String>,
     #[dynamic(default)]
     pub ime_preedit_rendering: ImePreeditRendering,
+    #[dynamic(default)]
+    pub macos_forward_marked_text_to_pane: bool,
 
     #[dynamic(default)]
     pub notification_handling: NotificationHandling,
