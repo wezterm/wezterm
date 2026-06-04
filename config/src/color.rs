@@ -567,6 +567,17 @@ fn default_window_close() -> String {
 
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]
 pub struct WindowFrameConfig {
+    /// Hide the Wayland fallback client-side decoration frame.
+    ///
+    /// This is useful on compositors where `window_decorations = "NONE"`
+    /// negotiates server-side decorations, but `window_decorations = "RESIZE"`
+    /// causes the fallback frame to draw an unwanted title bar.
+    ///
+    /// This also disables the fallback resize borders; use compositor-provided
+    /// keyboard or pointer shortcuts to move and resize the window.
+    #[dynamic(default)]
+    pub hidden: bool,
+
     #[dynamic(default = "default_inactive_titlebar_bg")]
     pub inactive_titlebar_bg: RgbaColor,
     #[dynamic(default = "default_active_titlebar_bg")]
@@ -615,6 +626,7 @@ const fn default_zero_pixel() -> Dimension {
 impl Default for WindowFrameConfig {
     fn default() -> Self {
         Self {
+            hidden: false,
             inactive_titlebar_bg: default_inactive_titlebar_bg(),
             active_titlebar_bg: default_active_titlebar_bg(),
             inactive_titlebar_fg: default_inactive_titlebar_fg(),

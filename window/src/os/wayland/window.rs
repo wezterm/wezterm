@@ -264,7 +264,7 @@ impl WaylandWindow {
                 .expect("failed to create csd frame")
         };
         let hidden = match decor_mode {
-            Some(DecorationMode::Client) => false,
+            Some(DecorationMode::Client) => config.window_frame.hidden,
             _ => true,
         };
         window_frame.set_hidden(hidden);

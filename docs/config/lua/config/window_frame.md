@@ -28,6 +28,26 @@ config.window_frame = {
 }
 ```
 
+
+{{since('nightly')}}
+
+You may hide the Wayland fallback client-side decoration frame:
+
+```lua
+config.window_decorations = "RESIZE"
+config.window_frame = {
+  hidden = true,
+}
+```
+
+This is useful on compositors where
+[`window_decorations = "NONE"`](window_decorations.md) negotiates server-side
+decorations, but `window_decorations = "RESIZE"` causes the fallback frame to
+draw an unwanted title bar.
+
+This hides both the fallback title bar and the fallback resize borders. Use
+your compositor's keyboard or pointer shortcuts to move and resize the window.
+
 {{since('20220903-194523-3bb1ed61')}}
 
 You may explicitly add a border around the window area:
