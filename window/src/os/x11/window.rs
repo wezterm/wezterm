@@ -61,6 +61,49 @@ impl CopyAndPaste {
     }
 }
 
+/// Translate an X11 button number into the corresponding mouse event.
+///
+/// Buttons 1-3 are the left/middle/right buttons. Buttons 4-7 are reported by
+/// the X server for scroll wheel motion: 4/5 are vertical (up/down) and 6/7 are
+/// horizontal (left/right). The wheel buttons only generate a press event, so
+/// release events for them are ignored. Returns `None` for anything we don't
+/// translate.
+fn mouse_event_kind_from_x11_button(
+    detail: xcb::x::Button,
+    pressed: bool,
+) -> Option<MouseEventKind> {
+    // Ideally this would be configurable, but it's currently a bit awkward to
+    // configure this layer, so let's just improve the default for now!
+    const LINES_PER_TICK: i16 = 5;
+
+    match detail {
+        b @ 1..=3 => {
+            let button = match b {
+                1 => MousePress::Left,
+                2 => MousePress::Middle,
+                3 => MousePress::Right,
+                _ => unreachable!(),
+            };
+            Some(if pressed {
+                MouseEventKind::Press(button)
+            } else {
+                MouseEventKind::Release(button)
+            })
+        }
+        4 | 5 if pressed => Some(MouseEventKind::VertWheel(if detail == 4 {
+            LINES_PER_TICK
+        } else {
+            -LINES_PER_TICK
+        })),
+        6 | 7 if pressed => Some(MouseEventKind::HorzWheel(if detail == 6 {
+            LINES_PER_TICK
+        } else {
+            -LINES_PER_TICK
+        })),
+        _ => None,
+    }
+}
+
 struct DragAndDrop {
     src_window: Option<xcb::x::Window>,
     src_types: Vec<Atom>,
@@ -432,38 +475,12 @@ impl XWindowInner {
             return Ok(());
         }
 
-        let kind = match detail {
-            b @ 1..=3 => {
-                let button = match b {
-                    1 => MousePress::Left,
-                    2 => MousePress::Middle,
-                    3 => MousePress::Right,
-                    _ => unreachable!(),
-                };
-                if pressed {
-                    MouseEventKind::Press(button)
-                } else {
-                    MouseEventKind::Release(button)
+        let kind = match mouse_event_kind_from_x11_button(detail, pressed) {
+            Some(kind) => kind,
+            None => {
+                if !matches!(detail, 4..=7) {
+                    log::trace!("button {} is not implemented", detail);
                 }
-            }
-            b @ 4..=5 => {
-                if !pressed {
-                    return Ok(());
-                }
-
-                // Ideally this would be configurable, but it's currently a bit
-                // awkward to configure this layer, so let's just improve the
-                // default for now!
-                const LINES_PER_TICK: i16 = 5;
-
-                MouseEventKind::VertWheel(if b == 4 {
-                    LINES_PER_TICK
-                } else {
-                    -LINES_PER_TICK
-                })
-            }
-            _ => {
-                log::trace!("button {} is not implemented", detail);
                 return Ok(());
             }
         };
@@ -2247,5 +2264,64 @@ impl NetWmStateAction {
         } else {
             Self::Remove
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn x11_buttons_map_to_press_and_release() {
+        assert_eq!(
+            mouse_event_kind_from_x11_button(1, true),
+            Some(MouseEventKind::Press(MousePress::Left))
+        );
+        assert_eq!(
+            mouse_event_kind_from_x11_button(2, true),
+            Some(MouseEventKind::Press(MousePress::Middle))
+        );
+        assert_eq!(
+            mouse_event_kind_from_x11_button(3, false),
+            Some(MouseEventKind::Release(MousePress::Right))
+        );
+    }
+
+    #[test]
+    fn x11_vertical_wheel_maps_to_vert_wheel() {
+        assert_eq!(
+            mouse_event_kind_from_x11_button(4, true),
+            Some(MouseEventKind::VertWheel(5))
+        );
+        assert_eq!(
+            mouse_event_kind_from_x11_button(5, true),
+            Some(MouseEventKind::VertWheel(-5))
+        );
+        // The wheel buttons only emit a press; the release is a no-op.
+        assert_eq!(mouse_event_kind_from_x11_button(4, false), None);
+        assert_eq!(mouse_event_kind_from_x11_button(5, false), None);
+    }
+
+    #[test]
+    fn x11_horizontal_wheel_maps_to_horz_wheel() {
+        // Buttons 6/7 are the horizontal scroll wheel. A positive HorzWheel
+        // value is interpreted as WheelLeft and a negative value as WheelRight
+        // by the consumer, so button 6 must be positive and button 7 negative.
+        assert_eq!(
+            mouse_event_kind_from_x11_button(6, true),
+            Some(MouseEventKind::HorzWheel(5))
+        );
+        assert_eq!(
+            mouse_event_kind_from_x11_button(7, true),
+            Some(MouseEventKind::HorzWheel(-5))
+        );
+        assert_eq!(mouse_event_kind_from_x11_button(6, false), None);
+        assert_eq!(mouse_event_kind_from_x11_button(7, false), None);
+    }
+
+    #[test]
+    fn x11_unknown_button_is_ignored() {
+        assert_eq!(mouse_event_kind_from_x11_button(8, true), None);
+        assert_eq!(mouse_event_kind_from_x11_button(9, false), None);
     }
 }

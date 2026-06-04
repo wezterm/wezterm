@@ -142,6 +142,9 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @j4james! #7046
 
 #### Fixed
+* X11: horizontal scroll wheel events (X buttons 6 and 7) were ignored, so
+  `WheelLeft`/`WheelRight` mouse bindings never fired. They are now translated
+  to horizontal wheel events. #7665
 * Race condition when very quickly adjusting font scale, and other improvements
   around resizing. Thanks to @jknockel! #4876 #5032 #5033
 * macOS: wacky initial window size with external monitors or certain font
