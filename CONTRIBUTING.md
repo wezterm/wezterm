@@ -44,6 +44,8 @@ If you are new to the Rust language check out <https://doc.rust-lang.org/rust-by
 To build wezterm from source, you will need a local Rust toolchain, and a few platform-specific dependencies.
 Follow the [Install from Source](https://wezfurlong.org/wezterm/install/source.html) guide to get started!
 
+Some platforms like Windows have a few specific steps, make sure to check the dedicated sections in the guide.
+
 ### Where to find things?
 
 The `term` directory holds the core terminal model code. This is agnostic
