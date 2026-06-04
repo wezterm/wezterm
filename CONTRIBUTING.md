@@ -41,17 +41,8 @@ If you are new to the Rust language check out <https://doc.rust-lang.org/rust-by
 
 ### Building from source
 
-To build wezterm from source, you will need `rustup`, a supported Rust
-toolchain (1.71 or later), and a few platform-specific dependencies.
-The full instructions, including Windows and macOS specifics, are in the
-[Install from Source](https://wezfurlong.org/wezterm/install/source.html)
-documentation.
-
-On Windows, make sure you select the MSVC toolchain when installing Rust
-and install [Strawberry Perl](https://strawberryperl.com) (needed for
-building OpenSSL). See the
-[Building on Windows](https://wezfurlong.org/wezterm/install/source.html#building-on-windows)
-section for details.
+To build wezterm from source, you will need a local Rust toolchain, and a few platform-specific dependencies.
+Follow the [Install from Source](https://wezfurlong.org/wezterm/install/source.html) guide to get started!
 
 ### Where to find things?
 
