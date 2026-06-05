@@ -4,7 +4,6 @@ members = [
   "bidi/generate",
   "strip-ansi-escapes",
   "sync-color-schemes",
-  "deps/cairo",
   "wezterm",
   "wezterm-blob-leases",
   "wezterm-cell",
@@ -53,7 +52,6 @@ block2 = "0.6"
 bstr = "1.0"
 bytemuck = { version="1.4", features=["derive"]}
 bytes = "1.0"
-cairo-rs = {version="0.18", default-features=false} # See patch.crates-io section
 camino = "1.0"
 cassowary = "0.3"
 cc = {version="1.0", features = ["parallel"]}
@@ -97,9 +95,9 @@ fixed = "1.23"
 fixedbitset = {version="0.4", default-features=false}
 flume = "0.11"
 fnv = "1.0"
-fontconfig = { path = "deps/fontconfig" }
+fontconfig-parser = "0.5"
+fontdb = "0.23"
 frecency = { path = "frecency" }
-freetype = { path = "deps/freetype" }
 futures = "0.3"
 futures-lite = "2.3"
 futures-util = "0.3"
@@ -110,7 +108,7 @@ gl_generator = "0.14"
 glium = { version = "0.35", default-features = false }
 governor = {version="0.5", default-features=false, features=["std"]}
 guillotiere = "0.6"
-harfbuzz = { path = "deps/harfbuzz" }
+harfrust = "0.5"
 heapless = "0.8"
 hdrhistogram = "7.1"
 hex = {version="0.4", default-features=false}
@@ -178,6 +176,7 @@ quote = "1.0.2"
 rangeset = { path = "rangeset" }
 ratelim= { path = "ratelim" }
 raw-window-handle = "0.6"
+read-fonts = "0.37"
 rayon = "1.10"
 rcgen = "0.12"
 regex = "1"
@@ -208,6 +207,7 @@ ssh-funcs = { path = "lua-api-crates/ssh-funcs" }
 ssh2 = "0.9.3"
 starship-battery = "0.10"
 strsim = "0.11"
+skrifa = "0.40"
 syn = "1.0"
 tabout = { path = "tabout" }
 tar = "0.4"
@@ -273,10 +273,7 @@ xcb-imdkit = { version="0.3", git="https://github.com/wezterm/xcb-imdkit-rs.git"
 xkbcommon = "0.7.0"
 xml-rs = "0.8"
 zbus = "4.2"
+zeno = "0.3"
 zstd = "0.11"
 zvariant = "4.0"
 
-[patch.crates-io]
-# We use our own vendored cairo, which has minimal deps and should just
-# build via cargo.
-cairo-sys-rs = {path="deps/cairo", version="0.18.0"}

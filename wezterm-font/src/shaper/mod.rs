@@ -4,7 +4,7 @@ use std::ops::Range;
 use termwiz::cell::Presentation;
 use termwiz::cellcluster::CellCluster;
 
-pub mod harfbuzz;
+pub mod harfrust_shaper;
 pub use wezterm_bidi::Direction;
 
 /// Holds information about a shaped glyph
@@ -143,8 +143,14 @@ pub fn new_shaper(
 ) -> anyhow::Result<Box<dyn FontShaper>> {
     match config.font_shaper {
         FontShaperSelection::Harfbuzz => {
-            Ok(Box::new(harfbuzz::HarfbuzzShaper::new(config, handles)?))
+            log::warn!("HarfBuzz shaper has been removed, using Harfrust instead");
+            Ok(Box::new(
+                harfrust_shaper::HarfrustShaper::new(config, handles)?,
+            ))
         }
+        FontShaperSelection::Harfrust => Ok(Box::new(
+            harfrust_shaper::HarfrustShaper::new(config, handles)?,
+        )),
         FontShaperSelection::Allsorts => {
             anyhow::bail!("The incomplete Allsorts shaper has been removed");
         }

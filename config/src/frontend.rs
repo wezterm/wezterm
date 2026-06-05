@@ -7,6 +7,7 @@ pub enum FrontEndSelection {
     OpenGL,
     WebGpu,
     Software,
+    PureCpu,
 }
 
 /// Corresponds to <https://docs.rs/wgpu/latest/wgpu/struct.AdapterInfo.html>
