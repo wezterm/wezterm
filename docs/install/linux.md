@@ -17,7 +17,7 @@ hide:
         especially for power users. It is recommended that you graduate
         to a native package if/when you decide to fully embrace wezterm.
 
-    <a href='https://flathub.org/apps/details/org.wezfurlong.wezterm'><img width='240' alt='Download on Flathub' src='https://flathub.org/assets/badges/flathub-badge-en.png'/></a>
+    <a href='https://flathub.org/apps/details/org.wezfurlong.wezterm'><img width='240' alt='Get it on Flathub' src='https://flathub.org/api/badge?locale=en'/></a>
 
     To install using the command line:
 
