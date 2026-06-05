@@ -119,7 +119,7 @@ http_req = "0.11"
 human-sort = "0.2"
 humansize = "2.1"
 humantime = "2.1"
-image = "0.25"
+image = { version = "0.25", features = ["avif-native"] }
 intrusive-collections = "0.9"
 k9 = "0.12.0"
 lazy_static = "1.4"

@@ -43,6 +43,9 @@ jobs:
       - name: "Install System Deps"
         shell: bash
         run: "env CI=yes PATH=$PATH ./get-deps"
+      - name: "Install dav1d"
+        shell: bash
+        run: "brew install dav1d"
       - name: "Build wezterm (Release mode Intel)"
         shell: bash
         run: "cargo build --target x86_64-apple-darwin -p wezterm --release"
