@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: "git config --global --add safe.directory /__w/wezterm/wezterm"
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: "recursive"
       - name: "Install Rust"
@@ -107,7 +107,7 @@ jobs:
         shell: bash
         run: "git config --global --add safe.directory /__w/wezterm/wezterm"
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: "Upload to gemfury"
         env:
           FURY_TOKEN: ${{ secrets.FURY_TOKEN }}

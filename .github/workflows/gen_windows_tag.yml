@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: "recursive"
       - name: "Install Rust"
@@ -90,7 +90,7 @@ jobs:
 
     steps:
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: "Download artifact"
         uses: actions/download-artifact@v4
         with:
@@ -109,7 +109,7 @@ jobs:
         shell: bash
         run: "bash ci/retry.sh gh release upload --clobber $(ci/tag-name.sh) WezTerm-*.zip WezTerm-*.exe *.sha256"
       - name: "Checkout winget-pkgs"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: "wez/winget-pkgs"
           path: "winget-pkgs"

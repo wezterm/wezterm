@@ -22,7 +22,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
       - name: Install nix
         uses: DeterminateSystems/nix-installer-action@main
       - name: Cache build artifacts
