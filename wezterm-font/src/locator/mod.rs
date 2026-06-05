@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 pub mod core_text;
 #[cfg(all(unix, not(target_os = "macos")))]
-pub mod font_config;
+pub mod fontdb_locator;
 pub mod gdi;
 
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash)]
@@ -222,9 +222,14 @@ pub trait FontLocator {
 pub fn new_locator(locator: FontLocatorSelection) -> Arc<dyn FontLocator + Send + Sync> {
     match locator {
         FontLocatorSelection::FontConfig => {
+            log::warn!("FontConfig locator has been removed, using FontDb instead");
             #[cfg(all(unix, not(target_os = "macos")))]
-            return Arc::new(font_config::FontConfigFontLocator {});
-            #[cfg(not(all(unix, not(target_os = "macos"))))]
+            return Arc::new(fontdb_locator::FontDbLocator::new());
+            #[cfg(target_os = "macos")]
+            return Arc::new(core_text::CoreTextFontLocator {});
+            #[cfg(windows)]
+            return Arc::new(gdi::GdiFontLocator {});
+            #[cfg(not(any(unix, windows)))]
             panic!("fontconfig not compiled in");
         }
         FontLocatorSelection::CoreText => {
@@ -240,6 +245,20 @@ pub fn new_locator(locator: FontLocatorSelection) -> Arc<dyn FontLocator + Send 
             panic!("Gdi not compiled in");
         }
         FontLocatorSelection::ConfigDirsOnly => Arc::new(NopSystemSource {}),
+        FontLocatorSelection::FontDb => {
+            #[cfg(all(unix, not(target_os = "macos")))]
+            return Arc::new(fontdb_locator::FontDbLocator::new());
+            #[cfg(not(all(unix, not(target_os = "macos"))))]
+            {
+                // FontDb locator is only for Linux; fall back to platform default
+                #[cfg(target_os = "macos")]
+                return Arc::new(core_text::CoreTextFontLocator {});
+                #[cfg(windows)]
+                return Arc::new(gdi::GdiFontLocator {});
+                #[cfg(not(any(target_os = "macos", windows)))]
+                return Arc::new(NopSystemSource {});
+            }
+        }
     }
 }
 

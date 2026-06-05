@@ -23,11 +23,13 @@ const INDICES_PER_CELL: usize = 6;
 pub enum RenderContext {
     Glium(Rc<GliumContext>),
     WebGpu(Rc<WebGpuState>),
+    PureCpu,
 }
 
 pub enum RenderFrame<'a> {
     Glium(&'a mut glium::Frame),
     WebGpu,
+    PureCpu,
 }
 
 impl RenderContext {
@@ -39,6 +41,7 @@ impl RenderContext {
                 indices,
             )?)),
             Self::WebGpu(state) => Ok(IndexBuffer::WebGpu(WebGpuIndexBuffer::new(indices, state))),
+            Self::PureCpu => Ok(IndexBuffer::PureCpu(indices.to_vec())),
         }
     }
 
@@ -47,7 +50,7 @@ impl RenderContext {
             Self::Glium(_) => {
                 vec![Vertex::default(); num_quads * VERTICES_PER_CELL]
             }
-            Self::WebGpu(_) => vec![],
+            Self::WebGpu(_) | Self::PureCpu => vec![],
         }
     }
 
@@ -65,6 +68,10 @@ impl RenderContext {
                 num_quads * VERTICES_PER_CELL,
                 state,
             ))),
+            Self::PureCpu => Ok(VertexBuffer::PureCpu(vec![
+                Vertex::default();
+                num_quads * VERTICES_PER_CELL
+            ])),
         }
     }
 
@@ -103,6 +110,11 @@ impl RenderContext {
                     Rc::new(WebGpuTexture::new(size as u32, size as u32, state)?);
                 Ok(texture)
             }
+            Self::PureCpu => {
+                use ::window::bitmaps::ImageTexture;
+                let texture: Rc<dyn Texture2d> = Rc::new(ImageTexture::new(size, size));
+                Ok(texture)
+            }
         }
     }
 
@@ -117,6 +129,7 @@ impl RenderContext {
                 let info = adapter_info_to_gpu_info(state.adapter_info.clone());
                 format!("WebGPU: {}", info.to_string())
             }
+            Self::PureCpu => "PureCpu Software Renderer".to_string(),
         }
     }
 }
@@ -124,6 +137,7 @@ impl RenderContext {
 pub enum IndexBuffer {
     Glium(GliumIndexBuffer<u32>),
     WebGpu(WebGpuIndexBuffer),
+    PureCpu(Vec<u32>),
 }
 
 impl IndexBuffer {
@@ -144,6 +158,7 @@ impl IndexBuffer {
 pub enum VertexBuffer {
     Glium(GliumVertexBuffer<Vertex>),
     WebGpu(WebGpuVertexBuffer),
+    PureCpu(Vec<Vertex>),
 }
 
 impl VertexBuffer {
@@ -170,6 +185,11 @@ impl VertexBuffer {
 enum MappedVertexBuffer {
     Glium(GliumMappedVertexBuffer),
     WebGpu(WebGpuMappedVertexBuffer),
+    PureCpu(PureCpuMappedVertexBuffer),
+}
+
+pub struct PureCpuMappedVertexBuffer {
+    verts: RefMut<'static, VertexBuffer>,
 }
 
 impl MappedVertexBuffer {
@@ -179,6 +199,12 @@ impl MappedVertexBuffer {
             Self::WebGpu(g) => {
                 let mapping: &mut [Vertex] = bytemuck::cast_slice_mut(&mut g.mapping);
                 &mut mapping[range]
+            }
+            Self::PureCpu(g) => {
+                match &mut *g.verts {
+                    VertexBuffer::PureCpu(v) => &mut v[range],
+                    _ => unreachable!(),
+                }
             }
         }
     }
@@ -427,6 +453,9 @@ impl TripleVertexBuffer {
                 })
             }
             VertexBuffer::WebGpu(vb) => MappedVertexBuffer::WebGpu(vb.map()),
+            VertexBuffer::PureCpu(_) => {
+                MappedVertexBuffer::PureCpu(PureCpuMappedVertexBuffer { verts: bufs })
+            }
         };
 
         MappedQuads {
@@ -594,7 +623,7 @@ impl RenderState {
                         RenderContext::Glium(context) => {
                             Some(Self::compile_prog(&context, Self::glyph_shader)?)
                         }
-                        RenderContext::WebGpu(_) => None,
+                        RenderContext::WebGpu(_) | RenderContext::PureCpu => None,
                     };
 
                     let main_layer = Rc::new(RenderLayer::new(&context, 1024, 0)?);

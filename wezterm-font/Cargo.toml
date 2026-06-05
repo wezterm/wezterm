@@ -15,14 +15,12 @@ vendor-nerd-font-symbols = []
 
 [dependencies]
 anyhow.workspace = true
-cairo-rs.workspace = true
 config.workspace = true
 encoding_rs.workspace = true
 enum-display-derive.workspace = true
 euclid.workspace = true
 finl_unicode.workspace = true
-freetype.workspace = true
-harfbuzz.workspace = true
+harfrust.workspace = true
 image.workspace = true
 lazy_static.workspace = true
 lfucache.workspace = true
@@ -31,8 +29,12 @@ memmap2.workspace = true
 metrics.workspace = true
 ordered-float.workspace = true
 rangeset.workspace = true
+read-fonts.workspace = true
+skrifa.workspace = true
+zeno.workspace = true
 termwiz.workspace = true
 thiserror.workspace = true
+tiny-skia.workspace = true
 walkdir.workspace = true
 wezterm-bidi.workspace = true
 wezterm-color-types.workspace = true
@@ -41,7 +43,8 @@ wezterm-term = { workspace=true, features=["use_serde"] }
 wezterm-toast-notification.workspace = true
 
 [target.'cfg(any(target_os = "android", all(unix, not(target_os = "macos"))))'.dependencies]
-fontconfig.workspace = true
+fontconfig-parser.workspace = true
+fontdb.workspace = true
 
 [target."cfg(windows)".dependencies]
 dwrote.workspace = true

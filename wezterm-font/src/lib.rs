@@ -22,18 +22,12 @@ use wezterm_bidi::Direction;
 use wezterm_term::{CellAttributes, Intensity};
 use wezterm_toast_notification::ToastNotification;
 
-mod hbwrap;
-
 pub mod db;
-pub mod ftwrap;
 pub mod locator;
 pub mod parser;
 pub mod rasterizer;
 pub mod shaper;
 pub mod units;
-
-#[cfg(all(unix, not(target_os = "macos")))]
-pub mod fcwrap;
 
 pub use crate::rasterizer::RasterizedGlyph;
 pub use crate::shaper::{FallbackIdx, FontMetrics, GlyphInfo};

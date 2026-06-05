@@ -179,6 +179,11 @@ pub enum WindowEvent {
     /// be repainted
     NeedRepaint,
 
+    /// Called when the window has been exposed by the window system
+    /// (e.g. desktop switch, overlapping window removed) and needs
+    /// its content re-presented even if nothing has changed.
+    Exposed,
+
     /// Called when the window gains/loses focus
     FocusChanged(bool),
 
@@ -348,6 +353,20 @@ pub trait WindowOps {
         _window_state: WindowState,
     ) -> anyhow::Result<Option<os::parameters::Parameters>> {
         Ok(None)
+    }
+
+    /// Present a software-rendered frame region to the window.
+    /// pixels is BGRA32, row-major, with the given width/height.
+    /// dst_x/dst_y specify the destination offset in the window.
+    fn present_software_frame_region(
+        &self,
+        _pixels: &[u8],
+        _width: u32,
+        _height: u32,
+        _dst_x: i16,
+        _dst_y: i16,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 

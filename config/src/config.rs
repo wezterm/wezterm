@@ -701,6 +701,11 @@ pub struct Config {
     #[dynamic(default)]
     pub periodic_stat_logging: u64,
 
+    /// When true, the PureCpu renderer will always do a full repaint
+    /// instead of using dirty region tracking. Useful for benchmarking.
+    #[dynamic(default)]
+    pub purecpu_force_full_repaint: bool,
+
     /// If false, do not scroll to the bottom of the terminal when
     /// you send input to the terminal.
     /// The default is to scroll to the bottom when you send input

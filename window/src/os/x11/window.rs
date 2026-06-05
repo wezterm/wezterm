@@ -206,7 +206,7 @@ impl XWindowInner {
             );
             self.sure_about_geometry = false;
         }
-        self.queue_pending(WindowEvent::NeedRepaint);
+        self.queue_pending(WindowEvent::Exposed);
     }
 
     fn cancel_drag(&mut self) -> bool {
@@ -285,6 +285,7 @@ impl XWindowInner {
         }
 
         let mut need_paint = false;
+        let mut was_exposed = false;
         let mut resize = None;
 
         for event in self.pending.drain(..) {
@@ -294,6 +295,13 @@ impl XWindowInner {
                         log::trace!("coalesce a repaint");
                     }
                     need_paint = true;
+                }
+                WindowEvent::Exposed => {
+                    if need_paint {
+                        log::trace!("coalesce an expose into repaint");
+                    }
+                    need_paint = true;
+                    was_exposed = true;
                 }
                 e @ WindowEvent::Resized { .. } => {
                     if resize.is_some() {
@@ -391,7 +399,11 @@ impl XWindowInner {
                     }
                 }
 
-                self.events.dispatch(WindowEvent::NeedRepaint);
+                if was_exposed {
+                    self.events.dispatch(WindowEvent::Exposed);
+                } else {
+                    self.events.dispatch(WindowEvent::NeedRepaint);
+                }
 
                 self.paint_throttled = true;
                 let window_id = self.window_id;
@@ -2150,6 +2162,69 @@ impl WindowOps for XWindow {
         });
 
         future
+    }
+
+    fn present_software_frame_region(
+        &self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        dst_x: i16,
+        dst_y: i16,
+    ) -> anyhow::Result<()> {
+        let window_id = self.0;
+        let pixels = pixels.to_vec();
+        XConnection::with_window_inner(window_id, move |inner| {
+            let conn = inner.conn();
+            let xcb_conn = &conn.conn;
+            let target_window = inner.child_id;
+
+            let gc: xcb::x::Gcontext = xcb_conn.generate_id();
+            xcb_conn.send_request(&xcb::x::CreateGc {
+                cid: gc,
+                drawable: xcb::x::Drawable::Window(target_window),
+                value_list: &[],
+            });
+
+            let depth = conn.depth;
+            let bytes_per_row = width as usize * 4;
+
+            // PutImage header overhead is ~28 bytes; use a 256-byte margin
+            // to be safe.
+            const PUTIMAGE_HEADER_MARGIN: usize = 256;
+            let max_data_bytes =
+                conn.max_request_bytes as usize - PUTIMAGE_HEADER_MARGIN;
+            let max_rows_per_chunk =
+                (max_data_bytes / bytes_per_row).max(1) as u32;
+
+            let mut row_offset: u32 = 0;
+            while row_offset < height {
+                let chunk_height = max_rows_per_chunk.min(height - row_offset);
+                let data_start = row_offset as usize * bytes_per_row;
+                let data_end = data_start + chunk_height as usize * bytes_per_row;
+
+                xcb_conn.send_request(&xcb::x::PutImage {
+                    format: xcb::x::ImageFormat::ZPixmap,
+                    drawable: xcb::x::Drawable::Window(target_window),
+                    gc,
+                    width: width as u16,
+                    height: chunk_height as u16,
+                    dst_x,
+                    dst_y: dst_y + row_offset as i16,
+                    left_pad: 0,
+                    depth,
+                    data: &pixels[data_start..data_end],
+                });
+
+                row_offset += chunk_height;
+            }
+
+            xcb_conn.send_request(&xcb::x::FreeGc { gc });
+            xcb_conn.flush()?;
+
+            Ok(())
+        });
+        Ok(())
     }
 
     /// Set some text in the clipboard

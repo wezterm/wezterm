@@ -462,6 +462,7 @@ pub struct TermWindow {
 
     gl: Option<Rc<glium::backend::Context>>,
     webgpu: Option<Rc<WebGpuState>>,
+    purecpu_state: Option<crate::termwindow::render::purecpu::PureCpuState>,
     config_subscription: Option<config::ConfigSubscription>,
 }
 
@@ -688,6 +689,7 @@ impl TermWindow {
             os_parameters: None,
             gl: None,
             webgpu: None,
+            purecpu_state: None,
             window: None,
             window_background,
             config: config.clone(),
@@ -845,7 +847,7 @@ impl TermWindow {
         });
 
         let gl = match config.front_end {
-            FrontEndSelection::WebGpu => None,
+            FrontEndSelection::WebGpu | FrontEndSelection::PureCpu => None,
             _ => Some(window.enable_opengl().await?),
         };
 
@@ -881,6 +883,15 @@ impl TermWindow {
             if let Some(webgpu) = webgpu {
                 myself.webgpu.replace(Rc::clone(&webgpu));
                 myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
+            }
+            if config.front_end == FrontEndSelection::PureCpu {
+                myself.purecpu_state.replace(
+                    crate::termwindow::render::purecpu::PureCpuState::new(
+                        dimensions.pixel_width as u32,
+                        dimensions.pixel_height as u32,
+                    ),
+                );
+                myself.created(RenderContext::PureCpu)?;
             }
             myself.load_os_parameters();
             window.show();
@@ -962,7 +973,9 @@ impl TermWindow {
                 self.resizes_pending -= 1;
                 if self.is_repaint_pending {
                     self.is_repaint_pending = false;
-                    if self.webgpu.is_some() {
+                    if self.purecpu_state.is_some() {
+                        self.do_paint_purecpu(window)?;
+                    } else if self.webgpu.is_some() {
                         self.do_paint_webgpu()?;
                     } else {
                         self.do_paint(window);
@@ -998,10 +1011,30 @@ impl TermWindow {
                 window.invalidate();
                 Ok(true)
             }
+            WindowEvent::Exposed => {
+                // The window was exposed by the window system (e.g. desktop
+                // switch).  Force a full repaint so the purecpu idle-skip
+                // optimisation doesn't suppress re-presenting the framebuffer.
+                if let Some(state) = self.purecpu_state.as_mut() {
+                    state.force_full_repaint = true;
+                }
+                if self.resizes_pending > 0 {
+                    self.is_repaint_pending = true;
+                    Ok(true)
+                } else if self.purecpu_state.is_some() {
+                    self.do_paint_purecpu(window)
+                } else if self.webgpu.is_some() {
+                    self.do_paint_webgpu()
+                } else {
+                    Ok(self.do_paint(window))
+                }
+            }
             WindowEvent::NeedRepaint => {
                 if self.resizes_pending > 0 {
                     self.is_repaint_pending = true;
                     Ok(true)
+                } else if self.purecpu_state.is_some() {
+                    self.do_paint_purecpu(window)
                 } else if self.webgpu.is_some() {
                     self.do_paint_webgpu()
                 } else {
@@ -1102,6 +1135,316 @@ impl TermWindow {
 
     fn do_paint_webgpu_impl(&mut self) -> anyhow::Result<bool> {
         self.paint_impl(&mut RenderFrame::WebGpu);
+        Ok(true)
+    }
+
+    /// Schedule the next blink animation check without running paint_impl.
+    /// Uses the same has_animation / scheduled_animation mechanism as
+    /// paint_impl so the two don't conflict.
+    fn schedule_blink_timer_if_needed(&mut self) {
+        // Only schedule if cursor blink is active
+        if self.config.cursor_blink_rate == 0 || self.focused.is_none() {
+            return;
+        }
+        let fps = self.config.animation_fps.max(1) as u64;
+        let frame_interval = std::time::Duration::from_millis(1000 / fps);
+        let next_due = std::time::Instant::now() + frame_interval;
+
+        // Use the same scheduling mechanism as paint_impl
+        let prior = self.scheduled_animation.borrow_mut().take();
+        match prior {
+            Some(prior) if prior <= next_due => {
+                // Already have an earlier timer pending
+                self.scheduled_animation.borrow_mut().replace(prior);
+            }
+            _ => {
+                self.scheduled_animation.borrow_mut().replace(next_due);
+                if let Some(window) = self.window.as_ref() {
+                    let window = window.clone();
+                    promise::spawn::spawn(async move {
+                        smol::Timer::at(next_due).await;
+                        let win = window.clone();
+                        window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
+                            tw.scheduled_animation.borrow_mut().take();
+                            win.invalidate();
+                        })));
+                    })
+                    .detach();
+                }
+            }
+        }
+    }
+
+    fn do_paint_purecpu(&mut self, _window: &Window) -> anyhow::Result<bool> {
+        use crate::termwindow::render::purecpu::DirtyRect;
+
+        // Resize framebuffer if needed
+        if let Some(state) = self.purecpu_state.as_mut() {
+            state.resize(
+                self.dimensions.pixel_width as u32,
+                self.dimensions.pixel_height as u32,
+            );
+        }
+
+        // If config says always full repaint, force it every frame
+        if self.config.purecpu_force_full_repaint {
+            self.purecpu_state.as_mut().unwrap().force_full_repaint = true;
+        }
+
+        // Read state values we need before calling self methods.
+        // Copy scalars in one block to avoid holding a borrow across
+        // later &mut self calls (e.g. get_active_pane_or_overlay).
+        let (
+            last_config_gen,
+            last_shape_gen,
+            last_quad_gen,
+            last_resolved_viewport,
+            last_seqno,
+            last_cursor_y,
+            last_cursor_x,
+            fb_width,
+            mut force_full,
+        ) = {
+            let s = self.purecpu_state.as_ref().unwrap();
+            (
+                s.last_config_generation,
+                s.last_shape_generation,
+                s.last_quad_generation,
+                s.last_resolved_viewport,
+                s.last_seqno,
+                s.last_cursor_y,
+                s.last_cursor_x,
+                s.width,
+                s.force_full_repaint,
+            )
+        };
+
+        // Detect generation changes that require full repaint
+        if self.config.generation() != last_config_gen
+            || self.shape_generation != last_shape_gen
+            || self.quad_generation != last_quad_gen
+        {
+            force_full = true;
+        }
+
+        // Detect viewport scroll — track resolved position (unwrap_or physical_top)
+        // so we detect scrolling even when get_viewport() returns None (following bottom)
+        if let Some(pane) = self.get_active_pane_or_overlay() {
+            let dims = pane.get_dimensions();
+            let resolved = self
+                .get_viewport(pane.pane_id())
+                .unwrap_or(dims.physical_top);
+            if last_resolved_viewport.is_some_and(|v| v != resolved) {
+                force_full = true;
+            }
+            self.purecpu_state.as_mut().unwrap().last_resolved_viewport = Some(resolved);
+
+            // Detect selection changes — force full repaint since selection
+            // highlighting is a GUI-level overlay that doesn't change line seqnos
+            let current_sel = self.selection(pane.pane_id()).range;
+            let last_sel = self.purecpu_state.as_ref().unwrap().last_selection_range;
+            if current_sel != last_sel {
+                force_full = true;
+                self.purecpu_state.as_mut().unwrap().last_selection_range = current_sel;
+            }
+        }
+
+        self.purecpu_state.as_mut().unwrap().force_full_repaint = force_full;
+
+        // On full repaint, snapshot seqno/cursor so the next incremental
+        // frame has a correct baseline. get_changed_since() is non-consuming
+        // so no state is lost.
+        if force_full {
+            if let Some(pane) = self.get_active_pane_or_overlay() {
+                let new_seqno = pane.get_current_seqno();
+                let cursor = pane.get_cursor_position();
+                let state = self.purecpu_state.as_mut().unwrap();
+                state.last_seqno = new_seqno;
+                state.last_cursor_y = Some(cursor.y);
+                state.last_cursor_x = Some(cursor.x);
+            }
+        }
+
+        // Compute dirty pixel regions if not doing full repaint
+        if !force_full {
+            // Collect all data we need from self methods first
+            let pane_info = self.get_active_pane_or_overlay().map(|pane| {
+                let dims = pane.get_dimensions();
+                let viewport = self
+                    .get_viewport(pane.pane_id())
+                    .unwrap_or(dims.physical_top);
+                let visible_range = viewport..viewport + dims.viewport_rows as StableRowIndex;
+                let dirty_rows = pane.get_changed_since(visible_range, last_seqno);
+                let cursor = pane.get_cursor_position();
+                let new_seqno = pane.get_current_seqno();
+                (dims, viewport, dirty_rows, cursor, new_seqno)
+            });
+
+            let cell_w = self.render_metrics.cell_size.width as i32;
+            let cell_h = self.render_metrics.cell_size.height as i32;
+            let (padding_left, padding_top) = self.padding_left_top();
+
+            // Match the paint pass coordinate system (render/pane.rs):
+            //   top_pixel_y = top_bar_height + padding_top + border.top
+            //   left_pixel_x = padding_left + border.left
+            let tab_bar_height = if self.show_tab_bar {
+                self.tab_bar_pixel_height().unwrap_or(0.)
+            } else {
+                0.
+            };
+            let top_bar_height = if self.config.tab_bar_at_bottom {
+                0.0
+            } else {
+                tab_bar_height
+            };
+            let border = self.get_os_border();
+            let content_top = (top_bar_height + padding_top + border.top.get() as f32) as i32;
+
+            // Now we can mutably borrow state
+            let state = self.purecpu_state.as_mut().unwrap();
+            state.dirty_pixel_rects.clear();
+
+            if let Some((dims, viewport, dirty_rows, cursor, new_seqno)) = pane_info {
+                // Convert dirty row ranges to full-width pixel bands.
+                // Line-level granularity is sufficient: XPutImage needs
+                // contiguous full-width data anyway.
+                for range in dirty_rows.iter() {
+                    for stable_row in range.clone() {
+                        let row_in_viewport = (stable_row - viewport) as i32;
+                        if row_in_viewport < 0 || row_in_viewport >= dims.viewport_rows as i32 {
+                            continue;
+                        }
+                        let y = content_top + row_in_viewport * cell_h;
+                        state.dirty_pixel_rects.push(DirtyRect {
+                            x: 0,
+                            y,
+                            width: fb_width as i32,
+                            height: cell_h,
+                        });
+                    }
+                }
+
+                let cursor_row = cursor.y;
+                let cursor_col = cursor.x;
+
+                let cursor_moved = match (last_cursor_y, last_cursor_x) {
+                    (Some(prev_y), Some(prev_x)) => {
+                        prev_y != cursor_row || prev_x != cursor_col
+                    }
+                    _ => true, // first frame: treat as moved
+                };
+
+                if cursor_moved {
+                    // Mark previous cursor position dirty
+                    if let (Some(prev_y), Some(prev_x)) = (last_cursor_y, last_cursor_x) {
+                        let prev_row_in_viewport = (prev_y - viewport) as i32;
+                        if prev_row_in_viewport >= 0
+                            && prev_row_in_viewport < dims.viewport_rows as i32
+                        {
+                            let y = content_top + prev_row_in_viewport * cell_h;
+                            let x = (padding_left + border.left.get() as f32) as i32
+                                + prev_x as i32 * cell_w;
+                            state.dirty_pixel_rects.push(DirtyRect {
+                                x,
+                                y,
+                                width: cell_w,
+                                height: cell_h,
+                            });
+                        }
+                    }
+
+                    // Mark new cursor position dirty
+                    let cursor_row_in_viewport = (cursor_row - viewport) as i32;
+                    if cursor_row_in_viewport >= 0
+                        && cursor_row_in_viewport < dims.viewport_rows as i32
+                    {
+                        let y = content_top + cursor_row_in_viewport * cell_h;
+                        let x = (padding_left + border.left.get() as f32) as i32
+                            + cursor_col as i32 * cell_w;
+                        state.dirty_pixel_rects.push(DirtyRect {
+                            x,
+                            y,
+                            width: cell_w,
+                            height: cell_h,
+                        });
+                    }
+                }
+
+                // Cursor blink: detect phase transitions (visible↔invisible)
+                // and only mark cursor dirty on actual transitions.  Between
+                // transitions the blink animation timer still fires (at
+                // animation_fps) but we skip paint_impl and just reschedule.
+                // This gives correct blink at ~2 paints/cycle instead of
+                // animation_fps paints/cycle.
+                let cursor_blinking = cursor.shape.is_blinking()
+                    && self.config.cursor_blink_rate != 0
+                    && self.focused.is_some();
+                if cursor_blinking {
+                    let intensity = self.cursor_blink_state.borrow().peek_intensity();
+                    // Quantize to on/off; None means cycle ended → visible
+                    let blink_visible = match intensity {
+                        Some(i) => i < 0.5,
+                        None => true,
+                    };
+                    let phase_changed = blink_visible != state.last_blink_visible;
+                    // Also force paint when cycle completed so intensity_continuous()
+                    // in paint_pass can restart it
+                    let cycle_ended = intensity.is_none();
+
+                    if phase_changed || cycle_ended {
+                        state.last_blink_visible = blink_visible;
+                        // Mark cursor position dirty for the blink transition
+                        let cursor_row_in_viewport = (cursor_row - viewport) as i32;
+                        if cursor_row_in_viewport >= 0
+                            && cursor_row_in_viewport < dims.viewport_rows as i32
+                        {
+                            let y = content_top + cursor_row_in_viewport * cell_h;
+                            let x = (padding_left + border.left.get() as f32) as i32
+                                + cursor_col as i32 * cell_w;
+                            state.dirty_pixel_rects.push(DirtyRect {
+                                x,
+                                y,
+                                width: cell_w,
+                                height: cell_h,
+                            });
+                        }
+                    }
+                }
+
+                state.last_cursor_y = Some(cursor_row);
+                state.last_cursor_x = Some(cursor_col);
+                state.last_seqno = new_seqno;
+            }
+        }
+
+        // Update generation counters
+        {
+            let state = self.purecpu_state.as_mut().unwrap();
+            state.last_config_generation = self.config.generation();
+            state.last_shape_generation = self.shape_generation;
+            state.last_quad_generation = self.quad_generation;
+        }
+
+        // Early exit: skip paint_impl entirely when nothing is dirty.
+        // paint_pass (~33ms) regenerates ALL quads from scratch; skipping
+        // it is the key idle optimisation.  Cursor blink continues via
+        // the scheduled animation timer — we just reschedule the next
+        // check.  paint_impl only runs on actual blink phase transitions
+        // (~2x per blink cycle) rather than at animation_fps.
+        {
+            let state = self.purecpu_state.as_ref().unwrap();
+            if !state.force_full_repaint && state.dirty_pixel_rects.is_empty() {
+                metrics::histogram!("purecpu.skip_paint.rate").record(1.);
+                // Keep the blink animation timer running so we catch the
+                // next phase transition.  Compute the next frame time from
+                // animation_fps and schedule it using the same mechanism
+                // as paint_impl.
+                self.schedule_blink_timer_if_needed();
+                return Ok(true);
+            }
+        }
+
+        self.paint_impl(&mut RenderFrame::PureCpu);
         Ok(true)
     }
 
@@ -1885,6 +2228,9 @@ impl TermWindow {
 
         self.last_scroll_info = render_dims;
 
+        if let Some(state) = self.purecpu_state.as_mut() {
+            state.force_full_repaint = true;
+        }
         if let Some(window) = self.window.as_ref() {
             window.invalidate();
         }
@@ -2006,6 +2352,9 @@ impl TermWindow {
             self.tab_bar = new_tab_bar;
             self.invalidate_fancy_tab_bar();
             self.invalidate_modal();
+            if let Some(state) = self.purecpu_state.as_mut() {
+                state.force_full_repaint = true;
+            }
             if let Some(window) = self.window.as_ref() {
                 window.invalidate();
             }
