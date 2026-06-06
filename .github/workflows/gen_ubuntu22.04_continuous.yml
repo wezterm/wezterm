@@ -131,7 +131,7 @@ jobs:
       - name: "checkout repo"
         uses: actions/checkout@v4
       - name: "Download artifact"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: "ubuntu22.04"
       - name: "Checksum"

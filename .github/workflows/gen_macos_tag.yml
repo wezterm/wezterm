@@ -117,7 +117,7 @@ jobs:
           commit_message: "Automated update to match latest tag"
           repository: "homebrew-wezterm"
       - name: "Download artifact"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: "macos"
       - name: "Checksum"
