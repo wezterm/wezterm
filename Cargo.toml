@@ -198,7 +198,8 @@ shell-words = "1.1"
 shlex = "1.1"
 signal-hook = "0.3"
 siphasher = "1.0.1"
-smithay-client-toolkit = {version = "0.19", default-features=false}
+smithay-client-toolkit = {version = "0.20", default-features=false}
+sctk-adwaita = { git = "https://github.com/PolyMeilex/sctk-adwaita", rev="a0bce432181d11d4b035fe4f64bd6dab6fcb4cbd" }
 smol = "2.0"
 socket2 = "0.5"
 spa = "0.3.1"

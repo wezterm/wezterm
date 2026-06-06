@@ -54,6 +54,7 @@ pub(super) struct WaylandState {
     pub(super) windows: RefCell<HashMap<usize, Rc<RefCell<WaylandWindowInner>>>>,
 
     pub(super) active_surface_id: RefCell<Option<ObjectId>>,
+    pub(super) active_subsurface_id: RefCell<Option<ObjectId>>,
     pub(super) last_serial: RefCell<u32>,
     pub(super) keyboard: Option<WlKeyboard>,
     pub(super) keyboard_mapper: Option<KeyboardWithFallback>,
@@ -100,6 +101,7 @@ impl WaylandState {
             seat: SeatState::new(globals, qh),
             xdg: XdgShell::bind(globals, qh)?,
             active_surface_id: RefCell::new(None),
+            active_subsurface_id: RefCell::new(None),
             last_serial: RefCell::new(0),
             keyboard: None,
             keyboard_mapper: None,
