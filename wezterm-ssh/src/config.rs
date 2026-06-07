@@ -105,7 +105,7 @@ impl Pattern {
         for pat in patterns {
             if pat.match_text(hostname) {
                 // We got a definitive name match.
-                // If it was an exlusion then we've been told
+                // If it was an exclusion then we've been told
                 // that this doesn't really match, otherwise
                 // we got one that we were looking for
                 return !pat.negated;
@@ -323,6 +323,8 @@ impl ParsedConfigFile {
                 let k = k.trim().to_lowercase();
                 let v = v[1..].trim();
 
+                // Include is handled early so it sees the raw argument string before generic string
+                // quote handling
                 if k == "include" {
                     Self::do_include(v, cwd, home_dir, options, groups, loaded_files);
                     continue;
@@ -1284,7 +1286,7 @@ Config {
         # the prior Something takes precedence
         Something ignored
         Match Host 192.168.1.8,wopr
-            FowardAgent yes
+            ForwardAgent yes
             IdentityFile "%d/.ssh/id_pub.dsa"
 
         Match Host !a.b,*.b User fred
@@ -1331,7 +1333,7 @@ Config {
                     ],
                     context: FirstPass,
                     options: {
-                        "fowardagent": "yes",
+                        "forwardagent": "yes",
                         "identityfile": "%d/.ssh/id_pub.dsa",
                     },
                 },
@@ -1469,7 +1471,7 @@ Config {
             opts,
             r#"
 {
-    "fowardagent": "yes",
+    "forwardagent": "yes",
     "hostname": "192.168.1.8",
     "identityfile": "/home/me/.ssh/id_pub.dsa",
     "port": "22",
@@ -1551,7 +1553,7 @@ Config {
         # the prior Something takes precedence
         Something ignored
         Host 192.168.1.8 wopr
-            FowardAgent yes
+            ForwardAgent yes
             IdentityFile "%d/.ssh/id_pub.dsa"
 
         Host !a.b *.b
@@ -1594,7 +1596,7 @@ Config {
                     ],
                     context: FirstPass,
                     options: {
-                        "fowardagent": "yes",
+                        "forwardagent": "yes",
                         "identityfile": "%d/.ssh/id_pub.dsa",
                     },
                 },
@@ -1677,7 +1679,7 @@ Config {
             opts,
             r#"
 {
-    "fowardagent": "yes",
+    "forwardagent": "yes",
     "hostname": "192.168.1.8",
     "identityfile": "/home/me/.ssh/id_pub.dsa",
     "port": "22",
