@@ -44,7 +44,7 @@ jobs:
           nix build ./nix --json > result.json
 
       - name: Push to Cachix
-        if: ${{ github.event_name == "schedule" || github.event_name == "workflow_dispatch" }}
+        if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
         run: |
           jq result.json -r '.[].outputs | to_entries[].value' \
           | cachix push wezterm
