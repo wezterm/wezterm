@@ -5,6 +5,50 @@ use std::path::{Path, PathBuf};
 
 pub type ConfigMap = BTreeMap<String, String>;
 
+/// Expand a leading `~/` to the given home directory
+fn expand_tilde(s: &str, home: &str) -> String {
+    if let Some(rest) = s.strip_prefix("~/") {
+        format!("{}/{}", home, rest)
+    } else {
+        s.to_string()
+    }
+}
+
+/// Split whitespace and handle quotes for Include directives
+fn split_whitespace_quoted(s: &str) -> Vec<String> {
+    let mut tokens = vec![];
+    let mut current = String::new();
+    let mut chars = s.chars();
+    let mut in_quotes = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            '\\' => {
+                // handle basic escaping of the next character
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                } else {
+                    current.push('\\');
+                }
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    tokens.push(current.clone());
+                    current.clear();
+                }
+            }
+            c => current.push(c),
+        }
+    }
+
+    // remaining tokens
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
 /// A Pattern in a `Host` list
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct Pattern {
@@ -150,7 +194,12 @@ struct ParsedConfigFile {
 }
 
 impl ParsedConfigFile {
-    fn parse(s: &str, cwd: Option<&Path>, source_file: Option<&Path>) -> Self {
+    fn parse(
+        s: &str,
+        cwd: Option<&Path>,
+        home_dir: Option<&Path>,
+        source_file: Option<&Path>,
+    ) -> Self {
         let mut options = ConfigMap::new();
         let mut groups = vec![];
         let mut loaded_files = vec![];
@@ -159,7 +208,14 @@ impl ParsedConfigFile {
             loaded_files.push(source.to_path_buf());
         }
 
-        Self::parse_impl(s, cwd, &mut options, &mut groups, &mut loaded_files);
+        Self::parse_impl(
+            s,
+            cwd,
+            home_dir,
+            &mut options,
+            &mut groups,
+            &mut loaded_files,
+        );
 
         Self {
             options,
@@ -171,18 +227,25 @@ impl ParsedConfigFile {
     fn do_include(
         value: &str,
         cwd: Option<&Path>,
+        home_dir: Option<&Path>,
         options: &mut ConfigMap,
         groups: &mut Vec<MatchGroup>,
         loaded_files: &mut Vec<PathBuf>,
     ) {
         // the Include directive can list multiple whitespace-separated paths,
         // and a leading `~/` should be expanded to the user's home directory
-        for pattern in value.split_ascii_whitespace() {
+        for pattern in split_whitespace_quoted(value) {
             let (expanded, base): (String, Option<PathBuf>) =
                 if let Some(rest) = pattern.strip_prefix("~/") {
-                    match dirs_next::home_dir() {
-                        Some(home) => (rest.to_string(), Some(home)),
-                        None => (pattern.to_string(), None),
+                    match home_dir.and_then(|h| h.to_str()) {
+                        Some(home) => (rest.to_string(), Some(PathBuf::from(home))),
+                        None => {
+                            log::error!(
+                                "error expanding `Include {}`: home directory is not set",
+                                pattern
+                            );
+                            continue;
+                        }
                     }
                 } else {
                     (pattern.to_string(), None)
@@ -210,6 +273,7 @@ impl ParsedConfigFile {
                                     Self::parse_impl(
                                         &data,
                                         path.parent(),
+                                        home_dir,
                                         options,
                                         groups,
                                         loaded_files,
@@ -243,6 +307,7 @@ impl ParsedConfigFile {
     fn parse_impl(
         s: &str,
         cwd: Option<&Path>,
+        home_dir: Option<&Path>,
         options: &mut ConfigMap,
         groups: &mut Vec<MatchGroup>,
         loaded_files: &mut Vec<PathBuf>,
@@ -257,6 +322,11 @@ impl ParsedConfigFile {
                 let (k, v) = line.split_at(sep);
                 let k = k.trim().to_lowercase();
                 let v = v[1..].trim();
+
+                if k == "include" {
+                    Self::do_include(v, cwd, home_dir, options, groups, loaded_files);
+                    continue;
+                }
 
                 let v = if v.starts_with('"') && v.ends_with('"') {
                     &v[1..v.len() - 1]
@@ -287,11 +357,6 @@ impl ParsedConfigFile {
                         }
                     }
                     patterns
-                }
-
-                if k == "include" {
-                    Self::do_include(v, cwd, options, groups, loaded_files);
-                    continue;
                 }
 
                 if k == "host" {
@@ -461,17 +526,24 @@ impl Config {
     /// Parse `config_string` as if it were the contents of an `ssh_config` file,
     /// and add that to the list of configs.
     pub fn add_config_string(&mut self, config_string: &str) {
-        self.config_files
-            .push(ParsedConfigFile::parse(config_string, None, None));
+        let home = self.resolve_home().map(PathBuf::from);
+        self.config_files.push(ParsedConfigFile::parse(
+            config_string,
+            None,
+            home.as_deref(),
+            None,
+        ));
     }
 
     /// Open `path`, read its contents and parse it as an `ssh_config` file,
     /// adding that to the list of configs
     pub fn add_config_file<P: AsRef<Path>>(&mut self, path: P) {
         if let Ok(data) = std::fs::read_to_string(path.as_ref()) {
+            let home = self.resolve_home().map(PathBuf::from);
             self.config_files.push(ParsedConfigFile::parse(
                 &data,
                 path.as_ref().parent(),
+                home.as_deref(),
                 Some(path.as_ref()),
             ));
         }
@@ -710,7 +782,7 @@ impl Config {
                         .collect::<Vec<String>>();
                     for item in &mut items {
                         if item.starts_with("~/") {
-                            item.replace_range(0..1, &home);
+                            *item = expand_tilde(item, &home);
                         } else {
                             *item = item.replace(t, &home);
                         }
@@ -1164,7 +1236,7 @@ Config {
     }
 
     #[test]
-    fn sub_tilde() {
+    fn sub_tilde_identityfile() {
         let mut config = Config::new();
 
         let mut fake_env = ConfigMap::new();
@@ -1647,5 +1719,234 @@ Config {
 }
 "#
         );
+    }
+
+    #[test]
+    fn tilde_expands() {
+        assert_eq!(
+            expand_tilde("~/.ssh/id_rsa", "/home/me"),
+            "/home/me/.ssh/id_rsa"
+        );
+
+        assert_eq!(expand_tilde("/absolute/path", "/home/me"), "/absolute/path");
+
+        assert_eq!(
+            expand_tilde("/absolute/~/path", "/home/me"),
+            "/absolute/~/path"
+        );
+
+        assert_eq!(
+            expand_tilde("/absolute~/path", "/home/me"),
+            "/absolute~/path"
+        );
+
+        assert_eq!(
+            expand_tilde("/absolute/~path", "/home/me"),
+            "/absolute/~path"
+        );
+    }
+
+    #[test]
+    fn whitespace_quoted_path_splits() {
+        assert_eq!(
+            split_whitespace_quoted("~/a.conf ~/b.conf"),
+            vec!["~/a.conf", "~/b.conf"]
+        );
+
+        assert_eq!(
+            split_whitespace_quoted(r#""~/a.conf" "~/b.conf""#),
+            vec!["~/a.conf", "~/b.conf"]
+        );
+
+        assert_eq!(
+            split_whitespace_quoted(r#"~/a.conf "~/b.conf with spaces" ~/c.conf"#),
+            vec!["~/a.conf", "~/b.conf with spaces", "~/c.conf"]
+        );
+
+        assert_eq!(
+            split_whitespace_quoted(r#"~/a.conf "~/b.conf with spaces" "~/c.conf with spaces""#),
+            vec!["~/a.conf", "~/b.conf with spaces", "~/c.conf with spaces"]
+        );
+
+        assert_eq!(
+            split_whitespace_quoted(r#"~/dir\ with\ spaces/a.conf"#),
+            vec!["~/dir with spaces/a.conf"]
+        );
+
+        assert_eq!(
+            split_whitespace_quoted(r#""~/dir \"quoted\"/a.conf""#),
+            vec![r#"~/dir "quoted"/a.conf"#]
+        );
+    }
+
+    #[test]
+    fn include_tilde() {
+        use assert_fs::prelude::*;
+        use assert_fs::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        tmp.child("a.conf")
+            .write_str("Host a\n    Port 2222\n")
+            .unwrap();
+
+        let mut fake_env = ConfigMap::new();
+        fake_env.insert("HOME".to_string(), tmp.path().to_str().unwrap().to_string());
+        fake_env.insert("USER".to_string(), "me".to_string());
+
+        let mut config = Config::new();
+        config.assign_environment(fake_env);
+        config.add_config_string("Include ~/a.conf");
+
+        assert_eq!(
+            config.for_host("a").get("port").map(|s| s.as_str()),
+            Some("2222")
+        );
+    }
+
+    #[test]
+    fn include_multiple_paths() {
+        use assert_fs::prelude::*;
+        use assert_fs::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        tmp.child("a.conf")
+            .write_str("Host a\n    Port 2222\n")
+            .unwrap();
+        tmp.child("b.conf")
+            .write_str("Host b\n    Port 3333\n")
+            .unwrap();
+
+        // HOME is tmp path so that the tilde expansion will find the files we just created
+        let mut fake_env = ConfigMap::new();
+        fake_env.insert("HOME".to_string(), tmp.path().to_str().unwrap().to_string());
+        fake_env.insert("USER".to_string(), "me".to_string());
+
+        let mut config = Config::new();
+        config.assign_environment(fake_env);
+        config.add_config_string("Include ~/a.conf ~/b.conf");
+
+        // we don't use snapshot because tmp file is not deterministic
+        assert_eq!(
+            config.for_host("a").get("port").map(|s| s.as_str()),
+            Some("2222")
+        );
+
+        assert_eq!(
+            config.for_host("b").get("port").map(|s| s.as_str()),
+            Some("3333")
+        );
+    }
+
+    #[test]
+    fn include_quoted_path_with_spaces() {
+        use assert_fs::prelude::*;
+        use assert_fs::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        tmp.child("dir with spaces")
+            .child("a.conf")
+            .write_str("Host a\n    Port 2222\n")
+            .unwrap();
+
+        let mut fake_env = ConfigMap::new();
+        fake_env.insert("HOME".to_string(), tmp.path().to_str().unwrap().to_string());
+        fake_env.insert("USER".to_string(), "me".to_string());
+
+        let mut config = Config::new();
+        config.assign_environment(fake_env);
+        config.add_config_string(r#"Include "~/dir with spaces/a.conf""#);
+
+        assert_eq!(
+            config.for_host("a").get("port").map(|s| s.as_str()),
+            Some("2222")
+        );
+    }
+
+    #[test]
+    fn include_escaped_space() {
+        use assert_fs::prelude::*;
+        use assert_fs::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        tmp.child("dir with spaces")
+            .child("a.conf")
+            .write_str("Host a\n    Port 2222\n")
+            .unwrap();
+
+        let mut fake_env = ConfigMap::new();
+        fake_env.insert("HOME".to_string(), tmp.path().to_str().unwrap().to_string());
+        fake_env.insert("USER".to_string(), "me".to_string());
+
+        let mut config = Config::new();
+        config.assign_environment(fake_env);
+        config.add_config_string(r#"Include ~/dir\ with\ spaces/a.conf"#);
+
+        assert_eq!(
+            config.for_host("a").get("port").map(|s| s.as_str()),
+            Some("2222")
+        );
+    }
+
+    #[test]
+    fn include_escaped_quote() {
+        use assert_fs::prelude::*;
+        use assert_fs::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        tmp.child(r#"dir "quoted""#)
+            .child("a.conf")
+            .write_str("Host a\n    Port 2222\n")
+            .unwrap();
+
+        let mut fake_env = ConfigMap::new();
+        fake_env.insert("HOME".to_string(), tmp.path().to_str().unwrap().to_string());
+        fake_env.insert("USER".to_string(), "me".to_string());
+
+        let mut config = Config::new();
+        config.assign_environment(fake_env);
+        config.add_config_string(r#"Include "~/dir \"quoted\"/a.conf""#);
+
+        assert_eq!(
+            config.for_host("a").get("port").map(|s| s.as_str()),
+            Some("2222")
+        );
+    }
+
+    #[test]
+    fn include_tilde_glob() {
+        use assert_fs::prelude::*;
+        use assert_fs::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        tmp.child("a.conf")
+            .write_str("Host a\n    Port 2222\n")
+            .unwrap();
+        tmp.child("b.conf")
+            .write_str("Host b\n    Port 3333\n")
+            .unwrap();
+        // this file should not be read
+        tmp.child("ignored.txt")
+            .write_str("Host ignored\n    Something ignored\n")
+            .unwrap();
+
+        let mut fake_env = ConfigMap::new();
+        fake_env.insert("HOME".to_string(), tmp.path().to_str().unwrap().to_string());
+        fake_env.insert("USER".to_string(), "me".to_string());
+
+        let mut config = Config::new();
+        config.assign_environment(fake_env);
+        config.add_config_string("Include ~/*.conf");
+
+        assert_eq!(
+            config.for_host("a").get("port").map(|s| s.as_str()),
+            Some("2222")
+        );
+
+        assert_eq!(
+            config.for_host("b").get("port").map(|s| s.as_str()),
+            Some("3333")
+        );
+
+        assert_eq!(config.for_host("ignored").get("something"), None);
     }
 }
