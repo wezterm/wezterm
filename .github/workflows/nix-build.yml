@@ -1,4 +1,4 @@
-name: Nix
+name: Nix / Build
 
 on:
   pull_request:
@@ -18,8 +18,7 @@ on:
       - 'nix/**'
 
 jobs:
-  lints:
-    name: Build
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
