@@ -69,25 +69,25 @@ hide:
     Download and make the file executable and you're ready to run!
 
     [AppImage :material-tray-arrow-down:]({{ ubuntu20_AppImage_stable }}){ .md-button }
-    [Nightly AppImage :material-tray-arrow-down:]({{ ubuntu20_AppImage_nightly }}){ .md-button }
+    [Nightly AppImage :material-tray-arrow-down:]({{ ubuntu24_AppImage_nightly }}){ .md-button }
 
     ```console
-    $ curl -LO {{ ubuntu20_AppImage_stable }}
-    $ chmod +x {{ ubuntu20_AppImage_stable_asset }}
+    $ curl -LO {{ ubuntu24_AppImage_stable }}
+    $ chmod +x {{ ubuntu24_AppImage_stable_asset }}
     ```
 
     You may then execute the appimage directly to launch wezterm, with no
     specific installation steps required:
 
     ```console
-    $ ./{{ ubuntu20_AppImage_stable_asset }}
+    $ ./{{ ubuntu24_AppImage_stable_asset }}
     ```
 
     That said, you may wish to make it a bit more convenient:
 
     ```console
     $ mkdir ~/bin
-    $ mv ./{{ ubuntu20_AppImage_stable_asset }} ~/bin/wezterm
+    $ mv ./{{ ubuntu24_AppImage_stable_asset }} ~/bin/wezterm
     $ ~/bin/wezterm
     ```
 
@@ -138,10 +138,10 @@ hide:
 
     |Distro      | Stable   |        | Nightly|            |
     |------------|----------|--------|--------|------------|
-    |Ubuntu20    |[amd64]({{ ubuntu20_deb_stable }}) ||[amd64]({{ ubuntu20_deb_nightly }})| |
+    |Ubuntu20    |[amd64]({{ ubuntu20_deb_stable }}) ||No longer supported| |
     |Ubuntu22    |[amd64]({{ ubuntu22_deb_stable }}) |[arm64]({{ ubuntu22_arm64_deb_stable}})|[amd64]({{ ubuntu22_deb_nightly }})|[arm64]({{ ubuntu22_arm64_deb_nightly}})|
     |Ubuntu24    |Nightly Only                       |Nightly Only                           |[amd64]({{ ubuntu24_deb_nightly }})|[arm64]({{ ubuntu24_arm64_deb_nightly}})|
-    |Debian11    |[amd64]({{ debian11_deb_stable }}) ||[amd64]({{ debian11_deb_nightly }})| |
+    |Debian11    |[amd64]({{ debian11_deb_stable }}) ||No longer supported| |
     |Debian12    |[amd64]({{ debian12_deb_stable }}) |[arm64]({{ debian12_arm64_deb_stable }})|[amd64]({{ debian12_deb_nightly }})|[arm64]({{ debian12_arm64_deb_nightly }}) |
 
     To download and install from the CLI, you can use something like this, which
@@ -229,8 +229,9 @@ hide:
     |CentOS9     |[{{ centos9_rpm_stable_asset }}]({{ centos9_rpm_stable }})|[{{ centos9_rpm_nightly_asset }}]({{ centos9_rpm_nightly }})|
     |Fedora37    |[{{ fedora37_rpm_stable_asset }}]({{ fedora37_rpm_stable }})|No longer supported|
     |Fedora38    |[{{ fedora38_rpm_stable_asset }}]({{ fedora38_rpm_stable }})|No longer supported|
-    |Fedora39    |[{{ fedora39_rpm_stable_asset }}]({{ fedora39_rpm_stable }})|[{{ fedora39_rpm_nightly_asset }}]({{ fedora39_rpm_nightly }})|
+    |Fedora39    |[{{ fedora39_rpm_stable_asset }}]({{ fedora39_rpm_stable }})|No longer supported|
     |Fedora40    |Nightly only|[{{ fedora40_rpm_nightly_asset }}]({{ fedora40_rpm_nightly }})|
+    |Fedora41    |Nightly only|[{{ fedora41_rpm_nightly_asset }}]({{ fedora41_rpm_nightly }})|
 
     To download and install from the CLI you can use something like this, which
     shows how to install the Fedora 39 package:
@@ -394,7 +395,15 @@ hide:
         };
     }
     ```
-    
+
+=== "Void"
+    ## Void Linux
+
+    ```console
+    $ sudo xbps-install -S wezterm
+    ```
+
+    Be sure to also install the `nerd-fonts-ttf` package!
 
 === "Raw"
     ## Raw Linux Binary
