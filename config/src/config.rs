@@ -1270,33 +1270,39 @@ impl Config {
         let mut tables = KeyTables::default();
 
         for k in &self.keys {
-            let (key, mods) = k
-                .key
-                .key
-                .resolve(self.key_map_preference)
-                .normalize_shift(k.key.mods);
-            tables.default.insert(
-                (key, mods),
-                KeyTableEntry {
-                    action: k.action.clone(),
-                },
-            );
-        }
-
-        for (name, keys) in &self.key_tables {
-            let mut table = KeyTable::default();
-            for k in keys {
+            for mods in k.key.mods.positional_matches() {
                 let (key, mods) = k
                     .key
                     .key
                     .resolve(self.key_map_preference)
-                    .normalize_shift(k.key.mods);
-                table.insert(
+                    .normalize_shift(mods);
+
+                tables.default.insert(
                     (key, mods),
                     KeyTableEntry {
                         action: k.action.clone(),
                     },
                 );
+            }
+        }
+
+        for (name, keys) in &self.key_tables {
+            let mut table = KeyTable::default();
+            for k in keys {
+                for mods in k.key.mods.positional_matches() {
+                    let (key, mods) = k
+                        .key
+                        .key
+                        .resolve(self.key_map_preference)
+                        .normalize_shift(mods);
+
+                    table.insert(
+                        (key, mods),
+                        KeyTableEntry {
+                            action: k.action.clone(),
+                        },
+                    );
+                }
             }
             tables.by_name.insert(name.to_string(), table);
         }
@@ -1310,7 +1316,11 @@ impl Config {
         let mut map = HashMap::new();
 
         for m in &self.mouse_bindings {
-            map.insert((m.event.clone(), m.mods), m.action.clone());
+            let mut mouse_mods = m.mods;
+            for mods in m.mods.mods.positional_matches() {
+                mouse_mods.mods = mods;
+                map.insert((m.event.clone(), mouse_mods), m.action.clone());
+            }
         }
 
         map

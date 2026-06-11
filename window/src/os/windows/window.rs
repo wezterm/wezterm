@@ -2425,7 +2425,9 @@ impl KeyboardLayoutInfo {
             | Modifiers::RIGHT_SHIFT
             | Modifiers::LEFT_CTRL
             | Modifiers::RIGHT_CTRL
-            | Modifiers::LEFT_ALT)
+            | Modifiers::LEFT_ALT
+            | Modifiers::LEFT_SUPER
+            | Modifiers::RIGHT_SUPER)
     }
 
     pub fn is_dead_key_leader(&mut self, mods: Modifiers, vk: u32) -> Option<char> {
@@ -2605,9 +2607,19 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
         if keys[VK_MENU as usize] & 0x80 != 0 {
             modifiers |= Modifiers::ALT;
         }
+        if keys[VK_LMENU as usize] & 0x80 != 0 {
+            modifiers |= Modifiers::LEFT_ALT;
+        }
+        if keys[VK_RMENU as usize] & 0x80 != 0 {
+            modifiers |= Modifiers::RIGHT_ALT;
+        }
     }
-    if keys[VK_LWIN as usize] & 0x80 != 0 || keys[VK_RWIN as usize] & 0x80 != 0 {
-        modifiers |= Modifiers::SUPER;
+
+    if keys[VK_LWIN as usize] & 0x80 != 0 {
+        modifiers |= Modifiers::LEFT_SUPER | Modifiers::SUPER;
+    }
+    if keys[VK_RWIN as usize] & 0x80 != 0 {
+        modifiers |= Modifiers::RIGHT_SUPER | Modifiers::SUPER;
     }
 
     let mut leds = KeyboardLedStatus::empty();

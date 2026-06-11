@@ -25,10 +25,17 @@ Possible Modifier labels are:
  * `SUPER`, `CMD`, `WIN` - these are all equivalent: on macOS the `Command` key,
    on Windows the `Windows` key, on Linux this can also be the `Super` or `Hyper`
    key.  Left and right are equivalent.
- * `CTRL` - The control key.  Left and right are equivalent.
- * `SHIFT` - The shift key.  Left and right are equivalent.
+ * `CTRL` - The control key.  Left and right will both trigger the action.
+    * `LEFT_CTRL` or `RIGHT_CTRL` may be used to bind more specific keys {{since('nightly', inline=True)}}
+ * `SHIFT` - The shift key.  Left and right will both trigger the action.
+    * `LEFT_SHIFT` or `RIGHT_SHIFT` may be used to bind more specific keys {{since('nightly', inline=True)}}
  * `ALT`, `OPT`, `META` - these are all equivalent: on macOS the `Option` key,
-   on other systems the `Alt` or `Meta` key.  Left and right are equivalent.
+   on other systems the `Alt` or `Meta` key.  Left and right will both trigger the action.
+    * `LEFT_ALT`, `LEFT_OPT`, `LEFT_META`, `RIGHT_ALT`, `RIGHT_OPT`, or `RIGHT_META`
+      may be used to bind more specific keys {{since('nightly', inline=True)}}.
+
+      Note that in some keyboard layouts,  `CTRL|RIGHT_ALT` will be mapped to `AltGr`
+      and therefore not be usable for keyboard shortcuts.
  * `LEADER` - a special modal modifier state managed by `wezterm`. See [Leader Key](#leader-key) for more information.
  * `VoidSymbol` - This keycode is emitted in special cases where the original
    function of the key has been removed. Such as in Linux and using `setxkbmap`.
@@ -60,7 +67,7 @@ all of these are meaningful on all platforms:
 Alternatively, a single unicode character can be specified to indicate
 pressing the corresponding key.
 
-Pay attention to the case of the text that you use and the state of the `SHIFT` modifier, as `key="A"` will match 
+Pay attention to the case of the text that you use and the state of the `SHIFT` modifier, as `key="A"` will match
 
 ### Physical vs Mapped Key Assignments
 
