@@ -73,6 +73,9 @@ As features stabilize some brief notes about them will accumulate here.
 * windows: Improve detection of running in WSL. Thanks to @bew! #7137
 
 #### New
+* [win32_keep_system_backdrop_when_inactive](config/lua/config/win32_keep_system_backdrop_when_inactive.md)
+  option to keep the *Acrylic*/*Mica*/*Tabbed* backdrop material rendered
+  while the window is inactive, instead of fading to a solid color. #5895
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
   and deserialization of JSON, TOML and YAML. Thanks to @expnn! #4969
 * `wezterm ssh` now supports agent forwarding. Thanks to @Riatre! #5345

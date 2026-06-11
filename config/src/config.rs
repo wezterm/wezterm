@@ -581,6 +581,13 @@ pub struct Config {
     #[dynamic(default = "default_win32_acrylic_accent_color")]
     pub win32_acrylic_accent_color: RgbaColor,
 
+    /// Only works on Windows: when enabled, the window keeps rendering
+    /// its configured `win32_system_backdrop` material (Acrylic/Mica/Tabbed)
+    /// while the window is inactive, instead of letting DWM fade the
+    /// backdrop to its solid fallback color.
+    #[dynamic(default)]
+    pub win32_keep_system_backdrop_when_inactive: bool,
+
     /// Specifies the alpha value to use when rendering the background
     /// of the window.  The background is taken either from the
     /// window_background_image, or if there is none, the background
