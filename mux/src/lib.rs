@@ -1251,9 +1251,29 @@ impl Mux {
         window_id: Option<WindowId>,
         workspace_for_new_window: Option<String>,
     ) -> anyhow::Result<(Arc<Tab>, WindowId)> {
-        let (domain_id, _src_window, src_tab) = self
+        let (domain_id, src_window_id, src_tab) = self
             .resolve_pane_id(pane_id)
             .ok_or_else(|| anyhow::anyhow!("pane {} not found", pane_id))?;
+
+        if self
+            .get_window(src_window_id)
+            .ok_or_else(|| anyhow::anyhow!("window {} not found", src_window_id))?
+            .len()
+            == 1
+        {
+            let src_tab = self
+                .get_tab(src_tab)
+                .ok_or_else(|| anyhow::anyhow!("Invalid tab id {}", src_tab))?;
+
+            //if there's only one tab and one pane in the current window, it doesn't make
+            //sense to move it to a new tab or window
+            if src_tab
+                .count_panes()
+                .map_or(true, |num_panes| num_panes <= 1)
+            {
+                return Ok((src_tab, src_window_id));
+            }
+        }
 
         let domain = self
             .get_domain(domain_id)
