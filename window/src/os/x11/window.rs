@@ -1854,7 +1854,7 @@ impl XWindowInner {
         // https://specifications.freedesktop.org/wm-spec/wm-spec-1.3.html#idm44927025355360
         // says that this is an array of 32bit ARGB data.
         // The first two elements are width, height, with the remainder
-        // being the the row data, left-to-right, top-to-bottom.
+        // being the row data, left-to-right, top-to-bottom.
         let mut icon_data = Vec::with_capacity((2 + (width * height)) * 4);
         icon_data.push(width as u32);
         icon_data.push(height as u32);

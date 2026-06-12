@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: "git config --global --add safe.directory /__w/wezterm/wezterm"
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: "recursive"
       - name: "Install Rust"
@@ -86,7 +86,7 @@ jobs:
         shell: bash
         run: "bash ci/deploy.sh"
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "ubuntu22.04"
           path: |
@@ -107,14 +107,14 @@ jobs:
         shell: bash
         run: "git config --global --add safe.directory /__w/wezterm/wezterm"
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: "Upload to gemfury"
         env:
           FURY_TOKEN: ${{ secrets.FURY_TOKEN }}
         shell: bash
         run: "for f in wezterm*.deb ; do curl -i -F package=@$f https://$FURY_TOKEN@push.fury.io/wez/ ; done"
       - name: "Download artifact"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: "ubuntu22.04"
       - name: "Checksum"

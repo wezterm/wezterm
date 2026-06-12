@@ -146,7 +146,7 @@ Alt/Option](config/keys.md), as well as options that influence that behavior.
 
 The next thing to verify is what byte sequences are being produced when you
 press keys.  I generally suggest running `xxd`, pressing the relevant key, then
-enter, then CTRL-D.  This should show a hex dump of the the byte sequence.
+enter, then CTRL-D.  This should show a hex dump of the byte sequence.
 This step helps to isolate the input from input processing layers in other
 applications.
 
