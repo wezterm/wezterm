@@ -1271,6 +1271,7 @@ impl Mux {
                 .count_panes()
                 .map_or(true, |num_panes| num_panes <= 1)
             {
+                log::debug!("move_pane_to_new_tab pane {} was not moved as it's already the sole pane in its window", pane_id);
                 return Ok((src_tab, src_window_id));
             }
         }
