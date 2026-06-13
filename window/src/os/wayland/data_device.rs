@@ -17,6 +17,7 @@ use super::state::WaylandState;
 
 pub(super) const TEXT_MIME_TYPE: &str = "text/plain;charset=utf-8";
 pub(super) const URI_MIME_TYPE: &str = "text/uri-list";
+pub(super) const IMAGE_PNG_MIME_TYPE: &str = "image/png";
 
 impl DataDeviceHandler for WaylandState {
     fn enter(
@@ -108,7 +109,7 @@ impl DataDeviceHandler for WaylandState {
             }
         };
         if let Some(offer) = offer {
-            if !offer.with_mime_types(|mime_types| mime_types.iter().any(|s| s == TEXT_MIME_TYPE)) {
+            if !offer.with_mime_types(|mime_types| has_accepted_mime_type(mime_types)) {
                 return;
             }
 
@@ -229,5 +230,71 @@ impl DataSourceHandler for WaylandState {
         _source: &wayland_client::protocol::wl_data_source::WlDataSource,
         _action: wayland_client::protocol::wl_data_device_manager::DndAction,
     ) {
+    }
+}
+
+/// Returns true if the given MIME types contain at least one type that we
+/// accept for clipboard selection (text or PNG image).
+fn has_accepted_mime_type(mime_types: &[String]) -> bool {
+    mime_types
+        .iter()
+        .any(|s| s == TEXT_MIME_TYPE || s == IMAGE_PNG_MIME_TYPE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_accept_text_mime_type() {
+        let mime_types = vec!["text/plain;charset=utf-8".to_string()];
+        assert!(has_accepted_mime_type(&mime_types));
+    }
+
+    #[test]
+    fn test_accept_image_png_mime_type() {
+        let mime_types = vec!["image/png".to_string()];
+        assert!(has_accepted_mime_type(&mime_types));
+    }
+
+    #[test]
+    fn test_accept_both_text_and_image() {
+        let mime_types = vec![
+            "text/plain;charset=utf-8".to_string(),
+            "image/png".to_string(),
+        ];
+        assert!(has_accepted_mime_type(&mime_types));
+    }
+
+    #[test]
+    fn test_reject_unsupported_mime_types() {
+        let mime_types = vec!["text/html".to_string(), "application/json".to_string()];
+        assert!(!has_accepted_mime_type(&mime_types));
+    }
+
+    #[test]
+    fn test_reject_empty_mime_types() {
+        let mime_types: Vec<String> = vec![];
+        assert!(!has_accepted_mime_type(&mime_types));
+    }
+
+    #[test]
+    fn test_accept_image_png_among_other_types() {
+        let mime_types = vec![
+            "text/html".to_string(),
+            "image/png".to_string(),
+            "application/octet-stream".to_string(),
+        ];
+        assert!(has_accepted_mime_type(&mime_types));
+    }
+
+    #[test]
+    fn test_reject_other_image_formats() {
+        let mime_types = vec![
+            "image/jpeg".to_string(),
+            "image/gif".to_string(),
+            "image/bmp".to_string(),
+        ];
+        assert!(!has_accepted_mime_type(&mime_types));
     }
 }

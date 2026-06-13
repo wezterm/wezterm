@@ -665,13 +665,29 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
         PasteFrom(ClipboardPasteSource::Clipboard) => CommandDef {
             brief: "Paste from clipboard".into(),
             doc: "Pastes text from the clipboard".into(),
-            keys: vec![
-                (Modifiers::SUPER, "v".into()),
-                (Modifiers::NONE, "Paste".into()),
-            ],
+            keys: {
+                let mut keys = vec![
+                    (Modifiers::SUPER, "v".into()),
+                    (Modifiers::NONE, "Paste".into()),
+                ];
+                // On Windows and Linux, also bind Ctrl+V to smart paste.
+                // (On macOS, Ctrl+V is "verbatim insert" in terminals, so we
+                // leave it alone — Cmd+V already handles paste there.)
+                #[cfg(not(target_os = "macos"))]
+                keys.push((Modifiers::CTRL, "v".into()));
+                keys
+            },
             args: &[ArgType::ActivePane],
             menubar: &["Edit"],
             icon: Some("md_content_paste"),
+        },
+        PasteImageToSshUpload => CommandDef {
+            brief: "Paste image to remote SSH".into(),
+            doc: "Uploads clipboard image to remote server via SFTP and pastes the remote file path".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_image"),
         },
         ToggleFullScreen => CommandDef {
             brief: "Toggle full screen mode".into(),
@@ -2047,6 +2063,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         CopyTo(ClipboardCopyDestination::PrimarySelection),
         CopyTo(ClipboardCopyDestination::Clipboard),
         PasteFrom(ClipboardPasteSource::Clipboard),
+        PasteImageToSshUpload,
         ClearScrollback(ScrollbackEraseMode::ScrollbackOnly),
         ClearScrollback(ScrollbackEraseMode::ScrollbackAndViewport),
         QuickSelect,
@@ -2144,4 +2161,163 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         // ----------------- Misc
         OpenLinkAtMouseCursor,
     ];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> ConfigHandle {
+        config::use_test_configuration();
+        config::configuration()
+    }
+
+    #[test]
+    fn test_paste_from_clipboard_default_keys_include_super_v() {
+        let config = test_config();
+        let assignments = CommandDef::default_key_assignments(&config);
+        let paste_bindings: Vec<_> = assignments
+            .iter()
+            .filter(|(_, _, action)| matches!(action, PasteFrom(ClipboardPasteSource::Clipboard)))
+            .collect();
+
+        // Super+V should always be bound (Cmd+V on macOS, Win+V on others)
+        assert!(
+            paste_bindings
+                .iter()
+                .any(|(mods, key, _)| *mods == Modifiers::SUPER && *key == KeyCode::Char('v')),
+            "Expected Super+v binding for PasteFrom(Clipboard), found: {:?}",
+            paste_bindings
+        );
+    }
+
+    #[test]
+    fn test_paste_from_clipboard_default_keys_include_ctrl_shift_v() {
+        let config = test_config();
+        let assignments = CommandDef::default_key_assignments(&config);
+        let paste_bindings: Vec<_> = assignments
+            .iter()
+            .filter(|(_, _, action)| matches!(action, PasteFrom(ClipboardPasteSource::Clipboard)))
+            .collect();
+
+        // Ctrl+Shift+V should be synthesized from Super+V on all platforms
+        assert!(
+            paste_bindings.iter().any(|(mods, key, _)| *mods
+                == (Modifiers::CTRL | Modifiers::SHIFT)
+                && *key == KeyCode::Char('v')),
+            "Expected Ctrl+Shift+v binding for PasteFrom(Clipboard), found: {:?}",
+            paste_bindings
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn test_paste_from_clipboard_default_keys_include_ctrl_v_on_non_macos() {
+        let config = test_config();
+        let assignments = CommandDef::default_key_assignments(&config);
+        let paste_bindings: Vec<_> = assignments
+            .iter()
+            .filter(|(_, _, action)| matches!(action, PasteFrom(ClipboardPasteSource::Clipboard)))
+            .collect();
+
+        // On Windows/Linux, Ctrl+V (lowercase) should be bound for smart paste
+        assert!(
+            paste_bindings
+                .iter()
+                .any(|(mods, key, _)| *mods == Modifiers::CTRL && *key == KeyCode::Char('v')),
+            "Expected Ctrl+v binding for PasteFrom(Clipboard) on non-macOS, found: {:?}",
+            paste_bindings
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_paste_from_clipboard_no_ctrl_v_on_macos() {
+        let config = test_config();
+        let assignments = CommandDef::default_key_assignments(&config);
+        let paste_bindings: Vec<_> = assignments
+            .iter()
+            .filter(|(_, _, action)| matches!(action, PasteFrom(ClipboardPasteSource::Clipboard)))
+            .collect();
+
+        // On macOS, plain Ctrl+V (lowercase) should NOT be bound
+        // (it is "verbatim insert" in terminals)
+        assert!(
+            !paste_bindings
+                .iter()
+                .any(|(mods, key, _)| *mods == Modifiers::CTRL && *key == KeyCode::Char('v')),
+            "Ctrl+v should NOT be bound on macOS, but found it in: {:?}",
+            paste_bindings
+        );
+    }
+
+    #[test]
+    fn test_paste_from_clipboard_has_paste_key() {
+        let config = test_config();
+        let assignments = CommandDef::default_key_assignments(&config);
+
+        // The system Paste key should be bound
+        assert!(
+            assignments.iter().any(|(mods, key, action)| {
+                *mods == Modifiers::NONE
+                    && *key == KeyCode::Paste
+                    && matches!(action, PasteFrom(ClipboardPasteSource::Clipboard))
+            }),
+            "Expected Paste key binding for PasteFrom(Clipboard)"
+        );
+    }
+
+    #[test]
+    fn test_copy_to_clipboard_default_keys_include_super_c() {
+        let config = test_config();
+        let assignments = CommandDef::default_key_assignments(&config);
+
+        assert!(
+            assignments.iter().any(|(mods, key, action)| {
+                *mods == Modifiers::SUPER
+                    && *key == KeyCode::Char('c')
+                    && matches!(action, CopyTo(ClipboardCopyDestination::Clipboard))
+            }),
+            "Expected Super+c binding for CopyTo(Clipboard)"
+        );
+    }
+
+    #[test]
+    fn test_permute_keys_super_generates_ctrl_shift() {
+        let config = test_config();
+        let def = CommandDef {
+            brief: "test".into(),
+            doc: "test".into(),
+            keys: vec![(Modifiers::SUPER, "v".into())],
+            args: &[],
+            menubar: &[],
+            icon: None,
+        };
+        let permuted = def.permute_keys(&config);
+
+        // Should contain at least: SUPER+v, CTRL+SHIFT+v, CTRL+SHIFT+V, CTRL+V
+        assert!(
+            permuted
+                .iter()
+                .any(|(m, k)| *m == Modifiers::SUPER && *k == KeyCode::Char('v')),
+            "Missing SUPER+v"
+        );
+        assert!(
+            permuted.iter().any(
+                |(m, k)| *m == (Modifiers::CTRL | Modifiers::SHIFT) && *k == KeyCode::Char('v')
+            ),
+            "Missing CTRL+SHIFT+v"
+        );
+    }
+
+    #[test]
+    fn test_us_layout_shift() {
+        assert_eq!(us_layout_shift("v"), "V");
+        assert_eq!(us_layout_shift("a"), "A");
+        assert_eq!(us_layout_shift("1"), "!");
+        assert_eq!(us_layout_shift("["), "{");
+        assert_eq!(us_layout_shift("="), "+");
+        assert_eq!(us_layout_shift("-"), "_");
+        assert_eq!(us_layout_shift("Paste"), "Paste");
+    }
 }

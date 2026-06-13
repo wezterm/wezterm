@@ -7065,6 +7065,7 @@ dependencies = [
  "ordered-float 4.6.0",
  "parking_lot",
  "portable-pty",
+ "procinfo",
  "promise",
  "rangeset",
  "ratelim",

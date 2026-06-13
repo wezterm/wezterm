@@ -374,6 +374,20 @@ pub struct Config {
     #[dynamic(default)]
     pub ssh_backend: SshBackend,
 
+    /// Remote path template for SSH image paste uploads.
+    /// `{timestamp}` is replaced with the current Unix timestamp.
+    #[dynamic(default = "default_ssh_image_paste_remote_path")]
+    pub ssh_image_paste_remote_path: String,
+
+    /// Enable or disable the SSH image paste feature
+    #[dynamic(default = "crate::default_true")]
+    pub ssh_image_paste_enabled: bool,
+
+    /// Local path template for saving clipboard images.
+    /// `{timestamp}` is replaced with the current Unix timestamp.
+    #[dynamic(default = "default_image_paste_local_path")]
+    pub image_paste_local_path: String,
+
     /// When running in server mode, defines configuration for
     /// each of the endpoints that we'll listen for connections
     #[dynamic(default)]
@@ -894,6 +908,16 @@ pub struct Config {
     pub ulimit_nproc: u64,
 }
 impl_lua_conversion_dynamic!(Config);
+
+fn default_ssh_image_paste_remote_path() -> String {
+    "/tmp/wezterm-paste-{timestamp}.png".to_string()
+}
+
+fn default_image_paste_local_path() -> String {
+    let temp = std::env::temp_dir();
+    let path = temp.join("wezterm-paste-{timestamp}.png");
+    path.to_string_lossy().to_string()
+}
 
 fn default_one() -> usize {
     1
@@ -2198,4 +2222,50 @@ fn default_macos_forward_mods() -> Modifiers {
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {
     FontRasterizerSelection::Harfbuzz
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ssh_image_paste_defaults() {
+        let path = default_ssh_image_paste_remote_path();
+        assert!(path.contains("{timestamp}"));
+        assert!(path.ends_with(".png"));
+        assert!(path.starts_with("/tmp/"));
+    }
+
+    #[test]
+    fn test_ssh_image_paste_remote_path_template_substitution() {
+        let path = default_ssh_image_paste_remote_path();
+        let result = path.replace("{timestamp}", "1234567890");
+        assert_eq!(result, "/tmp/wezterm-paste-1234567890.png");
+        assert!(!result.contains("{timestamp}"));
+    }
+
+    #[test]
+    fn test_image_paste_local_path_defaults() {
+        let path = default_image_paste_local_path();
+        assert!(path.contains("{timestamp}"));
+        assert!(path.ends_with(".png"));
+        assert!(path.contains("wezterm-paste-"));
+        // Should use the platform temp directory, not hardcoded /tmp/
+        let temp = std::env::temp_dir();
+        let temp_str = temp.to_string_lossy();
+        assert!(
+            path.starts_with(temp_str.as_ref()),
+            "path '{}' should start with temp dir '{}'",
+            path,
+            temp_str
+        );
+    }
+
+    #[test]
+    fn test_image_paste_local_path_template_substitution() {
+        let path = default_image_paste_local_path();
+        let result = path.replace("{timestamp}", "1234567890");
+        assert!(result.contains("wezterm-paste-1234567890.png"));
+        assert!(!result.contains("{timestamp}"));
+    }
 }

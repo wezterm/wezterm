@@ -35,6 +35,7 @@ struct CopyAndPaste {
     primary_selection_owned: Option<String>,
     clipboard_request: Option<Promise<String>>,
     selection_request: Option<Promise<String>>,
+    image_request: Option<Promise<Vec<u8>>>,
     time: u32,
 }
 
@@ -1061,6 +1062,43 @@ impl XWindowInner {
             "SEL: window_id={window_id:?} SELECTION_NOTIFY received {selection:?} \
             selection.selection={selection_name} selection.target={target_name}"
         );
+
+        // Handle image/png clipboard response
+        if selection.target() == conn.atom_image_png {
+            if let Some(mut promise) = self.copy_and_paste.image_request.take() {
+                if selection.property() == xcb::x::ATOM_NONE {
+                    log::trace!("SEL: window_id={window_id:?} -> no image/png data available");
+                    promise.err(anyhow!("No image data available in clipboard"));
+                } else {
+                    match conn.send_and_wait_request(&xcb::x::GetProperty {
+                        delete: false,
+                        window: selection.requestor(),
+                        property: selection.property(),
+                        r#type: conn.atom_image_png,
+                        long_offset: 0,
+                        long_length: u32::max_value(),
+                    }) {
+                        Ok(prop) => {
+                            let data: Vec<u8> = prop.value().to_vec();
+                            log::trace!(
+                                "SEL: window_id={window_id:?} -> got {} bytes of image/png data",
+                                data.len()
+                            );
+                            promise.ok(data);
+                        }
+                        Err(err) => {
+                            log::error!("clipboard: err while getting image property: {:?}", err);
+                            promise.err(anyhow!("Failed to get image property: {}", err));
+                        }
+                    }
+                    conn.send_request_no_reply(&xcb::x::DeleteProperty {
+                        window: self.window_id,
+                        property: conn.atom_xsel_data,
+                    })?;
+                }
+            }
+            return Ok(());
+        }
 
         if let Some(clipboard) = self.selection_atom_to_clipboard(selection.selection()) {
             if selection.property() == xcb::x::ATOM_NONE {
@@ -2145,6 +2183,39 @@ impl WindowOps for XWindow {
                 target: conn.atom_utf8_string,
                 property: conn.atom_xsel_data,
                 time: inner.copy_and_paste.time,
+            });
+            Ok(())
+        });
+
+        future
+    }
+
+    /// Retrieve image data from the clipboard as PNG bytes
+    fn get_clipboard_image_data(&self) -> Future<Vec<u8>> {
+        let window_id = self.0;
+        log::trace!("SEL: window_id={window_id:?} Window::get_clipboard_image_data called");
+        let mut promise = Promise::new();
+        let future = promise.get_future().unwrap();
+        let mut promise = Some(promise);
+
+        XConnection::with_window_inner(window_id, move |inner| {
+            let promise = promise.take().unwrap();
+            log::debug!(
+                "SEL: window_id={window_id:?} Window::get_clipboard_image_data: \
+                        prepare promise, time={}",
+                inner.copy_and_paste.time
+            );
+            inner.copy_and_paste.image_request.replace(promise);
+            let conn = inner.conn();
+            // Use CURRENT_TIME instead of copy_and_paste.time because
+            // Mutter ignores ConvertSelection requests with a zero or
+            // stale timestamp (same issue noted in focus_window()).
+            conn.send_request_no_reply_log(&xcb::x::ConvertSelection {
+                requestor: inner.window_id,
+                selection: conn.atom_clipboard,
+                target: conn.atom_image_png,
+                property: conn.atom_xsel_data,
+                time: xcb::x::CURRENT_TIME,
             });
             Ok(())
         });

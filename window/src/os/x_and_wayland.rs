@@ -401,6 +401,13 @@ impl WindowOps for Window {
             Self::Wayland(w) => w.get_clipboard(clipboard),
         }
     }
+    fn get_clipboard_image_data(&self) -> Future<Vec<u8>> {
+        match self {
+            Self::X11(x) => x.get_clipboard_image_data(),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.get_clipboard_image_data(),
+        }
+    }
     fn set_clipboard(&self, clipboard: Clipboard, text: String) {
         match self {
             Self::X11(x) => x.set_clipboard(clipboard, text),

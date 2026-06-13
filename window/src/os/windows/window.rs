@@ -755,6 +755,34 @@ impl HasWindowHandle for Window {
     }
 }
 
+pub fn get_clipboard_image_data() -> anyhow::Result<Vec<u8>> {
+    use clipboard_win::{formats, raw};
+
+    struct ClipboardGuard;
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            let _ = raw::close();
+        }
+    }
+
+    raw::open().context("Failed to open clipboard")?;
+    let _guard = ClipboardGuard;
+
+    if !raw::is_format_avail(formats::CF_DIB) {
+        anyhow::bail!("No image data in clipboard");
+    }
+
+    let size = raw::size(formats::CF_DIB).context("Failed to get clipboard data size")?;
+    if size == 0 {
+        anyhow::bail!("Clipboard image data is empty");
+    }
+
+    let mut buf = vec![0u8; size];
+    raw::get(formats::CF_DIB, &mut buf).context("Failed to get clipboard image data")?;
+
+    Ok(buf)
+}
+
 #[async_trait(?Send)]
 impl WindowOps for Window {
     async fn enable_opengl(&self) -> anyhow::Result<Rc<glium::backend::Context>> {
@@ -967,6 +995,10 @@ impl WindowOps for Window {
 
     fn set_clipboard(&self, _clipboard: Clipboard, text: String) {
         clipboard_win::set_clipboard_string(&text).ok();
+    }
+
+    fn get_clipboard_image_data(&self) -> Future<Vec<u8>> {
+        Future::result(get_clipboard_image_data())
     }
 
     fn set_window_drag_position(&self, coords: ScreenPoint) {

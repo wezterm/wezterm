@@ -17,6 +17,7 @@ in a form that you can copy and paste into your own configuration.
 | `SUPER`     | `v`   | `PasteFrom="Clipboard"`  |
 | `CTRL+SHIFT`     | `c`   | `CopyTo="Clipboard"`  |
 | `CTRL+SHIFT`     | `v`   | `PasteFrom="Clipboard"`  |
+| `CTRL`     | `v`   | `PasteFrom="Clipboard"` (Windows/Linux only)  |
 |      | `Copy`   | `CopyTo="Clipboard"`  |
 |      | `Paste`   | `PasteFrom="Clipboard"`  |
 | `CTRL`     | `Insert` | `CopyTo="PrimarySelection"` {{since('20210203-095643-70a364eb', inline=True)}} |

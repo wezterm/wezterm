@@ -787,6 +787,7 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
     .detach();
 
     maybe_show_configuration_error_window();
+    check_clipboard_image_tools();
     gui.run_forever()
 }
 
@@ -846,6 +847,75 @@ fn maybe_show_configuration_error_window() {
         let err = warnings.join("\n");
         mux::connui::show_configuration_error_message(&err);
     }
+}
+
+/// Check whether a command-line tool is available on the system PATH.
+fn has_tool(name: &str) -> bool {
+    let extensions: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_default()
+            .split(';')
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            for ext in &extensions {
+                if dir.join(format!("{}{}", name, ext)).is_file() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Return a warning message if the clipboard image tool required by the current
+/// display server is missing.  Returns `None` when the right tool is installed.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn clipboard_tool_warning(is_wayland: bool) -> Option<&'static str> {
+    if is_wayland {
+        if !has_tool("wl-paste") {
+            Some(
+                "Clipboard image paste may not work: `wl-paste` is not installed. \
+                 Run `sudo dnf install wl-clipboard` or install your distro's equivalent.",
+            )
+        } else {
+            None
+        }
+    } else {
+        // X11 (or no display server detected) — either xclip or xsel suffices
+        if !has_tool("xclip") && !has_tool("xsel") {
+            Some(
+                "Clipboard image paste may not work: `xclip` is not installed. \
+                 Run `sudo dnf install xclip` or install your distro's equivalent.",
+            )
+        } else {
+            None
+        }
+    }
+}
+
+/// Check whether the system clipboard image tools are available on Linux/FreeBSD.
+/// If the required tool for the current display server is missing, emit a warning
+/// log and show a persistent toast notification so the user knows image paste
+/// (e.g. PasteImageToSshUpload) will not work.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn check_clipboard_image_tools() {
+    let is_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    if let Some(msg) = clipboard_tool_warning(is_wayland) {
+        log::warn!("{}", msg);
+        persistent_toast_notification("Missing clipboard tool", msg);
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn check_clipboard_image_tools() {
+    // No-op on macOS and Windows where clipboard image reading
+    // is handled natively without external tools.
 }
 
 fn run_show_keys(config: config::ConfigHandle, cmd: &ShowKeysCommand) -> anyhow::Result<()> {
@@ -1274,5 +1344,88 @@ fn run() -> anyhow::Result<()> {
         ),
         SubCommand::LsFonts(cmd) => run_ls_fonts(config, &cmd),
         SubCommand::ShowKeys(cmd) => run_show_keys(config, &cmd),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_has_tool_finds_common_command() {
+        // `sh` is universally available on Unix-like systems
+        assert!(has_tool("sh"));
+    }
+
+    #[test]
+    fn test_has_tool_returns_false_for_nonexistent() {
+        assert!(!has_tool("__nonexistent_tool_that_should_never_exist__"));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    mod clipboard_tool_tests {
+        use super::*;
+
+        #[test]
+        fn test_x11_no_warning_when_xclip_installed() {
+            // Only meaningful when xclip is actually installed
+            if has_tool("xclip") {
+                assert!(
+                    clipboard_tool_warning(false).is_none(),
+                    "should not warn when xclip is installed"
+                );
+            }
+        }
+
+        #[test]
+        fn test_x11_no_warning_when_xsel_installed() {
+            if has_tool("xsel") {
+                assert!(
+                    clipboard_tool_warning(false).is_none(),
+                    "should not warn when xsel is installed"
+                );
+            }
+        }
+
+        #[test]
+        fn test_wayland_no_warning_when_wl_paste_installed() {
+            if has_tool("wl-paste") {
+                assert!(
+                    clipboard_tool_warning(true).is_none(),
+                    "should not warn when wl-paste is installed"
+                );
+            }
+        }
+
+        #[test]
+        fn test_wayland_warning_message_mentions_wl_paste() {
+            if !has_tool("wl-paste") {
+                let msg =
+                    clipboard_tool_warning(true).expect("should warn when wl-paste is missing");
+                assert!(
+                    msg.contains("wl-paste"),
+                    "warning should mention wl-paste, got: {}",
+                    msg
+                );
+                assert!(
+                    msg.contains("wl-clipboard"),
+                    "warning should mention the package name, got: {}",
+                    msg
+                );
+            }
+        }
+
+        #[test]
+        fn test_x11_warning_message_mentions_xclip() {
+            if !has_tool("xclip") && !has_tool("xsel") {
+                let msg =
+                    clipboard_tool_warning(false).expect("should warn when xclip/xsel are missing");
+                assert!(
+                    msg.contains("xclip"),
+                    "warning should mention xclip, got: {}",
+                    msg
+                );
+            }
+        }
     }
 }

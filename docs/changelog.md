@@ -73,6 +73,28 @@ As features stabilize some brief notes about them will accumulate here.
 * windows: Improve detection of running in WSL. Thanks to @bew! #7137
 
 #### New
+* [PasteImageToSshUpload](config/lua/keyassignment/PasteImageToSshUpload.md)
+  action to upload clipboard images to a remote SSH server via SFTP (or SCP
+  fallback) and paste the remote file path into the terminal. Useful for
+  sharing screenshots with remote CLI tools like Claude Code. Supported on
+  Windows, Linux (X11/Wayland), and macOS.
+  On Linux/FreeBSD, WezTerm now checks at startup whether the required
+  clipboard tool (`xclip`/`xsel` for X11, `wl-paste` for Wayland) is
+  installed and shows a warning notification if it is missing.
+  See also [ssh_image_paste_remote_path](config/lua/config/ssh_image_paste_remote_path.md)
+  and [ssh_image_paste_enabled](config/lua/config/ssh_image_paste_enabled.md).
+* `PasteFrom` (Cmd+V / Ctrl+V / Ctrl+Shift+V) now automatically falls back to saving
+  clipboard images as local files and pasting the file path when the clipboard
+  contains an image but no text. The local save path is configurable via
+  [image_paste_local_path](config/lua/config/image_paste_local_path.md).
+* `PasteImageToSshUpload` now gracefully handles local (non-SSH) panes: when
+  no SSH session is detected, it falls back to saving the image locally and
+  pasting the file path (instead of showing an error). It also falls back to
+  pasting clipboard text when no image is available.
+* [image_paste_local_path](config/lua/config/image_paste_local_path.md) now
+  defaults to the platform temp directory (e.g. `%TEMP%` on Windows) instead
+  of hardcoded `/tmp/`. Parent directories are created automatically.
+
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
   and deserialization of JSON, TOML and YAML. Thanks to @expnn! #4969
 * `wezterm ssh` now supports agent forwarding. Thanks to @Riatre! #5345
@@ -143,6 +165,9 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @j4james! #7046
 
 #### Fixed
+* Fixed clipboard tool startup check failing on systems without `which`
+  installed (e.g. Fedora containers). The check now uses a pure Rust PATH
+  lookup.
 * Race condition when very quickly adjusting font scale, and other improvements
   around resizing. Thanks to @jknockel! #4876 #5032 #5033
 * macOS: wacky initial window size with external monitors or certain font

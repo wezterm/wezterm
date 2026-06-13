@@ -244,6 +244,10 @@ impl RemoteSshDomain {
         ssh_domain_to_ssh_config(&self.dom)
     }
 
+    pub fn sftp(&self) -> Option<wezterm_ssh::Sftp> {
+        self.session.lock().unwrap().as_ref().map(|s| s.sftp())
+    }
+
     fn build_command(
         &self,
         pane_id: PaneId,

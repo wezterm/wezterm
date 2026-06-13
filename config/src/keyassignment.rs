@@ -545,6 +545,7 @@ pub enum KeyAssignment {
         destination: ClipboardCopyDestination,
     },
     PasteFrom(ClipboardPasteSource),
+    PasteImageToSshUpload,
     ActivateTabRelative(isize),
     ActivateTabRelativeNoWrap(isize),
     IncreaseFontSize,
@@ -733,4 +734,27 @@ pub struct KeyTables {
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyTableEntry {
     pub action: KeyAssignment,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wezterm_dynamic::{FromDynamic, ToDynamic, Value};
+
+    #[test]
+    fn test_paste_image_to_ssh_upload_roundtrip() {
+        let action = KeyAssignment::PasteImageToSshUpload;
+        let dynamic = action.to_dynamic();
+        let restored =
+            KeyAssignment::from_dynamic(&dynamic, Default::default()).expect("should deserialize");
+        assert_eq!(restored, action);
+    }
+
+    #[test]
+    fn test_paste_image_to_ssh_upload_from_string() {
+        let value = Value::String("PasteImageToSshUpload".to_string());
+        let action = KeyAssignment::from_dynamic(&value, Default::default())
+            .expect("should parse from string");
+        assert_eq!(action, KeyAssignment::PasteImageToSshUpload);
+    }
 }

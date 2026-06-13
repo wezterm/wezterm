@@ -473,6 +473,34 @@ impl WindowOps for WaylandWindow {
         future
     }
 
+    fn get_clipboard_image_data(&self) -> Future<Vec<u8>> {
+        let mut promise = Promise::new();
+        let future = promise.get_future().unwrap();
+        let promise = Arc::new(Mutex::new(promise));
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            let read = inner
+                .copy_and_paste
+                .lock()
+                .unwrap()
+                .get_clipboard_image_data()?;
+            let promise = Arc::clone(&promise);
+            std::thread::spawn(move || {
+                let mut promise = promise.lock().unwrap();
+                match read_pipe_with_timeout_bytes(read) {
+                    Ok(result) => {
+                        promise.ok(result);
+                    }
+                    Err(e) => {
+                        log::error!("while reading clipboard image: {}", e);
+                        promise.err(anyhow!("{}", e));
+                    }
+                };
+            });
+            Ok(())
+        });
+        future
+    }
+
     fn set_clipboard(&self, clipboard: Clipboard, text: String) {
         WaylandConnection::with_window_inner(self.0, move |inner| {
             inner
@@ -561,6 +589,43 @@ pub(crate) fn read_pipe_with_timeout(mut file: ReadPipe) -> anyhow::Result<Strin
     }
 
     Ok(String::from_utf8(result)?)
+}
+
+pub(crate) fn read_pipe_with_timeout_bytes(mut file: ReadPipe) -> anyhow::Result<Vec<u8>> {
+    let mut result = Vec::new();
+
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } != 0 {
+        bail!(
+            "failed to change non-blocking mode: {}",
+            std::io::Error::last_os_error()
+        )
+    }
+
+    let mut pfd = libc::pollfd {
+        fd: file.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+
+    let mut buf = [0u8; 8192];
+
+    loop {
+        if unsafe { libc::poll(&mut pfd, 1, 3000) == 1 } {
+            match file.read(&mut buf) {
+                Ok(size) if size == 0 => {
+                    break;
+                }
+                Ok(size) => {
+                    result.extend_from_slice(&buf[..size]);
+                }
+                Err(e) => bail!("error reading from pipe: {}", e),
+            }
+        } else {
+            bail!("timed out reading from pipe");
+        }
+    }
+
+    Ok(result)
 }
 
 pub struct WaylandWindowInner {

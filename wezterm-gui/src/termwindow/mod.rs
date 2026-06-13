@@ -2716,6 +2716,9 @@ impl TermWindow {
             PasteFrom(source) => {
                 self.paste_from_clipboard(pane, *source);
             }
+            PasteImageToSshUpload => {
+                self.paste_image_to_ssh_upload(pane);
+            }
             ActivateTabRelative(n) => {
                 self.activate_tab_relative(*n, true)?;
             }

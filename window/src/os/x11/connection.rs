@@ -96,6 +96,7 @@ pub struct XConnection {
     pub atom_net_supported: Atom,
     pub atom_net_supporting_wm_check: Atom,
     pub atom_net_active_window: Atom,
+    pub atom_image_png: Atom,
     pub(crate) xrm: RefCell<HashMap<String, String>>,
     pub(crate) windows: RefCell<HashMap<xcb::x::Window, Arc<Mutex<XWindowInner>>>>,
     pub(crate) child_to_parent_id: RefCell<HashMap<xcb::x::Window, xcb::x::Window>>,
@@ -714,6 +715,7 @@ impl XConnection {
         let atom_net_supported = Self::intern_atom(&conn, "_NET_SUPPORTED")?;
         let atom_net_supporting_wm_check = Self::intern_atom(&conn, "_NET_SUPPORTING_WM_CHECK")?;
         let atom_net_active_window = Self::intern_atom(&conn, "_NET_ACTIVE_WINDOW")?;
+        let atom_image_png = Self::intern_atom(&conn, "image/png")?;
 
         let has_randr = conn.active_extensions().any(|e| e == xcb::Extension::RandR);
 
@@ -850,6 +852,7 @@ impl XConnection {
             atom_net_supported,
             atom_net_supporting_wm_check,
             atom_net_active_window,
+            atom_image_png,
             atom_net_wm_icon,
             keyboard,
             kbd_ev,

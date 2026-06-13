@@ -827,6 +827,14 @@ impl WindowOps for Window {
         )
     }
 
+    fn get_clipboard_image_data(&self) -> Future<Vec<u8>> {
+        Future::result(
+            ClipboardContext::new()
+                .read_image_png()
+                .map_err(|e| anyhow!("Failed to get clipboard image: {}", e)),
+        )
+    }
+
     fn set_clipboard(&self, _clipboard: Clipboard, text: String) {
         ClipboardContext::new().write(text).ok();
     }

@@ -12,7 +12,7 @@ use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection
 
 use crate::{Clipboard, ConnectionOps};
 
-use super::data_device::TEXT_MIME_TYPE;
+use super::data_device::{IMAGE_PNG_MIME_TYPE, TEXT_MIME_TYPE};
 use super::state::WaylandState;
 
 #[derive(Default)]
@@ -60,6 +60,15 @@ impl CopyAndPaste {
                 Ok(pipe)
             }
         }
+    }
+
+    pub(super) fn get_clipboard_image_data(&mut self) -> anyhow::Result<ReadPipe> {
+        let offer = self
+            .data_offer
+            .as_ref()
+            .ok_or_else(|| anyhow!("no data offer"))?;
+        let pipe = offer.receive(IMAGE_PNG_MIME_TYPE.to_string())?;
+        Ok(pipe)
     }
 
     pub(super) fn set_clipboard_data(&mut self, clipboard: Clipboard, data: String) {
