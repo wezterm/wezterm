@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install nix
-        uses: DeterminateSystems/determinate-nix-action@v3.17.0
+        uses: DeterminateSystems/determinate-nix-action@v3.15.0
       - name: Cache build artifacts
         uses: DeterminateSystems/flakehub-cache-action@main
       - name: Check flake inputs
