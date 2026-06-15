@@ -119,7 +119,10 @@ impl DataDeviceHandler for WaylandState {
             for pending_mouse in self.surface_to_pending.values() {
                 let copy_and_paste = &pending_mouse.lock().unwrap().copy_and_paste;
                 // Each window gets a clone of the same underlying WlDataOffer handle.
-                copy_and_paste.lock().unwrap().confirm_selection(offer.clone());
+                copy_and_paste
+                    .lock()
+                    .unwrap()
+                    .confirm_selection(offer.clone());
             }
         }
     }
