@@ -58,6 +58,29 @@ use crate::{
     WindowEventSender, WindowKeyEvent, WindowOps, WindowState,
 };
 
+/// Wayland-specific coordinate conversion methods for Dimensions
+trait WaylandDimensions {
+    fn dpi_factor(&self) -> f64;
+    fn pixels_to_surface(&self, pixels: i32) -> i32;
+    fn surface_to_pixels(&self, surface: i32) -> i32;
+}
+
+impl WaylandDimensions for Dimensions {
+    fn dpi_factor(&self) -> f64 {
+        self.dpi as f64 / crate::DEFAULT_DPI as f64
+    }
+
+    fn pixels_to_surface(&self, pixels: i32) -> i32 {
+        // Take care to round up, otherwise we can lose a pixel
+        // and that can effectively lose the final row of the terminal
+        (pixels as f64 / self.dpi_factor()).ceil() as i32
+    }
+
+    fn surface_to_pixels(&self, surface: i32) -> i32 {
+        (surface as f64 * self.dpi_factor()).ceil() as i32
+    }
+}
+
 use super::copy_and_paste::CopyAndPaste;
 use super::pointer::{PendingMouse, PointerUserData};
 use super::state::WaylandState;
@@ -256,12 +279,11 @@ impl WaylandWindow {
 
         window.set_min_size(Some((32, 32)));
         let (x, y) = window_frame.location();
-        window.xdg_surface().set_window_geometry(
-            x,
-            y,
-            dimensions.pixel_width as i32,
-            dimensions.pixel_height as i32,
-        );
+        let surface_width = dimensions.pixels_to_surface(dimensions.pixel_width as i32);
+        let surface_height = dimensions.pixels_to_surface(dimensions.pixel_height as i32);
+        window
+            .xdg_surface()
+            .set_window_geometry(x, y, surface_width, surface_height);
         window.commit();
 
         let copy_and_paste = CopyAndPaste::create();
@@ -664,18 +686,15 @@ impl WaylandWindowInner {
     }
 
     fn get_dpi_factor(&self) -> f64 {
-        self.dimensions.dpi as f64 / crate::DEFAULT_DPI as f64
+        self.dimensions.dpi_factor()
     }
 
     fn surface_to_pixels(&self, surface: i32) -> i32 {
-        (surface as f64 * self.get_dpi_factor()).ceil() as i32
+        self.dimensions.surface_to_pixels(surface)
     }
 
     fn pixels_to_surface(&self, pixels: i32) -> i32 {
-        // Take care to round up, otherwise we can lose a pixel
-        // and that can effectively lose the final row of the
-        // terminal
-        ((pixels as f64) / self.get_dpi_factor()).ceil() as i32
+        self.dimensions.pixels_to_surface(pixels)
     }
 
     pub(super) fn dispatch_dropped_files(&mut self, paths: Vec<PathBuf>) {
@@ -866,11 +885,13 @@ impl WaylandWindowInner {
                     pending.refresh_decorations = true
                 }
                 let (x, y) = self.window_frame.location();
+                let surface_width = self.pixels_to_surface(pixel_width);
+                let surface_height = self.pixels_to_surface(pixel_height);
                 self.window
                     .as_mut()
                     .unwrap()
                     .xdg_surface()
-                    .set_window_geometry(x, y, pixel_width, pixel_height);
+                    .set_window_geometry(x, y, surface_width, surface_height);
                 // Compute the new pixel dimensions
                 let new_dimensions = Dimensions {
                     pixel_width: pixel_width.try_into().unwrap(),
@@ -921,8 +942,6 @@ impl WaylandWindowInner {
                         ) {
                             self.surface().attach(Some(buffer.wl_buffer()), 0, 0);
                             self.surface().set_buffer_scale(factor as i32);
-                            self.surface().commit();
-
                             self.surface_factor = factor;
                         }
                     }
@@ -1477,7 +1496,7 @@ impl SurfaceDataExt for SurfaceUserData {
 }
 
 impl HasDisplayHandle for WaylandWindowInner {
-    fn display_handle(&self) -> Result<DisplayHandle, HandleError> {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         let conn = WaylandConnection::get().unwrap().wayland();
         let backend = conn.connection.backend();
         let handle = backend.display_handle()?;
@@ -1486,7 +1505,7 @@ impl HasDisplayHandle for WaylandWindowInner {
 }
 
 impl HasWindowHandle for WaylandWindowInner {
-    fn window_handle(&self) -> Result<WindowHandle, HandleError> {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
         let handle = WaylandWindowHandle::new(
             NonNull::new(self.surface().id().as_ptr() as _).expect("non-null"),
         );
@@ -1495,7 +1514,7 @@ impl HasWindowHandle for WaylandWindowInner {
 }
 
 impl HasDisplayHandle for WaylandWindow {
-    fn display_handle(&self) -> Result<DisplayHandle, HandleError> {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         let conn = WaylandConnection::get().unwrap().wayland();
         let backend = conn.connection.backend();
         let handle = backend.display_handle()?;
@@ -1504,7 +1523,7 @@ impl HasDisplayHandle for WaylandWindow {
 }
 
 impl HasWindowHandle for WaylandWindow {
-    fn window_handle(&self) -> Result<WindowHandle, HandleError> {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
         let conn = Connection::get().expect("raw_window_handle only callable on main thread");
         let handle = conn
             .wayland()

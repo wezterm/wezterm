@@ -163,12 +163,17 @@ impl LocalProcessInfo {
 
         let procs: Vec<_> = all_pids().into_iter().filter_map(info_for_pid).collect();
 
-        fn build_proc(info: &libc::proc_bsdinfo, procs: &[libc::proc_bsdinfo]) -> LocalProcessInfo {
+        fn build_proc(
+            info: &libc::proc_bsdinfo,
+            procs: &[libc::proc_bsdinfo],
+            visited: &mut HashSet<u32>,
+        ) -> LocalProcessInfo {
             let mut children = HashMap::new();
 
             for kid in procs {
-                if kid.pbi_ppid == info.pbi_pid {
-                    children.insert(kid.pbi_pid, build_proc(kid, procs));
+                if kid.pbi_ppid == info.pbi_pid && !visited.contains(&kid.pbi_pid) {
+                    visited.insert(kid.pbi_pid);
+                    children.insert(kid.pbi_pid, build_proc(kid, procs, visited));
                 }
             }
 
@@ -192,7 +197,9 @@ impl LocalProcessInfo {
         }
 
         if let Some(info) = procs.iter().find(|info| info.pbi_pid == pid) {
-            Some(build_proc(info, &procs))
+            let mut visited = HashSet::new();
+            visited.insert(pid);
+            Some(build_proc(info, &procs, &mut visited))
         } else {
             None
         }

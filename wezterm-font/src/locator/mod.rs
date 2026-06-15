@@ -45,7 +45,7 @@ pub enum FontDataSource {
 }
 
 impl FontDataSource {
-    pub fn name_or_path_str(&self) -> Cow<str> {
+    pub fn name_or_path_str(&self) -> Cow<'_, str> {
         match self {
             Self::OnDisk(path) => path.to_string_lossy(),
             Self::BuiltIn { name, .. } => Cow::Borrowed(name),
@@ -53,7 +53,7 @@ impl FontDataSource {
         }
     }
 
-    pub fn path_str(&self) -> Option<Cow<str>> {
+    pub fn path_str(&self) -> Option<Cow<'_, str>> {
         match self {
             Self::OnDisk(path) => Some(path.to_string_lossy()),
             Self::BuiltIn { .. } => None,
@@ -165,11 +165,11 @@ impl Ord for FontDataHandle {
 }
 
 impl FontDataHandle {
-    pub fn name_or_path_str(&self) -> Cow<str> {
+    pub fn name_or_path_str(&self) -> Cow<'_, str> {
         self.source.name_or_path_str()
     }
 
-    pub fn path_str(&self) -> Option<Cow<str>> {
+    pub fn path_str(&self) -> Option<Cow<'_, str>> {
         self.source.path_str()
     }
 

@@ -220,6 +220,10 @@ pub trait TerminalConfiguration: Downcast + std::fmt::Debug + Send + Sync {
         false
     }
 
+    fn enable_checksum_rectangular_area(&self) -> bool {
+        false
+    }
+
     fn log_unknown_escape_sequences(&self) -> bool {
         false
     }
