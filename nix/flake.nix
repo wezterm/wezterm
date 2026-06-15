@@ -79,7 +79,7 @@
           # Rebuild the usual version number of the project from info of commit being built.
           # Format: `<date>-<time>-<shorthash>` (Example: `20200608-110940-3fb3a61`)
           # note: adds `-dirty` when the build includes uncomitted changes
-          version = builtins.break (
+          version = (
             builtins.concatStringsSep "-" (
               # note: `self.lastModifiedDate` looks like `20240209045744`
               # So this match gives list with 2 items: `20240209` (date) & `045744` (time)
