@@ -1251,30 +1251,9 @@ impl Mux {
         window_id: Option<WindowId>,
         workspace_for_new_window: Option<String>,
     ) -> anyhow::Result<(Arc<Tab>, WindowId)> {
-        let (domain_id, src_window_id, src_tab) = self
+        let (domain_id, src_window_id, src_tab_id) = self
             .resolve_pane_id(pane_id)
-            .ok_or_else(|| anyhow::anyhow!("pane {} not found", pane_id))?;
-
-        if self
-            .get_window(src_window_id)
-            .ok_or_else(|| anyhow::anyhow!("window {} not found", src_window_id))?
-            .len()
-            == 1
-        {
-            let src_tab = self
-                .get_tab(src_tab)
-                .ok_or_else(|| anyhow::anyhow!("Invalid tab id {}", src_tab))?;
-
-            //if there's only one tab and one pane in the current window, it doesn't make
-            //sense to move it to a new tab or window
-            if src_tab
-                .count_panes()
-                .map_or(true, |num_panes| num_panes <= 1)
-            {
-                log::debug!("move_pane_to_new_tab pane {} was not moved as it's already the sole pane in its window", pane_id);
-                return Ok((src_tab, src_window_id));
-            }
-        }
+            .ok_or_else(|| anyhow::anyhow!("pane {pane_id} not found"))?;
 
         let domain = self
             .get_domain(domain_id)
@@ -1287,16 +1266,28 @@ impl Mux {
             return Ok((tab, window_id));
         }
 
-        let src_tab = match self.get_tab(src_tab) {
-            Some(t) => t,
-            None => anyhow::bail!("Invalid tab id {}", src_tab),
-        };
+        let src_tab = self
+            .get_tab(src_tab_id)
+            .ok_or_else(|| anyhow::anyhow!("Invalid tab id {src_tab_id}"))?;
+
+        // Moving pane out would destroy source window if it's the sole pane in the sole tab.
+        // Guard against that regardless of target (new or existing) window.
+        let src_tabs_count = self
+            .get_window(src_window_id)
+            .ok_or_else(|| anyhow::anyhow!("window {src_window_id} not found"))?
+            .len();
+        let src_panes_count = src_tab.count_panes().unwrap_or(0);
+        if src_tabs_count == 1 && src_panes_count <= 1 {
+            return Err(anyhow!("pane {pane_id} is alone in its window, cannot move it out"));
+        }
 
         let window_builder;
         let (window_id, size) = if let Some(window_id) = window_id {
+            // Target is an existing window: move pane to a new tab there.
             let window = self
                 .get_window_mut(window_id)
                 .ok_or_else(|| anyhow!("window_id {} not found on this server", window_id))?;
+            // Use active tab in target window to determine terminal size.
             let tab = window
                 .get_active()
                 .ok_or_else(|| anyhow!("window {} has no tabs", window_id))?;
@@ -1304,6 +1295,7 @@ impl Mux {
 
             (window_id, size)
         } else {
+            // No target window: create a new one and move pane to a new tab there.
             window_builder = self.new_empty_window(workspace_for_new_window, None);
             (*window_builder, src_tab.get_size())
         };
