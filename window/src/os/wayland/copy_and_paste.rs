@@ -99,15 +99,6 @@ impl CopyAndPaste {
     }
 }
 
-impl WaylandState {
-    pub(super) fn resolve_copy_and_paste(&mut self) -> Option<Arc<Mutex<CopyAndPaste>>> {
-        let active_surface_id = self.active_surface_id.borrow();
-        let active_surface_id = active_surface_id.as_ref()?;
-        let pending = self.surface_to_pending.get(&active_surface_id)?;
-        Some(Arc::clone(&pending.lock().unwrap().copy_and_paste))
-    }
-}
-
 pub(super) fn write_selection_to_pipe(fd: WritePipe, text: &str) {
     if let Err(e) = write_pipe_with_timeout(fd, text.as_bytes()) {
         log::error!("while sending primary selection to pipe: {}", e);

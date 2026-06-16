@@ -25,10 +25,14 @@ pub fn running_under_wsl() -> bool {
     unsafe {
         let mut name: libc::utsname = std::mem::zeroed();
         if libc::uname(&mut name) == 0 {
-            let version = std::ffi::CStr::from_ptr(name.version.as_ptr())
-                .to_string_lossy()
-                .into_owned();
-            return version.contains("Microsoft");
+            // 'microsoft' is usually in version, in some cases it can be in release instead
+            // (see #7136)
+            let version = format!(
+                "{} {}",
+                std::ffi::CStr::from_ptr(name.version.as_ptr()).to_string_lossy(),
+                std::ffi::CStr::from_ptr(name.release.as_ptr()).to_string_lossy()
+            );
+            return version.to_lowercase().contains("microsoft");
         }
     };
 

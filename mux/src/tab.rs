@@ -535,7 +535,7 @@ impl Tab {
 
     /// Called by the multiplexer client when building a local tab to
     /// mirror a remote tab.  The supplied `root` is the information
-    /// about our counterpart in the the remote server.
+    /// about our counterpart in the remote server.
     /// This method builds a local tree based on the remote tree which
     /// then replaces the local tree structure.
     ///
