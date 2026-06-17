@@ -70,6 +70,7 @@ As features stabilize some brief notes about them will accumulate here.
 * `wezterm imgcat --hold` now avoids local echo and accepts pressing `Escape`,
   `CTRL-C` and `CTRL-D` as various ways of exiting hold mode. Thanks to
   @mgpinf! #6801
+* windows: Improve detection of running in WSL. Thanks to @bew! #7137
 
 #### New
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
@@ -257,6 +258,8 @@ As features stabilize some brief notes about them will accumulate here.
 * macOS: Fix toast notifications. Thanks to @nikhilm! #7483
 * termwiz: Fixed parsing of fragmented mouse reporting sequence. Thanks to
   @jgiannuzzi! #7076 #7504
+* docs: add missing `panes` field to [TabInformation](config/lua/TabInformation.md).
+  Thanks to @KevinSilvester! #7710
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
