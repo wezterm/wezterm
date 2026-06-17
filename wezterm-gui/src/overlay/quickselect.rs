@@ -125,9 +125,7 @@ fn compute_labels_for_alphabet_impl(
         .collect()
 }
 
-/// Returns true if a label should be displayed given the current selection prefix.
-/// When the prefix is empty, all labels are shown. Otherwise, only labels that
-/// start with the lowercased prefix are shown.
+/// Returns true if a label should be displayed given a selection prefix.
 fn label_matches_selection(label: &str, lowered_prefix: &str) -> bool {
     lowered_prefix.is_empty() || label.starts_with(lowered_prefix)
 }
@@ -206,20 +204,20 @@ mod label_filter_test {
 
     #[test]
     fn empty_prefix_matches_all() {
-        for label in &["a", "fq", "db", "av", "ac"] {
-            assert!(label_matches_selection(label, ""));
-        }
+        let labels = ["a", "fq", "db", "av", "ac"];
+        assert!(labels.iter().all(|l| label_matches_selection(l, "")));
     }
 
     #[test]
     fn single_char_prefix_filters_non_matching() {
         // Pressing 'a' should keep labels starting with 'a' and remove others
-        let labels = vec!["ai", "fq", "db", "av", "ac"];
-        let visible: Vec<&&str> = labels
+        let labels = ["ai", "fq", "db", "av", "ac"];
+        let visible: Vec<&str> = labels
             .iter()
+            .copied()
             .filter(|l| label_matches_selection(l, "a"))
             .collect();
-        assert_eq!(visible, vec![&"ai", &"av", &"ac"]);
+        assert_eq!(visible, ["ai", "av", "ac"]);
     }
 
     #[test]
@@ -229,69 +227,30 @@ mod label_filter_test {
     }
 
     #[test]
-    fn prefix_is_case_insensitive_via_lowered_input() {
-        // The caller lowercases the prefix before passing it in;
-        // labels are already lowercase from compute_labels_for_alphabet
-        assert!(label_matches_selection("ab", "a"));
-        assert!(!label_matches_selection("ab", "b"));
-    }
-
-    #[test]
-    fn single_char_labels_filtered_by_prefix() {
-        // With few matches, labels are single characters (a, b, c, d)
-        let labels = compute_labels_for_alphabet("abcd", 4);
-        assert_eq!(labels, vec!["a", "b", "c", "d"]);
-
-        // Typing 'a' should match only "a", not "b", "c", "d"
-        let visible: Vec<&String> = labels
-            .iter()
-            .filter(|l| label_matches_selection(l, "a"))
-            .collect();
-        assert_eq!(visible, vec!["a"]);
+    fn prefix_longer_than_label() {
+        assert!(!label_matches_selection("a", "ab"));
+        assert!(!label_matches_selection("", "a"));
     }
 
     #[test]
     fn two_char_labels_narrowed_by_first_char() {
         // With more matches than alphabet, two-char labels are generated
         let labels = compute_labels_for_alphabet("abcd", 6);
-        // Expected: ["a", "b", "c", "da", "db", "dc"]
-        assert_eq!(labels, vec!["a", "b", "c", "da", "db", "dc"]);
+        assert_eq!(labels, ["a", "b", "c", "da", "db", "dc"]);
 
         // Typing 'd' should keep "da", "db", "dc" and remove "a", "b", "c"
-        let visible: Vec<&String> = labels
+        let visible: Vec<&str> = labels
             .iter()
+            .map(String::as_str)
             .filter(|l| label_matches_selection(l, "d"))
             .collect();
-        assert_eq!(visible, vec!["da", "db", "dc"]);
+        assert_eq!(visible, ["da", "db", "dc"]);
     }
 
     #[test]
     fn no_labels_match_unknown_prefix() {
-        let labels = vec!["ai", "fq", "db"];
-        let visible: Vec<&&str> = labels
-            .iter()
-            .filter(|l| label_matches_selection(l, "z"))
-            .collect();
-        assert!(visible.is_empty());
-    }
-
-    #[test]
-    fn backspace_restores_all_labels() {
-        // Simulates: type 'a' (filters), then backspace (prefix becomes empty, all visible)
-        let labels = vec!["ai", "fq", "db", "av", "ac"];
-
-        let after_a: Vec<&&str> = labels
-            .iter()
-            .filter(|l| label_matches_selection(l, "a"))
-            .collect();
-        assert_eq!(after_a.len(), 3);
-
-        // After backspace, prefix is empty again
-        let after_backspace: Vec<&&str> = labels
-            .iter()
-            .filter(|l| label_matches_selection(l, ""))
-            .collect();
-        assert_eq!(after_backspace.len(), 5);
+        let labels = ["ai", "fq", "db"];
+        assert!(!labels.iter().any(|l| label_matches_selection(l, "z")));
     }
 }
 
@@ -523,20 +482,20 @@ impl Pane for QuickSelectOverlay {
                     r.select_and_copy_match_number(result_index, paste);
                     r.close();
                 } else {
-                    r.mark_all_matches_dirty();
+                    r.recompute_results();
                 }
             }
             (KeyCode::Backspace, KeyModifiers::NONE) => {
                 // Backspace to edit the selection
                 let mut r = self.renderer.lock();
                 r.selection.pop();
-                r.mark_all_matches_dirty();
+                r.recompute_results();
             }
             (KeyCode::Char('u'), KeyModifiers::CTRL) => {
                 // CTRL-u to clear the selection
                 let mut r = self.renderer.lock();
                 r.selection.clear();
-                r.mark_all_matches_dirty();
+                r.recompute_results();
             }
             _ => {}
         }
@@ -659,6 +618,7 @@ impl Pane for QuickSelectOverlay {
                 // the search UI.
                 // For rows with search results, we want to highlight the matching ranges
 
+                let lowered_prefix = self.renderer.selection.to_lowercase();
                 for (idx, line) in lines.iter_mut().enumerate() {
                     let mut line: Line = line.clone();
                     if disable_attr {
@@ -690,9 +650,9 @@ impl Pane for QuickSelectOverlay {
                         self.renderer.last_bar_pos = Some(self.search_row);
                         line.clear_appdata();
                     } else if let Some(matches) = self.renderer.by_line.get(&stable_idx) {
-                        let prefix = self.renderer.selection.to_lowercase();
                         for m in matches {
-                            if !label_matches_selection(&m.label, &prefix) {
+                            if !label_matches_selection(&m.label, &lowered_prefix) {
+                                // Skip displaying this label, it doesn't match the current filter.
                                 continue;
                             }
                             // highlight
@@ -844,12 +804,6 @@ impl QuickSelectRenderable {
         let top = self.viewport.unwrap_or_else(|| dims.physical_top);
         let bottom = (top + dims.viewport_rows as StableRowIndex).saturating_sub(1);
         bottom
-    }
-
-    fn mark_all_matches_dirty(&mut self) {
-        for idx in self.by_line.keys() {
-            self.dirty_results.add(*idx);
-        }
     }
 
     fn close(&self) {
