@@ -46,5 +46,6 @@ jobs:
       - name: Push to Cachix
         if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
         run: |
-          jq result.json -r '.[].outputs | to_entries[].value' \
+          cat result.json \
+          | jq -r '.[].outputs | to_entries[].value' \
           | cachix push wezterm

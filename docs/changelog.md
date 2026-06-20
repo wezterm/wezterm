@@ -270,6 +270,8 @@ As features stabilize some brief notes about them will accumulate here.
   the copy happened. Thanks to @bew and @XeroOl! #7863
 * Fixed an infinite loop in pane search when the regex engine hit a backtracking
   limit. Thanks to @bew! #7864
+* Fix ESC key encoding in kitty mode with disambiguate flag enabled.
+  Thanks to @Felixoid and @the-mikedavis! #7787
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
