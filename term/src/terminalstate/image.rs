@@ -71,6 +71,23 @@ impl TerminalState {
         let physical_rows = self.screen().physical_rows;
         let cell_pixel_width = self.pixel_width / physical_cols;
         let cell_pixel_height = self.pixel_height / physical_rows;
+
+        // If the pty never reported a pixel size then the per-cell pixel
+        // dimensions are zero. This is the case for the default `PtySize` and
+        // for tmux/headless domains, which report a zero pixel size. A
+        // cell-sized image (one without explicit `c=`/`r=`) would then divide
+        // by zero when computing how many cells it spans. There is no sane way
+        // to place a pixel-addressed image without a cell size, so refuse the
+        // placement rather than panicking and taking down the terminal.
+        // <https://github.com/wezterm/wezterm/issues/6344>
+        anyhow::ensure!(
+            cell_pixel_width != 0 && cell_pixel_height != 0,
+            "refusing to display image: terminal has no pixel dimensions \
+             (cell size {}x{})",
+            cell_pixel_width,
+            cell_pixel_height
+        );
+
         let cell_padding_left = params
             .cell_padding_left
             .min(cell_pixel_width.saturating_sub(1) as u16);
@@ -88,6 +105,18 @@ impl TerminalState {
             .source_height
             .unwrap_or(image_max_height)
             .min(image_max_height);
+
+        // A zero-sized drawable region (eg: a Kitty graphic with an explicit
+        // `w=0`/`h=0`, or a source origin that lies outside the image bounds)
+        // leaves nothing to display and would divide by zero when computing the
+        // per-cell pixel deltas below. Refuse the placement rather than
+        // panicking and taking down the terminal. <https://github.com/wezterm/wezterm/issues/6344>
+        anyhow::ensure!(
+            draw_width != 0 && draw_height != 0,
+            "refusing to display image with zero draw dimensions ({}x{})",
+            draw_width,
+            draw_height
+        );
 
         let (fullcells_width, remainder_width_cell, x_delta_divisor) = params
             .columns
