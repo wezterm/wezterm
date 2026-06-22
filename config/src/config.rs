@@ -754,6 +754,9 @@ pub struct Config {
     pub window_close_confirmation: WindowCloseConfirmation,
 
     #[dynamic(default)]
+    pub window_close_mux_behavior: WindowCloseMuxBehavior,
+
+    #[dynamic(default)]
     pub native_macos_fullscreen_mode: bool,
 
     #[dynamic(default)]
@@ -1998,6 +2001,13 @@ pub enum WindowCloseConfirmation {
     NeverPrompt,
     // TODO: something smart where we see whether the
     // running programs are stateful
+}
+
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WindowCloseMuxBehavior {
+    #[default]
+    Detach,
+    Kill,
 }
 
 struct PathPossibility {
