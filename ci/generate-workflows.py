@@ -4,6 +4,11 @@ import sys
 import glob
 from copy import deepcopy
 
+# The build from this target will be pushed to the gemfury APT repo
+GEMFURY_TARGET = "ubuntu:22.04"
+# The build from this target will be baked into the AppImage
+APPIMAGE_TARGET = "ubuntu:24.04"
+
 TRIGGER_PATHS = [
     "**/*.rs",
     "**/Cargo.lock",
@@ -145,11 +150,7 @@ class CheckoutStep(ActionStep):
         params = {}
         if submodules:
             params["submodules"] = "recursive"
-        # Newer versions of the checkout action use a binary-incompatible node
-        # binary, so we are pinned back on v3
-        # https://github.com/actions/checkout/issues/1442
-        version = "v3" if container is not None and "centos7" in container else "v4"
-        super().__init__(name, action=f"actions/checkout@{version}", params=params)
+        super().__init__(name, action=f"actions/checkout@v5", params=params)
 
 
 class InstallCrateStep(ActionStep):
@@ -186,7 +187,6 @@ class Target(object):
         bootstrap_git=False,
         rust_target=None,
         continuous_only=False,
-        app_image=False,
         is_tag=False,
     ):
         if not name:
@@ -200,7 +200,7 @@ class Target(object):
         self.bootstrap_git = bootstrap_git
         self.rust_target = rust_target
         self.continuous_only = continuous_only
-        self.app_image = app_image
+        self.app_image = container == APPIMAGE_TARGET
         self.env = {}
         self.is_tag = is_tag
 
@@ -503,8 +503,9 @@ rustup default {toolchain}
             }
         steps = [RunStep("Package", "bash ci/deploy.sh", env=deploy_env)]
         if self.app_image:
-            # AppImage needs fuse
+            # AppImage needs fuse and the file command
             steps += self.install_system_package("libfuse2")
+            steps += self.install_system_package("file")
             steps.append(RunStep("Source Tarball", "bash ci/source-archive.sh"))
             steps.append(RunStep("Build AppImage", "bash ci/appimage.sh"))
         return steps
@@ -552,7 +553,7 @@ rustup default {toolchain}
         return steps + [
             ActionStep(
                 "Upload artifact",
-                action="actions/upload-artifact@v4",
+                action="actions/upload-artifact@v7",
                 params={"name": self.name, "path": paths},
             ),
         ]
@@ -614,7 +615,7 @@ rustup default {toolchain}
         return steps + [
             ActionStep(
                 "Upload artifact",
-                action="actions/upload-artifact@v4",
+                action="actions/upload-artifact@v7",
                 params={"name": self.name, "path": paths, "retention-days": 5},
             ),
         ]
@@ -631,7 +632,7 @@ rustup default {toolchain}
         patterns.append("*.sha256")
         glob = " ".join(patterns)
 
-        if self.container == "ubuntu:22.04":
+        if self.container == GEMFURY_TARGET:
             steps += [
                 RunStep(
                     "Upload to gemfury",
@@ -643,7 +644,7 @@ rustup default {toolchain}
         return [
             ActionStep(
                 "Download artifact",
-                action="actions/download-artifact@v4",
+                action="actions/download-artifact@v8",
                 params={"name": self.name},
             ),
             checksum,
@@ -666,7 +667,7 @@ rustup default {toolchain}
         patterns.append("*.sha256")
         glob = " ".join(patterns)
 
-        if self.container == "ubuntu:22.04":
+        if self.container == GEMFURY_TARGET:
             steps += [
                 RunStep(
                     "Upload to gemfury",
@@ -678,7 +679,7 @@ rustup default {toolchain}
         return steps + [
             ActionStep(
                 "Download artifact",
-                action="actions/download-artifact@v4",
+                action="actions/download-artifact@v8",
                 params={"name": self.name},
             ),
             checksum,
@@ -704,7 +705,7 @@ rustup default {toolchain}
         return [
             ActionStep(
                 "Checkout flathub/org.wezfurlong.wezterm",
-                action="actions/checkout@v4",
+                action="actions/checkout@v5",
                 params={
                     "repository": "flathub/org.wezfurlong.wezterm",
                     "path": "flathub",
@@ -730,7 +731,7 @@ rustup default {toolchain}
             steps += [
                 ActionStep(
                     "Checkout winget-pkgs",
-                    action="actions/checkout@v4",
+                    action="actions/checkout@v5",
                     params={
                         "repository": "wez/winget-pkgs",
                         "path": "winget-pkgs",
@@ -766,7 +767,7 @@ rustup default {toolchain}
             steps += [
                 ActionStep(
                     "Checkout homebrew tap",
-                    action="actions/checkout@v4",
+                    action="actions/checkout@v5",
                     params={
                         "repository": "wez/homebrew-wezterm",
                         "path": "homebrew-wezterm",
@@ -790,7 +791,7 @@ rustup default {toolchain}
             steps += [
                 ActionStep(
                     "Checkout linuxbrew tap",
-                    action="actions/checkout@v4",
+                    action="actions/checkout@v5",
                     params={
                         "repository": "wez/homebrew-wezterm-linuxbrew",
                         "path": "linuxbrew-wezterm",
@@ -1001,35 +1002,32 @@ rustup default {toolchain}
 
 
 TARGETS = [
-    Target(container="ubuntu:20.04", continuous_only=True, app_image=True),
     Target(container="ubuntu:22.04", continuous_only=True),
     Target(container="ubuntu:24.04", continuous_only=True),
-    # debian 8's wayland libraries are too old for wayland-client
-    # Target(container="debian:8.11", continuous_only=True, bootstrap_git=True),
-    # harfbuzz's C++ is too new for debian 9's toolchain
-    # Target(container="debian:9.12", continuous_only=True, bootstrap_git=True),
-    Target(container="debian:11", continuous_only=True),
     Target(container="debian:12", continuous_only=True),
     Target(name="centos9", container="quay.io/centos/centos:stream9"),
     Target(name="macos", os="macos-latest"),
     # https://fedoraproject.org/wiki/End_of_life?rd=LifeCycle/EOL
-    Target(container="fedora:39"),
-    Target(container="fedora:40"),
     Target(container="fedora:41"),
     # Target(container="alpine:3.15"),
 
-    # Windows is on 2022 for the time being due to
-    # https://github.com/actions/runner-images/issues/11644
-    Target(name="windows", os="windows-2022", rust_target="x86_64-pc-windows-msvc"),
+    Target(name="windows", os="windows-2025", rust_target="x86_64-pc-windows-msvc"),
 ]
 
 
 def generate_actions(namer, jobber, trigger, is_continuous, is_tag=False):
+    have_gemfury = False
+    have_appimage = False
     for t in TARGETS:
         # Clone the definition, as some Target methods called
         # in the body below have side effects that we don't
         # want to bleed across into different schedule types
         t = deepcopy(t)
+
+        if t.app_image:
+            have_appimage = True
+        if t.container == GEMFURY_TARGET:
+            have_gemfury = True
 
         t.is_tag = is_tag
         # if t.continuous_only and not is_continuous:
@@ -1104,6 +1102,10 @@ jobs:
                 yaml.safe_load(f)
         except ImportError:
             pass
+    if not have_appimage:
+        raise NotImplementedError("no appimage target is present")
+    if not have_gemfury:
+        raise NotImplementedError("no gemfury target is present")
 
 
 def generate_pr_actions():

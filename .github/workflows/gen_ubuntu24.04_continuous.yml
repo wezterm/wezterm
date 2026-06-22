@@ -20,7 +20,10 @@ on:
       - "assets/wezterm-nautilus.py"
       - "assets/wezterm.appdata.xml"
       - "assets/wezterm.desktop"
+      - "ci/appimage.sh"
+      - "ci/appstreamcli"
       - "ci/deploy.sh"
+      - "ci/source-archive.sh"
       - "ci/tag-name.sh"
       - "get-deps"
       - "termwiz/data/wezterm.terminfo"
@@ -28,7 +31,9 @@ on:
 jobs:
   build:
     runs-on: "ubuntu-latest"
-    container: "ubuntu:24.04"
+    container:
+      image: "ubuntu:24.04"
+      options: --privileged
     env:
       BUILD_REASON: "Schedule"
       CARGO_INCREMENTAL: "0"
@@ -61,7 +66,7 @@ jobs:
         shell: bash
         run: "git config --global --add safe.directory /__w/wezterm/wezterm"
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: "recursive"
       - name: "Install Rust"
@@ -106,13 +111,27 @@ jobs:
       - name: "Package"
         shell: bash
         run: "bash ci/deploy.sh"
+      - name: "Install libfuse2"
+        shell: bash
+        run: "apt-get install -y libfuse2"
+      - name: "Install file"
+        shell: bash
+        run: "apt-get install -y file"
+      - name: "Source Tarball"
+        shell: bash
+        run: "bash ci/source-archive.sh"
+      - name: "Build AppImage"
+        shell: bash
+        run: "bash ci/appimage.sh"
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "ubuntu24.04"
           path: |
             wezterm-*.deb
             wezterm-*.xz
+            *src.tar.gz
+            *.AppImage
           retention-days: 5
 
   upload:
@@ -129,16 +148,16 @@ jobs:
         shell: bash
         run: "git config --global --add safe.directory /__w/wezterm/wezterm"
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: "Download artifact"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: "ubuntu24.04"
       - name: "Checksum"
         shell: bash
-        run: "for f in wezterm-*.deb wezterm-*.xz ; do sha256sum $f > $f.sha256 ; done"
+        run: "for f in wezterm-*.deb wezterm-*.xz *src.tar.gz *.AppImage ; do sha256sum $f > $f.sha256 ; done"
       - name: "Upload to Nightly Release"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
-        run: "bash ci/retry.sh gh release upload --clobber nightly wezterm-*.deb wezterm-*.xz *.sha256"
+        run: "bash ci/retry.sh gh release upload --clobber nightly wezterm-*.deb wezterm-*.xz *src.tar.gz *.AppImage *.sha256"

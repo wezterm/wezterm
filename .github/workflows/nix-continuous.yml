@@ -1,8 +1,8 @@
-name: nix_continuous
+name: Nix / Continuous Build
 
 on:
   schedule:
-    - cron: "10 3 * * *"
+    - cron: "10 3 * * *" # Every night at 3:10am
   workflow_dispatch:
   push:
     branches:
@@ -13,28 +13,39 @@ on:
       - 'nix/**'
 
 jobs:
-  lints:
-    name: Build
+  build:
     runs-on: ubuntu-latest
     if: github.repository == 'wezterm/wezterm'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
+
       - name: Install nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/determinate-nix-action@v3.21.1
+
       - name: Cache build artifacts
-        uses: DeterminateSystems/flakehub-cache-action@main
+        uses: DeterminateSystems/flakehub-cache-action@v3
+
       - name: Check flake inputs
+        # note: waiting for a release with node24 upgrade
+        # see: https://github.com/DeterminateSystems/flake-checker-action/pull/110
         uses: DeterminateSystems/flake-checker-action@main
         with:
           flake-lock-path: ./nix/flake.lock
           ignore-missing-flake-lock: false
+
       - name: Setup Cachix
         uses: cachix/cachix-action@v16
         with:
           name: wezterm
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
       - name: Build default package
         run: |
-          nix build ./nix --json \
+          nix build ./nix --json > result.json
+
+      - name: Push to Cachix
+        if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          cat result.json \
           | jq -r '.[].outputs | to_entries[].value' \
           | cachix push wezterm

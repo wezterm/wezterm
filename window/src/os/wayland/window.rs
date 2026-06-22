@@ -81,7 +81,6 @@ impl WaylandDimensions for Dimensions {
     }
 }
 
-use super::copy_and_paste::CopyAndPaste;
 use super::pointer::{PendingMouse, PointerUserData};
 use super::state::WaylandState;
 
@@ -286,8 +285,7 @@ impl WaylandWindow {
             .set_window_geometry(x, y, surface_width, surface_height);
         window.commit();
 
-        let copy_and_paste = CopyAndPaste::create();
-        let pending_mouse = PendingMouse::create(window_id, &copy_and_paste);
+        let pending_mouse = PendingMouse::create(window_id);
 
         {
             let surface_to_pending = &mut conn.wayland_state.borrow_mut().surface_to_pending;
@@ -299,7 +297,6 @@ impl WaylandWindow {
         let inner = Rc::new(RefCell::new(WaylandWindowInner {
             events: WindowEventSender::new(event_handler),
             surface_factor: 1.0,
-            copy_and_paste,
             invalidated: false,
             window: Some(window),
             window_frame,
@@ -446,42 +443,55 @@ impl WindowOps for WaylandWindow {
         let mut promise = Promise::new();
         let future = promise.get_future().unwrap();
         let promise = Arc::new(Mutex::new(promise));
-        WaylandConnection::with_window_inner(self.0, move |inner| {
-            let read = inner
-                .copy_and_paste
+        promise::spawn::spawn_into_main_thread(async move {
+            let conn = crate::Connection::get().unwrap().wayland();
+            // Clone the Arc before dropping the borrow so get_clipboard_data can re-borrow
+            // wayland_state internally (so we don't have to pass all state manually).
+            let copy_paste_offer = conn.wayland_state.borrow().copy_paste_offer.clone();
+            match copy_paste_offer
                 .lock()
                 .unwrap()
-                .get_clipboard_data(clipboard)?;
-            let promise = Arc::clone(&promise);
-            std::thread::spawn(move || {
-                let mut promise = promise.lock().unwrap();
-                match read_pipe_with_timeout(read) {
-                    Ok(result) => {
-                        // Normalize the text to unix line endings, otherwise
-                        // copying from eg: firefox inserts a lot of blank
-                        // lines, and that is super annoying.
-                        promise.ok(result.replace("\r\n", "\n"));
-                    }
-                    Err(e) => {
-                        log::error!("while reading clipboard: {}", e);
-                        promise.err(anyhow!("{}", e));
-                    }
-                };
-            });
-            Ok(())
-        });
+                .get_clipboard_data(clipboard)
+            {
+                Ok(read) => {
+                    std::thread::spawn(move || {
+                        let mut promise = promise.lock().unwrap();
+                        match read_pipe_with_timeout(read) {
+                            Ok(result) => {
+                                // Normalize the text to unix line endings, otherwise
+                                // copying from eg: firefox inserts a lot of blank
+                                // lines, and that is super annoying.
+                                promise.ok(result.replace("\r\n", "\n"));
+                            }
+                            Err(e) => {
+                                log::error!("while reading clipboard: {}", e);
+                                promise.err(anyhow!("{}", e));
+                            }
+                        };
+                    });
+                }
+                Err(e) => {
+                    // Report the error on the Promise
+                    promise.lock().unwrap().err(e);
+                }
+            };
+        })
+        .detach();
         future
     }
 
     fn set_clipboard(&self, clipboard: Clipboard, text: String) {
-        WaylandConnection::with_window_inner(self.0, move |inner| {
-            inner
-                .copy_and_paste
+        promise::spawn::spawn_into_main_thread(async move {
+            let conn = crate::Connection::get().unwrap().wayland();
+            // Clone the Arc before dropping the borrow so set_clipboard_data can re-borrow
+            // wayland_state internally (so we don't have to pass all state manually).
+            let copy_paste_offer = conn.wayland_state.borrow().copy_paste_offer.clone();
+            copy_paste_offer
                 .lock()
                 .unwrap()
                 .set_clipboard_data(clipboard, text);
-            Ok(())
-        });
+        })
+        .detach();
     }
 
     fn toggle_fullscreen(&self) {
@@ -566,7 +576,6 @@ pub(crate) fn read_pipe_with_timeout(mut file: ReadPipe) -> anyhow::Result<Strin
 pub struct WaylandWindowInner {
     pub(crate) events: WindowEventSender,
     surface_factor: f64,
-    copy_and_paste: Arc<Mutex<CopyAndPaste>>,
     window: Option<XdgWindow>,
     pub(super) window_frame: FallbackFrame<WaylandState>,
     dimensions: Dimensions,

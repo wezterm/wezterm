@@ -70,6 +70,9 @@ As features stabilize some brief notes about them will accumulate here.
 * `wezterm imgcat --hold` now avoids local echo and accepts pressing `Escape`,
   `CTRL-C` and `CTRL-D` as various ways of exiting hold mode. Thanks to
   @mgpinf! #6801
+* windows: Improve detection of running in WSL. Thanks to @bew! #7137
+* [QuickSelect](quickselect.md) mode now hides non-matching labels as you type, making it
+  easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
@@ -257,6 +260,22 @@ As features stabilize some brief notes about them will accumulate here.
 * macOS: Fix toast notifications. Thanks to @nikhilm! #7483
 * termwiz: Fixed parsing of fragmented mouse reporting sequence. Thanks to
   @jgiannuzzi! #7076 #7504
+* docs: add missing `panes` field to [TabInformation](config/lua/TabInformation.md).
+  Thanks to @KevinSilvester! #7710
+* Windows: Fixed a crash (RefCell borrow conflict) when toggling IME (e.g.
+  pressing Hankaku/Zenkaku) after splitting a pane. Thanks to @shiena! #7529
+* Fixed a stack overflow that could occur on Windows (and other platforms) when
+  the process tree contained cycles due to PID reuse. Thanks to @novoselov-ab! #7706
+* Wayland: Fixed clipboard paste failing in windows that were not focused when
+  the copy happened. Thanks to @bew and @XeroOl! #7863
+* Fixed an infinite loop in pane search when the regex engine hit a backtracking
+  limit. Thanks to @bew! #7864
+* Fix ESC key encoding in kitty mode with disambiguate flag enabled.
+  Thanks to @Felixoid and @the-mikedavis! #7787
+* Fixed two divide-by-zero crashes in Kitty inline image placement when a program requests
+  a zero-sized placement (e.g. `w=0`/`h=0`), or displaying a cell-sized image on a pane
+  whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
+  Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg

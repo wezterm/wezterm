@@ -111,10 +111,12 @@ impl DataDeviceHandler for WaylandState {
             if !offer.with_mime_types(|mime_types| mime_types.iter().any(|s| s == TEXT_MIME_TYPE)) {
                 return;
             }
-
-            if let Some(copy_and_paste) = self.resolve_copy_and_paste() {
-                copy_and_paste.lock().unwrap().confirm_selection(offer);
-            }
+            // The compositor sends the selection event once per client.
+            // ref: https://github.com/wezterm/wezterm/issues/6685
+            self.copy_paste_offer
+                .lock()
+                .unwrap()
+                .confirm_selection(offer);
         }
     }
 
