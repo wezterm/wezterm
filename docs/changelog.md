@@ -276,6 +276,10 @@ As features stabilize some brief notes about them will accumulate here.
   a zero-sized placement (e.g. `w=0`/`h=0`), or displaying a cell-sized image on a pane
   whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
   Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
+* mux: the PDU decoder no longer attempts an unbounded allocation based on the
+  length field of an incoming frame; a corrupt or oversized frame is now
+  rejected once it exceeds a 256MB cap, instead of aborting the process with an
+  out-of-memory error. Thanks to @zakrad! #7527
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
