@@ -661,11 +661,7 @@ impl WaylandWindowInner {
             let pixel_width = (self.dimensions.pixel_width as i32 / scale) * scale;
             let pixel_height = (self.dimensions.pixel_height as i32 / scale) * scale;
 
-            wegl_surface = Some(WlEglSurface::new(
-                object_id,
-                pixel_width,
-                pixel_height,
-            )?);
+            wegl_surface = Some(WlEglSurface::new(object_id, pixel_width, pixel_height)?);
 
             log::trace!("WEGL Surface here {:?}", wegl_surface);
 
