@@ -1,8 +1,8 @@
----
+
 tags:
     - appearance
 ---
-# ext_background_effect_v1 = false 
+# wayland_window_background_blur = false
 
 When combined with `window_background_opacity`, enables background blur
 using the Wayland background effect protocol.
@@ -12,8 +12,8 @@ a crystal clear transparent window effect.
 
 This effect can be achieved by adding the following to the configuration:
 ```lua
-    config.window_background_opacity = 0.4
-    config.ext_background_effect_v1 = true
+config.window_background_opacity = 0.4
+config.wayland_window_background_blur = true
 ```
 
 [Screenshot](../../../screenshots/wezterm-ext-background-effects-v1.png)

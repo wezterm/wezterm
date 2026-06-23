@@ -570,7 +570,7 @@ pub struct Config {
 
     /// Only works on Wayland compositors that support ext-background-effect-v1
     #[dynamic(default)]
-    pub ext_background_effect_v1: bool,
+    pub wayland_window_background_blur: bool,
 
     /// Only works on Windows
     #[dynamic(default)]

@@ -1299,7 +1299,7 @@ impl WaylandWindowInner {
                         .unwrap()
                         .clone()
                 };
-                if self.config.ext_background_effect_v1 {
+                if self.config.wayland_window_background_blur {
                     let region: WlRegion = wayland_state
                         .compositor
                         .wl_compositor()
