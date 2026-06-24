@@ -630,6 +630,7 @@ pub enum KeyAssignment {
     ClearKeyTableStack,
     DetachDomain(SpawnTabDomain),
     AttachDomain(String),
+    ReconnectDomain(SpawnTabDomain),
 
     CopyMode(CopyModeAssignment),
     RotatePanes(RotationDirection),

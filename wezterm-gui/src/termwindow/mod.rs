@@ -40,6 +40,7 @@ use config::{
 };
 use lfucache::*;
 use mlua::{FromLua, LuaSerdeExt, UserData, UserDataFields};
+use mux::domain::DomainState;
 use mux::pane::{
     CachePolicy, CloseReason, Pane, PaneId, Pattern as MuxPattern, PerformAssignmentResult,
 };
@@ -3091,6 +3092,79 @@ impl TermWindow {
                     }
 
                     Result::<(), anyhow::Error>::Ok(())
+                })
+                .detach();
+            }
+            ReconnectDomain(domain_spec) => {
+                let window = self.mux_window_id;
+                let mux = Mux::get();
+                let domain =
+                    mux.resolve_spawn_tab_domain(Some(pane.pane_id()), domain_spec)?;
+                let domain_name = domain.domain_name().to_string();
+                let old_pane_id = pane.pane_id();
+
+                let tab_id = match mux.resolve_pane_id(old_pane_id) {
+                    Some((_domain_id, _window_id, tab_id)) => tab_id,
+                    None => {
+                        log::error!("ReconnectDomain: cannot resolve tab for pane {}", old_pane_id);
+                        return Ok(PerformAssignmentResult::Handled);
+                    }
+                };
+
+                drop(domain);
+                drop(mux);
+
+                promise::spawn::spawn(async move {
+                    let mux = Mux::get();
+                    let domain = match mux.get_domain_by_name(&domain_name) {
+                        Some(d) => d,
+                        None => {
+                            log::error!("ReconnectDomain: domain '{}' not found", domain_name);
+                            return;
+                        }
+                    };
+
+                    if domain.detachable() {
+                        if domain.state() == DomainState::Attached {
+                            if let Err(err) = domain.detach() {
+                                log::error!("ReconnectDomain: detach failed: {:#}", err);
+                                return;
+                            }
+                        }
+
+                        if let Err(err) = domain.attach(Some(window)).await {
+                            log::error!("ReconnectDomain: attach failed: {:#}", err);
+                            return;
+                        }
+                    }
+
+                    let tab = match mux.get_tab(tab_id) {
+                        Some(t) => t,
+                        None => {
+                            log::error!("ReconnectDomain: tab {} no longer exists", tab_id);
+                            return;
+                        }
+                    };
+
+                    let size = tab.get_size();
+                    let new_pane = match domain.spawn_pane(size, None, None).await {
+                        Ok(p) => p,
+                        Err(err) => {
+                            log::error!("ReconnectDomain: spawn_pane failed: {:#}", err);
+                            return;
+                        }
+                    };
+
+                    if let Err(err) = mux.add_pane(&new_pane) {
+                        log::error!("ReconnectDomain: add_pane failed: {:#}", err);
+                        return;
+                    }
+
+                    if tab.replace_pane(old_pane_id, new_pane) {
+                        mux.remove_pane(old_pane_id);
+                    } else {
+                        log::error!("ReconnectDomain: pane {} not found in tab {}", old_pane_id, tab_id);
+                    }
                 })
                 .detach();
             }
