@@ -117,7 +117,22 @@ winapi = { workspace=true, features = [
     "namedpipeapi",
     "synchapi",
     "winsock2",
+    "combaseapi",
+    "errhandlingapi",
+    "guiddef",
+    "objbase",
+    "oleauto",
+    "processenv",
+    "processthreadsapi",
+    "unknwnbase",
+    "winbase",
+    "wincon",
+    "winnt",
+    "winreg",
+    "wtypes",
+    "wtypesbase",
 ]}
+winreg.workspace = true
 windows = { workspace=true, features = [
     "Win32_UI_Shell",
 ]}

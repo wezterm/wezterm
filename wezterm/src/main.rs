@@ -116,6 +116,11 @@ enum SubCommand {
     #[command(name = "show-keys", about = "Show key assignments")]
     ShowKeys(ShowKeysCommand),
 
+    /// Manage the Windows default terminal host configuration.
+    /// Errors out on non-Windows platforms.
+    #[command(name = "terminal-host")]
+    TerminalHost(TerminalHostCommand),
+
     #[command(name = "cli", about = "Interact with experimental mux server")]
     Cli(cli::CliCommand),
 
@@ -750,6 +755,12 @@ fn run() -> anyhow::Result<()> {
         | SubCommand::Ssh(_)
         | SubCommand::Serial(_)
         | SubCommand::Connect(_) => delegate_to_gui(saver),
+        #[cfg(windows)]
+        SubCommand::TerminalHost(_) => delegate_to_gui(saver),
+        #[cfg(not(windows))]
+        SubCommand::TerminalHost(_) => {
+            anyhow::bail!("the `terminal-host` subcommand is only available on Windows")
+        }
         SubCommand::ImageCat(cmd) => cmd.run(),
         SubCommand::SetCwd(cmd) => cmd.run(),
         SubCommand::Cli(cli) => cli::run_cli(&opts, cli),

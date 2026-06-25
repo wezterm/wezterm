@@ -16,7 +16,9 @@ use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use config::{configuration, ExecDomain, SerialDomain, ValueOrFunc, WslDomain};
 use downcast_rs::{impl_downcast, Downcast};
 use parking_lot::Mutex;
-use portable_pty::{native_pty_system, CommandBuilder, ExitStatus, MasterPty, PtySize, PtySystem};
+use portable_pty::{
+    native_pty_system, Child, CommandBuilder, ExitStatus, MasterPty, PtySize, PtySystem,
+};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Write;
@@ -256,6 +258,39 @@ impl LocalDomain {
     #[cfg(unix)]
     fn is_conpty(&self) -> bool {
         false
+    }
+
+    pub fn attach_external_pane(
+        &self,
+        size: TerminalSize,
+        pty: Box<dyn MasterPty + Send>,
+        child: Box<dyn Child + Send + Sync>,
+        command_description: String,
+    ) -> anyhow::Result<Arc<dyn Pane>> {
+        let pane_id = alloc_pane_id();
+        let writer = WriterWrapper::new(pty.take_writer()?);
+
+        let mut terminal = wezterm_term::Terminal::new(
+            size,
+            std::sync::Arc::new(config::TermConfig::new()),
+            "WezTerm",
+            config::wezterm_version(),
+            Box::new(writer.clone()),
+        );
+        // The PTY is always a ConPTY hosted by OpenConsole.exe.
+        terminal.enable_conpty_quirks();
+
+        let pane: Arc<dyn Pane> = Arc::new(LocalPane::new(
+            pane_id,
+            terminal,
+            child,
+            pty,
+            Box::new(writer),
+            self.id,
+            command_description,
+        ));
+
+        Ok(pane)
     }
 
     #[cfg(windows)]

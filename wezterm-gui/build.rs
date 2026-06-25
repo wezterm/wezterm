@@ -15,7 +15,7 @@ fn main() {
         let windows_dir = repo_dir.join("assets").join("windows");
 
         let conhost_dir = windows_dir.join("conhost");
-        for name in &["conpty.dll", "OpenConsole.exe"] {
+        for name in &["conpty.dll", "OpenConsole.exe", "OpenConsoleProxy.dll"] {
             let dest_name = exe_output_dir.join(name);
             let src_name = conhost_dir.join(name);
 

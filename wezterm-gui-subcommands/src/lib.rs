@@ -271,3 +271,53 @@ pub struct ShowKeysCommand {
     #[arg(long)]
     pub key_table: Option<String>,
 }
+
+#[derive(Debug, Parser, Clone)]
+pub struct TerminalHostCommand {
+    #[command(subcommand)]
+    pub sub: TerminalHostSub,
+}
+
+#[derive(Debug, Parser, Clone)]
+pub enum TerminalHostSub {
+    /// List installed and known terminal hosts, and show the current default.
+    #[command(name = "list")]
+    List,
+
+    /// Register WezTerm as an available terminal host.
+    #[command(name = "register")]
+    Register(TerminalHostRegisterArgs),
+
+    /// Unregister WezTerm as a terminal host.
+    #[command(name = "unregister")]
+    Unregister,
+
+    /// Set the default terminal host by id (e.g. `wezterm`, `conhost`,
+    /// `wt-release`) or by raw CLSID.
+    #[command(name = "set-default")]
+    SetDefault(TerminalHostSetDefaultArgs),
+
+    /// Reset to "Let Windows decide".
+    #[command(name = "reset")]
+    Reset,
+}
+
+#[derive(Debug, Parser, Clone)]
+pub struct TerminalHostRegisterArgs {
+    /// Skip registering the `LocalServer32` COM entry.
+    #[arg(long = "no-local-server")]
+    pub no_local_server: bool,
+
+    /// Skip per-user proxy/stub DLL registration.
+    #[arg(long = "no-proxy-stub")]
+    pub no_proxy_stub: bool,
+}
+
+#[derive(Debug, Parser, Clone)]
+pub struct TerminalHostSetDefaultArgs {
+    /// Host to set as default. Can be a known id (`wezterm`, `conhost`,
+    /// `wt-release`, `wt-preview`, `wt-canary`, `wt-dev`) or a raw CLSID
+    /// of the form `{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}`.
+    #[arg(default_value = "wezterm")]
+    pub host: String,
+}

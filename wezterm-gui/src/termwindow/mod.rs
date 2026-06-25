@@ -884,6 +884,10 @@ impl TermWindow {
             }
             myself.load_os_parameters();
             window.show();
+            #[cfg(windows)]
+            if crate::termhost::scm_launched() {
+                window.focus();
+            }
             myself.subscribe_to_pane_updates();
             myself.emit_window_event("window-config-reloaded", None);
             myself.emit_status_event();

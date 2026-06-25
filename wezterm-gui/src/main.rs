@@ -30,6 +30,8 @@ use wezterm_bidi::Direction;
 use wezterm_client::domain::ClientDomain;
 use wezterm_font::shaper::PresentationWidth;
 use wezterm_font::FontConfiguration;
+#[cfg(windows)]
+use wezterm_gui_subcommands::TerminalHostCommand;
 use wezterm_gui_subcommands::*;
 use wezterm_mux_server_impl::update_mux_domains;
 use wezterm_toast_notification::*;
@@ -52,6 +54,8 @@ mod shapecache;
 mod spawn;
 mod stats;
 mod tabbar;
+#[cfg(windows)]
+mod termhost;
 mod termwindow;
 mod unicode_names;
 mod uniforms;
@@ -131,6 +135,11 @@ enum SubCommand {
 
     #[command(name = "show-keys", about = "Show key assignments")]
     ShowKeys(ShowKeysCommand),
+
+    /// Manage the Windows default terminal host configuration.
+    #[command(name = "terminal-host")]
+    #[cfg(windows)]
+    TerminalHost(TerminalHostCommand),
 }
 
 async fn async_run_ssh(opts: SshCommand) -> anyhow::Result<()> {
@@ -281,7 +290,7 @@ fn have_panes_in_domain_and_ws(domain: &Arc<dyn Domain>, workspace: &Option<Stri
     }
 }
 
-async fn spawn_tab_in_domain_if_mux_is_empty(
+pub(crate) async fn spawn_tab_in_domain_if_mux_is_empty(
     cmd: Option<CommandBuilder>,
     is_connecting: bool,
     domain: Option<Arc<dyn Domain>>,
@@ -488,6 +497,11 @@ async fn async_run_terminal_gui(
             }
             trigger_and_log_gui_attached(MuxDomain(domain.domain_id())).await;
         }
+    }
+    #[cfg(windows)]
+    if crate::termhost::scm_launched() {
+        crate::termhost::await_handoff();
+        return Ok(());
     }
     spawn_tab_in_domain_if_mux_is_empty(cmd, is_connecting, domain, opts.workspace).await
 }
@@ -752,6 +766,10 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
         default_domain_name.as_deref(),
         opts.workspace.as_deref(),
     )?;
+
+    // Drop order matters: `HandoffGuard` must drop before `CoinitGuard`.
+    #[cfg(windows)]
+    let _termhost_state = crate::termhost::install();
 
     // First, let's see if we can ask an already running wezterm to do this.
     // We must do this before we start the gui frontend as the scheduler
@@ -1178,7 +1196,15 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
-    let opts = Opt::parse();
+    // Strip SCM-appended `-Embedding` before clap parsing.
+    #[cfg(windows)]
+    let (argv, scm_launched) = crate::termhost::preprocess_argv();
+    #[cfg(not(windows))]
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let opts = Opt::parse_from(argv);
+
+    #[cfg(windows)]
+    crate::termhost::set_scm_launched(scm_launched);
 
     // This is a bit gross.
     // In order to not to automatically open a standard windows console when
@@ -1274,5 +1300,7 @@ fn run() -> anyhow::Result<()> {
         ),
         SubCommand::LsFonts(cmd) => run_ls_fonts(config, &cmd),
         SubCommand::ShowKeys(cmd) => run_show_keys(config, &cmd),
+        #[cfg(windows)]
+        SubCommand::TerminalHost(cmd) => crate::termhost::cli::run(cmd),
     }
 }
