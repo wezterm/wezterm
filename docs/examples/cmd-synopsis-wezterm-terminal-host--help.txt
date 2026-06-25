@@ -1,0 +1,14 @@
+Manage the Windows default terminal host configuration. Errors out on non-Windows platforms
+
+Usage: wezterm terminal-host <COMMAND>
+
+Commands:
+  list         List installed and known terminal hosts, and show the current default
+  register     Register WezTerm as an available terminal host
+  unregister   Unregister WezTerm as a terminal host
+  set-default  Set the default terminal host by id (e.g. `wezterm`, `conhost`, `wt-release`) or by raw CLSID
+  reset        Reset to "Let Windows decide"
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help

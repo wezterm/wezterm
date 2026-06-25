@@ -7105,6 +7105,7 @@ dependencies = [
  "window",
  "window-funcs",
  "windows 0.33.0",
+ "winreg",
 ]
 
 [[package]]

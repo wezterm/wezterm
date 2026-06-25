@@ -11,6 +11,8 @@ Commands:
   connect                Connect to wezterm multiplexer
   ls-fonts               Display information about fonts
   show-keys              Show key assignments
+  terminal-host          Manage the Windows default terminal host configuration.
+                             Errors out on non-Windows platforms
   cli                    Interact with experimental mux server
   imgcat                 Output an image to the terminal
   set-working-directory  Advise the terminal of the current working
