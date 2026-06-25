@@ -365,6 +365,7 @@ TOC = [
             Page("Default Key Assignments", "config/default-keys.md"),
             Page("Keyboard Encoding", "config/key-encoding.md"),
             Page("Mouse Binding", "config/mouse.md"),
+            Page("Windows Default Terminal", "config/termhost.md"),
             Page("Plugins", "config/plugins.md"),
             GenColorScheme("Color Schemes", "colorschemes"),
             Gen("Recipes", "recipes", extract_title=True),
@@ -473,6 +474,7 @@ TOC = [
             Page("wezterm show-keys", "cli/show-keys.md"),
             Page("wezterm ssh", "cli/ssh.md"),
             Page("wezterm start", "cli/start.md"),
+            Page("wezterm terminal-host", "cli/terminal-host.md"),
         ],
     ),
     Page(

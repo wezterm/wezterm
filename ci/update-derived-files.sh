@@ -27,7 +27,7 @@ trim_file() {
 
 cargo run --example narrow $PWD/target/debug/wezterm --help | ./target/debug/strip-ansi-escapes | trim_file > docs/examples/cmd-synopsis-wezterm--help.txt
 
-for cmd in start ssh serial connect ls-fonts show-keys imgcat set-working-directory record replay  ; do
+for cmd in start ssh serial connect ls-fonts show-keys imgcat set-working-directory record replay terminal-host  ; do
   fname="docs/examples/cmd-synopsis-wezterm-${cmd}--help.txt"
   cargo run --example narrow $PWD/target/debug/wezterm $cmd --help | ./target/debug/strip-ansi-escapes | trim_file > $fname
 done
