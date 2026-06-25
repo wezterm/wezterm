@@ -9,10 +9,12 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # NOTE: @2024-05 Nix flakes does not support getting git submodules of 'self'.
+    # NOTE: @2026-06 Since Nix 2.27 we can set `inputs.self.submodules = true;` but it's silently
+    # ignored for all usage of `github:…` flake refs..
     # refs:
-    # - https://discourse.nixos.org/t/get-nix-flake-to-include-git-submodule/30324
-    # - https://github.com/NixOS/nix/pull/7862
+    # - https://github.com/wezterm/wezterm/pull/7854#issuecomment-4718011398 (previous attempt)
+    # - https://github.com/NixOS/nix/issues/13571
+    # - https://github.com/NixOS/nix/issues/14982
     #
     # ... In the meantime we kinda duplicate the dependencies here then replace the submodules with
     # links to each repo in package sources.
@@ -70,12 +72,12 @@
             libxkbcommon
             wayland
 
-            xorg.libX11
-            xorg.libxcb
-            xorg.xcbutil
-            xorg.xcbutilimage
-            xorg.xcbutilkeysyms
-            xorg.xcbutilwm # contains xcb-ewmh among others
+            libx11
+            libxcb
+            libxcb-util
+            libxcb-image
+            libxcb-keysyms
+            libxcb-wm # contains xcb-ewmh among others
           ]
           ++ lib.optionals stdenv.isDarwin ([
             libiconv
@@ -84,7 +86,7 @@
         libPath = lib.makeLibraryPath (
           with pkgs;
           [
-            xorg.xcbutilimage
+            libxcb-image
             libGL
             vulkan-loader
           ]
@@ -96,18 +98,31 @@
         };
       in
       {
-        packages.default = rustPlatform.buildRustPackage rec {
+        packages.default = rustPlatform.buildRustPackage (finalAttrs: {
           inherit buildInputs nativeBuildInputs;
 
-          name = "wezterm";
+          pname = "wezterm";
           src = ./..;
-          version = self.shortRev or "dev";
+
+          # Rebuild the usual version number of the project from info of commit being built.
+          # Format: `<date>-<time>-<shorthash>` (Example: `20200608-110940-3fb3a61`)
+          # note: adds `-dirty` when the build includes uncomitted changes
+          version = (
+            builtins.concatStringsSep "-" (
+              # note: `self.lastModifiedDate` looks like `20240209045744`
+              # So this match gives list with 2 items: `20240209` (date) & `045744` (time)
+              builtins.match "(.{8})(.{6})" self.lastModifiedDate
+              ++ [ (builtins.substring 0 8 self.rev or self.dirtyRev) ]
+              ++ lib.lists.optional (self ? dirtyRev) "dirty"
+            )
+          );
 
           cargoLock = {
             lockFile = ../Cargo.lock;
             allowBuiltinFetchGit = true;
           };
 
+          # Inject collected submodules in-place for Nix build
           prePatch = ''
             rm -rf deps/freetype/{freetype2,libpng,zlib} deps/harfbuzz/harfbuzz
 
@@ -118,7 +133,7 @@
           '';
 
           postPatch = ''
-            echo ${version} > .tag
+            echo ${finalAttrs.version} > .tag
 
             # tests are failing with: Unable to exchange encryption keys
             rm -r wezterm-ssh/tests
@@ -154,9 +169,13 @@
               ln -s "$OUT_APP"/{wezterm,wezterm-mux-server,wezterm-gui,strip-ansi-escapes} "$out/bin"
             '';
 
+          preBuild = ''
+            echo "Building Wezterm ${finalAttrs.version}..."
+          '';
+
           postInstall = ''
             mkdir -p $out/nix-support
-            echo "${passthru.terminfo}" >> $out/nix-support/propagated-user-env-packages
+            echo "${finalAttrs.passthru.terminfo}" >> $out/nix-support/propagated-user-env-packages
 
             install -Dm644 assets/icon/terminal.png $out/share/icons/hicolor/128x128/apps/org.wezfurlong.wezterm.png
             install -Dm644 assets/wezterm.desktop $out/share/applications/org.wezfurlong.wezterm.desktop
@@ -175,7 +194,7 @@
             # the headless variant is useful when deploying wezterm's mux server on remote severs
             headless = rustPlatform.buildRustPackage {
               pname = "wezterm-headless";
-              inherit
+              inherit (finalAttrs)
                 version
                 src
                 postPatch
@@ -198,23 +217,23 @@
 
               postInstall = ''
                 install -Dm644 assets/shell-integration/wezterm.sh -t $out/etc/profile.d
-                install -Dm644 ${passthru.terminfo}/share/terminfo/w/wezterm -t $out/share/terminfo/w
+                install -Dm644 ${finalAttrs.passthru.terminfo}/share/terminfo/w/wezterm -t $out/share/terminfo/w
               '';
             };
 
             terminfo =
-              pkgs.runCommand "wezterm-terminfo"
+              pkgs.runCommand "wezterm-terminfo-${finalAttrs.version}"
                 {
                   nativeBuildInputs = [ pkgs.ncurses ];
                 }
                 ''
                   mkdir -p $out/share/terminfo $out/nix-support
-                  tic -x -o $out/share/terminfo ${src}/termwiz/data/wezterm.terminfo
+                  tic -x -o $out/share/terminfo ${finalAttrs.src}/termwiz/data/wezterm.terminfo
                 '';
           };
 
           meta.mainProgram = "wezterm";
-        };
+        });
 
         devShell = pkgs.mkShell {
           name = "wezterm-shell";

@@ -16,6 +16,7 @@ if test -e /etc/os-release; then
   . /etc/os-release
 fi
 
+echo "OSTYPE is $OSTYPE"
 
 case $OSTYPE in
   darwin*)
@@ -100,7 +101,7 @@ case $OSTYPE in
     sed -e "s/@TAG@/$TAG_NAME/g" -e "s/@SHA256@/$SHA256/g" < ci/wezterm-homebrew-macos.rb.template > wezterm.rb
 
     ;;
-  msys)
+  msys|cygwin)
     zipdir=WezTerm-windows-$TAG_NAME
     if [[ "$BUILD_REASON" == "Schedule" ]] ; then
       zipname=WezTerm-windows-nightly.zip
@@ -160,7 +161,7 @@ cargo build --release \
       -p strip-ansi-escapes
 BUILDEOFEOF
 )
-          BUILD_REQUIRES=$(cat <<'BREQEOF'
+          BUILD_REQUIRES=$(cat <<BREQEOF
 BuildRequires: gcc, gcc-c++, make, curl, fontconfig-devel, openssl-devel, libxcb-devel, libxkbcommon-devel, libxkbcommon-x11-devel, wayland-devel, xcb-util-devel, xcb-util-keysyms-devel, xcb-util-image-devel, xcb-util-wm-devel, git
 %if 0%{?suse_version}
 BuildRequires: Mesa-libEGL-devel
@@ -193,6 +194,7 @@ License: MIT
 URL: https://wezterm.org/
 Summary: Wez's Terminal Emulator.
 ${BUILD_REQUIRES}
+Requires: wezterm-common, wezterm-gui, wezterm-mux-server
 
 %global debug_package %{nil}
 
@@ -231,9 +233,6 @@ Requires: openssl
 wezterm-mux-server is a headless terminal multiplexer that can be used
 as a session manager for terminal sessions, without requiring X11,
 Wayland, or other GUI libraries.
-
-# Main package (metapackage)
-Requires: wezterm-common, wezterm-gui, wezterm-mux-server
 
 ${BUILD_SECTION}
 
