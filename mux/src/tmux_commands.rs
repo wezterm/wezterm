@@ -1024,7 +1024,11 @@ impl TmuxCommand for SendKeys {
         for &byte in self.keys.iter() {
             write!(&mut s, "0x{:X} ", byte).expect("unable to write key");
         }
-        format!("send-keys -t %{} {}\r", self.pane, s)
+        // `-H` tells tmux each `0xNN` argument is a raw byte. Without it tmux
+        // treats them as Unicode code points, so a typed multi-byte UTF-8 char
+        // (e.g. 'é' = C3 A9) gets double-encoded into mojibake ("Ã©"). See
+        // wezterm issue #7162.
+        format!("send-keys -H -t %{} {}\r", self.pane, s)
     }
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
@@ -1034,6 +1038,25 @@ impl TmuxCommand for SendKeys {
             anyhow::bail!("{error}");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod send_keys_tests {
+    use super::*;
+
+    /// A typed 'é' arrives as UTF-8 bytes C3 A9. tmux's `send-keys` interprets a
+    /// bare `0xNN` argument as a *Unicode code point*, so without `-H` it turns
+    /// 0xC3 into U+00C3 (Ã) and 0xA9 into U+00A9 (©), re-encoding each to UTF-8
+    /// and producing the mojibake "Ã©" (wezterm issue #7162). The `-H` flag makes
+    /// tmux treat each value as a raw byte, preserving the UTF-8 sequence.
+    #[test]
+    fn send_keys_uses_hex_byte_mode() {
+        let cmd = SendKeys {
+            keys: vec![0xC3, 0xA9],
+            pane: 1,
+        };
+        assert_eq!(cmd.get_command(0), "send-keys -H -t %1 0xC3 0xA9 \r");
     }
 }
 
