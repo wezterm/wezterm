@@ -14,15 +14,11 @@ and/or the build for the terminal project make some more progress.
 
 https://github.com/wezterm/wezterm/issues/1927
 
-These assets were built by cloning the ms-terminal repo and running:
+Run `./assets/windows/conhost/update.sh` to refresh these artifacts from
+the latest stable Windows Terminal release, or pass a tag
+(eg. `v1.24.11321.0`) to pin to a specific release.
 
-```
-.\tools\razzle.cmd
-bcz rel
-```
-
-then the files can be copied from `bin/x64/Release` to this location.
-
-It's possible that you'll need to download this runtime support package
-from MS in order for this to work:
-https://www.microsoft.com/en-us/download/details.aspx?id=53175
+To build from source instead, clone <https://github.com/microsoft/terminal>,
+run `.\tools\razzle.cmd` followed by `bcz rel`, and copy the artifacts from
+`bin/x64/Release`.  You may need the Visual C++ runtime support package
+from <https://www.microsoft.com/en-us/download/details.aspx?id=53175>.
