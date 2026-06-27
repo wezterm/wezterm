@@ -111,19 +111,12 @@ impl DataDeviceHandler for WaylandState {
             if !offer.with_mime_types(|mime_types| mime_types.iter().any(|s| s == TEXT_MIME_TYPE)) {
                 return;
             }
-
-            // The compositor sends the (copy) selection event once per client.
-            // Broadcast to every window so any of them can paste, regardless
-            // of which surface was active when the clipboard changed.
+            // The compositor sends the selection event once per client.
             // ref: https://github.com/wezterm/wezterm/issues/6685
-            for pending_mouse in self.surface_to_pending.values() {
-                let copy_and_paste = &pending_mouse.lock().unwrap().copy_and_paste;
-                // Each window gets a clone of the same underlying WlDataOffer handle.
-                copy_and_paste
-                    .lock()
-                    .unwrap()
-                    .confirm_selection(offer.clone());
-            }
+            self.copy_paste_offer
+                .lock()
+                .unwrap()
+                .confirm_selection(offer);
         }
     }
 

@@ -272,6 +272,10 @@ As features stabilize some brief notes about them will accumulate here.
   limit. Thanks to @bew! #7864
 * Fix ESC key encoding in kitty mode with disambiguate flag enabled.
   Thanks to @Felixoid and @the-mikedavis! #7787
+* Fixed two divide-by-zero crashes in Kitty inline image placement when a program requests
+  a zero-sized placement (e.g. `w=0`/`h=0`), or displaying a cell-sized image on a pane
+  whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
+  Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
