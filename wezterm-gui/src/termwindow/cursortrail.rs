@@ -223,7 +223,7 @@ pub struct CursorTrailState {
     ///     configured smear duration, we arm the smear belatedly;
     ///   - otherwise (cursor still moving multi-cell) we keep holding.
     ///
-    /// The hold timeout is `cursor_animation_length` itself: holding longer
+    /// The hold timeout is `cursor_animation_duration` itself: holding longer
     /// than the smear's own duration is pointless because the smear we'd
     /// eventually play would already have completed.
     pending_jump: Option<PendingJump>,
@@ -508,7 +508,7 @@ impl CursorTrailState {
         //   • cursor still wandering multi-cell → keep holding (handles
         //     multi-frame bursts where tmux splits one btop redraw across
         //     several pushes);
-        //   • we've held longer than `cursor_animation_length` already →
+        //   • we've held longer than `cursor_animation_duration` already →
         //     give up and arm. Holding longer than the smear's own duration
         //     makes no sense because the smear would already have completed.
         if cursor_smear {

@@ -13,7 +13,7 @@ cursor body.
 
 * `1.0` (default) — maximum trail. The leading corners jump immediately to
   the destination while the trailing corners animate at the full
-  [cursor_animation_length](cursor_animation_length.md) duration, producing
+  [cursor_animation_duration](cursor_animation_duration.md) duration, producing
   the longest and most dramatic smear.
 * `0.5` — moderate trail. Leading and trailing corners meet somewhere between
   the start and the full animation duration.

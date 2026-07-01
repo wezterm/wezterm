@@ -72,24 +72,6 @@ As features stabilize some brief notes about them will accumulate here.
   @mgpinf! #6801
 
 #### New
-* Opt-in cursor trail and smear effects, inspired by
-  [Neovide](https://github.com/neovide/neovide). Enable the Neovide-style
-  4-corner deforming smear with
-  [cursor_smear](config/lua/config/cursor_smear.md), or choose a particle /
-  highlight style via
-  [cursor_trail_style](config/lua/config/cursor_trail_style.md) (`Torpedo`,
-  `PixieDust`, `Railgun`, `SonicBoom`, `Ripple`, `Wireframe`). All effects
-  are disabled by default. See also
-  [cursor_animation_length](config/lua/config/cursor_animation_length.md),
-  [cursor_trail_size](config/lua/config/cursor_trail_size.md),
-  [cursor_smear_gradient](config/lua/config/cursor_smear_gradient.md),
-  [cursor_trail_min_distance](config/lua/config/cursor_trail_min_distance.md),
-  [cursor_vfx_opacity](config/lua/config/cursor_vfx_opacity.md),
-  [cursor_vfx_particle_lifetime](config/lua/config/cursor_vfx_particle_lifetime.md),
-  [cursor_vfx_particle_density](config/lua/config/cursor_vfx_particle_density.md),
-  [cursor_vfx_particle_speed](config/lua/config/cursor_vfx_particle_speed.md),
-  [cursor_vfx_particle_size](config/lua/config/cursor_vfx_particle_size.md).
-  Thanks to @mathugoat! #7387
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
   and deserialization of JSON, TOML and YAML. Thanks to @expnn! #4969
 * `wezterm ssh` now supports agent forwarding. Thanks to @Riatre! #5345
@@ -158,6 +140,12 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @masriomarm! #6895
 * Indicate support for OSC 52 (clipboard extensions) in Primary DA Response.
   Thanks to @j4james! #7046
+* Opt-in cursor trail and smear effects, inspired by
+  [Neovide](https://github.com/neovide/neovide): a Neovide-style 4-corner
+  deforming smear plus optional particle / highlight styles (`Torpedo`,
+  `PixieDust`, `Railgun`, `SonicBoom`, `Ripple`, `Wireframe`). All effects are
+  disabled by default; see [cursor_smear](config/lua/config/cursor_smear.md)
+  for details and related options. Thanks to @MathurinV! #7387
 
 #### Fixed
 * Race condition when very quickly adjusting font scale, and other improvements

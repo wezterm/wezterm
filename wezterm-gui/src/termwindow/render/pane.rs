@@ -322,7 +322,7 @@ impl crate::TermWindow {
         let cursor_anim_enabled = pos.is_active
             && (config.cursor_smear
                 || config.cursor_trail_style.is_some()
-                || config.cursor_animation_length > 0.0);
+                || config.cursor_animation_duration > 0.0);
         let now = Instant::now();
         let cursor_visible = cursor.visibility == CursorVisibility::Visible;
         let mut suppress_static_cursor = false;
@@ -340,7 +340,7 @@ impl crate::TermWindow {
                     config.cursor_vfx_particle_lifetime,
                     config.cursor_vfx_particle_speed,
                     config.cursor_smear,
-                    config.cursor_animation_length,
+                    config.cursor_animation_duration,
                     config.cursor_trail_size,
                     config.default_cursor_style.effective_shape(cursor.shape),
                     now,

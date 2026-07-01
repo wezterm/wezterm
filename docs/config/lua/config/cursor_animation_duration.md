@@ -3,7 +3,7 @@ tags:
   - appearance
   - text_cursor
 ---
-# `cursor_animation_length`
+# `cursor_animation_duration`
 
 {{since('nightly')}}
 
@@ -18,7 +18,7 @@ cursor moves instantaneous even when `cursor_smear = true`.
 
 ```lua
 config.cursor_smear = true
-config.cursor_animation_length = 0.15
+config.cursor_animation_duration = 0.15
 ```
 
 The relative lag between the leading and trailing edges of the smear is

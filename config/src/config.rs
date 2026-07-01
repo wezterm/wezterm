@@ -665,8 +665,8 @@ pub struct Config {
     /// Determines the time it takes for the cursor smear to complete its animation
     /// on large moves (>= `cursor_trail_min_distance` cells), in seconds.
     /// Set to `0.0` to snap the cursor instantly on large moves.
-    #[dynamic(default = "default_cursor_animation_length")]
-    pub cursor_animation_length: f32,
+    #[dynamic(default = "default_cursor_animation_duration")]
+    pub cursor_animation_duration: f32,
     /// Controls how much the tail of the cursor trails the head during the smear
     /// effect. `1.0` gives the maximum trail — the head jumps immediately to the
     /// destination while the tail catches up. Lower values produce a shorter, less
@@ -1730,7 +1730,7 @@ fn default_cursor_smear_gradient() -> bool {
     false
 }
 
-fn default_cursor_animation_length() -> f32 {
+fn default_cursor_animation_duration() -> f32 {
     0.150
 }
 
