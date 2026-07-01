@@ -146,7 +146,7 @@
               OUT_APP="$out/Applications/WezTerm.app"
               cp -r assets/macos/WezTerm.app "$OUT_APP"
               rm $OUT_APP/*.dylib
-              cp -r assets/shell-integration/* "$OUT_APP"
+              cp -r assets/shell-integration/* "$OUT_APP/Contents/Resources"
               # macOS will only recognize our application bundle
               # if the binaries are inside of it. Move them there
               # and create symbolic links for them in bin/.
