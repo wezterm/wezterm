@@ -58,7 +58,7 @@ camino = "1.0"
 cassowary = "0.3"
 cc = {version="1.0", features = ["parallel"]}
 cgl = "0.3"
-chrono = {version="0.4", default-features=false, features=["unstable-locales", "serde"]}
+chrono = {version="0.4", default-features=false, features=["clock", "unstable-locales", "serde"]}
 clap = {version="4.0", features=["derive"]}
 clap_complete = "4.4"
 clap_complete_fig = "4.0"
