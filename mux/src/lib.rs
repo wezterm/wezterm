@@ -1,7 +1,7 @@
 use crate::client::{ClientId, ClientInfo};
 use crate::pane::{CachePolicy, Pane, PaneId};
 use crate::ssh_agent::AgentProxy;
-use crate::tab::{SplitRequest, Tab, TabId};
+use crate::tab::{NotifyMux, SplitRequest, Tab, TabId};
 use crate::window::{Window, WindowId};
 use anyhow::{anyhow, Context, Error};
 use config::keyassignment::SpawnTabDomain;
@@ -559,7 +559,7 @@ impl Mux {
             .get_tab(tab_id)
             .ok_or_else(|| anyhow::anyhow!("tab {tab_id} not found"))?;
 
-        tab.set_active_pane(&pane);
+        tab.set_active_pane_with_notify(&pane, NotifyMux::No);
 
         Ok(())
     }

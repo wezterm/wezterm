@@ -20,6 +20,12 @@ pub type Cursor = bintree::Cursor<Arc<dyn Pane>, SplitDirectionAndSize>;
 static TAB_ID: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
 pub type TabId = usize;
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum NotifyMux {
+    Yes,
+    No,
+}
+
 #[derive(Default)]
 struct Recency {
     count: usize,
@@ -699,7 +705,11 @@ impl Tab {
     }
 
     pub fn set_active_pane(&self, pane: &Arc<dyn Pane>) {
-        self.inner.lock().set_active_pane(pane)
+        self.set_active_pane_with_notify(pane, NotifyMux::Yes)
+    }
+
+    pub fn set_active_pane_with_notify(&self, pane: &Arc<dyn Pane>, notify: NotifyMux) {
+        self.inner.lock().set_active_pane(pane, notify)
     }
 
     pub fn set_active_idx(&self, pane_index: usize) {
@@ -1747,7 +1757,7 @@ impl TabInner {
         self.active
     }
 
-    fn set_active_pane(&mut self, pane: &Arc<dyn Pane>) {
+    fn set_active_pane(&mut self, pane: &Arc<dyn Pane>, notify: NotifyMux) {
         let prior = self.get_active_pane();
 
         if is_pane(pane, &prior.as_ref()) {
@@ -1768,22 +1778,26 @@ impl TabInner {
         {
             self.active = item.index;
             self.recency.tag(item.index);
-            self.advise_focus_change(prior);
+            self.advise_focus_change(prior, notify);
         }
     }
 
-    fn advise_focus_change(&mut self, prior: Option<Arc<dyn Pane>>) {
+    fn advise_focus_change(&mut self, prior: Option<Arc<dyn Pane>>, notify: NotifyMux) {
         let mux = Mux::get();
         let current = self.get_active_pane();
         match (prior, current) {
             (Some(prior), Some(current)) if prior.pane_id() != current.pane_id() => {
                 prior.focus_changed(false);
                 current.focus_changed(true);
-                mux.notify(MuxNotification::PaneFocused(current.pane_id()));
+                if notify == NotifyMux::Yes {
+                    mux.notify(MuxNotification::PaneFocused(current.pane_id()));
+                }
             }
             (None, Some(current)) => {
                 current.focus_changed(true);
-                mux.notify(MuxNotification::PaneFocused(current.pane_id()));
+                if notify == NotifyMux::Yes {
+                    mux.notify(MuxNotification::PaneFocused(current.pane_id()));
+                }
             }
             (Some(prior), None) => {
                 prior.focus_changed(false);
@@ -1798,7 +1812,7 @@ impl TabInner {
         let prior = self.get_active_pane();
         self.active = pane_index;
         self.recency.tag(pane_index);
-        self.advise_focus_change(prior);
+        self.advise_focus_change(prior, NotifyMux::Yes);
     }
 
     fn assign_pane(&mut self, pane: &Arc<dyn Pane>) {
@@ -1861,7 +1875,7 @@ impl TabInner {
         if keep_focus {
             self.set_active_idx(pane_index);
         } else {
-            self.advise_focus_change(Some(pane));
+            self.advise_focus_change(Some(pane), NotifyMux::Yes);
         }
         None
     }
@@ -2279,7 +2293,7 @@ mod test {
         fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>> {
             Ok(None)
         }
-        fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+        fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
             unimplemented!()
         }
         fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
@@ -2515,6 +2529,53 @@ mod test {
         assert_eq!(24, panes[2].height);
         assert_eq!(400, panes[2].pixel_width);
         assert_eq!(600, panes[2].pixel_height);
+    }
+
+    #[test]
+    fn set_active_pane_can_suppress_mux_notification() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+
+        let mux = Arc::new(Mux::new(None));
+        Mux::set_mux(&mux);
+
+        let notifications = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&notifications);
+        mux.subscribe(move |notification| {
+            if let MuxNotification::PaneFocused(pane_id) = notification {
+                seen.lock().push(pane_id);
+            }
+            true
+        });
+
+        let tab = Tab::new(&size);
+        let pane_1 = FakePane::new(1, size);
+        tab.assign_pane(&pane_1);
+        let pane_2 = FakePane::new(2, size);
+        let split = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(0, SplitRequest::default(), Arc::clone(&pane_2))
+            .unwrap();
+
+        pane_1.resize(split.first).unwrap();
+        tab.set_active_pane_with_notify(&pane_1, NotifyMux::No);
+
+        assert_eq!(Vec::<PaneId>::new(), *notifications.lock());
+        assert_eq!(1, tab.get_active_pane().unwrap().pane_id());
+
+        Mux::shutdown();
     }
 
     fn is_send_and_sync<T: Send + Sync>() -> bool {

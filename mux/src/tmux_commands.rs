@@ -1,7 +1,7 @@
 use crate::domain::{DomainId, WriterWrapper};
 use crate::localpane::LocalPane;
 use crate::pane::{alloc_pane_id, PaneId};
-use crate::tab::{SplitDirection, SplitRequest, SplitSize, Tab, TabId};
+use crate::tab::{NotifyMux, SplitDirection, SplitRequest, SplitSize, Tab, TabId};
 use crate::tmux::{AttachState, TmuxDomain, TmuxDomainState, TmuxRemotePane, TmuxTab};
 use crate::tmux_pty::{TmuxChild, TmuxPty};
 use crate::{Mux, MuxNotification, Pane};
@@ -341,7 +341,7 @@ impl TmuxDomainState {
 
                     match mux.get_tab(local_tab.tab_id) {
                         Some(tab) => {
-                            tab.set_active_pane(&local_pane);
+                            tab.set_active_pane_with_notify(&local_pane, NotifyMux::No);
                             mux.notify(MuxNotification::PaneFocused(local_pane.pane_id()));
                         }
                         None => {}
