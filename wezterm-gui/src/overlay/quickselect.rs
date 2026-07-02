@@ -76,7 +76,7 @@ fn compute_labels_for_alphabet_impl(
     let alphabet = if make_lowercase {
         alphabet
             .chars()
-            .map(|c| c.to_lowercase())
+            .map(|c| c.to_lowercase().to_string())
             .collect::<Vec<String>>()
     } else {
         alphabet
