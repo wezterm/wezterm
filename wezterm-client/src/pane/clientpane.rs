@@ -226,6 +226,15 @@ impl ClientPane {
                 // it here.
                 log::trace!("advised of remote pane focus: {pane_id}");
 
+                // Mark the pane focused on the server side before reconciling:
+                // `focus_pane_and_containing_tab` calls `focus_changed(true)`,
+                // which would otherwise echo this back as a fresh `SetFocusedPane`.
+                // See <https://github.com/wezterm/wezterm/issues/4390>
+                {
+                    let mut focused = self.client.focused_remote_pane_id.lock().unwrap();
+                    *focused = Some(pane_id);
+                }
+
                 let mux = Mux::get();
                 if let Err(err) = mux.focus_pane_and_containing_tab(self.local_pane_id) {
                     log::error!("Error reconciling remote PaneFocused notification: {err:#}");

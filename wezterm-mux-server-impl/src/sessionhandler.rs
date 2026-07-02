@@ -6,7 +6,7 @@ use mux::client::ClientId;
 use mux::domain::SplitSource;
 use mux::pane::{CachePolicy, Pane, PaneId};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
-use mux::tab::TabId;
+use mux::tab::{NotifyMux, TabId};
 use mux::{Mux, MuxNotification};
 use promise::spawn::spawn_into_main_thread;
 use std::collections::HashMap;
@@ -358,7 +358,10 @@ impl SessionHandler {
                             let tab = mux
                                 .get_tab(tab_id)
                                 .ok_or_else(|| anyhow::anyhow!("tab {tab_id} not found"))?;
-                            tab.set_active_pane(&pane);
+                            // We emit our own PaneFocused below; suppress the
+                            // duplicate advise_focus_change would emit.
+                            // See <https://github.com/wezterm/wezterm/issues/4390>
+                            tab.set_active_pane_with_notify(&pane, NotifyMux::No);
 
                             mux.record_focus_for_current_identity(pane_id);
                             mux.notify(mux::MuxNotification::PaneFocused(pane_id));

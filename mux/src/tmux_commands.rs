@@ -1,7 +1,7 @@
 use crate::domain::{DomainId, WriterWrapper};
 use crate::localpane::LocalPane;
 use crate::pane::{alloc_pane_id, PaneId};
-use crate::tab::{SplitDirection, SplitRequest, SplitSize, Tab, TabId};
+use crate::tab::{NotifyMux, SplitDirection, SplitRequest, SplitSize, Tab, TabId};
 use crate::tmux::{AttachState, TmuxDomain, TmuxDomainState, TmuxRemotePane, TmuxTab};
 use crate::tmux_pty::{TmuxChild, TmuxPty};
 use crate::{Mux, MuxNotification, Pane};
@@ -341,7 +341,12 @@ impl TmuxDomainState {
 
                     match mux.get_tab(local_tab.tab_id) {
                         Some(tab) => {
-                            tab.set_active_pane(&local_pane);
+                            // We fire our own PaneFocused on the next line;
+                            // suppress the duplicate advise_focus_change would emit.
+                            // See <https://github.com/wezterm/wezterm/issues/4390>
+                            // TODO: can we skip the unconditional mux.notify and use active_pane to notify,
+                            // or will that cause clients to drift out of sync in some cases?
+                            tab.set_active_pane_with_notify(&local_pane, NotifyMux::No);
                             mux.notify(MuxNotification::PaneFocused(local_pane.pane_id()));
                         }
                         None => {}

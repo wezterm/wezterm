@@ -78,13 +78,19 @@ impl GuiFrontEnd {
                     .detach();
                 }
                 MuxNotification::PaneFocused(pane_id) => {
-                    promise::spawn::spawn_into_main_thread(async move {
-                        let mux = Mux::get();
-                        if let Err(err) = mux.focus_pane_and_containing_tab(pane_id) {
-                            log::error!("Error reconciling PaneFocused notification: {err:#}");
-                        }
-                    })
-                    .detach();
+                    // Skip panes the mux has already destroyed (e.g. backlog
+                    // draining after a domain detach), so we don't flood the UI
+                    // thread with no-op reconciliation tasks.
+                    // See <https://github.com/wezterm/wezterm/issues/4390>
+                    if Mux::get().get_pane(pane_id).is_some() {
+                        promise::spawn::spawn_into_main_thread(async move {
+                            let mux = Mux::get();
+                            if let Err(err) = mux.focus_pane_and_containing_tab(pane_id) {
+                                log::error!("Error reconciling PaneFocused notification: {err:#}");
+                            }
+                        })
+                        .detach();
+                    }
                 }
                 MuxNotification::TabTitleChanged { .. } => {}
                 MuxNotification::WindowTitleChanged { .. } => {}
