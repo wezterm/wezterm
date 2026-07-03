@@ -74,7 +74,7 @@ config.colors = {
   -- Overrides the cell background color when copymode is enabled and the current cell is
   -- occupied by the cursor and the cursor style is set to Block
   copy_mode_cursor_bg = '#52ad70', -- {{since('nightly', inline=True)}}
-  -- Overrides the text color when copymode is enabled the current cell is occupied by
+  -- Overrides the text color when copymode is enabled and the current cell is occupied by
   -- the cursor
   copy_mode_cursor_fg = 'black', -- {{since('nightly', inline=True)}}
 
