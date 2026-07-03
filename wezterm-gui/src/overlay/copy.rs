@@ -1309,7 +1309,19 @@ impl Pane for CopyOverlay {
     }
 
     fn palette(&self) -> ColorPalette {
-        self.delegate.palette()
+        let mut palette = self.delegate.palette();
+        let config = config::configuration();
+        let colors = &config.resolved_palette;
+
+        if let Some(fg) = colors.copy_mode_cursor_fg {
+            palette.cursor_fg = fg.into();
+        }
+        if let Some(bg) = colors.copy_mode_cursor_bg {
+            palette.cursor_bg = bg.into();
+            palette.cursor_border = bg.into();
+        }
+
+        palette
     }
 
     fn domain_id(&self) -> DomainId {

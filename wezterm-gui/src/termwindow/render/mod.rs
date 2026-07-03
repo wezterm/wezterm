@@ -1,7 +1,6 @@
 use crate::colorease::ColorEase;
 use crate::customglyph::{BlockKey, *};
 use crate::glyphcache::{CachedGlyph, GlyphCache};
-use crate::overlay::CopyOverlay;
 use crate::quad::{
     HeapQuadAllocator, QuadAllocator, QuadImpl, QuadTrait, TripleLayerQuadAllocator,
     TripleLayerQuadAllocatorTrait,
@@ -540,19 +539,7 @@ impl crate::TermWindow {
                 let (fg_color, bg_color) = if self.use_reverse_video_cursor(&params) {
                     (params.bg_color, params.fg_color)
                 } else {
-                    let colors = &params.config.resolved_palette;
-                    let (cursor_fg, cursor_bg) = if self.copy_mode_enabled() {
-                        (
-                            colors.copy_mode_cursor_fg.map(|c| c.to_linear()),
-                            colors.copy_mode_cursor_bg.map(|c| c.to_linear()),
-                        )
-                    } else {
-                        (None, None)
-                    };
-                    (
-                        cursor_fg.unwrap_or_else(|| params.cursor_fg),
-                        cursor_bg.unwrap_or_else(|| params.cursor_bg),
-                    )
+                    (params.cursor_fg, params.cursor_bg)
                 };
 
                 let fg_color = self.ensure_min_contrast(fg_color, bg_color);
@@ -587,19 +574,7 @@ impl crate::TermWindow {
                 let (fg_color, bg_color) = if self.use_reverse_video_cursor(&params) {
                     (params.bg_color, params.fg_color)
                 } else {
-                    let colors = &params.config.resolved_palette;
-                    let (cursor_fg, cursor_bg) = if self.copy_mode_enabled() {
-                        (
-                            colors.copy_mode_cursor_fg.map(|c| c.to_linear()),
-                            colors.copy_mode_cursor_bg.map(|c| c.to_linear()),
-                        )
-                    } else {
-                        (None, None)
-                    };
-                    (
-                        cursor_fg.unwrap_or_else(|| params.cursor_fg),
-                        cursor_bg.unwrap_or_else(|| params.cursor_bg),
-                    )
+                    (params.cursor_fg, params.cursor_bg)
                 };
 
                 let fg_color = self.ensure_min_contrast(fg_color, bg_color);
@@ -661,22 +636,10 @@ impl crate::TermWindow {
                 if self.use_reverse_video_cursor(&params) {
                     (params.bg_color, params.fg_color, params.fg_color)
                 } else {
-                    let colors = &params.config.resolved_palette;
-                    let (fg_color, bg_color, cursor_bg) = if self.copy_mode_enabled() {
-                        (
-                            colors.copy_mode_cursor_fg.map(|c| c.to_linear()),
-                            colors.copy_mode_cursor_bg.map(|c| c.to_linear()),
-                            colors.copy_mode_cursor_bg.map(|c| c.to_linear()),
-                        )
-                    } else {
-                        (None, None, None)
-                    };
                     (
-                        fg_color
-                            .unwrap_or_else(|| params.cursor_fg)
-                            .when_fully_transparent(params.fg_color),
-                        bg_color.unwrap_or_else(|| params.cursor_bg),
-                        cursor_bg.unwrap_or_else(|| params.cursor_bg),
+                        params.cursor_fg.when_fully_transparent(params.fg_color),
+                        params.cursor_bg,
+                        params.cursor_bg,
                     )
                 }
             }
@@ -692,20 +655,7 @@ impl crate::TermWindow {
                 if self.use_reverse_video_cursor(&params) {
                     (params.fg_color, params.bg_color, params.fg_color)
                 } else {
-                    let cursor_bg = if self.copy_mode_enabled() {
-                        params
-                            .config
-                            .resolved_palette
-                            .copy_mode_cursor_bg
-                            .map(|c| c.to_linear())
-                    } else {
-                        None
-                    };
-                    (
-                        params.fg_color,
-                        params.bg_color,
-                        cursor_bg.unwrap_or_else(|| params.cursor_bg),
-                    )
+                    (params.fg_color, params.bg_color, params.cursor_bg)
                 }
             }
             // Normally, render the cell as configured (or if the window is unfocused)
@@ -777,11 +727,6 @@ impl crate::TermWindow {
             && params.cursor_is_default_color
             && params.fg_color.contrast_ratio(&params.bg_color)
                 >= self.config.reverse_video_cursor_min_contrast
-    }
-
-    fn copy_mode_enabled(&self) -> bool {
-        self.get_active_pane_or_overlay()
-            .is_some_and(|pane| pane.downcast_ref::<CopyOverlay>().is_some())
     }
 
     fn glyph_infos_to_glyphs(
