@@ -23,7 +23,7 @@ use termwiz::render::terminfo::TerminfoRenderer;
 use termwiz::surface::{Change, LineAttribute};
 use termwiz::terminal::{ScreenSize, Terminal, TerminalWaker};
 use wezterm_ssh::{
-    ConfigMap, HostVerificationFailed, Session, SessionEvent, SshChildProcess, SshPty,
+    HostOptions, HostVerificationFailed, Session, SessionEvent, SshChildProcess, SshPty,
 };
 use wezterm_term::TerminalSize;
 
@@ -58,16 +58,17 @@ impl LineEditorHost for PasswordPromptHost {
 }
 
 pub fn ssh_connect_with_ui(
-    ssh_config: wezterm_ssh::ConfigMap,
+    host_options: HostOptions,
     ui: &mut ConnectionUI,
 ) -> anyhow::Result<Session> {
     let cloned_ui = ui.clone();
     cloned_ui.run_and_log_error(move || {
-        let remote_address = ssh_config
+        let remote_address = host_options
+            .options
             .get("hostname")
             .expect("ssh config to always set hostname");
         ui.output_str(&format!("Connecting to {} using SSH\n", remote_address));
-        let (session, events) = Session::connect(ssh_config.clone())?;
+        let (session, events) = Session::connect(host_options.clone())?;
 
         while let Ok(event) = smol::block_on(events.recv()) {
             match event {
@@ -184,7 +185,7 @@ pub struct RemoteSshDomain {
     name: String,
 }
 
-pub fn ssh_domain_to_ssh_config(ssh_dom: &SshDomain) -> anyhow::Result<ConfigMap> {
+pub fn ssh_domain_to_host_options(ssh_dom: &SshDomain) -> anyhow::Result<HostOptions> {
     let mut ssh_config = wezterm_ssh::Config::new();
     ssh_config.add_default_config_files();
 
@@ -198,8 +199,8 @@ pub fn ssh_domain_to_ssh_config(ssh_dom: &SshDomain) -> anyhow::Result<ConfigMap
         }
     };
 
-    let mut ssh_config = ssh_config.for_host(&remote_host_name);
-    ssh_config.insert(
+    let mut host_options = ssh_config.resolve_host(&remote_host_name);
+    host_options.options.insert(
         "wezterm_ssh_backend".to_string(),
         match ssh_dom
             .ssh_backend
@@ -211,22 +212,53 @@ pub fn ssh_domain_to_ssh_config(ssh_dom: &SshDomain) -> anyhow::Result<ConfigMap
         .to_string(),
     );
     for (k, v) in &ssh_dom.ssh_option {
-        ssh_config.insert(k.to_string(), v.to_string());
+        // Legacy path: a single `identityfile` key routed through
+        // the flat `HashMap<String,String>`. The CLI now splits
+        // `-o IdentityFile=...` into `ssh_dom.identity_files`
+        // instead (see wezterm-gui/src/main.rs), but Lua configs
+        // that still write `ssh_option = { identityfile = ... }`
+        // keep working here. `push_identity_file` synchronises the
+        // typed list and the legacy flat map.
+        if k.eq_ignore_ascii_case("identityfile") {
+            host_options.push_identity_file(v.clone());
+            continue;
+        }
+        host_options.options.insert(k.to_string(), v.to_string());
+    }
+
+    // Typed identity file list: populated from `-o IdentityFile=...`
+    // CLI overrides via `wezterm-gui/src/main.rs::async_run_ssh` and/or
+    // from Lua configs that set `SshDomain.identity_files` directly.
+    // Appended after `ssh_option` so the declaration order is
+    // preserved end-to-end into `HostOptions::identity_files`, and
+    // `push_identity_file` keeps the legacy flat-map view in sync.
+    for identity_file in &ssh_dom.identity_files {
+        host_options.push_identity_file(identity_file.clone());
     }
 
     if let Some(username) = &ssh_dom.username {
-        ssh_config.insert("user".to_string(), username.to_string());
+        host_options
+            .options
+            .insert("user".to_string(), username.to_string());
     }
     if let Some(port) = port {
-        ssh_config.insert("port".to_string(), port.to_string());
+        host_options
+            .options
+            .insert("port".to_string(), port.to_string());
     }
     if ssh_dom.no_agent_auth {
-        ssh_config.insert("identitiesonly".to_string(), "yes".to_string());
+        host_options
+            .options
+            .insert("identitiesonly".to_string(), "yes".to_string());
     }
-    if let Some("true") = ssh_config.get("wezterm_ssh_verbose").map(|s| s.as_str()) {
-        log::info!("Using ssh config: {ssh_config:#?}");
+    if let Some("true") = host_options
+        .options
+        .get("wezterm_ssh_verbose")
+        .map(|s| s.as_str())
+    {
+        log::info!("Using ssh config: {host_options:#?}");
     }
-    Ok(ssh_config)
+    Ok(host_options)
 }
 
 impl RemoteSshDomain {
@@ -240,8 +272,8 @@ impl RemoteSshDomain {
         })
     }
 
-    pub fn ssh_config(&self) -> anyhow::Result<ConfigMap> {
-        ssh_domain_to_ssh_config(&self.dom)
+    pub fn host_options(&self) -> anyhow::Result<HostOptions> {
+        ssh_domain_to_host_options(&self.dom)
     }
 
     fn build_command(
@@ -330,7 +362,7 @@ impl RemoteSshDomain {
         env: HashMap<String, String>,
         size: TerminalSize,
     ) -> anyhow::Result<StartNewSessionResult> {
-        let (session, events) = Session::connect(self.ssh_config().context("obtain ssh config")?)
+        let (session, events) = Session::connect(self.host_options().context("obtain ssh config")?)
             .context("connect to ssh server")?;
         self.session.lock().unwrap().replace(session.clone());
 
@@ -1144,5 +1176,75 @@ impl std::io::Read for PtyReader {
                 _ => res,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_domain_identity_files_stack_into_typed_host_options() {
+        // Non-breaking regression guard for the C1 fix from the
+        // 24-agent review armada on PR #7739: repeated
+        // `wezterm ssh -o IdentityFile=...` CLI overrides are
+        // filtered into `SshDomain.identity_files` before the
+        // flat `ssh_option` HashMap can clobber them, and the
+        // consumption loop in `ssh_domain_to_host_options` then
+        // stacks them into `HostOptions::identity_files` in
+        // declaration order via `push_identity_file`.
+        //
+        // Pins four invariants at once:
+        // 1. The additive `identity_files` field deserialises via
+        //    `..Default::default()` without any Lua input — proving
+        //    the `#[dynamic(default)]` compat promise holds.
+        // 2. Every entry reaches the typed list.
+        // 3. Declaration order is preserved end-to-end.
+        // 4. `push_identity_file` keeps the legacy
+        //    `options["identityfile"]` view in sync with the typed
+        //    list so downstream readers of the flat map observe
+        //    the overrides as well.
+        let dom = SshDomain {
+            name: "test".to_string(),
+            remote_address: "example.invalid".to_string(),
+            identity_files: vec![
+                "/home/me/.ssh/cli_first".to_string(),
+                "/home/me/.ssh/cli_second".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let host_options = ssh_domain_to_host_options(&dom).expect("ssh_domain_to_host_options");
+
+        let paths: Vec<&str> = host_options
+            .identity_files
+            .iter()
+            .map(|e| e.path.as_str())
+            .collect();
+
+        let first_idx = paths
+            .iter()
+            .position(|p| *p == "/home/me/.ssh/cli_first")
+            .expect("first CLI identity file must survive into the typed list");
+        let second_idx = paths
+            .iter()
+            .position(|p| *p == "/home/me/.ssh/cli_second")
+            .expect("second CLI identity file must survive into the typed list");
+        assert!(
+            first_idx < second_idx,
+            "CLI declaration order must be preserved, got {:?}",
+            paths
+        );
+
+        let flat = host_options
+            .options
+            .get("identityfile")
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            flat.contains("/home/me/.ssh/cli_first") && flat.contains("/home/me/.ssh/cli_second"),
+            "push_identity_file must keep the legacy ConfigMap view in sync, got {:?}",
+            flat
+        );
     }
 }

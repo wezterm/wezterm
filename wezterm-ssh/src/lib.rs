@@ -8,11 +8,13 @@ mod dirwrap;
 mod filewrap;
 mod host;
 mod pty;
+mod pubkey_from_private;
 mod session;
 mod sessioninner;
 mod sessionwrap;
 mod sftp;
 mod sftpwrap;
+mod tokenizer;
 
 pub use auth::*;
 pub use config::*;

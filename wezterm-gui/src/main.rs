@@ -135,10 +135,20 @@ enum SubCommand {
 
 async fn async_run_ssh(opts: SshCommand) -> anyhow::Result<()> {
     let mut ssh_option = HashMap::new();
+    let mut identity_files: Vec<String> = Vec::new();
     if opts.verbose {
         ssh_option.insert("wezterm_ssh_verbose".to_string(), "true".to_string());
     }
     for (k, v) in opts.config_override {
+        // `-o IdentityFile=...` overrides must stack, not clobber.
+        // Route them into the typed list before the HashMap squashes
+        // repeated keys; `mux::ssh::ssh_domain_to_host_options` then
+        // appends them to `HostOptions::identity_files` via
+        // `push_identity_file` so the declaration order survives.
+        if k.eq_ignore_ascii_case("identityfile") {
+            identity_files.push(v);
+            continue;
+        }
         ssh_option.insert(k.to_lowercase().to_string(), v);
     }
 
@@ -148,6 +158,7 @@ async fn async_run_ssh(opts: SshCommand) -> anyhow::Result<()> {
         username: opts.user_at_host_and_port.username.clone(),
         multiplexing: SshMultiplexing::None,
         ssh_option,
+        identity_files,
         ..Default::default()
     };
 

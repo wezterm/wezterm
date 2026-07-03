@@ -1,5 +1,5 @@
 use crate::auth::*;
-use crate::config::ConfigMap;
+use crate::config::HostOptions;
 use crate::host::*;
 use crate::pty::*;
 use crate::sessioninner::*;
@@ -86,7 +86,36 @@ impl Drop for Session {
 }
 
 impl Session {
-    pub fn connect(config: ConfigMap) -> anyhow::Result<(Self, Receiver<SessionEvent>)> {
+    /// Connect to the given host using pre-resolved ssh_config
+    /// options.
+    ///
+    /// Accepts anything that converts [`Into`] a [`HostOptions`]. In
+    /// practice that means either the typed `HostOptions` returned
+    /// by [`crate::Config::resolve_host`] (recommended) or a legacy
+    /// flat [`ConfigMap`] (via the `From<ConfigMap>` impl on
+    /// `HostOptions`). Callers that need correct handling of
+    /// `IdentityFile` paths containing whitespace must use the
+    /// `Config::resolve_host` route — the `ConfigMap` conversion is
+    /// provided purely for backwards compatibility and splits the
+    /// legacy space-concatenated value on whitespace, which is
+    /// lossy.
+    ///
+    /// ```no_run
+    /// use wezterm_ssh::{Config, Session};
+    ///
+    /// let mut config = Config::new();
+    /// config.add_default_config_files();
+    /// let (_session, _events) = Session::connect(config.resolve_host("example.com"))?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn connect(
+        options: impl Into<HostOptions>,
+    ) -> anyhow::Result<(Self, Receiver<SessionEvent>)> {
+        let HostOptions {
+            options: config,
+            identity_files,
+        } = options.into();
+
         let (tx_event, rx_event) = bounded(8);
         let (tx_req, rx_req) = bounded(8);
         let (mut sender_write, mut sender_read) = socketpair()?;
@@ -111,6 +140,7 @@ impl Session {
 
         let mut inner = SessionInner {
             config,
+            identity_files,
             tx_event,
             rx_req,
             channels: HashMap::new(),

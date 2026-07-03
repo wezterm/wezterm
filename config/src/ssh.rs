@@ -100,6 +100,19 @@ pub struct SshDomain {
     #[dynamic(default)]
     pub ssh_option: HashMap<String, String>,
 
+    /// Additional `IdentityFile` paths supplied via `-o IdentityFile=...`
+    /// CLI overrides or directly from Lua. Entries flow into the typed
+    /// `HostOptions::identity_files` list via `push_identity_file` in
+    /// `mux::ssh::ssh_domain_to_host_options`, so repeated entries stack
+    /// in declaration order instead of clobbering each other the way
+    /// the flat `ssh_option` map does for a single `identityfile` key.
+    ///
+    /// This field is additive: existing Lua configs that do not set it
+    /// continue to deserialise cleanly thanks to `#[dynamic(default)]`,
+    /// which maps a missing field to `Vec::new()`.
+    #[dynamic(default)]
+    pub identity_files: Vec<String>,
+
     pub default_prog: Option<Vec<String>>,
 
     #[dynamic(default)]

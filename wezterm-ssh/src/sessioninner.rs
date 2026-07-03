@@ -40,6 +40,7 @@ pub(crate) type ChannelId = usize;
 
 pub(crate) struct SessionInner {
     pub config: ConfigMap,
+    pub identity_files: Vec<crate::config::IdentityFileEntry>,
     pub tx_event: Sender<SessionEvent>,
     pub rx_req: Receiver<SessionRequest>,
     pub channels: HashMap<ChannelId, ChannelInfo>,
@@ -184,10 +185,22 @@ impl SessionInner {
         if let Some(agent) = self.config.get("identityagent") {
             sess.set_option(libssh_rs::SshOption::IdentityAgent(Some(agent.clone())))?;
         }
-        if let Some(files) = self.config.get("identityfile") {
-            for file in files.split_whitespace() {
-                sess.set_option(libssh_rs::SshOption::AddIdentity(file.to_string()))?;
+        for entry in &self.identity_files {
+            // `AddIdentity` expects a private key path; `.pub`
+            // entries cannot be used for signing and would be
+            // rejected or degrade the connection. The shared
+            // helper `is_identity_file_signable` documents this
+            // invariant on both ssh2 and libssh sides. The public
+            // blob for such entries is still picked up by the
+            // agent-key filter via `derive_public_blob`.
+            if !crate::auth::is_identity_file_signable(entry) {
+                log::trace!(
+                    "libssh backend: skipping public-only identity entry {}",
+                    entry.path
+                );
+                continue;
             }
+            sess.set_option(libssh_rs::SshOption::AddIdentity(entry.path.clone()))?;
         }
         if let Some(kh) = self.config.get("userknownhostsfile") {
             for file in kh.split_whitespace() {
