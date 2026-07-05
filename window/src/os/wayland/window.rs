@@ -1494,17 +1494,27 @@ impl Dispatch<WlRegion, GlobalData> for WaylandState {
     }
 }
 
-pub(super) struct SurfaceUserData {
+/// User-data attached to each [`WlSurface`] via [`smithay_client_toolkit`].
+///
+/// Associates a surface with its owning window ID, allowing lookups
+/// from raw surface references (e.g. during DnD or pointer events).
+pub struct SurfaceUserData {
+    /// [`smithay_client_toolkit`] surface data
     surface_data: SurfaceData,
-    pub(super) window_id: usize,
+    /// ID of the window
+    pub window_id: usize,
 }
 
 impl SurfaceUserData {
-    pub(super) fn from_wl(wl: &WlSurface) -> &Self {
+    /// Returns the [`SurfaceUserData`] associated with the given [`WlSurface`].
+    pub fn from_wl(wl: &WlSurface) -> &Self {
         wl.data()
             .expect("User data should be associated with WlSurface")
     }
-    pub(super) fn try_from_wl(wl: &WlSurface) -> Option<&SurfaceUserData> {
+
+    /// Returns an [`Option`] with the [`SurfaceUserData`] associated with the given [`WlSurface`],
+    /// `None` if the surface has no associated user-data.
+    pub fn try_from_wl(wl: &WlSurface) -> Option<&SurfaceUserData> {
         wl.data()
     }
 }
