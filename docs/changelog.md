@@ -75,6 +75,14 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* Mouse bindings can now branch on what's under the cursor from Lua:
+  [window:get_mouse_position()](config/lua/window/get_mouse_position.md)
+  returns the cell column and stable row under the mouse, and
+  [window:get_hyperlink_at_mouse_cursor()](config/lua/window/get_hyperlink_at_mouse_cursor.md)
+  returns the URI of the hyperlink under the mouse (or `nil`).
+  [OpenLinkAtMouseCursor](config/lua/keyassignment/OpenLinkAtMouseCursor.md)
+  also accepts an optional `fallback` action that runs when no link is
+  present. #7899
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
   and deserialization of JSON, TOML and YAML. Thanks to @expnn! #4969
 * `wezterm ssh` now supports agent forwarding. Thanks to @Riatre! #5345

@@ -1,6 +1,7 @@
 use crate::tabbar::TabBarItem;
 use crate::termwindow::{
-    GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
+    GuiWin, MouseCapture, MousePosition, PositionedSplit, ScrollHit, TermWindowNotif, UIItem,
+    UIItemType, TMB,
 };
 use ::window::{
     MouseButtons as WMB, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
@@ -784,6 +785,11 @@ impl super::TermWindow {
                 },
                 stable_row,
             ));
+
+        // Track the cell under the mouse so it can be queried from Lua
+        // (window:get_mouse_position()). Uses the same column/stable_row
+        // computed above for hyperlink hit-testing.
+        self.current_mouse_position = Some(MousePosition { column, stable_row });
 
         pane.apply_hyperlinks(stable_row..stable_row + 1, &self.config.hyperlink_rules);
 
