@@ -36,6 +36,7 @@ use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwi
 
 use crate::x11::KeyboardWithFallback;
 
+use super::copy_and_paste::CopyPasteOffer;
 use super::inputhandler::{TextInputData, TextInputState};
 use super::pointer::{PendingMouse, PointerUserData};
 use super::{OutputManagerData, OutputManagerState, SurfaceUserData, WaylandWindowInner};
@@ -64,12 +65,27 @@ pub(super) struct WaylandState {
     pub(super) pointer: Option<ThemedPointer<PointerUserData>>,
     pub(super) surface_to_pending: HashMap<ObjectId, Arc<Mutex<PendingMouse>>>,
 
+    /// Bound global for wl_data_device_manager; factory for data devices and copy-paste sources.
     pub(super) data_device_manager_state: DataDeviceManagerState,
+    /// Protocol object for clipboard and drag-and-drop.
+    /// None until first seat capability event is received.
     pub(super) data_device: Option<DataDevice>,
+    /// Most recent incoming clipboard offer from another Wayland client (regular clipboard).
+    /// Updated on every `wl_data_device::selection` event; read when pasting data.
+    pub(super) copy_paste_offer: Arc<Mutex<CopyPasteOffer>>,
+    /// Outgoing regular clipboard: our data source while we own clipboard selection.
+    /// Dropped when another Wayland client takes ownership.
     pub(super) copy_paste_source: Option<(CopyPasteSource, String)>,
+    /// Protocol manager for primary selection.
+    /// None if unsupported by compositor.
     pub(super) primary_selection_manager: Option<PrimarySelectionManagerState>,
+    /// Protocol object for primary selection device.
+    /// None if unsupported by compositor, or until first seat capability event is received.
     pub(super) primary_selection_device: Option<PrimarySelectionDevice>,
+    /// Outgoing primary selection: our source while we own primary selection.
+    /// Dropped when another client takes ownership.
     pub(super) primary_selection_source: Option<(PrimarySelectionSource, String)>,
+
     pub(super) shm: Shm,
     pub(super) mem_pool: RefCell<SlotPool>,
     pub(super) kde_blur_manager: Option<OrgKdeKwinBlurManager>,
@@ -110,6 +126,7 @@ impl WaylandState {
             surface_to_pending: HashMap::new(),
             data_device_manager_state: DataDeviceManagerState::bind(globals, qh)?,
             data_device: None,
+            copy_paste_offer: CopyPasteOffer::create(),
             copy_paste_source: None,
             primary_selection_manager: PrimarySelectionManagerState::bind(globals, qh).ok(),
             primary_selection_device: None,

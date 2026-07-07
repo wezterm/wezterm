@@ -217,7 +217,7 @@ _arguments "${_arguments_options[@]}" \
 _arguments "${_arguments_options[@]}" \
 '--pane-id=[Specify the target pane. The default is to use the current pane based on the environment variable WEZTERM_PANE]:PANE_ID: ' \
 '--start-line=[The starting line number. 0 is the first line of terminal screen. Negative numbers proceed backwards into the scrollback. The default value is unspecified is 0, the first line of the terminal screen]:START_LINE: ' \
-'--end-line=[The ending line number. 0 is the first line of terminal screen. Negative numbers proceed backwards into the scrollback. The default value if unspecified is the bottom of the the terminal screen]:END_LINE: ' \
+'--end-line=[The ending line number. 0 is the first line of terminal screen. Negative numbers proceed backwards into the scrollback. The default value if unspecified is the bottom of the terminal screen]:END_LINE: ' \
 '--escapes[Include escape sequences that color and style the text. If omitted, unattributed text will be returned]' \
 '-h[Print help]' \
 '--help[Print help]' \

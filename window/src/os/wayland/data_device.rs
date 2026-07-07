@@ -7,12 +7,11 @@ use wayland_client::protocol::wl_data_device_manager::DndAction;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::Proxy;
 
-use crate::wayland::drag_and_drop::SurfaceAndOffer;
 use crate::wayland::pointer::PointerUserData;
 use crate::wayland::SurfaceUserData;
 
 use super::copy_and_paste::write_selection_to_pipe;
-use super::drag_and_drop::{DragAndDrop, SurfaceAndPipe};
+use super::drag_and_drop::{DragAndDropSession, WindowAndPipe};
 use super::state::WaylandState;
 
 pub(super) const TEXT_MIME_TYPE: &str = "text/plain;charset=utf-8";
@@ -36,21 +35,25 @@ impl DataDeviceHandler for WaylandState {
             }
         };
 
-        let offer = data.drag_offer().unwrap();
+        let drag_offer = data.drag_offer().unwrap();
 
-        offer.with_mime_types(|mime_types| {
-            log::trace!(
-                "Data offer entered: {:?}, mime_types: {:?}",
-                offer,
-                mime_types
-            );
+        log::trace!("Data offer entered: {:?}", drag_offer);
+
+        // Skip the event if not for a top-level surface (no associated top-level user data)
+        let window_id = match SurfaceUserData::try_from_wl(&drag_offer.surface) {
+            Some(userdata) => userdata.window_id,
+            None => return,
+        };
+
+        drag_offer.with_mime_types(|mime_types| {
+            log::trace!("Data offer mime_types: {:?}", mime_types);
 
             if let Some(mime) = mime_types.iter().find(|s| *s == URI_MIME_TYPE) {
-                offer.accept_mime_type(*self.last_serial.borrow(), Some(mime.clone()));
+                drag_offer.accept_mime_type(*self.last_serial.borrow(), Some(mime.clone()));
             }
         });
 
-        offer.set_actions(DndAction::None | DndAction::Copy, DndAction::None);
+        drag_offer.set_actions(DndAction::None | DndAction::Copy, DndAction::None);
 
         let pointer = self.pointer.as_mut().unwrap();
         let mut pstate = pointer
@@ -61,9 +64,8 @@ impl DataDeviceHandler for WaylandState {
             .lock()
             .unwrap();
 
-        let window_id = SurfaceUserData::from_wl(&offer.surface).window_id;
-
-        pstate.drag_and_drop.offer = Some(SurfaceAndOffer { window_id, offer });
+        pstate.drag_and_drop_session = Some(DragAndDropSession { window_id, drag_offer });
+        log::trace!("DnD: session started for window_id={}", window_id);
     }
 
     fn leave(
@@ -80,8 +82,9 @@ impl DataDeviceHandler for WaylandState {
             .state
             .lock()
             .unwrap();
-        if let Some(SurfaceAndOffer { offer, .. }) = pstate.drag_and_drop.offer.take() {
-            offer.destroy();
+        if let Some(session) = pstate.drag_and_drop_session.take() {
+            session.drag_offer.destroy();
+            log::trace!("DnD: session ended for window_id={}", session.window_id);
         }
     }
 
@@ -111,10 +114,12 @@ impl DataDeviceHandler for WaylandState {
             if !offer.with_mime_types(|mime_types| mime_types.iter().any(|s| s == TEXT_MIME_TYPE)) {
                 return;
             }
-
-            if let Some(copy_and_paste) = self.resolve_copy_and_paste() {
-                copy_and_paste.lock().unwrap().confirm_selection(offer);
-            }
+            // The compositor sends the selection event once per client.
+            // ref: https://github.com/wezterm/wezterm/issues/6685
+            self.copy_paste_offer
+                .lock()
+                .unwrap()
+                .confirm_selection(offer);
         }
     }
 
@@ -132,15 +137,17 @@ impl DataDeviceHandler for WaylandState {
             .state
             .lock()
             .unwrap();
-        let drag_and_drop = &mut pstate.drag_and_drop;
-        if let Some(SurfaceAndPipe { window_id, read }) = drag_and_drop.create_pipe_for_drop() {
+        let Some(mut dnd_session) = pstate.drag_and_drop_session.take() else {
+            log::warn!("DnD: in drop_performed but no session active");
+            return;
+        };
+        if let Some(WindowAndPipe { window_id, read }) = dnd_session.create_pipe_for_drop() {
             std::thread::spawn(move || {
-                if let Some(paths) = DragAndDrop::read_paths_from_pipe(read) {
-                    DragAndDrop::dispatch_dropped_files(window_id, paths);
+                if let Some(paths) = DragAndDropSession::read_paths_from_pipe(read) {
+                    DragAndDropSession::dispatch_dropped_files(window_id, paths);
                 }
             });
         }
-        // if let Some(SurfaceAndOffer { offer, .. }) = pstate.drag_and_drop.offer.take() {
     }
 }
 

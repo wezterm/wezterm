@@ -81,7 +81,6 @@ impl WaylandDimensions for Dimensions {
     }
 }
 
-use super::copy_and_paste::CopyAndPaste;
 use super::pointer::{PendingMouse, PointerUserData};
 use super::state::WaylandState;
 
@@ -286,8 +285,7 @@ impl WaylandWindow {
             .set_window_geometry(x, y, surface_width, surface_height);
         window.commit();
 
-        let copy_and_paste = CopyAndPaste::create();
-        let pending_mouse = PendingMouse::create(window_id, &copy_and_paste);
+        let pending_mouse = PendingMouse::create(window_id);
 
         {
             let surface_to_pending = &mut conn.wayland_state.borrow_mut().surface_to_pending;
@@ -299,7 +297,6 @@ impl WaylandWindow {
         let inner = Rc::new(RefCell::new(WaylandWindowInner {
             events: WindowEventSender::new(event_handler),
             surface_factor: 1.0,
-            copy_and_paste,
             invalidated: false,
             window: Some(window),
             window_frame,
@@ -446,42 +443,55 @@ impl WindowOps for WaylandWindow {
         let mut promise = Promise::new();
         let future = promise.get_future().unwrap();
         let promise = Arc::new(Mutex::new(promise));
-        WaylandConnection::with_window_inner(self.0, move |inner| {
-            let read = inner
-                .copy_and_paste
+        promise::spawn::spawn_into_main_thread(async move {
+            let conn = crate::Connection::get().unwrap().wayland();
+            // Clone the Arc before dropping the borrow so get_clipboard_data can re-borrow
+            // wayland_state internally (so we don't have to pass all state manually).
+            let copy_paste_offer = conn.wayland_state.borrow().copy_paste_offer.clone();
+            match copy_paste_offer
                 .lock()
                 .unwrap()
-                .get_clipboard_data(clipboard)?;
-            let promise = Arc::clone(&promise);
-            std::thread::spawn(move || {
-                let mut promise = promise.lock().unwrap();
-                match read_pipe_with_timeout(read) {
-                    Ok(result) => {
-                        // Normalize the text to unix line endings, otherwise
-                        // copying from eg: firefox inserts a lot of blank
-                        // lines, and that is super annoying.
-                        promise.ok(result.replace("\r\n", "\n"));
-                    }
-                    Err(e) => {
-                        log::error!("while reading clipboard: {}", e);
-                        promise.err(anyhow!("{}", e));
-                    }
-                };
-            });
-            Ok(())
-        });
+                .get_clipboard_data(clipboard)
+            {
+                Ok(read) => {
+                    std::thread::spawn(move || {
+                        let mut promise = promise.lock().unwrap();
+                        match read_pipe_with_timeout(read) {
+                            Ok(result) => {
+                                // Normalize the text to unix line endings, otherwise
+                                // copying from eg: firefox inserts a lot of blank
+                                // lines, and that is super annoying.
+                                promise.ok(result.replace("\r\n", "\n"));
+                            }
+                            Err(e) => {
+                                log::error!("while reading clipboard: {}", e);
+                                promise.err(anyhow!("{}", e));
+                            }
+                        };
+                    });
+                }
+                Err(e) => {
+                    // Report the error on the Promise
+                    promise.lock().unwrap().err(e);
+                }
+            };
+        })
+        .detach();
         future
     }
 
     fn set_clipboard(&self, clipboard: Clipboard, text: String) {
-        WaylandConnection::with_window_inner(self.0, move |inner| {
-            inner
-                .copy_and_paste
+        promise::spawn::spawn_into_main_thread(async move {
+            let conn = crate::Connection::get().unwrap().wayland();
+            // Clone the Arc before dropping the borrow so set_clipboard_data can re-borrow
+            // wayland_state internally (so we don't have to pass all state manually).
+            let copy_paste_offer = conn.wayland_state.borrow().copy_paste_offer.clone();
+            copy_paste_offer
                 .lock()
                 .unwrap()
                 .set_clipboard_data(clipboard, text);
-            Ok(())
-        });
+        })
+        .detach();
     }
 
     fn toggle_fullscreen(&self) {
@@ -566,7 +576,6 @@ pub(crate) fn read_pipe_with_timeout(mut file: ReadPipe) -> anyhow::Result<Strin
 pub struct WaylandWindowInner {
     pub(crate) events: WindowEventSender,
     surface_factor: f64,
-    copy_and_paste: Arc<Mutex<CopyAndPaste>>,
     window: Option<XdgWindow>,
     pub(super) window_frame: FallbackFrame<WaylandState>,
     dimensions: Dimensions,
@@ -644,11 +653,15 @@ impl WaylandWindowInner {
                 .ok_or(anyhow!("Window does not exist"))?;
             let object_id = window.wl_surface().id();
 
-            wegl_surface = Some(WlEglSurface::new(
-                object_id,
-                self.dimensions.pixel_width as i32,
-                self.dimensions.pixel_height as i32,
-            )?);
+            // Align pixel dimensions to the integer buffer scale factor
+            // to satisfy the Wayland protocol requirement that buffer
+            // dimensions must be an integer multiple of the buffer_scale.
+            let surface_udata = SurfaceUserData::from_wl(window.wl_surface());
+            let scale = surface_udata.surface_data.scale_factor();
+            let pixel_width = (self.dimensions.pixel_width as i32 / scale) * scale;
+            let pixel_height = (self.dimensions.pixel_height as i32 / scale) * scale;
+
+            wegl_surface = Some(WlEglSurface::new(object_id, pixel_width, pixel_height)?);
 
             log::trace!("WEGL Surface here {:?}", wegl_surface);
 
@@ -875,6 +888,13 @@ impl WaylandWindowInner {
                         pixel_height = self.surface_to_pixels(h.try_into().unwrap());
                     }
                 }
+
+                // Align pixel dimensions to the integer buffer scale factor
+                // to satisfy the Wayland protocol requirement that buffer
+                // dimensions must be an integer multiple of the buffer_scale.
+                let scale = factor as i32;
+                pixel_width = (pixel_width / scale) * scale;
+                pixel_height = (pixel_height / scale) * scale;
 
                 log::trace!("Resizing frame");
                 if !self.window_frame.is_hidden() {
@@ -1474,17 +1494,27 @@ impl Dispatch<WlRegion, GlobalData> for WaylandState {
     }
 }
 
-pub(super) struct SurfaceUserData {
+/// User-data attached to each [`WlSurface`] via [`smithay_client_toolkit`].
+///
+/// Associates a surface with its owning window ID, allowing lookups
+/// from raw surface references (e.g. during DnD or pointer events).
+pub struct SurfaceUserData {
+    /// [`smithay_client_toolkit`] surface data
     surface_data: SurfaceData,
-    pub(super) window_id: usize,
+    /// ID of the window
+    pub window_id: usize,
 }
 
 impl SurfaceUserData {
-    pub(super) fn from_wl(wl: &WlSurface) -> &Self {
+    /// Returns the [`SurfaceUserData`] associated with the given [`WlSurface`].
+    pub fn from_wl(wl: &WlSurface) -> &Self {
         wl.data()
             .expect("User data should be associated with WlSurface")
     }
-    pub(super) fn try_from_wl(wl: &WlSurface) -> Option<&SurfaceUserData> {
+
+    /// Returns an [`Option`] with the [`SurfaceUserData`] associated with the given [`WlSurface`],
+    /// `None` if the surface has no associated user-data.
+    pub fn try_from_wl(wl: &WlSurface) -> Option<&SurfaceUserData> {
         wl.data()
     }
 }

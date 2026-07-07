@@ -18,7 +18,7 @@ on:
 
 jobs:
   build:
-    runs-on: "windows-2022"
+    runs-on: "windows-2025"
     
     env:
       CARGO_INCREMENTAL: "0"
@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: "recursive"
       - name: "Install Rust"
@@ -83,7 +83,7 @@ jobs:
         shell: bash
         run: "bash ci/deploy.sh"
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "windows"
           path: |
