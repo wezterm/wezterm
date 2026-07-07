@@ -1113,6 +1113,17 @@ impl TermWindow {
             anyhow::anyhow!("{}", e)
         }
 
+        let may_change_focus = matches!(
+            notif,
+            TermWindowNotif::MuxNotification(
+                MuxNotification::PaneFocused(_)
+                    | MuxNotification::PaneAdded(_)
+                    | MuxNotification::PaneRemoved(_)
+                    | MuxNotification::TabAddedToWindow { .. }
+                    | MuxNotification::WindowInvalidated(_)
+            )
+        );
+
         match notif {
             TermWindowNotif::InvalidateShapeCache => {
                 self.shape_generation += 1;
@@ -1283,7 +1294,6 @@ impl TermWindow {
                             tab.resize(self.terminal_size);
                         }
                     }
-                    self.test_and_emit_pane_focus_changed();
                 }
                 MuxNotification::PaneOutput(pane_id) => {
                     self.mux_pane_output_event(pane_id);
@@ -1291,7 +1301,6 @@ impl TermWindow {
                 MuxNotification::WindowInvalidated(_) => {
                     window.invalidate();
                     self.update_title_post_status();
-                    self.test_and_emit_pane_focus_changed();
                 }
                 MuxNotification::WindowRemoved(_window_id) => {
                     // Handled by frontend
@@ -1305,7 +1314,6 @@ impl TermWindow {
                 MuxNotification::PaneFocused(_) => {
                     // Also handled by clientpane
                     self.update_title_post_status();
-                    self.test_and_emit_pane_focus_changed();
                 }
                 MuxNotification::TabResized(_) => {
                     // Also handled by wezterm-client
@@ -1314,10 +1322,9 @@ impl TermWindow {
                 MuxNotification::TabTitleChanged { .. } => {
                     self.update_title_post_status();
                 }
-                MuxNotification::PaneAdded(_) | MuxNotification::PaneRemoved(_) => {
-                    self.test_and_emit_pane_focus_changed();
-                }
-                MuxNotification::WorkspaceRenamed { .. }
+                MuxNotification::PaneAdded(_)
+                | MuxNotification::WorkspaceRenamed { .. }
+                | MuxNotification::PaneRemoved(_)
                 | MuxNotification::WindowWorkspaceChanged(_)
                 | MuxNotification::ActiveWorkspaceChanged(_)
                 | MuxNotification::Empty
@@ -1360,6 +1367,10 @@ impl TermWindow {
             TermWindowNotif::SetInnerSize { width, height } => {
                 self.set_inner_size(window, width, height);
             }
+        }
+
+        if may_change_focus {
+            self.maybe_emit_pane_focus_changed();
         }
 
         Ok(())
@@ -1638,7 +1649,7 @@ impl TermWindow {
         }
     }
 
-    fn test_and_emit_pane_focus_changed(&mut self) {
+    fn maybe_emit_pane_focus_changed(&mut self) {
         let pane_id = match self.get_active_pane_no_overlay() {
             Some(pane) => pane.pane_id(),
             None => return,
