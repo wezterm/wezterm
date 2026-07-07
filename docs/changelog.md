@@ -75,6 +75,10 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* [InputSelector](config/lua/keyassignment/InputSelector.md) now accepts a
+  `selected_idx` field to choose which entry is highlighted when it opens
+  (defaults to the first; out-of-range falls back to 0). The selected row is
+  scrolled into view.
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
   and deserialization of JSON, TOML and YAML. Thanks to @expnn! #4969
 * `wezterm ssh` now supports agent forwarding. Thanks to @Riatre! #5345
