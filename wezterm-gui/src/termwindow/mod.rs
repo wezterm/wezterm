@@ -2200,7 +2200,7 @@ impl TermWindow {
 
             if let Some(pane) = self.get_active_pane_or_overlay() {
                 pane.focus_changed(true);
-                mux.notify(MuxNotification::PaneFocused(tab.pane_id()));
+                mux.notify(MuxNotification::PaneFocused(pane.pane_id()));
             }
 
             self.update_title();
