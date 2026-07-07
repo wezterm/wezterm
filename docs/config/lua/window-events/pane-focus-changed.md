@@ -3,7 +3,8 @@
 {{since('nightly')}}
 
 The `pane-focus-changed` event is emitted when a different pane becomes focused
-within a window, whether by switching tabs or by switching panes within a tab.
+within a window. This includes switching tabs, switching panes within a tab,
+and the focus changes that result from creating or destroying tabs and panes.
 
 This event is fire-and-forget from the perspective of wezterm; it fires the
 event to advise of the focus change, but has no other expectations.
