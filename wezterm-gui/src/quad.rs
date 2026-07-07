@@ -368,6 +368,7 @@ impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
         let src_quads: &[[Vertex; VERTICES_PER_CELL]] =
             unsafe { std::slice::from_raw_parts(vertices.as_ptr().cast(), vertices.len() / 4) };
 
+        dest_quads.reserve(src_quads.len());
         for quad in src_quads {
             dest_quads.push(Box::new(BoxedQuad::from_vertices(quad)));
         }

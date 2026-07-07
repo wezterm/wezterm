@@ -286,6 +286,68 @@ impl crate::TermWindow {
         Ok(quad)
     }
 
+    /// Draw a free-form quadrilateral cursor smear with four fully independent
+    /// corner positions (Neovide-style deforming cursor body).
+    ///
+    /// Corners are in SCREEN pixel coordinates; order matches Neovide's draw path:
+    ///   tl = top-left, tr = top-right, br = bottom-right, bl = bottom-left.
+    /// `corner_alphas`: per-corner alpha multipliers in TL/TR/BR/BL order.
+    /// When `None` all four corners use the base `color` alpha unchanged.
+    /// Pass `Some([a0,a1,a2,a3])` to implement a gradient (e.g. trailing
+    /// corners fade to 0.0 for the `cursor_smear_gradient` effect).
+    pub fn draw_cursor_deformed_quad(
+        &self,
+        layers: &mut TripleLayerQuadAllocator,
+        layer_num: usize,
+        tl: (f32, f32),
+        tr: (f32, f32),
+        br: (f32, f32),
+        bl: (f32, f32),
+        color: LinearRgba,
+        corner_alphas: Option<[f32; 4]>,
+    ) {
+        use crate::quad::{Vertex, V_BOT_LEFT, V_BOT_RIGHT, V_TOP_LEFT, V_TOP_RIGHT};
+
+        let left_offset = self.dimensions.pixel_width as f32 / 2.0;
+        let top_offset = self.dimensions.pixel_height as f32 / 2.0;
+
+        let gl_state = match self.render_state.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+        let tex = gl_state.util_sprites.filled_box.texture_coords();
+        let (tx1, tx2, ty1, ty2) = (tex.min_x(), tex.max_x(), tex.min_y(), tex.max_y());
+
+        const IS_SOLID_COLOR: f32 = 3.0;
+        let (r, g, b, a) = color.tuple();
+
+        let col_for = |idx: usize| -> [f32; 4] {
+            let alpha = match corner_alphas {
+                Some(ref alphas) => alphas[idx],
+                None => a,
+            };
+            [r, g, b, alpha]
+        };
+
+        let mk = |px: f32, py: f32, u: f32, v: f32, col: [f32; 4]| Vertex {
+            position: [px - left_offset, py - top_offset],
+            tex: [u, v],
+            fg_color: col,
+            alt_color: col,
+            hsv: [1.0, 1.0, 1.0],
+            has_color: IS_SOLID_COLOR,
+            mix_value: 0.0,
+        };
+
+        let mut verts = [Vertex::default(); 4];
+        verts[V_TOP_LEFT] = mk(tl.0, tl.1, tx1, ty1, col_for(0));
+        verts[V_TOP_RIGHT] = mk(tr.0, tr.1, tx2, ty1, col_for(1));
+        verts[V_BOT_LEFT] = mk(bl.0, bl.1, tx1, ty2, col_for(3));
+        verts[V_BOT_RIGHT] = mk(br.0, br.1, tx2, ty2, col_for(2));
+
+        layers.extend_with(layer_num, &verts);
+    }
+
     pub fn poly_quad<'a>(
         &self,
         layers: &'a mut TripleLayerQuadAllocator,

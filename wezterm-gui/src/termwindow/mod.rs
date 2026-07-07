@@ -18,6 +18,7 @@ use crate::tabbar::{TabBarItem, TabBarState};
 use crate::termwindow::background::{
     load_background_image, reload_background_image, LoadedBackgroundLayer,
 };
+use crate::termwindow::cursortrail::CursorTrailState;
 use crate::termwindow::keyevent::{KeyTableArgs, KeyTableState};
 use crate::termwindow::modal::Modal;
 use crate::termwindow::render::paint::AllowImage;
@@ -72,6 +73,7 @@ pub mod background;
 pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
+mod cursortrail;
 pub mod keyevent;
 pub mod modal;
 mod mouseevent;
@@ -401,6 +403,7 @@ pub struct TermWindow {
     window_drag_position: Option<MouseEvent>,
     current_mouse_event: Option<MouseEvent>,
     prev_cursor: PrevCursorPos,
+    cursor_trail_states: RefCell<HashMap<PaneId, CursorTrailState>>,
     last_scroll_info: RenderableDimensions,
 
     tab_state: RefCell<HashMap<TabId, TabState>>,
@@ -719,6 +722,7 @@ impl TermWindow {
             current_mouse_event: None,
             current_modifier_and_leds: Default::default(),
             prev_cursor: PrevCursorPos::new(),
+            cursor_trail_states: RefCell::new(HashMap::new()),
             last_scroll_info: RenderableDimensions::default(),
             tab_state: RefCell::new(HashMap::new()),
             pane_state: RefCell::new(HashMap::new()),
@@ -1308,9 +1312,11 @@ impl TermWindow {
                 MuxNotification::TabTitleChanged { .. } => {
                     self.update_title_post_status();
                 }
+                MuxNotification::PaneRemoved(pane_id) => {
+                    self.cursor_trail_states.borrow_mut().remove(&pane_id);
+                }
                 MuxNotification::PaneAdded(_)
                 | MuxNotification::WorkspaceRenamed { .. }
-                | MuxNotification::PaneRemoved(_)
                 | MuxNotification::WindowWorkspaceChanged(_)
                 | MuxNotification::ActiveWorkspaceChanged(_)
                 | MuxNotification::Empty
@@ -1777,6 +1783,7 @@ impl TermWindow {
         );
 
         self.show_scroll_bar = config.enable_scroll_bar;
+        self.cursor_trail_states.borrow_mut().clear();
         self.shape_generation += 1;
         {
             let mut shape_cache = self.shape_cache.borrow_mut();

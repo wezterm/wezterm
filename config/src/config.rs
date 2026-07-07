@@ -653,6 +653,53 @@ pub struct Config {
     #[dynamic(default = "default_reverse_video_cursor_min_contrast")]
     pub reverse_video_cursor_min_contrast: f32,
 
+    /// Enables the cursor smear effect: a fading parallelogram trail drawn between
+    /// the previous and current cursor positions during animated movement.
+    #[dynamic(default)]
+    pub cursor_smear: bool,
+    /// When `true`, the cursor smear fades from fully transparent at the tail to
+    /// the full cursor colour at the head, giving a comet-like gradient effect.
+    /// When `false`, the smear is rendered at a uniform opacity along its length.
+    #[dynamic(default = "default_cursor_smear_gradient")]
+    pub cursor_smear_gradient: bool,
+    /// Determines the time it takes for the cursor smear to complete its animation
+    /// on large moves (>= `cursor_trail_min_distance` cells), in seconds.
+    /// Set to `0.0` to snap the cursor instantly on large moves.
+    #[dynamic(default = "default_cursor_animation_duration")]
+    pub cursor_animation_duration: f32,
+    /// Controls how much the tail of the cursor trails the head during the smear
+    /// effect. `1.0` gives the maximum trail — the head jumps immediately to the
+    /// destination while the tail catches up. Lower values produce a shorter, less
+    /// dramatic trail. `0.0` disables the visible trail entirely.
+    #[dynamic(default = "default_cursor_trail_size")]
+    pub cursor_trail_size: f32,
+    /// Selects the particle / highlight style for the cursor VFX trail.
+    /// When unset (the default) no particles are spawned; cursor smearing is
+    /// still available independently via `cursor_smear`.
+    #[dynamic(default)]
+    pub cursor_trail_style: Option<CursorTrailStyle>,
+    #[dynamic(default = "default_cursor_trail_min_distance")]
+    pub cursor_trail_min_distance: usize,
+    /// Controls the opacity of cursor VFX particles and highlights.
+    /// `1.0` is fully opaque, `0.0` is invisible.
+    #[dynamic(default = "default_cursor_vfx_opacity")]
+    pub cursor_vfx_opacity: f32,
+    /// Controls how long cursor VFX particles persist, in seconds.
+    /// Higher values create longer-lasting trails.
+    #[dynamic(default = "default_cursor_vfx_particle_lifetime")]
+    pub cursor_vfx_particle_lifetime: f32,
+    /// Controls how many particles are spawned per cell of cursor movement.
+    /// Higher values create denser trails.
+    #[dynamic(default = "default_cursor_vfx_particle_density")]
+    pub cursor_vfx_particle_density: f32,
+    /// Controls the initial speed of cursor VFX particles (in cells per second).
+    /// Higher values make particles fly further and faster from the cursor.
+    #[dynamic(default = "default_cursor_vfx_particle_speed")]
+    pub cursor_vfx_particle_speed: f32,
+    /// Controls the maximum diameter of cursor VFX particles as a fraction of
+    /// the cell width.  1.0 = one full cell wide.  Default 0.5.
+    #[dynamic(default = "default_cursor_vfx_particle_size")]
+    pub cursor_vfx_particle_size: f32,
     /// Specifies the default cursor style.  various escape sequences
     /// can override the default style in different situations (eg:
     /// an editor can change it depending on the mode), but this value
@@ -1675,6 +1722,42 @@ fn default_cursor_blink_rate() -> u64 {
     800
 }
 
+fn default_cursor_trail_min_distance() -> usize {
+    4
+}
+
+fn default_cursor_smear_gradient() -> bool {
+    false
+}
+
+fn default_cursor_animation_duration() -> f32 {
+    0.150
+}
+
+fn default_cursor_trail_size() -> f32 {
+    1.0
+}
+
+fn default_cursor_vfx_opacity() -> f32 {
+    0.6
+}
+
+fn default_cursor_vfx_particle_lifetime() -> f32 {
+    0.35
+}
+
+fn default_cursor_vfx_particle_density() -> f32 {
+    0.7
+}
+
+fn default_cursor_vfx_particle_speed() -> f32 {
+    8.0
+}
+
+fn default_cursor_vfx_particle_size() -> f32 {
+    0.5
+}
+
 fn default_text_blink_rate() -> u64 {
     500
 }
@@ -1892,6 +1975,25 @@ fn default_inactive_pane_hsb() -> HsbTransform {
         saturation: 0.9,
         hue: 1.0,
     }
+}
+
+/// Particle / highlight style for the cursor trail animation.
+/// Used as `cursor_trail_style` in config; leave unset for no particles
+/// (cursor smearing is controlled separately by `cursor_smear`).
+#[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, PartialEq)]
+pub enum CursorTrailStyle {
+    /// Railgun: sinusoidal particle stream along the movement vector.
+    Railgun,
+    /// Torpedo: particles that scatter opposing the travel direction.
+    Torpedo,
+    /// PixieDust: small squares that fall with gravity.
+    PixieDust,
+    /// SonicBoom: an expanding filled square at the cursor destination.
+    SonicBoom,
+    /// Ripple: an expanding hollow ring at the cursor destination.
+    Ripple,
+    /// Wireframe: an expanding hollow rectangle at the cursor destination.
+    Wireframe,
 }
 
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default)]

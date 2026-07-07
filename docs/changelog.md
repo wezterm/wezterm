@@ -143,6 +143,12 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @masriomarm! #6895
 * Indicate support for OSC 52 (clipboard extensions) in Primary DA Response.
   Thanks to @j4james! #7046
+* Opt-in cursor trail and smear effects, inspired by
+  [Neovide](https://github.com/neovide/neovide): a Neovide-style 4-corner
+  deforming smear plus optional particle / highlight styles (`Torpedo`,
+  `PixieDust`, `Railgun`, `SonicBoom`, `Ripple`, `Wireframe`). All effects are
+  disabled by default; see [cursor_smear](config/lua/config/cursor_smear.md)
+  for details and related options. Thanks to @MathurinV! #7387
 
 #### Fixed
 * Race condition when very quickly adjusting font scale, and other improvements
