@@ -260,6 +260,12 @@ pub struct Config {
     #[dynamic(default)]
     pub enable_title_reporting: bool,
 
+    /// Whether the terminal should respond to DECRQCRA checksum requests.
+    /// Disabled by default as it allows programs to read screen contents.
+    /// <https://vt100.net/docs/vt510-rm/DECRQCRA.html>
+    #[dynamic(default)]
+    pub enable_checksum_rectangular_area: bool,
+
     /// Specifies the width of a new window, expressed in character cells
     #[dynamic(default = "default_initial_cols", validate = "validate_row_or_col")]
     pub initial_cols: u16,

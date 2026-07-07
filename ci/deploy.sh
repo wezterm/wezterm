@@ -16,6 +16,7 @@ if test -e /etc/os-release; then
   . /etc/os-release
 fi
 
+echo "OSTYPE is $OSTYPE"
 
 case $OSTYPE in
   darwin*)
@@ -100,7 +101,7 @@ case $OSTYPE in
     sed -e "s/@TAG@/$TAG_NAME/g" -e "s/@SHA256@/$SHA256/g" < ci/wezterm-homebrew-macos.rb.template > wezterm.rb
 
     ;;
-  msys)
+  msys|cygwin)
     zipdir=WezTerm-windows-$TAG_NAME
     if [[ "$BUILD_REASON" == "Schedule" ]] ; then
       zipname=WezTerm-windows-nightly.zip

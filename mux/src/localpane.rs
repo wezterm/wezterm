@@ -721,23 +721,33 @@ impl Pane for LocalPane {
                 CompiledPattern::Regex(re) => {
                     // Allow for the regex to contain captures
                     for capture_res in re.captures_iter(&haystack) {
-                        if let Ok(c) = capture_res {
-                            // Look for the captures in reverse order, as index==0 is
-                            // the whole matched string.  We can't just call
-                            // `c.iter().rev()` as the capture iterator isn't double-ended.
-                            for idx in (0..c.len()).rev() {
-                                if let Some(m) = c.get(idx) {
-                                    found_match(
-                                        m.as_str(),
-                                        m.start(),
-                                        lines,
-                                        stable_idx,
-                                        &mut uniq_matches,
-                                        &mut coords,
-                                        &mut results,
-                                    );
-                                    break;
+                        match capture_res {
+                            Ok(c) => {
+                                // Look for the captures in reverse order, as index==0 is
+                                // the whole matched string.  We can't just call
+                                // `c.iter().rev()` as the capture iterator isn't double-ended.
+                                for idx in (0..c.len()).rev() {
+                                    if let Some(m) = c.get(idx) {
+                                        found_match(
+                                            m.as_str(),
+                                            m.start(),
+                                            lines,
+                                            stable_idx,
+                                            &mut uniq_matches,
+                                            &mut coords,
+                                            &mut results,
+                                        );
+                                        break;
+                                    }
                                 }
+                            }
+                            Err(err) => {
+                                // On errors like max backtracking limit reached, fancy_regex does
+                                // NOT advance the iterator position, so silently ignoring Err
+                                // would loop forever.
+                                log::warn!("line {stable_idx} search error: {err}");
+                                log::warn!("stopping collecting matches on line {stable_idx}");
+                                break;
                             }
                         }
                     }
