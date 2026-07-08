@@ -19,7 +19,7 @@ use percent_encoding::percent_decode_str;
 use portable_pty::{CommandBuilder, ExitStatus, PtySize};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
-use std::io::{Read, Write};
+use std::io::Read;
 #[cfg(windows)]
 use std::os::raw::c_int;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -137,7 +137,178 @@ fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: V
     histogram!("send_actions_to_mux.rate").record(1.);
 }
 
-fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
+// Channel-based parser: consumes chunks of bytes sent via a channel.
+// This implementation is used for the Windows in-process channel path
+// and implements the same coalescing behavior as the socket-based
+// implementation (wait up to `delay` for more data before flushing
+// parsed actions).
+fn parse_buffered_data_chan(
+    pane: Weak<dyn Pane>,
+    dead: &Arc<AtomicBool>,
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    let mut parser = termwiz::escape::parser::Parser::new();
+    let mut actions = vec![];
+    let mut hold = false;
+    let mut action_size = 0usize;
+    let mut delay = Duration::from_millis(configuration().mux_output_parser_coalesce_delay_ms);
+
+    loop {
+        // Block until we receive the next chunk or the sender is dropped.
+        let chunk = match rx.recv() {
+            Ok(c) => c,
+            Err(_) => {
+                dead.store(true, Ordering::Relaxed);
+                break;
+            }
+        };
+
+        // Feed the received chunk into the parser.
+        parser.parse(&chunk, |action| {
+            let mut flush = false;
+            match &action {
+                Action::CSI(CSI::Mode(Mode::SetDecPrivateMode(DecPrivateMode::Code(
+                    DecPrivateModeCode::SynchronizedOutput,
+                )))) => {
+                    hold = true;
+
+                    if !actions.is_empty() {
+                        send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+                        action_size = 0;
+                    }
+                }
+                Action::CSI(CSI::Mode(Mode::ResetDecPrivateMode(DecPrivateMode::Code(
+                    DecPrivateModeCode::SynchronizedOutput,
+                )))) => {
+                    hold = false;
+                    flush = true;
+                }
+                Action::CSI(CSI::Device(dev)) if matches!(**dev, Device::SoftReset) => {
+                    hold = false;
+                    flush = true;
+                }
+                _ => {}
+            };
+            action.append_to(&mut actions);
+
+            if flush && !actions.is_empty() {
+                send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+                action_size = 0;
+            }
+        });
+
+        action_size += chunk.len();
+
+        if !actions.is_empty() && !hold {
+            // If we haven't accumulated too much data, wait a short while
+            // to see if more arrives so we can coalesce frames.
+            if action_size < configuration().mux_output_parser_buffer_size {
+                // Wait up to `delay` for another chunk. If we get one, loop
+                // and process it before possibly flushing. If we time out,
+                // flush what we have.
+                match rx.recv_timeout(delay) {
+                    Ok(next_chunk) => {
+                        // push next_chunk back into the parser path by continuing
+                        // the outer loop with that chunk; but we already have
+                        // processed `chunk` so we need to process `next_chunk`
+                        // immediately. Achieve this by assigning chunk = next_chunk
+                        // and continuing the outer loop. To avoid allocation juggling,
+                        // we'll use an inner loop: create a small vector to hold
+                        // the pending chunk(s).
+                        let mut pending = next_chunk;
+                        loop {
+                            parser.parse(&pending, |action| {
+                                let mut flush = false;
+                                match &action {
+                                    Action::CSI(CSI::Mode(Mode::SetDecPrivateMode(
+                                        DecPrivateMode::Code(
+                                            DecPrivateModeCode::SynchronizedOutput,
+                                        ),
+                                    ))) => {
+                                        hold = true;
+
+                                        if !actions.is_empty() {
+                                            send_actions_to_mux(
+                                                &pane,
+                                                &dead,
+                                                std::mem::take(&mut actions),
+                                            );
+                                            action_size = 0;
+                                        }
+                                    }
+                                    Action::CSI(CSI::Mode(Mode::ResetDecPrivateMode(
+                                        DecPrivateMode::Code(
+                                            DecPrivateModeCode::SynchronizedOutput,
+                                        ),
+                                    ))) => {
+                                        hold = false;
+                                        flush = true;
+                                    }
+                                    Action::CSI(CSI::Device(dev))
+                                        if matches!(**dev, Device::SoftReset) =>
+                                    {
+                                        hold = false;
+                                        flush = true;
+                                    }
+                                    _ => {}
+                                };
+                                action.append_to(&mut actions);
+
+                                if flush && !actions.is_empty() {
+                                    send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+                                    action_size = 0;
+                                }
+                            });
+
+                            action_size += pending.len();
+
+                            if action_size >= configuration().mux_output_parser_buffer_size || hold
+                            {
+                                break;
+                            }
+
+                            // Try to fetch another chunk quickly without waiting the full delay.
+                            match rx.recv_timeout(delay) {
+                                Ok(more) => {
+                                    pending = more;
+                                    continue;
+                                }
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                                Err(_) => {
+                                    dead.store(true, Ordering::Relaxed);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        // timed out: flush what we have
+                        send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+                        action_size = 0;
+                    }
+                    Err(_) => {
+                        dead.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                }
+            }
+
+            if !actions.is_empty() {
+                send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+                action_size = 0;
+            }
+        }
+
+        delay = Duration::from_millis(configuration().mux_output_parser_coalesce_delay_ms);
+    }
+
+    if !actions.is_empty() {
+        send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+    }
+}
+
+// Original FileDescriptor-based parser kept for non-Windows platforms
+fn parse_buffered_data_fd(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
     let mut buf = vec![0; configuration().mux_output_parser_buffer_size];
     let mut parser = termwiz::escape::parser::Parser::new();
     let mut actions = vec![];
@@ -292,28 +463,19 @@ fn read_from_pane_pty(
         None => return,
     };
 
-    let (mut tx, rx) = match allocate_socketpair() {
-        Ok(pair) => pair,
-        Err(err) => {
-            log::error!("read_from_pane_pty: Unable to allocate a socketpair: {err:#}");
-            localpane::emit_output_for_pane(
-                pane_id,
-                &format!(
-                    "⚠️  wezterm: read_from_pane_pty: \
-                    Unable to allocate a socketpair: {err:#}"
-                ),
-            );
-            return;
-        }
+    let sender = {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        // spawn parser thread consuming from the channel
+        std::thread::spawn({
+            let dead = Arc::clone(&dead);
+            let pane = pane.clone();
+            move || parse_buffered_data_chan(pane, &dead, rx)
+        });
+        tx
     };
 
-    std::thread::spawn({
-        let dead = Arc::clone(&dead);
-        move || parse_buffered_data(pane, &dead, rx)
-    });
-
     if let Some(banner) = banner {
-        tx.write_all(banner.as_bytes()).ok();
+        let _ = sender.send(banner.into_bytes());
     }
 
     while !dead.load(Ordering::Relaxed) {
@@ -329,12 +491,14 @@ fn read_from_pane_pty(
             Ok(size) => {
                 histogram!("read_from_pane_pty.bytes.rate").record(size as f64);
                 log::trace!("read_pty pane {pane_id} read {size} bytes");
-                if let Err(err) = tx.write_all(&buf[..size]) {
-                    error!(
-                        "read_pty failed to write to parser: pane {} {:?}",
-                        pane_id, err
-                    );
-                    break;
+                {
+                    if sender.send((&buf[..size]).to_vec()).is_err() {
+                        error!(
+                            "read_pty failed to write to parser (channel closed): pane {}",
+                            pane_id
+                        );
+                        break;
+                    }
                 }
             }
         }
