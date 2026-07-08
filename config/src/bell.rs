@@ -81,3 +81,18 @@ impl Default for AudibleBell {
         Self::SystemBeep
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
+pub enum BellUrgencyHint {
+    /// Set the urgency hint on the window when a BEL character is received
+    /// and the window is not focused
+    Enabled,
+    /// Do not set the urgency hint
+    Disabled,
+}
+
+impl Default for BellUrgencyHint {
+    fn default() -> Self {
+        Self::Disabled
+    }
+}

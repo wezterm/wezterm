@@ -502,6 +502,7 @@ impl Window {
                 ime_last_event: None,
                 live_resizing: false,
                 ime_text: String::new(),
+                attention_request_id: None,
             }));
 
             let window: id = msg_send![get_window_class(), alloc];
@@ -848,6 +849,13 @@ impl WindowOps for Window {
     fn restore(&self) {
         Connection::with_window_inner(self.id, move |inner| {
             inner.restore();
+            Ok(())
+        });
+    }
+
+    fn set_attention_hint(&self, enabled: bool) {
+        Connection::with_window_inner(self.id, move |inner| {
+            inner.set_attention_hint(enabled)?;
             Ok(())
         });
     }
@@ -1336,6 +1344,13 @@ impl WindowInner {
         }
     }
 
+    fn set_attention_hint(&mut self, enable: bool) -> anyhow::Result<()> {
+        if let Some(window_view) = WindowView::get_this(unsafe { &**self.view }) {
+            window_view.inner.borrow_mut().set_attention_hint(enable)?;
+        }
+        Ok(())
+    }
+
     fn config_did_change(&mut self, config: &ConfigHandle) {
         let dpi_changed =
             self.config.dpi != config.dpi || self.config.dpi_by_screen != config.dpi_by_screen;
@@ -1572,6 +1587,9 @@ struct Inner {
     live_resizing: bool,
 
     ime_text: String,
+
+    /// Request ID from requestUserAttention, used for cancellation
+    attention_request_id: Option<NSInteger>,
 }
 
 #[repr(C)]
@@ -1815,6 +1833,29 @@ impl Inner {
         } else {
             Ok(TranslateStatus::NotDead)
         }
+    }
+
+    fn set_attention_hint(&mut self, enable: bool) -> anyhow::Result<()> {
+        unsafe {
+            use cocoa::appkit::NSApp;
+
+            let app = NSApp();
+
+            if enable {
+                let request_id: NSInteger = msg_send![
+                    app,
+                    requestUserAttention: 10 // NSInformationalRequest
+                ];
+                self.attention_request_id = Some(request_id);
+                log::trace!("Requested user attention with ID: {}", request_id);
+            } else {
+                if let Some(request_id) = self.attention_request_id.take() {
+                    let _: () = msg_send![app, cancelUserAttentionRequest: request_id];
+                    log::trace!("Cancelled user attention request ID: {}", request_id);
+                }
+            }
+        }
+        Ok(())
     }
 }
 

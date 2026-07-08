@@ -331,6 +331,13 @@ pub trait WindowOps {
     fn restore(&self) {}
     fn focus(&self) {}
 
+    /// Request or clear the urgency/attention hint on the window.
+    /// On X11: Sets _NET_WM_STATE_DEMANDS_ATTENTION
+    /// On Wayland: May not be supported or use compositor protocols
+    /// On macOS: Bounces the dock icon
+    /// On Windows: Flashes the taskbar
+    fn set_attention_hint(&self, _enabled: bool) {}
+
     fn toggle_fullscreen(&self) {}
 
     fn config_did_change(&self, _config: &config::ConfigHandle) {}

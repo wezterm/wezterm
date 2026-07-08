@@ -81,6 +81,10 @@ impl UserData for GuiWin {
             this.window.focus();
             Ok(())
         });
+        methods.add_method("request_attention", |_, this, enabled: bool| {
+            this.window.set_attention_hint(enabled);
+            Ok(())
+        });
         methods.add_method(
             "toast_notification",
             |_, _, (title, message, url, timeout): (String, String, Option<String>, Option<u64>)| {

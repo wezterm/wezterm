@@ -1,5 +1,5 @@
 use crate::background::{BackgroundLayer, Gradient};
-use crate::bell::{AudibleBell, EasingFunction, VisualBell};
+use crate::bell::{AudibleBell, BellUrgencyHint, EasingFunction, VisualBell};
 use crate::color::{
     ColorSchemeFile, HsbTransform, Palette, SrgbaTuple, TabBarStyle, WindowFrameConfig,
 };
@@ -841,6 +841,9 @@ pub struct Config {
 
     #[dynamic(default)]
     pub audible_bell: AudibleBell,
+
+    #[dynamic(default)]
+    pub bell_urgency_hint: BellUrgencyHint,
 
     #[dynamic(default)]
     pub canonicalize_pasted_newlines: Option<NewlineCanon>,

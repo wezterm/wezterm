@@ -26,4 +26,4 @@ end)
 return {}
 ```
 
-See also [audible_bell](../config/audible_bell.md) and [visual_bell](../config/visual_bell.md).
+See also [audible_bell](../config/audible_bell.md), [visual_bell](../config/visual_bell.md), and [bell_urgency_hint](../config/bell_urgency_hint.md).

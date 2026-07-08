@@ -528,6 +528,11 @@ impl TermWindow {
         self.quad_generation += 1;
         self.load_os_parameters();
 
+        // Clear urgency hint when window gains focus
+        if focused {
+            window.set_attention_hint(false);
+        }
+
         if self.focused.is_none() {
             self.last_mouse_click = None;
             self.current_mouse_buttons.clear();
@@ -1237,6 +1242,12 @@ impl TermWindow {
                             Connection::get().expect("on main thread").beep();
                         }
                         AudibleBell::Disabled => {}
+                    }
+
+                    if self.config.bell_urgency_hint == config::BellUrgencyHint::Enabled
+                        && self.focused.is_none()
+                    {
+                        window.set_attention_hint(true);
                     }
 
                     log::trace!("Ding! (this is the bell) in pane {}", pane_id);

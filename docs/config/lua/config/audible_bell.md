@@ -17,5 +17,5 @@ The follow are possible values:
 * `"Disabled"` - don't make a sound
 
 
-See also [visual_bell](visual_bell.md) and [bell event](../window-events/bell.md)
+See also [visual_bell](visual_bell.md), [bell_urgency_hint](bell_urgency_hint.md), and [bell event](../window-events/bell.md)
 
