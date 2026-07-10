@@ -131,6 +131,8 @@ impl super::TermWindow {
                 }
                 if press == &MousePress::Left && self.dragging.take().is_some() {
                     // Completed a drag
+                    self.dragging_tab_start_offset = None;
+                    context.invalidate();
                     return;
                 }
             }
@@ -345,6 +347,7 @@ impl super::TermWindow {
         tab_idx: TabId,
         start_event: MouseEvent,
         event: MouseEvent,
+        context: &dyn WindowOps,
     ) {
         let current_x = event.coords.x;
         let drag_right = current_x.saturating_sub(start_event.coords.x) > 0;
@@ -369,6 +372,9 @@ impl super::TermWindow {
         // the overall (from first click that initiated drag), so we always replace
         // the start_event.
         self.dragging.replace((item, event));
+        // The floating drag preview tracks the live cursor position, so
+        // every move needs a repaint, not just moves that trigger a swap.
+        context.invalidate();
     }
 
     fn drag_ui_item(
@@ -388,7 +394,7 @@ impl super::TermWindow {
                 self.drag_scroll_thumb(item, start_event, event, context);
             }
             UIItemType::TabBar(TabBarItem::Tab { tab_idx, .. }) => {
-                self.drag_reorder_tab(item, tab_idx, start_event, event);
+                self.drag_reorder_tab(item, tab_idx, start_event, event, context);
             }
             _ => {
                 log::error!("drag not implemented for {:?}", item);
@@ -507,6 +513,7 @@ impl super::TermWindow {
                 TabBarItem::Tab { tab_idx, .. } => {
                     self.activate_tab(tab_idx as isize).ok();
                     // For reordering tabs
+                    self.dragging_tab_start_offset = Some(event.coords.x - item.x as isize);
                     self.dragging = Some((item, event));
                 }
                 TabBarItem::NewTabButton { .. } => {
