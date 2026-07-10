@@ -67,29 +67,59 @@ lazy_static! {
 }
 
 pub struct PsuedoCon {
-    con: HPCON,
+    con: Option<HPCON>,
 }
 
 unsafe impl Send for PsuedoCon {}
 unsafe impl Sync for PsuedoCon {}
 
+pub(crate) struct DetachedPseudoConsole(HPCON);
+
+unsafe impl Send for DetachedPseudoConsole {}
+
+impl DetachedPseudoConsole {
+    pub(crate) fn close(self) {
+        close_pseudo_console(self.0);
+    }
+}
+
+fn close_pseudo_console(con: HPCON) {
+    let started = Instant::now();
+    log::warn!(
+        "[close-tab-diagnostic] ClosePseudoConsole begin hpc={:p} thread={:?}",
+        con,
+        std::thread::current().id()
+    );
+    unsafe { (CONPTY.ClosePseudoConsole)(con) };
+    log::warn!(
+        "[close-tab-diagnostic] ClosePseudoConsole end hpc={:p} elapsed_ms={} thread={:?}",
+        con,
+        started.elapsed().as_millis(),
+        std::thread::current().id()
+    );
+}
+
 impl Drop for PsuedoCon {
     fn drop(&mut self) {
-        let started = Instant::now();
-        log::warn!(
-            "[close-tab-diagnostic] ClosePseudoConsole begin hpc={:p}",
-            self.con
-        );
-        unsafe { (CONPTY.ClosePseudoConsole)(self.con) };
-        log::warn!(
-            "[close-tab-diagnostic] ClosePseudoConsole end hpc={:p} elapsed_ms={}",
-            self.con,
-            started.elapsed().as_millis()
-        );
+        if let Some(con) = self.con.take() {
+            close_pseudo_console(con);
+        }
     }
 }
 
 impl PsuedoCon {
+    fn handle(&self) -> HPCON {
+        self.con.expect("pseudo console has already been detached")
+    }
+
+    pub(crate) fn detach(mut self) -> DetachedPseudoConsole {
+        DetachedPseudoConsole(
+            self.con
+                .take()
+                .expect("pseudo console has already been detached"),
+        )
+    }
+
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
         let result = unsafe {
@@ -108,11 +138,11 @@ impl PsuedoCon {
             "failed to create psuedo console: HRESULT {}",
             result
         );
-        Ok(Self { con })
+        Ok(Self { con: Some(con) })
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {
-        let result = unsafe { (CONPTY.ResizePseudoConsole)(self.con, size) };
+        let result = unsafe { (CONPTY.ResizePseudoConsole)(self.handle(), size) };
         ensure!(
             result == S_OK,
             "failed to resize console to {}x{}: HRESULT: {}",
@@ -138,7 +168,7 @@ impl PsuedoCon {
         si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
 
         let mut attrs = ProcThreadAttributeList::with_capacity(1)?;
-        attrs.set_pty(self.con)?;
+        attrs.set_pty(self.handle())?;
         si.lpAttributeList = attrs.as_mut_ptr();
 
         let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };

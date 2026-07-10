@@ -277,6 +277,21 @@ impl Pane for LocalPane {
             }
             _ => {}
         }
+
+        drop(proc);
+
+        #[cfg(windows)]
+        {
+            let shutdown_started = Instant::now();
+            let result = self.pty.lock().shutdown();
+            log::warn!(
+                "[close-tab-diagnostic] LocalPane::kill pty shutdown scheduled pane_id={} elapsed_ms={} result={:?}",
+                self.pane_id,
+                shutdown_started.elapsed().as_millis(),
+                result
+            );
+        }
+
         log::warn!(
             "[close-tab-diagnostic] LocalPane::kill end pane_id={} elapsed_ms={}",
             self.pane_id,
@@ -1172,6 +1187,11 @@ impl Drop for LocalPane {
         // <https://github.com/wezterm/wezterm/issues/558>
         if let ProcessState::Running { signaller, .. } = &mut *self.process.lock() {
             let _ = signaller.kill();
+        }
+
+        #[cfg(windows)]
+        if let Err(err) = self.pty.get_mut().shutdown() {
+            log::error!("failed to schedule pty shutdown while dropping pane: {err:#}");
         }
     }
 }

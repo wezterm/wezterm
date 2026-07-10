@@ -151,6 +151,45 @@ pub enum TermWindowNotif {
     },
 }
 
+struct CloseTabFallback {
+    tab_id: Option<TabId>,
+}
+
+impl CloseTabFallback {
+    fn new(tab_id: TabId) -> Self {
+        Self {
+            tab_id: Some(tab_id),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.tab_id = None;
+    }
+}
+
+impl Drop for CloseTabFallback {
+    fn drop(&mut self) {
+        let Some(tab_id) = self.tab_id.take() else {
+            return;
+        };
+
+        // Window::notify silently drops a notification if its native window
+        // disappears before dispatch.  The user already confirmed this close,
+        // so preserve the mux operation even when overlay cleanup is no longer
+        // possible.
+        promise::spawn::spawn_into_main_thread(async move {
+            if let Some(mux) = Mux::try_get() {
+                log::warn!(
+                    "[close-tab-diagnostic] window notification dropped; applying close fallback tab_id={}",
+                    tab_id
+                );
+                mux.remove_tab(tab_id);
+            }
+        })
+        .detach();
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UIItemType {
     TabBar(TabBarItem),
@@ -3563,7 +3602,9 @@ impl TermWindow {
     }
 
     pub fn schedule_close_tab_after_confirmation(window: Window, tab_id: TabId) {
+        let fallback = CloseTabFallback::new(tab_id);
         window.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+            let mut fallback = fallback;
             let started = Instant::now();
             log::warn!(
                 "[close-tab-diagnostic] main-thread close begin tab_id={}",
@@ -3584,6 +3625,7 @@ impl TermWindow {
                 removed,
                 started.elapsed().as_millis()
             );
+            fallback.disarm();
         })));
     }
 

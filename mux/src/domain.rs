@@ -536,6 +536,10 @@ impl portable_pty::MasterPty for FailedSpawnPty {
         self.inner.lock().take_writer()
     }
 
+    fn shutdown(&self) -> anyhow::Result<()> {
+        self.inner.lock().shutdown()
+    }
+
     #[cfg(unix)]
     fn process_group_leader(&self) -> Option<i32> {
         None

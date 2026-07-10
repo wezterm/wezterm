@@ -101,6 +101,13 @@ pub trait MasterPty: Downcast + Send {
     /// It is invalid to take the writer more than once.
     fn take_writer(&self) -> Result<Box<dyn std::io::Write + Send>, Error>;
 
+    /// Begin shutting down the pty without requiring the caller to drop it.
+    /// Implementations that have a potentially blocking teardown can move that
+    /// work off the calling thread. Calling this more than once must be safe.
+    fn shutdown(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
     /// If applicable to the type of the tty, return the local process id
     /// of the process group or session leader
     #[cfg(unix)]
