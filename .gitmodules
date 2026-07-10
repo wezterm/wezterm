@@ -10,3 +10,6 @@
 [submodule "freetype2"]
 	path = deps/freetype/freetype2
 	url = https://github.com/freetype/freetype2.git
+[submodule "wezterm_config"]
+	path = wezterm_config
+	url = https://github.com/gamebili/wezterm_config.git

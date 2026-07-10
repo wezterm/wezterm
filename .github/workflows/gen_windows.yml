@@ -13,6 +13,9 @@ on:
       - "assets/fonts/**/*"
       - "assets/icon/*"
       - "assets/windows/**/*"
+      - ".gitmodules"
+      - "wezterm_config"
+      - "ci/build-wezterm-config.ps1"
       - "ci/deploy.sh"
       - "ci/windows-installer.iss"
 
@@ -35,6 +38,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           target: "x86_64-pc-windows-msvc"
+      - name: "Install Node"
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "wezterm_config/wezterm-gui/package-lock.json"
       - name: "Compile with sccache"
         uses: mozilla-actions/sccache-action@v0.0.9
       - name: "Cache Rust Dependencies"
@@ -48,7 +57,7 @@ jobs:
       - name: "Vendor dependecies"
         if: steps.cache-cargo-vendor.outputs.cache-hit != 'true'
         shell: bash
-        run: "cargo vendor --locked --versioned-dirs >> .cargo/config"
+        run: "cargo vendor --locked --versioned-dirs --sync wezterm_config/wezterm-gui/src-tauri/Cargo.toml >> .cargo/config"
       - name: "Build wezterm (Release mode)"
         shell: cmd
         run: |
@@ -69,6 +78,9 @@ jobs:
         run: |
           PATH C:\Strawberry\perl\bin;%PATH%
           cargo build -p strip-ansi-escapes --release
+      - name: "Build wezterm-config (Release mode)"
+        shell: pwsh
+        run: "ci/build-wezterm-config.ps1"
       - name: "Install cargo-nextest from Cargo"
         uses: baptiste0928/cargo-install@v3
         with:

@@ -215,6 +215,10 @@ pub enum WindowEvent {
     /// Called by menubar dispatching stuff on some systems
     PerformKeyAssignment(config::keyassignment::KeyAssignment),
 
+    /// Called when an application-defined item in the native window/system
+    /// menu is selected.
+    SystemMenuCommand(u16),
+
     AdviseModifiersLedStatus(Modifiers, KeyboardLedStatus),
 }
 
@@ -279,6 +283,11 @@ pub trait WindowOps {
 
     /// Change the titlebar text for the window
     fn set_title(&self, title: &str);
+
+    /// Add an application-defined command to the native window/system menu.
+    /// Command identifiers must be below 0xf000 and have their lower four bits
+    /// clear so that they can be distinguished from built-in system commands.
+    fn add_system_menu_item(&self, _command_id: u16, _label: &str) {}
 
     /// Resize the inner or client area of the window
     fn set_inner_size(&self, width: usize, height: usize);

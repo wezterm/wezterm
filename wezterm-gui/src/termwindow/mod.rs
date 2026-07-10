@@ -87,6 +87,7 @@ use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
 
 const ATLAS_SIZE: usize = 128;
+const SYSTEM_MENU_OPEN_CONFIG: u16 = 0x1ff0;
 
 lazy_static::lazy_static! {
     static ref WINDOW_CLASS: Mutex<String> = Mutex::new(wezterm_gui_subcommands::DEFAULT_WINDOW_CLASS.to_owned());
@@ -872,6 +873,7 @@ impl TermWindow {
         tw.borrow_mut().window.replace(window.clone());
 
         Self::apply_icon(&window)?;
+        window.add_system_menu_item(SYSTEM_MENU_OPEN_CONFIG, "&Configuration...");
 
         let config_subscription = config::subscribe_to_config_reload({
             let window = window.clone();
@@ -974,6 +976,18 @@ impl TermWindow {
                 if let Some(pane) = self.get_active_pane_or_overlay() {
                     self.perform_key_assignment(&pane, &action)?;
                     window.invalidate();
+                }
+                Ok(true)
+            }
+            WindowEvent::SystemMenuCommand(command_id) => {
+                if command_id == SYSTEM_MENU_OPEN_CONFIG {
+                    if let Err(err) = crate::config_panel::launch() {
+                        log::error!("failed to launch WezTerm Config: {err:#}");
+                        wezterm_toast_notification::persistent_toast_notification(
+                            "WezTerm Config",
+                            &format!("Unable to open the configuration panel: {err:#}"),
+                        );
+                    }
                 }
                 Ok(true)
             }

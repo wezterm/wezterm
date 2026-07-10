@@ -19,7 +19,7 @@ use raw_window_handle::{
 use shared_library::shared_library;
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::ffi::OsString;
 use std::io::{self, Error as IoError};
@@ -125,6 +125,7 @@ pub(crate) struct WindowInner {
     appearance: Appearance,
 
     config: ConfigHandle,
+    system_menu_commands: HashSet<u16>,
     paint_throttled: bool,
     invalidated: bool,
 }
@@ -545,6 +546,7 @@ impl Window {
             window_drag_position: None,
             maximize_button_position: None,
             config: config.clone(),
+            system_menu_commands: HashSet::new(),
             paint_throttled: false,
             invalidated: true,
         }));
@@ -664,6 +666,57 @@ impl WindowInner {
         unsafe {
             SetWindowTextW(self.hwnd.0, title.as_ptr());
         }
+    }
+
+    fn add_system_menu_item(&mut self, command_id: u16, label: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            command_id < 0xf000 && command_id & 0x000f == 0,
+            "system menu command id must be below 0xf000 with its low four bits clear"
+        );
+        if self.system_menu_commands.contains(&command_id) {
+            return Ok(());
+        }
+
+        unsafe {
+            let menu = GetSystemMenu(self.hwnd.0, 0);
+            anyhow::ensure!(!menu.is_null(), "GetSystemMenu returned NULL");
+            anyhow::ensure!(
+                GetMenuState(menu, command_id as _, MF_BYCOMMAND) == u32::MAX,
+                "system menu command id {command_id:#x} is already in use"
+            );
+
+            let mut label = wide_string(label);
+            let item = MENUITEMINFOW {
+                cbSize: std::mem::size_of::<MENUITEMINFOW>() as _,
+                fMask: MIIM_ID | MIIM_STRING,
+                fType: MFT_STRING,
+                wID: command_id as _,
+                dwTypeData: label.as_mut_ptr(),
+                cch: label.len().saturating_sub(1) as _,
+                ..std::mem::zeroed()
+            };
+            if InsertMenuItemW(menu, SC_CLOSE as _, 0, &item) == 0 {
+                return Err(IoError::last_os_error()).context("InsertMenuItemW command");
+            }
+
+            let separator = MENUITEMINFOW {
+                cbSize: std::mem::size_of::<MENUITEMINFOW>() as _,
+                fMask: MIIM_FTYPE,
+                fType: MFT_SEPARATOR,
+                ..std::mem::zeroed()
+            };
+            if InsertMenuItemW(menu, SC_CLOSE as _, 0, &separator) == 0 {
+                DeleteMenu(menu, command_id as _, MF_BYCOMMAND);
+                return Err(IoError::last_os_error()).context("InsertMenuItemW separator");
+            }
+
+            // The system menu is rendered when its popup opens. DrawMenuBar is
+            // unnecessary here and synchronously re-enters the window proc while
+            // WindowInner is still mutably borrowed.
+        }
+
+        self.system_menu_commands.insert(command_id);
+        Ok(())
     }
 
     fn set_text_cursor_position(&mut self, cursor: Rect) {
@@ -873,6 +926,16 @@ impl WindowOps for Window {
         let title = title.to_owned();
         Connection::with_window_inner(self.0, move |inner| {
             inner.set_title(&title);
+            Ok(())
+        });
+    }
+
+    fn add_system_menu_item(&self, command_id: u16, label: &str) {
+        let label = label.to_owned();
+        Connection::with_window_inner(self.0, move |inner| {
+            if let Err(err) = inner.add_system_menu_item(command_id, &label) {
+                log::error!("failed to add system menu item {command_id:#x}: {err:#}");
+            }
             Ok(())
         });
     }
@@ -2922,6 +2985,22 @@ unsafe fn drop_files(hwnd: HWND, _msg: UINT, wparam: WPARAM, _lparam: LPARAM) ->
     Some(0)
 }
 
+unsafe fn wm_syscommand(hwnd: HWND, wparam: WPARAM) -> Option<LRESULT> {
+    // Windows reserves the low four bits for internal use. Application menu
+    // identifiers are registered with those bits clear.
+    let command_id = (wparam & 0xfff0) as u16;
+    let inner = rc_from_hwnd(hwnd)?;
+    let mut inner = inner.try_borrow_mut().ok()?;
+    if !inner.system_menu_commands.contains(&command_id) {
+        return None;
+    }
+
+    inner
+        .events
+        .dispatch(WindowEvent::SystemMenuCommand(command_id));
+    Some(0)
+}
+
 unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     match msg {
         WM_NCCREATE => wm_nccreate(hwnd, msg, wparam, lparam),
@@ -2952,6 +3031,7 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
             mouse_button(hwnd, msg, wparam, lparam)
         }
         WM_DROPFILES => drop_files(hwnd, msg, wparam, lparam),
+        WM_SYSCOMMAND => wm_syscommand(hwnd, wparam),
         WM_ERASEBKGND => Some(1),
         WM_CLOSE => {
             if let Some(inner) = rc_from_hwnd(hwnd) {

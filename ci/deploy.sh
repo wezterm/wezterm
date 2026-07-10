@@ -115,6 +115,7 @@ case $OSTYPE in
     cp $TARGET_DIR/release/wezterm.exe \
       $TARGET_DIR/release/wezterm-mux-server.exe \
       $TARGET_DIR/release/wezterm-gui.exe \
+      $TARGET_DIR/release/wezterm-config.exe \
       $TARGET_DIR/release/strip-ansi-escapes.exe \
       $TARGET_DIR/release/wezterm.pdb \
       assets/windows/conhost/conpty.dll \

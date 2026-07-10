@@ -36,6 +36,7 @@ use wezterm_toast_notification::*;
 
 mod colorease;
 mod commands;
+mod config_panel;
 mod customglyph;
 mod download;
 mod frontend;
