@@ -242,7 +242,17 @@ impl Pane for LocalPane {
     }
 
     fn kill(&self) {
+        let started = Instant::now();
+        log::warn!(
+            "[close-tab-diagnostic] LocalPane::kill waiting for process lock pane_id={}",
+            self.pane_id
+        );
         let mut proc = self.process.lock();
+        log::warn!(
+            "[close-tab-diagnostic] LocalPane::kill acquired process lock pane_id={} elapsed_ms={}",
+            self.pane_id,
+            started.elapsed().as_millis()
+        );
         log::debug!(
             "killing process in pane {}, state is {:?}",
             self.pane_id,
@@ -252,7 +262,14 @@ impl Pane for LocalPane {
             ProcessState::Running {
                 signaller, killed, ..
             } => {
-                let _ = signaller.kill();
+                let kill_started = Instant::now();
+                let result = signaller.kill();
+                log::warn!(
+                    "[close-tab-diagnostic] LocalPane::kill signaller completed pane_id={} elapsed_ms={} result={:?}",
+                    self.pane_id,
+                    kill_started.elapsed().as_millis(),
+                    result
+                );
                 *killed = true;
             }
             ProcessState::DeadPendingClose { killed } => {
@@ -260,6 +277,11 @@ impl Pane for LocalPane {
             }
             _ => {}
         }
+        log::warn!(
+            "[close-tab-diagnostic] LocalPane::kill end pane_id={} elapsed_ms={}",
+            self.pane_id,
+            started.elapsed().as_millis()
+        );
     }
 
     fn is_dead(&self) -> bool {

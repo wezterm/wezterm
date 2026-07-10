@@ -3562,6 +3562,31 @@ impl TermWindow {
         window.notify(TermWindowNotif::CancelOverlayForTab { tab_id, pane_id });
     }
 
+    pub fn schedule_close_tab_after_confirmation(window: Window, tab_id: TabId) {
+        window.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+            let started = Instant::now();
+            log::warn!(
+                "[close-tab-diagnostic] main-thread close begin tab_id={}",
+                tab_id
+            );
+
+            term_window.cancel_overlay_for_tab(tab_id, None);
+            log::warn!(
+                "[close-tab-diagnostic] overlay cancelled tab_id={} elapsed_ms={}",
+                tab_id,
+                started.elapsed().as_millis()
+            );
+
+            let removed = Mux::get().remove_tab(tab_id).is_some();
+            log::warn!(
+                "[close-tab-diagnostic] main-thread close end tab_id={} removed={} elapsed_ms={}",
+                tab_id,
+                removed,
+                started.elapsed().as_millis()
+            );
+        })));
+    }
+
     fn cancel_overlay_for_pane(&mut self, pane_id: PaneId) {
         if let Some(overlay) = self.pane_state(pane_id).overlay.take() {
             // Ungh, when I built the CopyOverlay, its pane doesn't get

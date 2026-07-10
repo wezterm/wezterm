@@ -34,17 +34,25 @@ pub fn confirm_close_tab(
     _mux_window_id: WindowId,
     window: ::window::Window,
 ) -> anyhow::Result<()> {
-    if confirm::run_confirmation(
+    let confirmed = confirm::run_confirmation(
         "🛑 Really kill this tab and all contained panes?",
         &mut term,
-    )? {
-        promise::spawn::spawn_into_main_thread(async move {
-            let mux = Mux::get();
-            mux.remove_tab(tab_id);
-        })
-        .detach();
+    )?;
+
+    log::warn!(
+        "[close-tab-diagnostic] confirmation completed tab_id={} confirmed={}",
+        tab_id,
+        confirmed
+    );
+
+    if confirmed {
+        // Cancel the overlay and remove the tab from one window notification.
+        // Keeping those operations ordered avoids dispatching overlay cleanup
+        // against a tab that has already been removed from the mux.
+        TermWindow::schedule_close_tab_after_confirmation(window, tab_id);
+    } else {
+        TermWindow::schedule_cancel_overlay(window, tab_id, None);
     }
-    TermWindow::schedule_cancel_overlay(window, tab_id, None);
 
     Ok(())
 }

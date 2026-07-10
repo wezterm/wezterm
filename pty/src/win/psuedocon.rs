@@ -11,6 +11,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Instant;
 use std::{mem, ptr};
 use winapi::shared::minwindef::DWORD;
 use winapi::shared::winerror::{HRESULT, S_OK};
@@ -53,8 +54,10 @@ fn load_conpty() -> ConPtyFuncs {
     // alongside the application.  We check for this after checking for kernel
     // support so that we don't try to proceed and do something crazy.
     if let Ok(sideloaded) = ConPtyFuncs::open(Path::new("conpty.dll")) {
+        log::warn!("[close-tab-diagnostic] using sideloaded conpty.dll");
         sideloaded
     } else {
+        log::warn!("[close-tab-diagnostic] using system ConPTY from kernel32.dll");
         kernel
     }
 }
@@ -72,7 +75,17 @@ unsafe impl Sync for PsuedoCon {}
 
 impl Drop for PsuedoCon {
     fn drop(&mut self) {
+        let started = Instant::now();
+        log::warn!(
+            "[close-tab-diagnostic] ClosePseudoConsole begin hpc={:p}",
+            self.con
+        );
         unsafe { (CONPTY.ClosePseudoConsole)(self.con) };
+        log::warn!(
+            "[close-tab-diagnostic] ClosePseudoConsole end hpc={:p} elapsed_ms={}",
+            self.con,
+            started.elapsed().as_millis()
+        );
     }
 }
 
