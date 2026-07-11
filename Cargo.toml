@@ -128,7 +128,7 @@ lfucache = { path = "lfucache" }
 libc = "0.2"
 libflate = "2"
 libloading = "0.8"
-libssh-rs = "0.3.6"
+libssh-rs = "0.3.8"
 line_drawing = "0.8"
 log = "0.4"
 logging = { path = "lua-api-crates/logging" }

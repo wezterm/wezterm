@@ -64,7 +64,10 @@ impl DataDeviceHandler for WaylandState {
             .lock()
             .unwrap();
 
-        pstate.drag_and_drop_session = Some(DragAndDropSession { window_id, drag_offer });
+        pstate.drag_and_drop_session = Some(DragAndDropSession {
+            window_id,
+            drag_offer,
+        });
         log::trace!("DnD: session started for window_id={}", window_id);
     }
 

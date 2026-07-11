@@ -27,12 +27,16 @@ impl DragAndDropSession {
     /// Takes the current drag offer and initiates a receive into a pipe,
     /// returning that window and pipe descriptor.
     pub fn create_pipe_for_drop(&mut self) -> Option<WindowAndPipe> {
-        let read = self.drag_offer
+        let read = self
+            .drag_offer
             .receive(URI_MIME_TYPE.to_string())
             .map_err(|err| log::error!("Unable to receive data: {:#}", err))
             .ok()?;
         self.drag_offer.finish();
-        Some(WindowAndPipe { window_id: self.window_id, read })
+        Some(WindowAndPipe {
+            window_id: self.window_id,
+            read,
+        })
     }
 
     pub fn read_paths_from_pipe(read: ReadPipe) -> Option<Vec<PathBuf>> {
