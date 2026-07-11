@@ -1,4 +1,5 @@
 use crate::terminal::{Alert, Progress};
+use crate::terminalstate::kitty::KITTY_UNICODE_PLACEHOLDER;
 use crate::terminalstate::{
     default_color_map, CharSet, MouseEncoding, TabStop, UnicodeVersionStackEntry,
 };
@@ -220,8 +221,14 @@ impl<'a> Performer<'a> {
                 g,
                 self.pen
             );
-            self.screen_mut()
-                .set_cell_grapheme(x, y, g, print_width, pen, seqno);
+            if g.starts_with(KITTY_UNICODE_PLACEHOLDER)
+                && self.kitty_print_unicode_placeholder(x, y, g, &pen, seqno)
+            {
+                // The cell now shows a tile of a kitty virtual placement
+            } else {
+                self.screen_mut()
+                    .set_cell_grapheme(x, y, g, print_width, pen, seqno);
+            }
 
             if !wrappable {
                 self.cursor.x += print_width;
