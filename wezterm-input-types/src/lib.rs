@@ -2012,7 +2012,13 @@ impl KeyEvent {
                     (Some(code), true) => {
                         format!("\x1b[{code};{modifiers}{event_type}{generated_text}u")
                     }
-                    _ => String::new(),
+                    _ => {
+                        if let KeyCode::Composed(s) = &self.key {
+                            s.clone()
+                        } else {
+                            String::new()
+                        }
+                    }
                 }
             }
         }
