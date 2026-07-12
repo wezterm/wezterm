@@ -515,6 +515,9 @@ pub struct Config {
     #[dynamic(default)]
     pub enable_scroll_bar: bool,
 
+    #[dynamic(default)]
+    pub search_trigger_on_navigate: bool,
+
     #[dynamic(try_from = "crate::units::PixelUnit", default = "default_half_cell")]
     pub min_scroll_bar_height: Dimension,
 
