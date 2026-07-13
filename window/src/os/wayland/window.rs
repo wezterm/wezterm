@@ -329,7 +329,7 @@ impl WaylandWindow {
 
             wegl_surface: None,
             gl_state: None,
-            ext_background_effect_surface: RefCell::new(None),
+            ext_background_effect_surface: None,
         }));
 
         let window_handle = Window::Wayland(WaylandWindow(window_id));
@@ -339,7 +339,7 @@ impl WaylandWindow {
             .events
             .assign_window(window_handle.clone());
 
-        inner.borrow().update_window_background_blur();
+        inner.borrow_mut().update_window_background_blur();
 
         {
             let windows = &conn.wayland_state.borrow().windows;
@@ -608,7 +608,7 @@ pub struct WaylandWindowInner {
     // libraries will segfault on shutdown
     wegl_surface: Option<WlEglSurface>,
     gl_state: Option<Rc<glium::backend::Context>>,
-    ext_background_effect_surface: RefCell<Option<ExtBackgroundEffectSurfaceV1>>,
+    ext_background_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
 }
 
 impl WaylandWindowInner {
@@ -1292,51 +1292,79 @@ impl WaylandWindowInner {
         self.update_window_background_blur();
     }
 
-    fn update_window_background_blur(&self) {
+    fn update_window_background_blur(&mut self) {
         let conn = WaylandConnection::get().unwrap().wayland();
         let qh = conn.event_queue.borrow().handle();
         let wayland_state = conn.wayland_state.borrow();
-        if let Some(manager) = &wayland_state.kde_blur_manager {
-            let kde_blur = manager.create(self.surface(), &qh, GlobalData);
-            if self.config.kde_window_background_blur {
-                kde_blur.set_region(None);
-            } else {
-                kde_blur.release();
-            }
-            kde_blur.commit();
-        } else if let Some(manager) = &wayland_state.ext_background_effect_manager {
-            const BLUR_CAPABILITY: u32 = 1;
-            if wayland_state.ext_background_effect_capabilities & BLUR_CAPABILITY != 0 {
-                let ext_blur = {
-                    if self.ext_background_effect_surface.borrow().is_none() {
-                        let surface =
-                            manager.get_background_effect(self.surface(), &qh, GlobalData);
-                        *self.ext_background_effect_surface.borrow_mut() = Some(surface.clone());
-                    }
-                    self.ext_background_effect_surface
-                        .borrow()
-                        .as_ref()
-                        .unwrap()
-                        .clone()
-                };
-                if self.config.wayland_window_background_blur {
-                    let region: WlRegion = wayland_state
-                        .compositor
-                        .wl_compositor()
-                        .create_region(&qh, GlobalData);
-                    region.add(
-                        0,
-                        0,
-                        self.dimensions.pixel_width as i32,
-                        self.dimensions.pixel_height as i32,
+        let win_wl_surface = self.surface().clone();
+        let bg_blur_wanted =
+            self.config.wayland_window_background_blur || self.config.kde_window_background_blur;
+
+        if wayland_state.ext_background_effect_manager.is_some() {
+            let manager = &wayland_state.ext_background_effect_manager.clone().unwrap();
+            // Check if bg blur is disabled -> cleanup past state & return
+            if !bg_blur_wanted {
+                if let Some(ext_effect_surface) = self.ext_background_effect_surface.take() {
+                    log::trace!(
+                        "ext window bg: dropping surface {:?}, associated with win {:?}",
+                        ext_effect_surface.id(),
+                        win_wl_surface.id(),
                     );
-                    ext_blur.set_blur_region(Some(&region));
-                    region.destroy();
-                } else {
-                    ext_blur.destroy();
-                    *self.ext_background_effect_surface.borrow_mut() = None;
+                    ext_effect_surface.destroy();
                 }
+                return
             }
+
+            if !wayland_state.ext_background_effect_can_blur {
+                // Nothing else to do here
+                return
+            }
+
+            // Get or create the associated surface used for background effects
+            let blur_surface = self.ext_background_effect_surface.get_or_insert_with(|| {
+                log::trace!(
+                    "ext window bg: creating blur surface, for win {:?}",
+                    win_wl_surface.id(),
+                );
+                let surface = manager.get_background_effect(&win_wl_surface, &qh, GlobalData);
+                log::trace!(
+                    "ext window bg: created blur surface {:?}, for win {:?}",
+                    surface.id(),
+                    win_wl_surface.id(),
+                );
+                surface
+            });
+
+            let region: WlRegion = wayland_state
+                .compositor
+                .wl_compositor()
+                .create_region(&qh, GlobalData);
+            region.add(
+                0,
+                0,
+                self.dimensions.pixel_width as i32,
+                self.dimensions.pixel_height as i32,
+            );
+            blur_surface.set_blur_region(Some(&region));
+            region.destroy();
+        } else if let Some(manager) = &wayland_state.kde_blur_manager {
+            let blur_surface = manager.create(&win_wl_surface, &qh, GlobalData);
+            if bg_blur_wanted {
+                log::trace!(
+                    "kde window bg: setting up blur surface for win {:?}",
+                    win_wl_surface.id()
+                );
+                blur_surface.set_region(None);
+            } else {
+                log::trace!(
+                    "kde window bg: clearing blur surface for win {:?}",
+                    win_wl_surface.id()
+                );
+                blur_surface.release();
+            }
+            blur_surface.commit();
+        } else if bg_blur_wanted {
+            log::warn!("window bg: blur wanted but no provider available");
         }
     }
 }
@@ -1541,8 +1569,12 @@ impl Dispatch<ExtBackgroundEffectManagerV1, GlobalData> for WaylandState {
         _qhandle: &QueueHandle<Self>,
     ) {
         use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::Event;
+        const BLUR_CAPABILITY_FLAG: u32 = 1;
         if let Event::Capabilities { flags } = event {
-            state.ext_background_effect_capabilities = flags.into();
+            let flags: u32 = flags.into();
+            log::trace!("ext window bg: got capabilities: {flags:#x?}");
+            state.ext_background_effect_can_blur = flags & BLUR_CAPABILITY_FLAG != 0;
+            log::trace!("ext window bg: can blur: {}", state.ext_background_effect_can_blur);
         }
     }
 }

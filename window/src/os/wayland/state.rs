@@ -91,7 +91,7 @@ pub(super) struct WaylandState {
     pub(super) mem_pool: RefCell<SlotPool>,
     pub(super) kde_blur_manager: Option<OrgKdeKwinBlurManager>,
     pub(super) ext_background_effect_manager: Option<ExtBackgroundEffectManagerV1>,
-    pub(super) ext_background_effect_capabilities: u32,
+    pub(super) ext_background_effect_can_blur: bool,
 }
 
 impl WaylandState {
@@ -141,7 +141,7 @@ impl WaylandState {
             mem_pool: RefCell::new(mem_pool),
             kde_blur_manager,
             ext_background_effect_manager,
-            ext_background_effect_capabilities: 0,
+            ext_background_effect_can_blur: false,
         };
         Ok(wayland_state)
     }

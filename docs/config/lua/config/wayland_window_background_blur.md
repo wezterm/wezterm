@@ -1,4 +1,4 @@
-
+---
 tags:
     - appearance
 ---
@@ -17,8 +17,6 @@ config.wayland_window_background_blur = true
 ```
 
 [Screenshot](../../../screenshots/wezterm-ext-background-effects-v1.png)
-See also [kde_window_background_blur](./kde_window_background_blur.md) for
-a similar effect using the kde protocol
 
 See also [win32_system_backdrop](./win32_system_backdrop.md) for a similar
 effect on Windows
