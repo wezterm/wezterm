@@ -276,6 +276,11 @@ As features stabilize some brief notes about them will accumulate here.
   a zero-sized placement (e.g. `w=0`/`h=0`), or displaying a cell-sized image on a pane
   whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
   Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
+* Capability queries (DA1, the kitty keyboard probe, etc.) are now answered
+  while a synchronized update is open, and an update held open for too long
+  now times out; see
+  [mux_synchronized_output_timeout_ms](config/lua/config/mux_synchronized_output_timeout_ms.md).
+  Thanks to @luizribeiro! #7918
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
