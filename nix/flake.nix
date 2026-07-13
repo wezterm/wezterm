@@ -97,50 +97,12 @@
             cargo = pkgs.rust-bin.stable.latest.minimal;
             rustc = pkgs.rust-bin.stable.latest.minimal;
           };
-
-          # Root of the workspace for fileset filtering.
-          projectRoot = ./..;
-          # Helper to create fileset representing ignored paths.
-          pathsFileset = ignoredPaths: lib.fileset.unions (
-            map
-              (
-                # Function that returns full fileset for path if it exists in projectRoot
-                relPath:
-                let rootPath = projectRoot + "/" + relPath; in
-                if builtins.pathExists rootPath then
-                  lib.fileset.fromSource rootPath
-                else
-                  lib.fileset.empty
-              )
-              ignoredPaths
-          );
-          # Concrete source derivation produced from the filtered fileset.
-          srcSource = lib.fileset.toSource {
-            root = projectRoot;
-            # Everything under the repo minus the ignored fileset.
-            fileset = (
-              lib.fileset.difference
-                (lib.fileset.fromSource projectRoot)
-                (pathsFileset [
-                  # Directories/files we never want to trigger rebuilds.
-                  ".git"
-                  ".github"
-                  "docs"
-                  "target"
-                  ".direnv" # direnv tool
-                  "nix"
-                  "result" # nix result link
-                  "nixos.qcow2" # nix test VM' disk
-                ])
-            );
-          };
-      in
-        {
+        in {
           packages.default = rustPlatform.buildRustPackage (finalAttrs: {
             inherit buildInputs nativeBuildInputs;
 
             pname = "wezterm";
-            src = srcSource; # filtered sources, to avoid rebuilds on non-Rust related changes
+            src = ./..;
 
             # Rebuild the usual version number of the project from info of commit being built.
             # Format: `<date>-<time>-<shorthash>` (Example: `20200608-110940-3fb3a61`)
