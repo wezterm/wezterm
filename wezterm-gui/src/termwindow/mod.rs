@@ -444,6 +444,7 @@ pub struct TermWindow {
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
     event_states: HashMap<String, EventState>,
+    last_focused_pane_id: Option<PaneId>,
     pub current_event: Option<Value>,
     has_animation: RefCell<Option<Instant>>,
     /// We use this to attempt to do something reasonable
@@ -776,6 +777,7 @@ impl TermWindow {
                 None,
             )),
             event_states: HashMap::new(),
+            last_focused_pane_id: None,
             current_event: None,
             has_animation: RefCell::new(None),
             scheduled_animation: RefCell::new(None),
@@ -885,6 +887,7 @@ impl TermWindow {
             myself.load_os_parameters();
             window.show();
             myself.subscribe_to_pane_updates();
+            myself.last_focused_pane_id = myself.get_active_pane_no_overlay().map(|p| p.pane_id());
             myself.emit_window_event("window-config-reloaded", None);
             myself.emit_status_event();
         }
@@ -1109,6 +1112,17 @@ impl TermWindow {
         fn chan_err<T>(e: smol::channel::TrySendError<T>) -> anyhow::Error {
             anyhow::anyhow!("{}", e)
         }
+
+        let may_change_focus = matches!(
+            notif,
+            TermWindowNotif::MuxNotification(
+                MuxNotification::PaneFocused(_)
+                    | MuxNotification::PaneAdded(_)
+                    | MuxNotification::PaneRemoved(_)
+                    | MuxNotification::TabAddedToWindow { .. }
+                    | MuxNotification::WindowInvalidated(_)
+            )
+        );
 
         match notif {
             TermWindowNotif::InvalidateShapeCache => {
@@ -1355,6 +1369,10 @@ impl TermWindow {
             }
         }
 
+        if may_change_focus {
+            self.maybe_emit_pane_focus_changed();
+        }
+
         Ok(())
     }
 
@@ -1465,6 +1483,7 @@ impl TermWindow {
                     | Alert::Bell,
             }
             | MuxNotification::PaneFocused(pane_id)
+            | MuxNotification::PaneAdded(pane_id)
             | MuxNotification::PaneRemoved(pane_id)
             | MuxNotification::PaneOutput(pane_id) => {
                 // Ideally we'd check to see if pane_id is part of this window,
@@ -1477,19 +1496,13 @@ impl TermWindow {
                 if mux.get_window(mux_window_id).is_none() {
                     // Something inconsistent: cancel subscription
                     log::debug!(
-                        "PaneOutput: wanted mux_window_id={} from mux, but \
+                        "got Pane mux event: wanted mux_window_id={} from mux, but \
                          was not found, cancel mux subscription",
                         mux_window_id
                     );
                     return false;
                 }
                 let _ = pane_id;
-            }
-            MuxNotification::PaneAdded(_pane_id) => {
-                // If some other client spawns a pane inside this window, this
-                // gives us an opportunity to attach it to the clipboard.
-                let mux = Mux::get();
-                return mux.get_window(mux_window_id).is_some();
             }
             MuxNotification::TabAddedToWindow { window_id, .. }
             | MuxNotification::WindowTitleChanged { window_id, .. }
@@ -1634,6 +1647,21 @@ impl TermWindow {
         } else {
             *state = EventState::None;
         }
+    }
+
+    /// Emit "pane-focus-changed" event if pane focus changed since last check.
+    fn maybe_emit_pane_focus_changed(&mut self) {
+        let pane_id = match self.get_active_pane_no_overlay() {
+            Some(pane) => pane.pane_id(),
+            None => return,
+        };
+
+        if self.last_focused_pane_id == Some(pane_id) {
+            return;
+        }
+
+        self.last_focused_pane_id = Some(pane_id);
+        self.emit_window_event("pane-focus-changed", Some(pane_id));
     }
 
     pub fn emit_window_event(&mut self, name: &str, pane_id: Option<PaneId>) {
