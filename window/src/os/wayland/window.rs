@@ -42,6 +42,8 @@ use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection as WConnection, Dispatch, Proxy, QueueHandle};
 use wayland_egl::{is_available as egl_is_available, WlEglSurface};
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1;
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwinBlurManager;
 use wezterm_font::FontConfiguration;
@@ -327,6 +329,7 @@ impl WaylandWindow {
 
             wegl_surface: None,
             gl_state: None,
+            ext_background_effect_surface: None,
         }));
 
         let window_handle = Window::Wayland(WaylandWindow(window_id));
@@ -336,7 +339,7 @@ impl WaylandWindow {
             .events
             .assign_window(window_handle.clone());
 
-        inner.borrow().update_window_background_blur();
+        inner.borrow_mut().update_window_background_blur();
 
         {
             let windows = &conn.wayland_state.borrow().windows;
@@ -605,6 +608,7 @@ pub struct WaylandWindowInner {
     // libraries will segfault on shutdown
     wegl_surface: Option<WlEglSurface>,
     gl_state: Option<Rc<glium::backend::Context>>,
+    ext_background_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
 }
 
 impl WaylandWindowInner {
@@ -653,11 +657,15 @@ impl WaylandWindowInner {
                 .ok_or(anyhow!("Window does not exist"))?;
             let object_id = window.wl_surface().id();
 
-            wegl_surface = Some(WlEglSurface::new(
-                object_id,
-                self.dimensions.pixel_width as i32,
-                self.dimensions.pixel_height as i32,
-            )?);
+            // Align pixel dimensions to the integer buffer scale factor
+            // to satisfy the Wayland protocol requirement that buffer
+            // dimensions must be an integer multiple of the buffer_scale.
+            let surface_udata = SurfaceUserData::from_wl(window.wl_surface());
+            let scale = surface_udata.surface_data.scale_factor();
+            let pixel_width = (self.dimensions.pixel_width as i32 / scale) * scale;
+            let pixel_height = (self.dimensions.pixel_height as i32 / scale) * scale;
+
+            wegl_surface = Some(WlEglSurface::new(object_id, pixel_width, pixel_height)?);
 
             log::trace!("WEGL Surface here {:?}", wegl_surface);
 
@@ -884,6 +892,13 @@ impl WaylandWindowInner {
                         pixel_height = self.surface_to_pixels(h.try_into().unwrap());
                     }
                 }
+
+                // Align pixel dimensions to the integer buffer scale factor
+                // to satisfy the Wayland protocol requirement that buffer
+                // dimensions must be an integer multiple of the buffer_scale.
+                let scale = factor as i32;
+                pixel_width = (pixel_width / scale) * scale;
+                pixel_height = (pixel_height / scale) * scale;
 
                 log::trace!("Resizing frame");
                 if !self.window_frame.is_hidden() {
@@ -1277,18 +1292,79 @@ impl WaylandWindowInner {
         self.update_window_background_blur();
     }
 
-    fn update_window_background_blur(&self) {
+    fn update_window_background_blur(&mut self) {
         let conn = WaylandConnection::get().unwrap().wayland();
         let qh = conn.event_queue.borrow().handle();
         let wayland_state = conn.wayland_state.borrow();
-        if let Some(manager) = &wayland_state.kde_blur_manager {
-            let kde_blur = manager.create(self.surface(), &qh, GlobalData);
-            if self.config.kde_window_background_blur {
-                kde_blur.set_region(None);
-            } else {
-                kde_blur.release();
+        let win_wl_surface = self.surface().clone();
+        let bg_blur_wanted =
+            self.config.wayland_window_background_blur || self.config.kde_window_background_blur;
+
+        if wayland_state.ext_background_effect_manager.is_some() {
+            let manager = &wayland_state.ext_background_effect_manager.clone().unwrap();
+            // Check if bg blur is disabled -> cleanup past state & return
+            if !bg_blur_wanted {
+                if let Some(ext_effect_surface) = self.ext_background_effect_surface.take() {
+                    log::trace!(
+                        "ext window bg: dropping surface {:?}, associated with win {:?}",
+                        ext_effect_surface.id(),
+                        win_wl_surface.id(),
+                    );
+                    ext_effect_surface.destroy();
+                }
+                return;
             }
-            kde_blur.commit();
+
+            if !wayland_state.ext_background_effect_can_blur {
+                // Nothing else to do here
+                return;
+            }
+
+            // Get or create the associated surface used for background effects
+            let blur_surface = self.ext_background_effect_surface.get_or_insert_with(|| {
+                log::trace!(
+                    "ext window bg: creating blur surface, for win {:?}",
+                    win_wl_surface.id(),
+                );
+                let surface = manager.get_background_effect(&win_wl_surface, &qh, GlobalData);
+                log::trace!(
+                    "ext window bg: created blur surface {:?}, for win {:?}",
+                    surface.id(),
+                    win_wl_surface.id(),
+                );
+                surface
+            });
+
+            let region: WlRegion = wayland_state
+                .compositor
+                .wl_compositor()
+                .create_region(&qh, GlobalData);
+            region.add(
+                0,
+                0,
+                self.dimensions.pixel_width as i32,
+                self.dimensions.pixel_height as i32,
+            );
+            blur_surface.set_blur_region(Some(&region));
+            region.destroy();
+        } else if let Some(manager) = &wayland_state.kde_blur_manager {
+            let blur_surface = manager.create(&win_wl_surface, &qh, GlobalData);
+            if bg_blur_wanted {
+                log::trace!(
+                    "kde window bg: setting up blur surface for win {:?}",
+                    win_wl_surface.id()
+                );
+                blur_surface.set_region(None);
+            } else {
+                log::trace!(
+                    "kde window bg: clearing blur surface for win {:?}",
+                    win_wl_surface.id()
+                );
+                blur_surface.release();
+            }
+            blur_surface.commit();
+        } else if bg_blur_wanted {
+            log::warn!("window bg: blur wanted but no provider available");
         }
     }
 }
@@ -1483,17 +1559,62 @@ impl Dispatch<WlRegion, GlobalData> for WaylandState {
     }
 }
 
-pub(super) struct SurfaceUserData {
+impl Dispatch<ExtBackgroundEffectManagerV1, GlobalData> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _proxy: &ExtBackgroundEffectManagerV1,
+        event: <ExtBackgroundEffectManagerV1 as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::Event;
+        const BLUR_CAPABILITY_FLAG: u32 = 1;
+        if let Event::Capabilities { flags } = event {
+            let flags: u32 = flags.into();
+            log::trace!("ext window bg: got capabilities: {flags:#x?}");
+            state.ext_background_effect_can_blur = flags & BLUR_CAPABILITY_FLAG != 0;
+            log::trace!(
+                "ext window bg: can blur: {}",
+                state.ext_background_effect_can_blur
+            );
+        }
+    }
+}
+
+impl Dispatch<ExtBackgroundEffectSurfaceV1, GlobalData> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ExtBackgroundEffectSurfaceV1,
+        _event: <ExtBackgroundEffectSurfaceV1 as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+/// User-data attached to each [`WlSurface`] via [`smithay_client_toolkit`].
+///
+/// Associates a surface with its owning window ID, allowing lookups
+/// from raw surface references (e.g. during DnD or pointer events).
+pub struct SurfaceUserData {
+    /// [`smithay_client_toolkit`] surface data
     surface_data: SurfaceData,
-    pub(super) window_id: usize,
+    /// ID of the window
+    pub window_id: usize,
 }
 
 impl SurfaceUserData {
-    pub(super) fn from_wl(wl: &WlSurface) -> &Self {
+    /// Returns the [`SurfaceUserData`] associated with the given [`WlSurface`].
+    pub fn from_wl(wl: &WlSurface) -> &Self {
         wl.data()
             .expect("User data should be associated with WlSurface")
     }
-    pub(super) fn try_from_wl(wl: &WlSurface) -> Option<&SurfaceUserData> {
+
+    /// Returns an [`Option`] with the [`SurfaceUserData`] associated with the given [`WlSurface`],
+    /// `None` if the surface has no associated user-data.
+    pub fn try_from_wl(wl: &WlSurface) -> Option<&SurfaceUserData> {
         wl.data()
     }
 }
