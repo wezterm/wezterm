@@ -1312,12 +1312,12 @@ impl WaylandWindowInner {
                     );
                     ext_effect_surface.destroy();
                 }
-                return
+                return;
             }
 
             if !wayland_state.ext_background_effect_can_blur {
                 // Nothing else to do here
-                return
+                return;
             }
 
             // Get or create the associated surface used for background effects
@@ -1574,7 +1574,10 @@ impl Dispatch<ExtBackgroundEffectManagerV1, GlobalData> for WaylandState {
             let flags: u32 = flags.into();
             log::trace!("ext window bg: got capabilities: {flags:#x?}");
             state.ext_background_effect_can_blur = flags & BLUR_CAPABILITY_FLAG != 0;
-            log::trace!("ext window bg: can blur: {}", state.ext_background_effect_can_blur);
+            log::trace!(
+                "ext window bg: can blur: {}",
+                state.ext_background_effect_can_blur
+            );
         }
     }
 }
