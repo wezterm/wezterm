@@ -145,6 +145,13 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @j4james! #7046
 
 #### Fixed
+* Queries such as the primary device attributes request or the kitty keyboard
+  protocol probe were not answered while a synchronized update (DEC private
+  mode 2026) was open, stalling applications that block waiting for the
+  response. Capability queries are now answered immediately, and a
+  synchronized update that is held open for too long now times out; see
+  [synchronized_output_timeout_ms](config/lua/config/synchronized_output_timeout_ms.md).
+  Thanks to @luizribeiro! #7918
 * Race condition when very quickly adjusting font scale, and other improvements
   around resizing. Thanks to @jknockel! #4876 #5032 #5033
 * macOS: wacky initial window size with external monitors or certain font
