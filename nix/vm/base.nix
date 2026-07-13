@@ -16,6 +16,8 @@
 
   environment.systemPackages = [
     pkgs.neovim
+    pkgs.ripgrep
+    pkgs.git
   ];
 
   nix.settings = {

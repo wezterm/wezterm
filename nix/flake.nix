@@ -309,25 +309,15 @@
         # 6. (In the VM) Run the binary built! ``
         #
         # FIXME: cannot write to $REPO in the VM...
-        nixosConfigurations.testing-on-gnome = nixpkgs.lib.nixosSystem {
+        nixosConfigurations.testing-on-gnome = import ./vm {
+          inherit nixpkgs;
           system = testingSystem;
-          modules = [
-            ./vm/base.nix
-            ./vm/vm-settings.nix
-            ./vm/patch-opengl.nix # 👀
-            ./vm/desktop-gnome.nix
-            ./vm/shared-repo.nix
-          ];
+          desktopModule = ./vm/desktop-gnome.nix;
         };
-        nixosConfigurations.testing-on-plasma = nixpkgs.lib.nixosSystem {
+        nixosConfigurations.testing-on-plasma = import ./vm {
+          inherit nixpkgs;
           system = testingSystem;
-          modules = [
-            ./vm/base.nix
-            ./vm/vm-settings.nix
-            ./vm/patch-opengl.nix # 👀
-            ./vm/desktop-plasma.nix
-            ./vm/shared-repo.nix
-          ];
+          desktopModule = ./vm/desktop-plasma.nix;
         };
       };
     in
