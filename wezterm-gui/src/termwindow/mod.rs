@@ -1650,6 +1650,7 @@ impl TermWindow {
         }
     }
 
+    /// Emit "pane-focus-changed" event if pane focus changed since last check.
     fn maybe_emit_pane_focus_changed(&mut self) {
         let pane_id = match self.get_active_pane_no_overlay() {
             Some(pane) => pane.pane_id(),
