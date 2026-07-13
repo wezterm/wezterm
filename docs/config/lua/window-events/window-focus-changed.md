@@ -28,4 +28,4 @@ end)
 ```
 
 See also [pane-focus-changed](pane-focus-changed.md) which is emitted when
-changing focus between panes (of the active pane.
+changing focus between panes.
