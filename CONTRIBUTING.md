@@ -89,6 +89,12 @@ $ run
 $ bt
 ```
 
+Starting WezTerm with `wezterm-gui start --always-new-process` is useful to ensure Mux logs are not
+hidden in an background process started in an earlier test.
+
+Start WezTerm with `wezterm-gui --config-file ./test-conf.lua ……` to test a custom config file.
+
+
 ### Please include tests to cover your changes!
 
 This will help ensure that your contributions keep working as things change.
@@ -108,7 +114,7 @@ clarify the intent of the test!
 
 ### Testing in a NixOS VM
 
-If you need to test wezterm in a clean desktop environment (e.g. to reproduce a
+If you need to test WezTerm in a clean desktop environment (e.g. to reproduce a
 display server bug or verify a desktop integration), you can use the provided
 NixOS VM configurations.
 
@@ -125,6 +131,11 @@ $ cargo build                                            # build wezterm locally
 $ nixos-rebuild build-vm --flake ./nix#testing-on-plasma # build the Plasma VM image
 $ REPO=$PWD ./result/bin/run-nixos-vm                    # start the VM
 ```
+
+> [!NOTE]
+> You might need to tweak desktop settings (e.g. the keyboard layout) on first VM start.
+>
+> The VM state is stored in `nixos.qcow2` in the current working directory on the host.
 
 Inside the VM, open a terminal (e.g. _Console_ on GNOME, _Konsole_ on Plasma), then:
 
