@@ -7,7 +7,9 @@ use anyhow::{anyhow, Context, Error};
 use config::keyassignment::SpawnTabDomain;
 use config::{configuration, ExitBehavior, GuiPosition};
 use domain::{Domain, DomainId, DomainState, SplitSource};
-use filedescriptor::{poll, pollfd, socketpair, AsRawSocketDescriptor, FileDescriptor, POLLIN};
+use filedescriptor::{
+    poll, pollfd, socketpair, AsRawSocketDescriptor, Error as FdError, FileDescriptor, POLLIN,
+};
 #[cfg(unix)]
 use libc::{c_int, SOL_SOCKET, SO_RCVBUF, SO_SNDBUF};
 use log::error;
@@ -167,6 +169,18 @@ fn is_passthrough_query(action: &Action) -> bool {
     }
 }
 
+/// The poll timeout is a c_int of milliseconds on the platforms this
+/// runs on, and the deadline is Instant arithmetic; clamp the configured
+/// value (to ~24.8 days) so that an absurdly large setting can't wrap
+/// into a negative poll timeout or overflow the deadline
+fn hold_timeout_from(config: &config::ConfigHandle) -> Duration {
+    Duration::from_millis(
+        config
+            .mux_synchronized_output_timeout_ms
+            .min(i32::MAX as u64),
+    )
+}
+
 fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
     let mut buf = vec![0; configuration().mux_output_parser_buffer_size];
     let mut parser = termwiz::escape::parser::Parser::new();
@@ -175,8 +189,62 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
     let mut action_size = 0;
     let mut delay = Duration::from_millis(configuration().mux_output_parser_coalesce_delay_ms);
     let mut deadline = None;
+    let mut hold_timeout = hold_timeout_from(&configuration());
+    let mut hold_deadline: Option<Instant> = None;
 
     loop {
+        if hold {
+            let target = *hold_deadline.get_or_insert_with(|| Instant::now() + hold_timeout);
+            let expired = match target.checked_duration_since(Instant::now()) {
+                Some(remaining) => {
+                    let mut pfd = [pollfd {
+                        fd: rx.as_socket_descriptor(),
+                        events: POLLIN,
+                        revents: 0,
+                    }];
+                    match poll(&mut pfd, Some(remaining)) {
+                        Ok(0) => true,
+                        Ok(_) => false,
+                        // Interrupted before the deadline; recompute the
+                        // remaining time and poll again. The error variant
+                        // depends on the backend: poll(2) reports
+                        // FdError::Poll, while the macOS select(2) shim and
+                        // Windows WSAPoll report FdError::Io
+                        Err(FdError::Poll(err) | FdError::Io(err))
+                            if err.kind() == std::io::ErrorKind::Interrupted =>
+                        {
+                            continue;
+                        }
+                        Err(err) => {
+                            // Polling is what enforces the deadline, so if
+                            // it is broken the only way to keep the promise
+                            // that a stalled client cannot freeze the pane
+                            // is to fail open and release the hold
+                            log::error!(
+                                "error polling for pane output while a \
+                                 synchronized update is open: {err:#}; \
+                                 releasing the hold"
+                            );
+                            true
+                        }
+                    }
+                }
+                None => true,
+            };
+            if expired {
+                // The synchronized update has been open for longer than
+                // the configured timeout; release the hold so that a
+                // stalled application cannot freeze the pane indefinitely
+                hold = false;
+                hold_deadline = None;
+                if !actions.is_empty() {
+                    send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+                    action_size = 0;
+                }
+                continue;
+            }
+        }
+
         match rx.read(&mut buf) {
             Ok(size) if size == 0 => {
                 dead.store(true, Ordering::Relaxed);
@@ -197,22 +265,30 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                         Action::CSI(CSI::Mode(Mode::SetDecPrivateMode(DecPrivateMode::Code(
                             DecPrivateModeCode::SynchronizedOutput,
                         )))) => {
-                            hold = true;
+                            // Setting the mode while it is already active is
+                            // idempotent: the update keeps its original
+                            // deadline and the frame held so far stays held
+                            if !hold {
+                                hold = true;
+                                hold_deadline = Some(Instant::now() + hold_timeout);
 
-                            // Flush prior actions
-                            if !actions.is_empty() {
-                                send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
-                                action_size = 0;
+                                // Flush prior actions
+                                if !actions.is_empty() {
+                                    send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+                                    action_size = 0;
+                                }
                             }
                         }
                         Action::CSI(CSI::Mode(Mode::ResetDecPrivateMode(
                             DecPrivateMode::Code(DecPrivateModeCode::SynchronizedOutput),
                         ))) => {
                             hold = false;
+                            hold_deadline = None;
                             flush = true;
                         }
                         Action::CSI(CSI::Device(dev)) if matches!(**dev, Device::SoftReset) => {
                             hold = false;
+                            hold_deadline = None;
                             flush = true;
                         }
                         _ => {}
@@ -263,6 +339,7 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                 let config = configuration();
                 buf.resize(config.mux_output_parser_buffer_size, 0);
                 delay = Duration::from_millis(config.mux_output_parser_coalesce_delay_ms);
+                hold_timeout = hold_timeout_from(&config);
             }
         }
     }

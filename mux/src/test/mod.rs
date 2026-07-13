@@ -128,7 +128,9 @@ impl Pane for RecordingPane {
 // run concurrently with each other.
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn start_parser() -> (FileDescriptor, Arc<RecordingPane>, thread::JoinHandle<()>) {
+fn start_parser(
+    mux_synchronized_output_timeout_ms: u64,
+) -> (FileDescriptor, Arc<RecordingPane>, thread::JoinHandle<()>) {
     static SCHEDULER: Once = Once::new();
     SCHEDULER.call_once(|| {
         // send_actions_to_mux notifies the mux via
@@ -145,7 +147,9 @@ fn start_parser() -> (FileDescriptor, Arc<RecordingPane>, thread::JoinHandle<()>
         );
     });
 
-    config::use_this_configuration(config::Config::default_config());
+    let mut config = config::Config::default_config();
+    config.mux_synchronized_output_timeout_ms = mux_synchronized_output_timeout_ms;
+    config::use_this_configuration(config);
 
     let (tx, rx) = socketpair().unwrap();
     let pane = Arc::new(RecordingPane::new());
