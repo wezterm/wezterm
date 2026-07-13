@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
-use termwiz::escape::csi::{DecPrivateMode, DecPrivateModeCode, Device, Mode};
+use termwiz::escape::csi::{DecPrivateMode, DecPrivateModeCode, Device, Keyboard, Mode};
 use termwiz::escape::{Action, CSI};
 use thiserror::*;
 use wezterm_term::{Clipboard, ClipboardSelection, DownloadHandler, TerminalSize};
@@ -137,6 +137,37 @@ fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: V
     histogram!("send_actions_to_mux.rate").record(1.);
 }
 
+/// Returns true for queries that are safe to answer while a synchronized
+/// update (DEC private mode 2026) is holding back the output stream:
+/// their responses reflect terminal capabilities rather than screen state,
+/// so they don't need to wait for the held actions to be applied.
+/// Applications commonly block waiting for these responses, and would
+/// otherwise stall until the update closes.
+/// The kitty keyboard query is answered eagerly, but the kitty state
+/// mutations are not applied eagerly: the keyboard stacks live on the
+/// screens themselves, so a held screen switch or reset could route an
+/// eager mutation to the wrong screen's stack. An application that
+/// mutates the stack and queries it within a single held update will see
+/// the pre-update flags.
+/// Cursor position reports and DECRQM stay held for the same reason:
+/// a CPR answer is the cursor position and a DECRQM answer is the state
+/// of a mode, both of which may be changed by the actions that are being
+/// held back.
+fn is_passthrough_query(action: &Action) -> bool {
+    match action {
+        Action::CSI(CSI::Device(dev)) => matches!(
+            **dev,
+            Device::RequestPrimaryDeviceAttributes
+                | Device::RequestSecondaryDeviceAttributes
+                | Device::RequestTertiaryDeviceAttributes
+                | Device::RequestTerminalNameAndVersion
+                | Device::StatusReport
+        ),
+        Action::CSI(CSI::Keyboard(Keyboard::QueryKittySupport)) => true,
+        _ => false,
+    }
+}
+
 fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
     let mut buf = vec![0; configuration().mux_output_parser_buffer_size];
     let mut parser = termwiz::escape::parser::Parser::new();
@@ -158,6 +189,10 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
             }
             Ok(size) => {
                 parser.parse(&buf[0..size], |action| {
+                    if hold && is_passthrough_query(&action) {
+                        send_actions_to_mux(&pane, &dead, vec![action]);
+                        return;
+                    }
                     let mut flush = false;
                     match &action {
                         Action::CSI(CSI::Mode(Mode::SetDecPrivateMode(DecPrivateMode::Code(
@@ -1464,3 +1499,6 @@ impl wezterm_term::DownloadHandler for MuxDownloader {
         }
     }
 }
+
+#[cfg(test)]
+mod test;
