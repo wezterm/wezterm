@@ -296,7 +296,7 @@ impl ParsedConfigFile {
                     let mut tokens = v.split_ascii_whitespace();
 
                     while let Some(cname) = tokens.next() {
-                        match cname.to_lowercase().as_str() {
+                        match cname.to_ascii_lowercase().as_str() {
                             "all" => {
                                 criteria.push(Criteria::All);
                             }

@@ -2197,8 +2197,8 @@ impl TermWindow {
 
             drop(window);
 
-            if let Some(tab) = self.get_active_pane_or_overlay() {
-                tab.focus_changed(true);
+            if let Some(pane) = self.get_active_pane_or_overlay() {
+                pane.focus_changed(true);
             }
 
             self.update_title();

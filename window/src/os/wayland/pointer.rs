@@ -15,7 +15,7 @@ use wezterm_input_types::MousePress;
 
 use crate::wayland::SurfaceUserData;
 
-use super::drag_and_drop::DragAndDrop;
+use super::drag_and_drop::DragAndDropSession;
 use super::state::WaylandState;
 use super::WaylandConnection;
 
@@ -75,11 +75,13 @@ impl PointerUserData {
     }
 }
 
+/// Per-pointer state tracked across pointer events.
 #[derive(Default)]
-pub(super) struct PointerState {
+pub struct PointerState {
     active_surface_id: Option<ObjectId>,
-    pub(super) drag_and_drop: DragAndDrop,
     serial: u32,
+    /// Active drag-and-drop session, if any.
+    pub drag_and_drop_session: Option<DragAndDropSession>,
 }
 
 impl PointerDataExt for PointerUserData {
