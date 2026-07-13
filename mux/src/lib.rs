@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
-use termwiz::escape::csi::{DecPrivateMode, DecPrivateModeCode, Device, Mode};
+use termwiz::escape::csi::{DecPrivateMode, DecPrivateModeCode, Device, Keyboard, Mode};
 use termwiz::escape::{Action, CSI};
 use thiserror::*;
 use wezterm_term::{Clipboard, ClipboardSelection, DownloadHandler, TerminalSize};
@@ -44,6 +44,8 @@ pub mod ssh;
 pub mod ssh_agent;
 pub mod tab;
 pub mod termwiztermtab;
+#[cfg(test)]
+mod test;
 pub mod tmux;
 pub mod tmux_commands;
 mod tmux_pty;
@@ -137,6 +139,34 @@ fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: V
     histogram!("send_actions_to_mux.rate").record(1.);
 }
 
+/// Returns true for queries that are safe to answer while a synchronized
+/// update (DEC private mode 2026) is holding back the output stream:
+/// their responses reflect terminal capabilities rather than screen state,
+/// so they don't need to wait for the held actions to be applied.
+/// Applications commonly block waiting for these responses, and would
+/// otherwise stall until the update closes.
+fn is_passthrough_query(action: &Action) -> bool {
+    match action {
+        Action::CSI(CSI::Device(dev)) => matches!(
+            **dev,
+            Device::RequestPrimaryDeviceAttributes
+                | Device::RequestSecondaryDeviceAttributes
+                | Device::RequestTertiaryDeviceAttributes
+                | Device::RequestTerminalNameAndVersion
+                | Device::StatusReport
+        ),
+        // The query is answered eagerly, but kitty state mutations stay
+        // held: the keyboard stacks live on the screens themselves, so a
+        // held screen switch or reset could route an eager mutation to
+        // the wrong screen's stack.
+        Action::CSI(CSI::Keyboard(Keyboard::QueryKittySupport)) => true,
+        // Notably, CPR and DECRQM stay held: their answers (the cursor
+        // position, the state of a mode) may be changed by the actions
+        // that are being held back.
+        _ => false,
+    }
+}
+
 fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
     let mut buf = vec![0; configuration().mux_output_parser_buffer_size];
     let mut parser = termwiz::escape::parser::Parser::new();
@@ -158,6 +188,10 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
             }
             Ok(size) => {
                 parser.parse(&buf[0..size], |action| {
+                    if hold && is_passthrough_query(&action) {
+                        send_actions_to_mux(&pane, &dead, vec![action]);
+                        return;
+                    }
                     let mut flush = false;
                     match &action {
                         Action::CSI(CSI::Mode(Mode::SetDecPrivateMode(DecPrivateMode::Code(
