@@ -300,18 +300,33 @@
 
       testingSystem = "x86_64-linux";
       globalOutputs = {
-        # Build VM: `nixos-rebuild build-vm --flake ./nix#testing-on-gnome`
-        # Then: `REPO=$PWD ./result/bin/run-nixos-vm`
+        # 0. Build Wezterm locally: `cargo build`
+        # 1. Build the VM: `nixos-rebuild build-vm --flake ./nix#testing-on-gnome`
+        # 2. Start the VM: `REPO=$PWD ./result/bin/run-nixos-vm`
+        # 3. (In the VM) (optional, 1-time) Adjust your keyboard layout in settings
+        # 4. (In the VM) Open a terminal 'Console' on Gnome, 'Konsole' on KDE
+        # 5. (In the VM) `cd ~/repo`
+        # 6. (In the VM) Run the binary built! ``
         #
         # FIXME: cannot write to $REPO in the VM...
         nixosConfigurations.testing-on-gnome = nixpkgs.lib.nixosSystem {
           system = testingSystem;
           modules = [
-            ./nixos-base.nix
-            ./nixos-vm-settings.nix
-            ./nixos-patch-opengl.nix # 👀
-            ./nixos-gnome-desktop.nix
-            ./nixos-shared-repo.nix
+            ./vm/base.nix
+            ./vm/vm-settings.nix
+            ./vm/patch-opengl.nix # 👀
+            ./vm/desktop-gnome.nix
+            ./vm/shared-repo.nix
+          ];
+        };
+        nixosConfigurations.testing-on-plasma = nixpkgs.lib.nixosSystem {
+          system = testingSystem;
+          modules = [
+            ./vm/base.nix
+            ./vm/vm-settings.nix
+            ./vm/patch-opengl.nix # 👀
+            ./vm/desktop-plasma.nix
+            ./vm/shared-repo.nix
           ];
         };
       };
