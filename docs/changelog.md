@@ -128,9 +128,9 @@ As features stabilize some brief notes about them will accumulate here.
   @BenBergman! #6328 #6873 #6875
 * [cell_widths](config/lua/config/cell_widths.md) option for explicit
   control over cell widths. Thanks to @hamano! #6289 #6290
-* [kde_window_background_blur](config/lua/config/kde_window_background_blur.md) option
-  to enable window blur when running under KDE Plasma on Wayland systems.
-  Thanks to @psomani16k! #6905
+* [wayland_window_background_blur](config/lua/config/wayland_window_background_blur.md) option
+  to enable window blur on Wayland compositors supporting the `ext-background-effect-v1` protocol.
+  Thanks to @psomani16k, @1Capito1 & @bew! #6905 #7615
 * [reverse_video_cursor_min_contrast](config/lua/config/reverse_video_cursor_min_contrast.md)
   option. Thanks to @jameshurst! #6584 ?2861
 * [text_min_contrast_ratio](config/lua/config/text_min_contrast_ratio.md) to more generally
