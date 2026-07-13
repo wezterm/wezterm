@@ -1496,7 +1496,7 @@ impl TermWindow {
                 if mux.get_window(mux_window_id).is_none() {
                     // Something inconsistent: cancel subscription
                     log::debug!(
-                        "PaneOutput: wanted mux_window_id={} from mux, but \
+                        "got Pane mux event: wanted mux_window_id={} from mux, but \
                          was not found, cancel mux subscription",
                         mux_window_id
                     );
@@ -1649,6 +1649,7 @@ impl TermWindow {
         }
     }
 
+    /// Emit "pane-focus-changed" event if pane focus changed since last check.
     fn maybe_emit_pane_focus_changed(&mut self) {
         let pane_id = match self.get_active_pane_no_overlay() {
             Some(pane) => pane.pane_id(),
