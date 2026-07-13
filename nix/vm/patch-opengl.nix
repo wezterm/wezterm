@@ -16,6 +16,6 @@
   # (although I got many error/warning from graphics rendering on start)
   # So we patch that in the env directly 👀
   environment.sessionVariables = {
-    LD_LIBRARY_PATH = ["${pkgs.libglvnd}/lib"];
+    LD_LIBRARY_PATH = [ "${pkgs.libglvnd}/lib" ];
   };
 }

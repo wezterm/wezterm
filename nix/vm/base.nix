@@ -2,7 +2,7 @@
 
 {
   users.mutableUsers = false;
-  users.groups.devs = {};
+  users.groups.devs = { };
   users.users.dev = {
     isNormalUser = true;
     group = "devs";
@@ -21,8 +21,14 @@
   ];
 
   nix.settings = {
-    trusted-users = [ "root" "dev" ];
-    experimental-features = ["nix-command" "flakes"];
+    trusted-users = [
+      "root"
+      "dev"
+    ];
+    experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
   };
 
   documentation.nixos.enable = false;

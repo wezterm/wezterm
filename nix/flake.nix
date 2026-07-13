@@ -41,15 +41,15 @@
   };
 
   outputs =
-    inputs@{ self, nixpkgs, flake-utils, rust-overlay, ... }:
+    inputs@{ self, ... }:
     let
-      perSystemOutputs = flake-utils.lib.eachDefaultSystem (
+      perSystemOutputs = inputs.flake-utils.lib.eachDefaultSystem (
         system:
         let
-          overlays = [ (import rust-overlay) ];
-          pkgs = import nixpkgs { inherit system overlays; };
+          overlays = [ (import inputs.rust-overlay) ];
+          pkgs = import inputs.nixpkgs { inherit system overlays; };
 
-          inherit (nixpkgs) lib;
+          inherit (inputs.nixpkgs) lib;
           inherit (pkgs) stdenv;
 
           nativeBuildInputs =
@@ -97,7 +97,8 @@
             cargo = pkgs.rust-bin.stable.latest.minimal;
             rustc = pkgs.rust-bin.stable.latest.minimal;
           };
-        in {
+        in
+        {
           packages.default = rustPlatform.buildRustPackage (finalAttrs: {
             inherit buildInputs nativeBuildInputs;
 
@@ -257,7 +258,7 @@
             LD_LIBRARY_PATH = libPath;
           };
 
-          formatter = pkgs.nixfmt-rfc-style;
+          formatter = pkgs.nixfmt-tree;
         }
       );
 
@@ -273,12 +274,12 @@
         #
         # FIXME: cannot write to $REPO in the VM...
         nixosConfigurations.testing-on-gnome = import ./vm {
-          inherit nixpkgs;
+          inherit (inputs) nixpkgs;
           system = testingSystem;
           desktopModule = ./vm/desktop-gnome.nix;
         };
         nixosConfigurations.testing-on-plasma = import ./vm {
-          inherit nixpkgs;
+          inherit (inputs) nixpkgs;
           system = testingSystem;
           desktopModule = ./vm/desktop-plasma.nix;
         };
