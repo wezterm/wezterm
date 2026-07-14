@@ -585,6 +585,15 @@ pub struct Config {
     #[dynamic(default)]
     pub win32_system_backdrop: SystemBackdrop,
 
+    /// Only works on Windows: when a `win32_system_backdrop` material is
+    /// active, keep rendering the *active* material while the window is
+    /// unfocused. By default DWM swaps the backdrop for a desaturated /
+    /// solid fallback on inactive windows (a power-saving behavior); this
+    /// option suppresses that by reporting the window as visually active.
+    /// See <https://github.com/wezterm/wezterm/issues/5895>.
+    #[dynamic(default)]
+    pub win32_system_backdrop_keep_inactive: bool,
+
     #[dynamic(default = "default_win32_acrylic_accent_color")]
     pub win32_acrylic_accent_color: RgbaColor,
 

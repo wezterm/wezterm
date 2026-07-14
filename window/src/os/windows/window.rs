@@ -2922,6 +2922,34 @@ unsafe fn drop_files(hwnd: HWND, _msg: UINT, wparam: WPARAM, _lparam: LPARAM) ->
     Some(0)
 }
 
+/// DWM keys the system-backdrop material (Acrylic/Mica/Tabbed) off the
+/// window's non-client activation state: when `DefWindowProc` processes
+/// `WM_NCACTIVATE` with `wParam == FALSE`, the material is swapped for a
+/// desaturated/solid "inactive" fallback (a power-saving behavior that
+/// cannot be disabled from outside the window). When the user has opted
+/// in via `win32_system_backdrop_keep_inactive`, lie to `DefWindowProc`
+/// so the active material keeps rendering while unfocused.
+/// `lParam = -1` suppresses the frame repaint (long-standing Win32 idiom).
+/// Real focus handling (WM_SETFOCUS/WM_KILLFOCUS) is unaffected.
+unsafe fn wm_ncactivate(
+    hwnd: HWND,
+    _msg: UINT,
+    wparam: WPARAM,
+    _lparam: LPARAM,
+) -> Option<LRESULT> {
+    if wparam == 0 {
+        if let Some(inner) = rc_from_hwnd(hwnd) {
+            let inner = inner.borrow();
+            if inner.config.win32_system_backdrop_keep_inactive
+                && inner.config.win32_system_backdrop != SystemBackdrop::Disable
+            {
+                return Some(DefWindowProcW(hwnd, WM_NCACTIVATE, 1, -1));
+            }
+        }
+    }
+    None
+}
+
 unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     match msg {
         WM_NCCREATE => wm_nccreate(hwnd, msg, wparam, lparam),
@@ -2933,6 +2961,7 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
         WM_WINDOWPOSCHANGED => wm_windowposchanged(hwnd, msg, wparam, lparam),
         WM_SETFOCUS => wm_set_focus(hwnd, msg, wparam, lparam),
         WM_KILLFOCUS => wm_kill_focus(hwnd, msg, wparam, lparam),
+        WM_NCACTIVATE => wm_ncactivate(hwnd, msg, wparam, lparam),
         WM_DEADCHAR | WM_KEYDOWN | WM_KEYUP | WM_SYSCHAR | WM_CHAR | WM_IME_CHAR | WM_SYSKEYUP
         | WM_SYSKEYDOWN => key(hwnd, msg, wparam, lparam),
         WM_SIZING => {
