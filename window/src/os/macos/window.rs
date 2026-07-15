@@ -2634,6 +2634,17 @@ impl WindowView {
                 false
             } else if only_right_alt && !send_composed_key_when_right_alt_is_pressed {
                 false
+            } else if modifiers.intersects(
+                Modifiers::SUPER - config_handle.macos_forward_to_ime_modifier_mask,
+            ) {
+                // CMD chords are keyboard shortcuts rather than text input:
+                // the IME would echo the key back via insertText: as plain,
+                // unmodified text, silently losing the modifiers. A chord
+                // such as CMD+SHIFT+D would otherwise be forwarded when the
+                // mask contains SHIFT and reach the terminal as just "d".
+                // Users who really want CMD to reach the IME can add SUPER
+                // to macos_forward_to_ime_modifier_mask.
+                false
             } else {
                 modifiers.is_empty()
                     || modifiers.intersects(config_handle.macos_forward_to_ime_modifier_mask)
