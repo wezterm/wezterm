@@ -2777,6 +2777,21 @@ impl WindowView {
                 }
             } else if chars.is_empty() || chars == unmod {
                 (key, None)
+            } else if modifiers.contains(Modifiers::SUPER) {
+                // When CMD is held, macOS reports `chars` from the command
+                // keyboard layer, which strips SHIFT (eg: CMD+SHIFT+D gives
+                // chars="d", unmod="D") and transliterates non-Latin layouts
+                // (eg: Cyrillic gives chars="s", unmod="ы"). That mismatch
+                // would otherwise be mistaken for a layout translation below
+                // and cause the modifiers to be discarded, so the terminal
+                // would receive plain text instead of the chord.
+                // CMD chords are shortcuts, not text: take the unmodified
+                // key and preserve the modifiers.
+                // <https://github.com/wezterm/wezterm/issues/4589>
+                match key_string_to_key_code(unmod) {
+                    Some(key) => (key, None),
+                    None => return,
+                }
             } else if swap_unmod_and_chars {
                 match key_string_to_key_code(unmod) {
                     Some(key) => (key, None),
