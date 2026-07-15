@@ -482,6 +482,21 @@ pub struct Config {
     #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
 
+    /// Controls the position of the tab bar: Top, Bottom, Left, or Right.
+    /// When set to a non-default value, this takes precedence over tab_bar_at_bottom.
+    /// Left and Right positions require use_fancy_tab_bar = true (the default).
+    #[dynamic(default)]
+    pub tab_bar_position: TabBarPosition,
+
+    /// The width of the tab bar when positioned on the left or right side.
+    /// Ignored when the tab bar is at the top or bottom.
+    /// Defaults to 200 pixels.
+    #[dynamic(
+        try_from = "crate::units::PixelUnit",
+        default = "default_tab_bar_width"
+    )]
+    pub tab_bar_width: Dimension,
+
     #[dynamic(default = "default_true")]
     pub mouse_wheel_scrolls_tabs: bool,
 
@@ -928,6 +943,17 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Returns the effective tab bar position, resolving the precedence
+    /// between `tab_bar_position` and the legacy `tab_bar_at_bottom` option.
+    /// If `tab_bar_position` is set to a non-default value, it takes precedence.
+    /// Otherwise, `tab_bar_at_bottom = true` maps to `Bottom`.
+    pub fn resolved_tab_bar_position(&self) -> TabBarPosition {
+        match self.tab_bar_position {
+            TabBarPosition::Top if self.tab_bar_at_bottom => TabBarPosition::Bottom,
+            pos => pos,
+        }
+    }
+
     pub fn load() -> LoadedConfig {
         Self::load_with_overrides(&wezterm_dynamic::Value::default())
     }
@@ -1881,6 +1907,10 @@ fn default_tab_max_width() -> usize {
     16
 }
 
+fn default_tab_bar_width() -> Dimension {
+    Dimension::Pixels(200.0)
+}
+
 fn default_update_interval() -> u64 {
     86400
 }
@@ -2023,6 +2053,22 @@ impl PathPossibility {
             path,
             is_required: false,
         }
+    }
+}
+
+/// Controls the position of the tab bar within the window
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabBarPosition {
+    #[default]
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl TabBarPosition {
+    pub fn is_vertical(self) -> bool {
+        matches!(self, TabBarPosition::Left | TabBarPosition::Right)
     }
 }
 
@@ -2205,4 +2251,73 @@ fn default_macos_forward_mods() -> Modifiers {
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {
     FontRasterizerSelection::Harfbuzz
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wezterm_dynamic::{FromDynamic, FromDynamicOptions, Value};
+
+    #[test]
+    fn tab_bar_position_from_dynamic() {
+        let opts = FromDynamicOptions::default();
+        assert_eq!(
+            TabBarPosition::from_dynamic(&Value::String("Top".into()), opts).unwrap(),
+            TabBarPosition::Top
+        );
+        assert_eq!(
+            TabBarPosition::from_dynamic(&Value::String("Bottom".into()), opts).unwrap(),
+            TabBarPosition::Bottom
+        );
+        assert_eq!(
+            TabBarPosition::from_dynamic(&Value::String("Left".into()), opts).unwrap(),
+            TabBarPosition::Left
+        );
+        assert_eq!(
+            TabBarPosition::from_dynamic(&Value::String("Right".into()), opts).unwrap(),
+            TabBarPosition::Right
+        );
+    }
+
+    #[test]
+    fn tab_bar_position_default() {
+        assert_eq!(TabBarPosition::default(), TabBarPosition::Top);
+    }
+
+    #[test]
+    fn tab_bar_position_is_vertical() {
+        assert!(!TabBarPosition::Top.is_vertical());
+        assert!(!TabBarPosition::Bottom.is_vertical());
+        assert!(TabBarPosition::Left.is_vertical());
+        assert!(TabBarPosition::Right.is_vertical());
+    }
+
+    #[test]
+    fn resolved_tab_bar_position_defaults_to_top() {
+        let config = Config::default();
+        assert_eq!(config.resolved_tab_bar_position(), TabBarPosition::Top);
+    }
+
+    #[test]
+    fn resolved_tab_bar_position_respects_tab_bar_at_bottom() {
+        let mut config = Config::default();
+        config.tab_bar_at_bottom = true;
+        assert_eq!(config.resolved_tab_bar_position(), TabBarPosition::Bottom);
+    }
+
+    #[test]
+    fn resolved_tab_bar_position_explicit_overrides_at_bottom() {
+        let mut config = Config::default();
+        config.tab_bar_at_bottom = true;
+        config.tab_bar_position = TabBarPosition::Left;
+        assert_eq!(config.resolved_tab_bar_position(), TabBarPosition::Left);
+    }
+
+    #[test]
+    fn resolved_tab_bar_position_explicit_bottom_ignores_at_bottom() {
+        let mut config = Config::default();
+        config.tab_bar_at_bottom = false;
+        config.tab_bar_position = TabBarPosition::Right;
+        assert_eq!(config.resolved_tab_bar_position(), TabBarPosition::Right);
+    }
 }

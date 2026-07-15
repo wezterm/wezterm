@@ -68,12 +68,19 @@ impl super::TermWindow {
         self.current_mouse_event.replace(event.clone());
 
         let border = self.get_os_border();
+        let tab_pos = self.resolved_tab_bar_position();
 
-        let first_line_offset = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
+        let first_line_offset = if self.show_tab_bar && tab_pos == config::TabBarPosition::Top {
             self.tab_bar_pixel_height().unwrap_or(0.) as isize
         } else {
             0
         } + border.top.get() as isize;
+
+        let left_bar_offset = if self.show_tab_bar && tab_pos == config::TabBarPosition::Left {
+            self.tab_bar_pixel_width() as isize
+        } else {
+            0
+        };
 
         let (padding_left, padding_top) = self.padding_left_top();
 
@@ -88,6 +95,7 @@ impl super::TermWindow {
         let x = (event
             .coords
             .x
+            .sub(left_bar_offset)
             .sub((padding_left + border.left.get() as f32) as isize)
             .max(0) as f32)
             / self.render_metrics.cell_size.width as f32;
@@ -112,6 +120,7 @@ impl super::TermWindow {
         let mut x_pixel_offset = event
             .coords
             .x
+            .sub(left_bar_offset)
             .sub((padding_left + border.left.get() as f32) as isize);
         if x > 0 {
             x_pixel_offset = x_pixel_offset.max(0) % self.render_metrics.cell_size.width;
@@ -295,15 +304,16 @@ impl super::TermWindow {
         let dims = pane.get_dimensions();
         let current_viewport = self.get_viewport(pane.pane_id());
 
-        let tab_bar_height = if self.show_tab_bar {
+        let scroll_tab_pos = self.resolved_tab_bar_position();
+        let tab_bar_height = if self.show_tab_bar && !scroll_tab_pos.is_vertical() {
             self.tab_bar_pixel_height().unwrap_or(0.)
         } else {
             0.
         };
-        let (top_bar_height, bottom_bar_height) = if self.config.tab_bar_at_bottom {
-            (0.0, tab_bar_height)
-        } else {
-            (tab_bar_height, 0.0)
+        let (top_bar_height, bottom_bar_height) = match scroll_tab_pos {
+            config::TabBarPosition::Bottom => (0.0, tab_bar_height),
+            config::TabBarPosition::Top => (tab_bar_height, 0.0),
+            _ => (0.0, 0.0),
         };
 
         let border = self.get_os_border();

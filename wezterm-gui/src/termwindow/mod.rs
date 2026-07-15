@@ -607,7 +607,8 @@ impl TermWindow {
         // Initially we have only a single tab, so take that into account
         // for the tab bar state.
         let show_tab_bar = config.enable_tab_bar && !config.hide_tab_bar_if_only_one_tab;
-        let tab_bar_height = if show_tab_bar {
+        let is_vertical_tab_bar = config.resolved_tab_bar_position().is_vertical();
+        let tab_bar_height = if show_tab_bar && !is_vertical_tab_bar {
             Self::tab_bar_pixel_height_impl(&config, &fontconfig, &render_metrics)? as usize
         } else {
             0
@@ -653,8 +654,24 @@ impl TermWindow {
         let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
 
-        let mut dimensions = Dimensions {
+        // For vertical tab bar, we need a temporary Dimensions to compute the tab bar width.
+        // The tab_bar_pixel_width_impl needs dimensions for DPI.
+        let temp_dims = Dimensions {
             pixel_width: (terminal_size.pixel_width + padding_left + padding_right) as usize,
+            pixel_height: ((terminal_size.rows * render_metrics.cell_size.height as usize)
+                + padding_top
+                + padding_bottom) as usize,
+            dpi,
+        };
+        let tab_bar_width = if show_tab_bar && is_vertical_tab_bar {
+            Self::tab_bar_pixel_width_impl(&config, &render_metrics, &temp_dims) as usize
+        } else {
+            0
+        };
+
+        let mut dimensions = Dimensions {
+            pixel_width: (terminal_size.pixel_width + padding_left + padding_right) as usize
+                + tab_bar_width,
             pixel_height: ((terminal_size.rows * render_metrics.cell_size.height as usize)
                 + padding_top
                 + padding_bottom) as usize
@@ -873,6 +890,7 @@ impl TermWindow {
                         padding_bottom: padding_bottom,
                         border: border,
                         tab_bar_height: tab_bar_height,
+                        tab_bar_width: tab_bar_width,
                     }
                     .into(),
                 );
@@ -1970,26 +1988,45 @@ impl TermWindow {
         let active_pane = panes.iter().find(|p| p.is_active).cloned();
 
         let border = self.get_os_border();
+        let tab_pos = self.resolved_tab_bar_position();
         let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
-        let tab_bar_y = if self.config.tab_bar_at_bottom {
-            ((self.dimensions.pixel_height as f32) - (tab_bar_height + border.bottom.get() as f32))
-                .max(0.)
-        } else {
-            border.top.get() as f32
-        };
-
-        let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
+        let tab_bar_width = self.tab_bar_pixel_width();
 
         let hovering_in_tab_bar = match &self.current_mouse_event {
             Some(event) => {
-                let mouse_y = event.coords.y as f32;
-                mouse_y >= tab_bar_y as f32 && mouse_y < tab_bar_y as f32 + tab_bar_height
+                if tab_pos.is_vertical() {
+                    let mouse_x = event.coords.x as f32;
+                    let tab_bar_x = if tab_pos == config::TabBarPosition::Left {
+                        border.left.get() as f32
+                    } else {
+                        (self.dimensions.pixel_width as f32)
+                            - tab_bar_width
+                            - border.right.get() as f32
+                    };
+                    mouse_x >= tab_bar_x && mouse_x < tab_bar_x + tab_bar_width
+                } else {
+                    let mouse_y = event.coords.y as f32;
+                    let tab_bar_y = if tab_pos == config::TabBarPosition::Bottom {
+                        ((self.dimensions.pixel_height as f32)
+                            - (tab_bar_height + border.bottom.get() as f32))
+                            .max(0.)
+                    } else {
+                        border.top.get() as f32
+                    };
+                    mouse_y >= tab_bar_y && mouse_y < tab_bar_y + tab_bar_height
+                }
             }
             None => false,
         };
 
+        let tab_bar_cols = if tab_pos.is_vertical() {
+            (tab_bar_width as usize) / self.render_metrics.cell_size.width as usize
+        } else {
+            self.dimensions.pixel_width / self.render_metrics.cell_size.width as usize
+        };
+
         let new_tab_bar = TabBarState::new(
-            self.dimensions.pixel_width / self.render_metrics.cell_size.width as usize,
+            tab_bar_cols,
             if hovering_in_tab_bar {
                 Some(self.last_mouse_coords.0)
             } else {
@@ -2113,8 +2150,14 @@ impl TermWindow {
         if let Some(win) = self.window.as_ref() {
             let cursor = pos.pane.get_cursor_position();
             let top = pos.pane.get_dimensions().physical_top;
-            let tab_bar_height = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
+            let tab_pos = self.resolved_tab_bar_position();
+            let tab_bar_height = if self.show_tab_bar && tab_pos == config::TabBarPosition::Top {
                 self.tab_bar_pixel_height().unwrap()
+            } else {
+                0.0
+            };
+            let left_bar_width = if self.show_tab_bar && tab_pos == config::TabBarPosition::Left {
+                self.tab_bar_pixel_width()
             } else {
                 0.0
             };
@@ -2123,7 +2166,8 @@ impl TermWindow {
             let r = Rect::new(
                 Point::new(
                     (((cursor.x + pos.left) as isize).max(0) * self.render_metrics.cell_size.width)
-                        .add(padding_left as isize),
+                        .add(padding_left as isize)
+                        .add(left_bar_width as isize),
                     ((cursor.y + pos.top as isize - top).max(0)
                         * self.render_metrics.cell_size.height)
                         .add(tab_bar_height as isize)

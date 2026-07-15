@@ -392,8 +392,15 @@ impl CharSelector {
             .expect("to resolve char selection font");
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
 
-        let top_bar_height = if term_window.show_tab_bar && !term_window.config.tab_bar_at_bottom {
+        let tab_pos = term_window.resolved_tab_bar_position();
+        let top_bar_height = if term_window.show_tab_bar && tab_pos == config::TabBarPosition::Top {
             term_window.tab_bar_pixel_height().unwrap()
+        } else {
+            0.
+        };
+        let left_bar_width = if term_window.show_tab_bar && tab_pos == config::TabBarPosition::Left
+        {
+            term_window.tab_bar_pixel_width()
         } else {
             0.
         };
@@ -532,7 +539,7 @@ impl CharSelector {
                     pixel_cell: metrics.cell_size.width as f32,
                 },
                 bounds: euclid::rect(
-                    padding_left,
+                    padding_left + left_bar_width,
                     top_pixel_y,
                     size.cols as f32 * term_window.render_metrics.cell_size.width as f32,
                     size.rows as f32 * term_window.render_metrics.cell_size.height as f32,

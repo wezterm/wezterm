@@ -6,7 +6,7 @@ use crate::termwindow::render::corners::*;
 use crate::termwindow::render::window_buttons::window_button_element;
 use crate::termwindow::{UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
-use config::{Dimension, DimensionContext, TabBarColors};
+use config::{Dimension, DimensionContext, TabBarColors, TabBarPosition};
 use std::rc::Rc;
 use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
@@ -56,6 +56,21 @@ impl crate::TermWindow {
     }
 
     pub fn build_fancy_tab_bar(&self, palette: &ColorPalette) -> anyhow::Result<ComputedElement> {
+        let pos = self.resolved_tab_bar_position();
+        if pos.is_vertical() {
+            self.build_vertical_fancy_tab_bar(palette, pos)
+        } else {
+            self.build_horizontal_fancy_tab_bar(palette, pos)
+        }
+    }
+
+    /// Build the horizontal fancy tab bar (Top/Bottom positions).
+    /// This is the original build_fancy_tab_bar logic.
+    fn build_horizontal_fancy_tab_bar(
+        &self,
+        palette: &ColorPalette,
+        pos: TabBarPosition,
+    ) -> anyhow::Result<ComputedElement> {
         let tab_bar_height = self.tab_bar_pixel_height()?;
         let font = self.fonts.title_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
@@ -71,229 +86,10 @@ impl crate::TermWindow {
         let mut left_status = vec![];
         let mut left_eles = vec![];
         let mut right_eles = vec![];
-        let bar_colors = ElementColors {
-            border: BorderColor::default(),
-            bg: if self.focused.is_some() {
-                self.config.window_frame.active_titlebar_bg
-            } else {
-                self.config.window_frame.inactive_titlebar_bg
-            }
-            .to_linear()
-            .into(),
-            text: if self.focused.is_some() {
-                self.config.window_frame.active_titlebar_fg
-            } else {
-                self.config.window_frame.inactive_titlebar_fg
-            }
-            .to_linear()
-            .into(),
-        };
+        let bar_colors = self.tab_bar_colors();
 
         let item_to_elem = |item: &TabEntry| -> Element {
-            let element = Element::with_line(&font, &item.title, palette);
-
-            let bg_color = item
-                .title
-                .get_cell(0)
-                .and_then(|c| match c.attrs().background() {
-                    ColorAttribute::Default => None,
-                    col => Some(palette.resolve_bg(col)),
-                });
-            let fg_color = item
-                .title
-                .get_cell(0)
-                .and_then(|c| match c.attrs().foreground() {
-                    ColorAttribute::Default => None,
-                    col => Some(palette.resolve_fg(col)),
-                });
-
-            let new_tab = colors.new_tab();
-            let new_tab_hover = colors.new_tab_hover();
-            let active_tab = colors.active_tab();
-
-            match item.item {
-                TabBarItem::RightStatus | TabBarItem::LeftStatus | TabBarItem::None => element
-                    .item_type(UIItemType::TabBar(TabBarItem::None))
-                    .line_height(Some(1.75))
-                    .margin(BoxDimension {
-                        left: Dimension::Cells(0.),
-                        right: Dimension::Cells(0.),
-                        top: Dimension::Cells(0.0),
-                        bottom: Dimension::Cells(0.),
-                    })
-                    .padding(BoxDimension {
-                        left: Dimension::Cells(0.5),
-                        right: Dimension::Cells(0.),
-                        top: Dimension::Cells(0.),
-                        bottom: Dimension::Cells(0.),
-                    })
-                    .border(BoxDimension::new(Dimension::Pixels(0.)))
-                    .colors(bar_colors.clone()),
-                TabBarItem::NewTabButton => Element::new(
-                    &font,
-                    ElementContent::Poly {
-                        line_width: metrics.underline_height.max(2),
-                        poly: SizedPoly {
-                            poly: PLUS_BUTTON,
-                            width: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
-                            height: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
-                        },
-                    },
-                )
-                .vertical_align(VerticalAlign::Middle)
-                .item_type(UIItemType::TabBar(item.item.clone()))
-                .margin(BoxDimension {
-                    left: Dimension::Cells(0.5),
-                    right: Dimension::Cells(0.),
-                    top: Dimension::Cells(0.2),
-                    bottom: Dimension::Cells(0.),
-                })
-                .padding(BoxDimension {
-                    left: Dimension::Cells(0.5),
-                    right: Dimension::Cells(0.5),
-                    top: Dimension::Cells(0.2),
-                    bottom: Dimension::Cells(0.25),
-                })
-                .border(BoxDimension::new(Dimension::Pixels(1.)))
-                .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: new_tab.bg_color.to_linear().into(),
-                    text: new_tab.fg_color.to_linear().into(),
-                })
-                .hover_colors(Some(ElementColors {
-                    border: BorderColor::default(),
-                    bg: new_tab_hover.bg_color.to_linear().into(),
-                    text: new_tab_hover.fg_color.to_linear().into(),
-                })),
-                TabBarItem::Tab { active, .. } if active => element
-                    .vertical_align(VerticalAlign::Bottom)
-                    .item_type(UIItemType::TabBar(item.item.clone()))
-                    .margin(BoxDimension {
-                        left: Dimension::Cells(0.),
-                        right: Dimension::Cells(0.),
-                        top: Dimension::Cells(0.2),
-                        bottom: Dimension::Cells(0.),
-                    })
-                    .padding(BoxDimension {
-                        left: Dimension::Cells(0.5),
-                        right: Dimension::Cells(0.5),
-                        top: Dimension::Cells(0.2),
-                        bottom: Dimension::Cells(0.25),
-                    })
-                    .border(BoxDimension::new(Dimension::Pixels(1.)))
-                    .border_corners(Some(Corners {
-                        top_left: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_LEFT_ROUNDED_CORNER,
-                        },
-                        top_right: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_RIGHT_ROUNDED_CORNER,
-                        },
-                        bottom_left: SizedPoly::none(),
-                        bottom_right: SizedPoly::none(),
-                    }))
-                    .colors(ElementColors {
-                        border: BorderColor::new(
-                            bg_color
-                                .unwrap_or_else(|| active_tab.bg_color.into())
-                                .to_linear(),
-                        ),
-                        bg: bg_color
-                            .unwrap_or_else(|| active_tab.bg_color.into())
-                            .to_linear()
-                            .into(),
-                        text: fg_color
-                            .unwrap_or_else(|| active_tab.fg_color.into())
-                            .to_linear()
-                            .into(),
-                    }),
-                TabBarItem::Tab { .. } => element
-                    .vertical_align(VerticalAlign::Bottom)
-                    .item_type(UIItemType::TabBar(item.item.clone()))
-                    .margin(BoxDimension {
-                        left: Dimension::Cells(0.),
-                        right: Dimension::Cells(0.),
-                        top: Dimension::Cells(0.2),
-                        bottom: Dimension::Cells(0.),
-                    })
-                    .padding(BoxDimension {
-                        left: Dimension::Cells(0.5),
-                        right: Dimension::Cells(0.5),
-                        top: Dimension::Cells(0.2),
-                        bottom: Dimension::Cells(0.25),
-                    })
-                    .border(BoxDimension::new(Dimension::Pixels(1.)))
-                    .border_corners(Some(Corners {
-                        top_left: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_LEFT_ROUNDED_CORNER,
-                        },
-                        top_right: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_RIGHT_ROUNDED_CORNER,
-                        },
-                        bottom_left: SizedPoly {
-                            width: Dimension::Cells(0.),
-                            height: Dimension::Cells(0.33),
-                            poly: &[],
-                        },
-                        bottom_right: SizedPoly {
-                            width: Dimension::Cells(0.),
-                            height: Dimension::Cells(0.33),
-                            poly: &[],
-                        },
-                    }))
-                    .colors({
-                        let inactive_tab = colors.inactive_tab();
-                        let bg = bg_color
-                            .unwrap_or_else(|| inactive_tab.bg_color.into())
-                            .to_linear();
-                        let edge = colors.inactive_tab_edge().to_linear();
-                        ElementColors {
-                            border: BorderColor {
-                                left: bg,
-                                right: edge,
-                                top: bg,
-                                bottom: bg,
-                            },
-                            bg: bg.into(),
-                            text: fg_color
-                                .unwrap_or_else(|| inactive_tab.fg_color.into())
-                                .to_linear()
-                                .into(),
-                        }
-                    })
-                    .hover_colors({
-                        let inactive_tab_hover = colors.inactive_tab_hover();
-                        Some(ElementColors {
-                            border: BorderColor::new(
-                                bg_color
-                                    .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
-                                    .to_linear(),
-                            ),
-                            bg: bg_color
-                                .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
-                                .to_linear()
-                                .into(),
-                            text: fg_color
-                                .unwrap_or_else(|| inactive_tab_hover.fg_color.into())
-                                .to_linear()
-                                .into(),
-                        })
-                    }),
-                TabBarItem::WindowButton(button) => window_button_element(
-                    button,
-                    self.window_state.contains(window::WindowState::MAXIMIZED),
-                    &font,
-                    &metrics,
-                    &self.config,
-                ),
-            }
+            self.tab_item_to_element(item, &font, &metrics, palette, &colors, &bar_colors, false)
         };
 
         let num_tabs: f32 = items
@@ -447,7 +243,7 @@ impl crate::TermWindow {
 
         computed.translate(euclid::vec2(
             0.,
-            if self.config.tab_bar_at_bottom {
+            if pos == TabBarPosition::Bottom {
                 self.dimensions.pixel_height as f32
                     - (computed.bounds.height() + border.bottom.get() as f32)
             } else {
@@ -456,6 +252,410 @@ impl crate::TermWindow {
         ));
 
         Ok(computed)
+    }
+
+    /// Build the vertical fancy tab bar (Left/Right positions).
+    /// Tabs are stacked vertically in a column with configurable width.
+    fn build_vertical_fancy_tab_bar(
+        &self,
+        palette: &ColorPalette,
+        pos: TabBarPosition,
+    ) -> anyhow::Result<ComputedElement> {
+        let tab_bar_width = self.tab_bar_pixel_width();
+        let font = self.fonts.title_font()?;
+        let metrics = RenderMetrics::with_font_metrics(&font.metrics());
+        let items = self.tab_bar.items();
+        let colors = self
+            .config
+            .colors
+            .as_ref()
+            .and_then(|c| c.tab_bar.as_ref())
+            .cloned()
+            .unwrap_or_else(TabBarColors::default);
+
+        let bar_colors = self.tab_bar_colors();
+
+        // For vertical layout, each tab is a Block element stacked vertically.
+        // Important: we override vertical_align to Top for all children because
+        // the parent container has min_height = window_height. With Bottom or Middle
+        // alignment, all children would be translated to overlap at the bottom/middle
+        // of the window instead of stacking from the top.
+        let mut tab_eles = vec![];
+
+        for item in items {
+            match item.item {
+                TabBarItem::LeftStatus | TabBarItem::RightStatus | TabBarItem::None => {
+                    let mut elem = self.tab_item_to_element(
+                        item,
+                        &font,
+                        &metrics,
+                        palette,
+                        &colors,
+                        &bar_colors,
+                        true,
+                    );
+                    elem.display = DisplayType::Block;
+                    elem.vertical_align = VerticalAlign::Top;
+                    elem.min_width = Some(Dimension::Pixels(tab_bar_width));
+                    elem.max_width = Some(Dimension::Pixels(tab_bar_width));
+                    tab_eles.push(elem);
+                }
+                TabBarItem::WindowButton(_) => {
+                    // Skip window buttons in vertical mode
+                }
+                TabBarItem::Tab { tab_idx, active } => {
+                    let mut elem = self.tab_item_to_element(
+                        item,
+                        &font,
+                        &metrics,
+                        palette,
+                        &colors,
+                        &bar_colors,
+                        true,
+                    );
+                    // In vertical mode, tabs fill the full bar width and stack
+                    elem.display = DisplayType::Block;
+                    elem.vertical_align = VerticalAlign::Top;
+                    elem.min_width = Some(Dimension::Pixels(tab_bar_width));
+                    elem.max_width = Some(Dimension::Pixels(tab_bar_width));
+                    // Round all four corners equally for vertical tabs
+                    elem.border_corners = Some(Corners {
+                        top_left: SizedPoly {
+                            width: Dimension::Cells(0.5),
+                            height: Dimension::Cells(0.5),
+                            poly: TOP_LEFT_ROUNDED_CORNER,
+                        },
+                        top_right: SizedPoly {
+                            width: Dimension::Cells(0.5),
+                            height: Dimension::Cells(0.5),
+                            poly: TOP_RIGHT_ROUNDED_CORNER,
+                        },
+                        bottom_left: SizedPoly {
+                            width: Dimension::Cells(0.5),
+                            height: Dimension::Cells(0.5),
+                            poly: BOTTOM_LEFT_ROUNDED_CORNER,
+                        },
+                        bottom_right: SizedPoly {
+                            width: Dimension::Cells(0.5),
+                            height: Dimension::Cells(0.5),
+                            poly: BOTTOM_RIGHT_ROUNDED_CORNER,
+                        },
+                    });
+                    elem.content = match elem.content {
+                        ElementContent::Text(_) => unreachable!(),
+                        ElementContent::Poly { .. } => unreachable!(),
+                        ElementContent::Children(mut kids) => {
+                            if self.config.show_close_tab_button_in_tabs {
+                                kids.push(make_x_button(&font, &metrics, &colors, tab_idx, active));
+                            }
+                            ElementContent::Children(kids)
+                        }
+                    };
+                    tab_eles.push(elem);
+                }
+                TabBarItem::NewTabButton => {
+                    let mut elem = self.tab_item_to_element(
+                        item,
+                        &font,
+                        &metrics,
+                        palette,
+                        &colors,
+                        &bar_colors,
+                        true,
+                    );
+                    elem.display = DisplayType::Block;
+                    elem.vertical_align = VerticalAlign::Top;
+                    elem.min_width = Some(Dimension::Pixels(tab_bar_width));
+                    elem.max_width = Some(Dimension::Pixels(tab_bar_width));
+                    tab_eles.push(elem);
+                }
+            }
+        }
+
+        let content = ElementContent::Children(tab_eles);
+
+        let tabs = Element::new(&font, content)
+            .display(DisplayType::Block)
+            .item_type(UIItemType::TabBar(TabBarItem::None))
+            .min_width(Some(Dimension::Pixels(tab_bar_width)))
+            .min_height(Some(Dimension::Pixels(self.dimensions.pixel_height as f32)))
+            .colors(bar_colors);
+
+        let border = self.get_os_border();
+
+        let mut computed = self.compute_element(
+            &LayoutContext {
+                height: DimensionContext {
+                    dpi: self.dimensions.dpi as f32,
+                    pixel_max: self.dimensions.pixel_height as f32,
+                    pixel_cell: metrics.cell_size.height as f32,
+                },
+                width: DimensionContext {
+                    dpi: self.dimensions.dpi as f32,
+                    pixel_max: tab_bar_width,
+                    pixel_cell: metrics.cell_size.width as f32,
+                },
+                bounds: euclid::rect(
+                    0.,
+                    border.top.get() as f32,
+                    tab_bar_width,
+                    self.dimensions.pixel_height as f32 - (border.top + border.bottom).get() as f32,
+                ),
+                metrics: &metrics,
+                gl_state: self.render_state.as_ref().unwrap(),
+                zindex: 10,
+            },
+            &tabs,
+        )?;
+
+        // Position the tab bar on the correct side
+        let translate_x = if pos == TabBarPosition::Right {
+            self.dimensions.pixel_width as f32 - tab_bar_width - border.right.get() as f32
+        } else {
+            // Left
+            border.left.get() as f32
+        };
+        computed.translate(euclid::vec2(translate_x, 0.));
+
+        Ok(computed)
+    }
+
+    /// Compute the bar background colors based on focus state.
+    fn tab_bar_colors(&self) -> ElementColors {
+        ElementColors {
+            border: BorderColor::default(),
+            bg: if self.focused.is_some() {
+                self.config.window_frame.active_titlebar_bg
+            } else {
+                self.config.window_frame.inactive_titlebar_bg
+            }
+            .to_linear()
+            .into(),
+            text: if self.focused.is_some() {
+                self.config.window_frame.active_titlebar_fg
+            } else {
+                self.config.window_frame.inactive_titlebar_fg
+            }
+            .to_linear()
+            .into(),
+        }
+    }
+
+    /// Convert a TabEntry into an Element, used for both horizontal and vertical tab bars.
+    fn tab_item_to_element(
+        &self,
+        item: &TabEntry,
+        font: &Rc<LoadedFont>,
+        metrics: &RenderMetrics,
+        palette: &ColorPalette,
+        colors: &TabBarColors,
+        bar_colors: &ElementColors,
+        _vertical: bool,
+    ) -> Element {
+        let element = Element::with_line(font, &item.title, palette);
+
+        let bg_color = item
+            .title
+            .get_cell(0)
+            .and_then(|c| match c.attrs().background() {
+                ColorAttribute::Default => None,
+                col => Some(palette.resolve_bg(col)),
+            });
+        let fg_color = item
+            .title
+            .get_cell(0)
+            .and_then(|c| match c.attrs().foreground() {
+                ColorAttribute::Default => None,
+                col => Some(palette.resolve_fg(col)),
+            });
+
+        let new_tab = colors.new_tab();
+        let new_tab_hover = colors.new_tab_hover();
+        let active_tab = colors.active_tab();
+
+        match item.item {
+            TabBarItem::RightStatus | TabBarItem::LeftStatus | TabBarItem::None => element
+                .item_type(UIItemType::TabBar(TabBarItem::None))
+                .line_height(Some(1.75))
+                .margin(BoxDimension {
+                    left: Dimension::Cells(0.),
+                    right: Dimension::Cells(0.),
+                    top: Dimension::Cells(0.0),
+                    bottom: Dimension::Cells(0.),
+                })
+                .padding(BoxDimension {
+                    left: Dimension::Cells(0.5),
+                    right: Dimension::Cells(0.),
+                    top: Dimension::Cells(0.),
+                    bottom: Dimension::Cells(0.),
+                })
+                .border(BoxDimension::new(Dimension::Pixels(0.)))
+                .colors(bar_colors.clone()),
+            TabBarItem::NewTabButton => Element::new(
+                font,
+                ElementContent::Poly {
+                    line_width: metrics.underline_height.max(2),
+                    poly: SizedPoly {
+                        poly: PLUS_BUTTON,
+                        width: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
+                        height: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
+                    },
+                },
+            )
+            .vertical_align(VerticalAlign::Middle)
+            .item_type(UIItemType::TabBar(item.item.clone()))
+            .margin(BoxDimension {
+                left: Dimension::Cells(0.5),
+                right: Dimension::Cells(0.),
+                top: Dimension::Cells(0.2),
+                bottom: Dimension::Cells(0.),
+            })
+            .padding(BoxDimension {
+                left: Dimension::Cells(0.5),
+                right: Dimension::Cells(0.5),
+                top: Dimension::Cells(0.2),
+                bottom: Dimension::Cells(0.25),
+            })
+            .border(BoxDimension::new(Dimension::Pixels(1.)))
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: new_tab.bg_color.to_linear().into(),
+                text: new_tab.fg_color.to_linear().into(),
+            })
+            .hover_colors(Some(ElementColors {
+                border: BorderColor::default(),
+                bg: new_tab_hover.bg_color.to_linear().into(),
+                text: new_tab_hover.fg_color.to_linear().into(),
+            })),
+            TabBarItem::Tab { active, .. } if active => element
+                .vertical_align(VerticalAlign::Bottom)
+                .item_type(UIItemType::TabBar(item.item.clone()))
+                .margin(BoxDimension {
+                    left: Dimension::Cells(0.),
+                    right: Dimension::Cells(0.),
+                    top: Dimension::Cells(0.2),
+                    bottom: Dimension::Cells(0.),
+                })
+                .padding(BoxDimension {
+                    left: Dimension::Cells(0.5),
+                    right: Dimension::Cells(0.5),
+                    top: Dimension::Cells(0.2),
+                    bottom: Dimension::Cells(0.25),
+                })
+                .border(BoxDimension::new(Dimension::Pixels(1.)))
+                .border_corners(Some(Corners {
+                    top_left: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.5),
+                        poly: TOP_LEFT_ROUNDED_CORNER,
+                    },
+                    top_right: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.5),
+                        poly: TOP_RIGHT_ROUNDED_CORNER,
+                    },
+                    bottom_left: SizedPoly::none(),
+                    bottom_right: SizedPoly::none(),
+                }))
+                .colors(ElementColors {
+                    border: BorderColor::new(
+                        bg_color
+                            .unwrap_or_else(|| active_tab.bg_color.into())
+                            .to_linear(),
+                    ),
+                    bg: bg_color
+                        .unwrap_or_else(|| active_tab.bg_color.into())
+                        .to_linear()
+                        .into(),
+                    text: fg_color
+                        .unwrap_or_else(|| active_tab.fg_color.into())
+                        .to_linear()
+                        .into(),
+                }),
+            TabBarItem::Tab { .. } => element
+                .vertical_align(VerticalAlign::Bottom)
+                .item_type(UIItemType::TabBar(item.item.clone()))
+                .margin(BoxDimension {
+                    left: Dimension::Cells(0.),
+                    right: Dimension::Cells(0.),
+                    top: Dimension::Cells(0.2),
+                    bottom: Dimension::Cells(0.),
+                })
+                .padding(BoxDimension {
+                    left: Dimension::Cells(0.5),
+                    right: Dimension::Cells(0.5),
+                    top: Dimension::Cells(0.2),
+                    bottom: Dimension::Cells(0.25),
+                })
+                .border(BoxDimension::new(Dimension::Pixels(1.)))
+                .border_corners(Some(Corners {
+                    top_left: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.5),
+                        poly: TOP_LEFT_ROUNDED_CORNER,
+                    },
+                    top_right: SizedPoly {
+                        width: Dimension::Cells(0.5),
+                        height: Dimension::Cells(0.5),
+                        poly: TOP_RIGHT_ROUNDED_CORNER,
+                    },
+                    bottom_left: SizedPoly {
+                        width: Dimension::Cells(0.),
+                        height: Dimension::Cells(0.33),
+                        poly: &[],
+                    },
+                    bottom_right: SizedPoly {
+                        width: Dimension::Cells(0.),
+                        height: Dimension::Cells(0.33),
+                        poly: &[],
+                    },
+                }))
+                .colors({
+                    let inactive_tab = colors.inactive_tab();
+                    let bg = bg_color
+                        .unwrap_or_else(|| inactive_tab.bg_color.into())
+                        .to_linear();
+                    let edge = colors.inactive_tab_edge().to_linear();
+                    ElementColors {
+                        border: BorderColor {
+                            left: bg,
+                            right: edge,
+                            top: bg,
+                            bottom: bg,
+                        },
+                        bg: bg.into(),
+                        text: fg_color
+                            .unwrap_or_else(|| inactive_tab.fg_color.into())
+                            .to_linear()
+                            .into(),
+                    }
+                })
+                .hover_colors({
+                    let inactive_tab_hover = colors.inactive_tab_hover();
+                    Some(ElementColors {
+                        border: BorderColor::new(
+                            bg_color
+                                .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
+                                .to_linear(),
+                        ),
+                        bg: bg_color
+                            .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
+                            .to_linear()
+                            .into(),
+                        text: fg_color
+                            .unwrap_or_else(|| inactive_tab_hover.fg_color.into())
+                            .to_linear()
+                            .into(),
+                    })
+                }),
+            TabBarItem::WindowButton(button) => window_button_element(
+                button,
+                self.window_state.contains(window::WindowState::MAXIMIZED),
+                font,
+                metrics,
+                &self.config,
+            ),
+        }
     }
 
     pub fn paint_fancy_tab_bar(&self) -> anyhow::Result<Vec<UIItem>> {
@@ -479,7 +679,7 @@ fn make_x_button(
     active: bool,
 ) -> Element {
     Element::new(
-        &font,
+        font,
         ElementContent::Poly {
             line_width: metrics.underline_height.max(2),
             poly: SizedPoly {
