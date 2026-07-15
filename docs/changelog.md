@@ -147,6 +147,11 @@ As features stabilize some brief notes about them will accumulate here.
   See dedicated section in [CONTRIBUTING.md](https://github.com/wezterm/wezterm/blob/main/CONTRIBUTING.md)
 
 #### Fixed
+* macOS: CMD chords could reach the terminal as plain text with the
+  modifiers discarded (eg: `CMD+SHIFT+D` was sent as just `d`), both via
+  the IME forwarding path and via the command keyboard layer reporting
+  mismatching `chars`, so applications using the kitty keyboard protocol
+  never saw them. #4589
 * Race condition when very quickly adjusting font scale, and other improvements
   around resizing. Thanks to @jknockel! #4876 #5032 #5033
 * macOS: wacky initial window size with external monitors or certain font
