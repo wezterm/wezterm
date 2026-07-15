@@ -572,21 +572,26 @@ impl WebGpuState {
     }
 }
 
-/// Clamp a requested surface size to the adapter's maximum texture dimension.
+/// Clamp a requested surface size to a maximum.
+/// (e.g. the GPU adapter's maximum texture dimension)
 ///
-/// `Surface::configure` raises a validation error (which becomes a fatal panic
-/// when called from an Objective-C → Rust FFI callback) if either dimension
-/// exceeds `max`. This is reachable on macOS with tiling window managers that
-/// transiently compute window geometry spanning multiple Retina displays.
-fn clamp_surface_dimensions(width: u32, height: u32, max: u32) -> (u32, u32) {
-    // A degenerate adapter reporting max == 0 would clamp everything to zero,
-    // bypassing the > 0 guard that skips surface.configure. Pass through
-    // unchanged in that case and let wgpu surface validation surface the error.
-    if max == 0 {
+/// This is necessary before `Surface::configure` as it raises a validation error if either
+/// dimension exceeds the GPU supported max dimension.
+///
+/// This can happen on macOS with tiling window managers that transiently compute
+/// window geometry spanning multiple Retina displays.
+///  (which becomes a fatal panic when called from an Objective-C → Rust FFI callback)
+/// See https://github.com/wezterm/wezterm/issues/7819.
+fn clamp_surface_dimensions(width: u32, height: u32, max_texture_dimension_2d: u32) -> (u32, u32) {
+    // A degenerate adapter reporting max_texture_dimension_2d == 0 would clamp
+    // everything to zero, bypassing the > 0 guard that skips surface.configure.
+    // Pass through unchanged in that case and let wgpu surface validation
+    // surface the error.
+    if max_texture_dimension_2d == 0 {
         return (width, height);
     }
-    let clamped_w = width.min(max);
-    let clamped_h = height.min(max);
+    let clamped_w = width.min(max_texture_dimension_2d);
+    let clamped_h = height.min(max_texture_dimension_2d);
     if clamped_w != width || clamped_h != height {
         log::warn!(
             "Clamped surface size from {}x{} to {}x{} (max_texture_dimension_2d={})",
@@ -594,7 +599,7 @@ fn clamp_surface_dimensions(width: u32, height: u32, max: u32) -> (u32, u32) {
             height,
             clamped_w,
             clamped_h,
-            max
+            max_texture_dimension_2d
         );
     }
     (clamped_w, clamped_h)
@@ -604,32 +609,51 @@ fn clamp_surface_dimensions(width: u32, height: u32, max: u32) -> (u32, u32) {
 mod tests {
     use super::clamp_surface_dimensions;
 
+    /// Apple Silicon's `max_texture_dimension_2d`, and the limit hit in the
+    /// crash reports this fix addresses.
+    const MAX_TEXTURE_DIMENSION_2D: u32 = 16384;
+
     #[test]
     fn no_clamp_when_within_limit() {
-        assert_eq!(clamp_surface_dimensions(1920, 1080, 16384), (1920, 1080));
+        assert_eq!(
+            clamp_surface_dimensions(1920, 1080, MAX_TEXTURE_DIMENSION_2D),
+            (1920, 1080)
+        );
     }
 
     #[test]
     fn clamps_width_exceeding_max() {
         // Reproduces the exact dimensions seen in crash reports:
         // Aerospace spanning two Retina displays → 19872 x 2260, max = 16384.
-        assert_eq!(clamp_surface_dimensions(19872, 2260, 16384), (16384, 2260));
+        assert_eq!(
+            clamp_surface_dimensions(19872, 2260, MAX_TEXTURE_DIMENSION_2D),
+            (MAX_TEXTURE_DIMENSION_2D, 2260)
+        );
     }
 
     #[test]
     fn clamps_height_exceeding_max() {
-        assert_eq!(clamp_surface_dimensions(1920, 20000, 16384), (1920, 16384));
+        assert_eq!(
+            clamp_surface_dimensions(1920, 20000, MAX_TEXTURE_DIMENSION_2D),
+            (1920, MAX_TEXTURE_DIMENSION_2D)
+        );
     }
 
     #[test]
     fn clamps_both_dimensions() {
-        assert_eq!(clamp_surface_dimensions(20000, 20000, 16384), (16384, 16384));
+        assert_eq!(
+            clamp_surface_dimensions(20000, 20000, MAX_TEXTURE_DIMENSION_2D),
+            (MAX_TEXTURE_DIMENSION_2D, MAX_TEXTURE_DIMENSION_2D)
+        );
     }
 
     #[test]
     fn zero_dimensions_pass_through() {
         // Zero is handled separately by the > 0 guard before surface.configure.
-        assert_eq!(clamp_surface_dimensions(0, 0, 16384), (0, 0));
+        assert_eq!(
+            clamp_surface_dimensions(0, 0, MAX_TEXTURE_DIMENSION_2D),
+            (0, 0)
+        );
     }
 
     #[test]
@@ -641,6 +665,13 @@ mod tests {
 
     #[test]
     fn exact_limit_is_not_clamped() {
-        assert_eq!(clamp_surface_dimensions(16384, 16384, 16384), (16384, 16384));
+        assert_eq!(
+            clamp_surface_dimensions(
+                MAX_TEXTURE_DIMENSION_2D,
+                MAX_TEXTURE_DIMENSION_2D,
+                MAX_TEXTURE_DIMENSION_2D
+            ),
+            (MAX_TEXTURE_DIMENSION_2D, MAX_TEXTURE_DIMENSION_2D)
+        );
     }
 }
