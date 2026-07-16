@@ -133,6 +133,14 @@ impl RenderMetrics {
             underline_height,
         })
     }
+
+    /// Override the cell size (used in GDI front_end mode where GDI's own
+    /// `GetTextMetrics` are authoritative for layout so drawing and geometry
+    /// agree).
+    #[cfg(windows)]
+    pub fn override_cell_size(&mut self, width: usize, height: usize) {
+        self.cell_size = Size::new(width as isize, height as isize);
+    }
 }
 
 pub struct UtilSprites {

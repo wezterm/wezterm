@@ -9,7 +9,7 @@ use crate::font::{
     AllowSquareGlyphOverflow, DisplayPixelGeometry, FontLocatorSelection, FontRasterizerSelection,
     FontShaperSelection, FreeTypeLoadFlags, FreeTypeLoadTarget, StyleRule, TextStyle,
 };
-use crate::frontend::FrontEndSelection;
+use crate::frontend::{default_front_end, FrontEndSelection};
 use crate::keyassignment::{
     KeyAssignment, KeyTable, KeyTableEntry, KeyTables, MouseEventTrigger, SpawnCommand,
 };
@@ -340,7 +340,7 @@ pub struct Config {
     #[dynamic(default = "default_harfbuzz_features")]
     pub harfbuzz_features: Vec<String>,
 
-    #[dynamic(default)]
+    #[dynamic(default = "default_front_end")]
     pub front_end: FrontEndSelection,
 
     /// Whether to select the higher powered discrete GPU when
@@ -1327,6 +1327,11 @@ impl Config {
     /// on those provided by the user.  This is where we do that.
     pub fn compute_extra_defaults(&self, config_path: Option<&Path>) -> Self {
         let mut cfg = self.clone();
+
+        // Resolve the front_end for the current platform. The GDI text renderer
+        // is Windows-only; on other platforms an explicit `Gdi` selection falls
+        // back to OpenGL (with a warning emitted by `resolve()`).
+        cfg.front_end = cfg.front_end.resolve();
 
         // Convert any relative font dirs to their config file relative locations
         if let Some(config_dir) = config_path.as_ref().and_then(|p| p.parent()) {

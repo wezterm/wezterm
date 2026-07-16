@@ -72,6 +72,8 @@ pub mod background;
 pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
+#[cfg(windows)]
+pub mod gdi;
 pub mod keyevent;
 pub mod modal;
 mod mouseevent;
@@ -465,6 +467,8 @@ pub struct TermWindow {
 
     gl: Option<Rc<glium::backend::Context>>,
     webgpu: Option<Rc<WebGpuState>>,
+    #[cfg(windows)]
+    gdi: Option<gdi::GdiState>,
     config_subscription: Option<config::ConfigSubscription>,
 }
 
@@ -545,6 +549,11 @@ impl TermWindow {
         // Reset the cursor blink phase
         self.prev_cursor.bump();
 
+        // Focus toggles cursor rendering (solid vs hollow); force a full GDI
+        // repaint so the change is visible.
+        #[cfg(windows)]
+        self.gdi_invalidate_all();
+
         // force cursor to be repainted
         window.invalidate();
 
@@ -602,6 +611,16 @@ impl TermWindow {
         let physical_cols = size.cols as usize;
 
         let render_metrics = RenderMetrics::new(&fontconfig)?;
+        #[cfg(windows)]
+        let render_metrics = {
+            let mut rm = render_metrics;
+            if let Some((w, h)) =
+                gdi::gdi_cell_metrics(&config, config.font_size * fontconfig.get_font_scale(), dpi)
+            {
+                rm.override_cell_size(w, h);
+            }
+            rm
+        };
         log::trace!("using render_metrics {:#?}", render_metrics);
 
         // Initially we have only a single tab, so take that into account
@@ -691,6 +710,8 @@ impl TermWindow {
             os_parameters: None,
             gl: None,
             webgpu: None,
+            #[cfg(windows)]
+            gdi: None,
             window: None,
             window_background,
             config: config.clone(),
@@ -849,7 +870,7 @@ impl TermWindow {
         });
 
         let gl = match config.front_end {
-            FrontEndSelection::WebGpu => None,
+            FrontEndSelection::WebGpu | FrontEndSelection::Gdi => None,
             _ => Some(window.enable_opengl().await?),
         };
 
@@ -885,6 +906,12 @@ impl TermWindow {
             if let Some(webgpu) = webgpu {
                 myself.webgpu.replace(Rc::clone(&webgpu));
                 myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
+            }
+            #[cfg(windows)]
+            {
+                if config.front_end == FrontEndSelection::Gdi {
+                    myself.gdi.replace(gdi::GdiState::new());
+                }
             }
             myself.load_os_parameters();
             window.show();
@@ -960,12 +987,21 @@ impl TermWindow {
                 live_resizing,
             } => {
                 self.resize(dimensions, window_state, window, live_resizing);
+                #[cfg(windows)]
+                self.gdi_invalidate_all();
                 Ok(true)
             }
             WindowEvent::SetInnerSizeCompleted => {
                 self.resizes_pending -= 1;
                 if self.is_repaint_pending {
                     self.is_repaint_pending = false;
+                    #[cfg(windows)]
+                    if self.gdi.is_some() {
+                        self.gdi_invalidate_all();
+                        self.do_paint_gdi(window);
+                        self.apply_pending_scale_changes();
+                        return Ok(true);
+                    }
                     if self.webgpu.is_some() {
                         self.do_paint_webgpu()?;
                     } else {
@@ -1006,10 +1042,18 @@ impl TermWindow {
                 if self.resizes_pending > 0 {
                     self.is_repaint_pending = true;
                     Ok(true)
-                } else if self.webgpu.is_some() {
-                    self.do_paint_webgpu()
                 } else {
-                    Ok(self.do_paint(window))
+                    #[cfg(windows)]
+                    {
+                        if self.gdi.is_some() {
+                            return Ok(self.do_paint_gdi(window));
+                        }
+                    }
+                    if self.webgpu.is_some() {
+                        self.do_paint_webgpu()
+                    } else {
+                        Ok(self.do_paint(window))
+                    }
                 }
             }
             WindowEvent::Notification(item) => {
@@ -1730,6 +1774,10 @@ impl TermWindow {
         );
         self.key_table_state.clear_stack();
         self.connection_name = Connection::get().unwrap().name();
+        // Colors/fonts may have changed; force a full GDI repaint (and font
+        // rebuild happens automatically via needs_rebuild).
+        #[cfg(windows)]
+        self.gdi_invalidate_all();
         let config = match config::overridden_config(&self.config_overrides) {
             Ok(config) => config,
             Err(err) => {

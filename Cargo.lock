@@ -987,6 +987,7 @@ dependencies = [
  "wezterm-ssh",
  "wezterm-term",
  "winapi",
+ "winreg",
 ]
 
 [[package]]

@@ -108,6 +108,14 @@ impl super::TermWindow {
         match RenderMetrics::new(&self.fonts) {
             Ok(metrics) => {
                 self.render_metrics = metrics;
+                #[cfg(windows)]
+                if let Some((w, h)) = crate::termwindow::gdi::gdi_cell_metrics(
+                    &self.config,
+                    self.config.font_size * self.fonts.get_font_scale(),
+                    dimensions.dpi as usize,
+                ) {
+                    self.render_metrics.override_cell_size(w, h);
+                }
             }
             Err(err) => {
                 log::error!(
@@ -479,6 +487,18 @@ impl super::TermWindow {
             self.dimensions.dpi,
         )?);
         let render_metrics = RenderMetrics::new(&fontconfig)?;
+        #[cfg(windows)]
+        let render_metrics = {
+            let mut rm = render_metrics;
+            if let Some((w, h)) = crate::termwindow::gdi::gdi_cell_metrics(
+                &config,
+                config.font_size * self.fonts.get_font_scale(),
+                self.dimensions.dpi,
+            ) {
+                rm.override_cell_size(w, h);
+            }
+            rm
+        };
 
         let terminal_size = TerminalSize {
             rows: size.rows,

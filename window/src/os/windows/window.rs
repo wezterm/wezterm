@@ -127,6 +127,10 @@ pub(crate) struct WindowInner {
     config: ConfigHandle,
     paint_throttled: bool,
     invalidated: bool,
+    /// GDI front_end: set when a real WM_PAINT (OS expose/resize) occurred so
+    /// the GDI renderer knows to perform a full clear+redraw of the client area
+    /// rather than an incremental (dirty-line) paint.
+    gdi_full_repaint: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -221,6 +225,34 @@ impl HasWindowHandle for WindowInner {
 }
 
 impl WindowInner {
+    /// Drive an incremental GDI repaint without invalidating the OS paint
+    /// region. Model-driven changes use this so that a genuine `WM_PAINT` (OS
+    /// expose/resize) remains distinguishable and can force a full redraw.
+    /// Preserves the same `max_fps` coalescing that `wm_paint` uses.
+    fn request_gdi_repaint(&mut self) {
+        if self.paint_throttled {
+            self.invalidated = true;
+            return;
+        }
+        self.invalidated = false;
+        self.events.dispatch(WindowEvent::NeedRepaint);
+
+        self.paint_throttled = true;
+        let window_id = self.hwnd;
+        let max_fps = self.config.max_fps;
+        promise::spawn::spawn(async move {
+            async_io::Timer::after(std::time::Duration::from_millis(1000 / max_fps as u64)).await;
+            Connection::with_window_inner(window_id, move |inner| {
+                inner.paint_throttled = false;
+                if inner.invalidated {
+                    inner.request_gdi_repaint();
+                }
+                Ok(())
+            });
+        })
+        .detach();
+    }
+
     fn enable_opengl(&mut self) -> anyhow::Result<Rc<glium::backend::Context>> {
         let conn = Connection::get().unwrap();
 
@@ -547,6 +579,7 @@ impl Window {
             config: config.clone(),
             paint_throttled: false,
             invalidated: true,
+            gdi_full_repaint: true,
         }));
 
         // Careful: `raw` owns a ref to inner, but there is no Drop impl
@@ -744,6 +777,55 @@ impl HasDisplayHandle for Window {
     }
 }
 
+impl Window {
+    /// GDI front_end: read and clear the "OS requested a full repaint" flag.
+    /// Returns true if a real `WM_PAINT` (expose/resize) occurred since the last
+    /// call, meaning the next GDI paint must be a full clear+redraw.
+    pub fn take_gdi_full_repaint(&self) -> bool {
+        let conn = match Connection::get() {
+            Some(c) => c,
+            None => return true,
+        };
+        match conn.get_window(self.0) {
+            Some(handle) => {
+                let mut inner = handle.borrow_mut();
+                let v = inner.gdi_full_repaint;
+                inner.gdi_full_repaint = false;
+                v
+            }
+            None => true,
+        }
+    }
+
+    /// Windows-only: run a GDI paint closure against the window's client DC.
+    ///
+    /// Used by the GDI text `front_end`. Obtains the client HDC via `GetDC`,
+    /// invokes `f` with the HDC and the current client `RECT`, then releases the
+    /// DC and validates the whole client area (so the pending `WM_PAINT` update
+    /// region is cleared). Must be called on the GUI thread.
+    pub fn with_gdi_dc<F, R>(&self, f: F) -> anyhow::Result<R>
+    where
+        F: FnOnce(HDC, RECT) -> anyhow::Result<R>,
+    {
+        let hwnd = self.0 .0;
+        if hwnd.is_null() {
+            anyhow::bail!("with_gdi_dc: window has no hwnd");
+        }
+        unsafe {
+            let hdc = GetDC(hwnd);
+            if hdc.is_null() {
+                anyhow::bail!("with_gdi_dc: GetDC returned null");
+            }
+            let mut rect: RECT = std::mem::zeroed();
+            GetClientRect(hwnd, &mut rect);
+            let result = f(hdc, rect);
+            ReleaseDC(hwnd, hdc);
+            ValidateRect(hwnd, null());
+            result
+        }
+    }
+}
+
 impl HasWindowHandle for Window {
     fn window_handle(&self) -> Result<WindowHandle, HandleError> {
         let conn = Connection::get().expect("raw_window_handle only callable on main thread");
@@ -862,6 +944,17 @@ impl WindowOps for Window {
     }
 
     fn invalidate(&self) {
+        // In GDI mode, model-driven repaints must not invalidate the OS paint
+        // region (that would make every repaint indistinguishable from an OS
+        // expose and force a full redraw). Instead drive an incremental repaint
+        // directly through the throttle.
+        if config::configuration().front_end == config::FrontEndSelection::Gdi {
+            Connection::with_window_inner(self.0, |inner| {
+                inner.request_gdi_repaint();
+                Ok(())
+            });
+            return;
+        }
         let hwnd = self.0 .0;
         log::trace!("WindowOps::invalidate calling InvalidateRect");
         unsafe {
@@ -1611,6 +1704,10 @@ unsafe fn wm_kill_focus(
 unsafe fn wm_paint(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
+
+    // A real WM_PAINT means the OS needs (part of) the client reconstructed;
+    // for the GDI front_end this must be a full clear+redraw.
+    inner.gdi_full_repaint = true;
 
     if inner.paint_throttled {
         inner.invalidated = true;

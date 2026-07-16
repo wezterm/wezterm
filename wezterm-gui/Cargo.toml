@@ -111,6 +111,7 @@ window.workspace = true
 shared_library.workspace = true
 winapi = { workspace=true, features = [
     "winuser",
+    "wingdi",
     "consoleapi",
     "handleapi",
     "fileapi",
