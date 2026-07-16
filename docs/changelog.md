@@ -130,7 +130,7 @@ As features stabilize some brief notes about them will accumulate here.
   control over cell widths. Thanks to @hamano! #6289 #6290
 * [wayland_window_background_blur](config/lua/config/wayland_window_background_blur.md) option
   to enable window blur on Wayland compositors supporting the `ext-background-effect-v1` protocol.
-  Thanks to @psomani16k, @1Capito1 & @bew! #6905 #7615
+  Thanks to @psomani16k, @1Capito1 & @bew! #6905 #7615 #7939
 * [reverse_video_cursor_min_contrast](config/lua/config/reverse_video_cursor_min_contrast.md)
   option. Thanks to @jameshurst! #6584 ?2861
 * [text_min_contrast_ratio](config/lua/config/text_min_contrast_ratio.md) to more generally
