@@ -609,14 +609,14 @@ fn clamp_surface_dimensions(width: u32, height: u32, max_texture_dimension_2d: u
 mod tests {
     use super::clamp_surface_dimensions;
 
-    /// Apple Silicon's `max_texture_dimension_2d`, and the limit hit in the
-    /// crash reports this fix addresses.
-    const MAX_TEXTURE_DIMENSION_2D: u32 = 16384;
+    /// Apple Silicon's `max_texture_dimension_2d`, the value seen in the
+    /// crash reports in <https://github.com/wezterm/wezterm/issues/7819>.
+    const SAMPLE_MAX_TEXTURE_DIMENSION_2D: u32 = 16384;
 
     #[test]
     fn no_clamp_when_within_limit() {
         assert_eq!(
-            clamp_surface_dimensions(1920, 1080, MAX_TEXTURE_DIMENSION_2D),
+            clamp_surface_dimensions(1920, 1080, SAMPLE_MAX_TEXTURE_DIMENSION_2D),
             (1920, 1080)
         );
     }
@@ -626,24 +626,27 @@ mod tests {
         // Reproduces the exact dimensions seen in crash reports:
         // Aerospace spanning two Retina displays → 19872 x 2260, max = 16384.
         assert_eq!(
-            clamp_surface_dimensions(19872, 2260, MAX_TEXTURE_DIMENSION_2D),
-            (MAX_TEXTURE_DIMENSION_2D, 2260)
+            clamp_surface_dimensions(19872, 2260, SAMPLE_MAX_TEXTURE_DIMENSION_2D),
+            (SAMPLE_MAX_TEXTURE_DIMENSION_2D, 2260)
         );
     }
 
     #[test]
     fn clamps_height_exceeding_max() {
         assert_eq!(
-            clamp_surface_dimensions(1920, 20000, MAX_TEXTURE_DIMENSION_2D),
-            (1920, MAX_TEXTURE_DIMENSION_2D)
+            clamp_surface_dimensions(1920, 20000, SAMPLE_MAX_TEXTURE_DIMENSION_2D),
+            (1920, SAMPLE_MAX_TEXTURE_DIMENSION_2D)
         );
     }
 
     #[test]
     fn clamps_both_dimensions() {
         assert_eq!(
-            clamp_surface_dimensions(20000, 20000, MAX_TEXTURE_DIMENSION_2D),
-            (MAX_TEXTURE_DIMENSION_2D, MAX_TEXTURE_DIMENSION_2D)
+            clamp_surface_dimensions(20000, 20000, SAMPLE_MAX_TEXTURE_DIMENSION_2D),
+            (
+                SAMPLE_MAX_TEXTURE_DIMENSION_2D,
+                SAMPLE_MAX_TEXTURE_DIMENSION_2D
+            )
         );
     }
 
@@ -651,7 +654,7 @@ mod tests {
     fn zero_dimensions_pass_through() {
         // Zero is handled separately by the > 0 guard before surface.configure.
         assert_eq!(
-            clamp_surface_dimensions(0, 0, MAX_TEXTURE_DIMENSION_2D),
+            clamp_surface_dimensions(0, 0, SAMPLE_MAX_TEXTURE_DIMENSION_2D),
             (0, 0)
         );
     }
@@ -667,11 +670,14 @@ mod tests {
     fn exact_limit_is_not_clamped() {
         assert_eq!(
             clamp_surface_dimensions(
-                MAX_TEXTURE_DIMENSION_2D,
-                MAX_TEXTURE_DIMENSION_2D,
-                MAX_TEXTURE_DIMENSION_2D
+                SAMPLE_MAX_TEXTURE_DIMENSION_2D,
+                SAMPLE_MAX_TEXTURE_DIMENSION_2D,
+                SAMPLE_MAX_TEXTURE_DIMENSION_2D
             ),
-            (MAX_TEXTURE_DIMENSION_2D, MAX_TEXTURE_DIMENSION_2D)
+            (
+                SAMPLE_MAX_TEXTURE_DIMENSION_2D,
+                SAMPLE_MAX_TEXTURE_DIMENSION_2D
+            )
         );
     }
 }
