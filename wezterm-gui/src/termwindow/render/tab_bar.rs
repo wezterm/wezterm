@@ -111,7 +111,12 @@ impl crate::TermWindow {
         fontconfig: &wezterm_font::FontConfiguration,
         render_metrics: &RenderMetrics,
     ) -> anyhow::Result<f32> {
-        if config.use_fancy_tab_bar {
+        // The GDI front_end renders the retro (single cell-row) tab bar and does
+        // not draw the fancy box-model tab bar, so reserve exactly one cell row
+        // regardless of use_fancy_tab_bar to keep layout and rendering aligned.
+        let use_fancy =
+            config.use_fancy_tab_bar && config.front_end != config::FrontEndSelection::Gdi;
+        if use_fancy {
             let font = fontconfig.title_font()?;
             Ok((font.metrics().cell_height.get() as f32 * 1.75).ceil())
         } else {
