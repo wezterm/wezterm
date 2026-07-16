@@ -127,10 +127,6 @@ pub(crate) struct WindowInner {
     config: ConfigHandle,
     paint_throttled: bool,
     invalidated: bool,
-    /// GDI front_end: set when a real WM_PAINT (OS expose/resize) occurred so
-    /// the GDI renderer knows to perform a full clear+redraw of the client area
-    /// rather than an incremental (dirty-line) paint.
-    gdi_full_repaint: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -579,7 +575,6 @@ impl Window {
             config: config.clone(),
             paint_throttled: false,
             invalidated: true,
-            gdi_full_repaint: true,
         }));
 
         // Careful: `raw` owns a ref to inner, but there is no Drop impl
@@ -781,20 +776,15 @@ impl Window {
     /// GDI front_end: read and clear the "OS requested a full repaint" flag.
     /// Returns true if a real `WM_PAINT` (expose/resize) occurred since the last
     /// call, meaning the next GDI paint must be a full clear+redraw.
+    ///
+    /// The flag lives in a thread-local keyed by HWND rather than in
+    /// `WindowInner`, because `do_paint_gdi` frequently runs re-entrantly while
+    /// `WindowInner` is already mutably borrowed (e.g. `wm_paint` dispatches
+    /// `NeedRepaint` synchronously while holding the borrow, and
+    /// `SetInnerSizeCompleted` is dispatched from inside `with_window_inner`).
+    /// Borrowing `WindowInner` again there would panic.
     pub fn take_gdi_full_repaint(&self) -> bool {
-        let conn = match Connection::get() {
-            Some(c) => c,
-            None => return true,
-        };
-        match conn.get_window(self.0) {
-            Some(handle) => {
-                let mut inner = handle.borrow_mut();
-                let v = inner.gdi_full_repaint;
-                inner.gdi_full_repaint = false;
-                v
-            }
-            None => true,
-        }
+        gdi_take_full_repaint(self.0 .0 as isize)
     }
 
     /// Windows-only: run a GDI paint closure against the window's client DC.
@@ -1701,13 +1691,36 @@ unsafe fn wm_kill_focus(
     None
 }
 
+thread_local! {
+    /// GDI front_end: per-HWND "OS requested a full repaint" flag. Kept out of
+    /// `WindowInner` so it can be read during a re-entrant GDI paint without
+    /// re-borrowing `WindowInner`. GUI runs single-threaded, so a thread-local
+    /// is sufficient.
+    static GDI_FULL_REPAINT: std::cell::RefCell<std::collections::HashMap<isize, bool>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Mark that the given window needs a full GDI repaint on its next paint.
+fn gdi_set_full_repaint(hwnd: isize) {
+    GDI_FULL_REPAINT.with(|m| {
+        m.borrow_mut().insert(hwnd, true);
+    });
+}
+
+/// Read and clear the full-repaint flag for the given window.
+fn gdi_take_full_repaint(hwnd: isize) -> bool {
+    GDI_FULL_REPAINT.with(|m| m.borrow_mut().insert(hwnd, false).unwrap_or(false))
+}
+
 unsafe fn wm_paint(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
 
     // A real WM_PAINT means the OS needs (part of) the client reconstructed;
-    // for the GDI front_end this must be a full clear+redraw.
-    inner.gdi_full_repaint = true;
+    // for the GDI front_end this must be a full clear+redraw. Stored outside
+    // WindowInner (see `Window::take_gdi_full_repaint`) so the re-entrant GDI
+    // paint can read it without re-borrowing WindowInner.
+    gdi_set_full_repaint(hwnd as isize);
 
     if inner.paint_throttled {
         inner.invalidated = true;
