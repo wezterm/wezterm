@@ -18,8 +18,7 @@ use wezterm_term::color::{ColorAttribute, ColorPalette};
 use wezterm_term::StableRowIndex;
 use winapi::shared::windef::{HDC, RECT};
 use winapi::um::wingdi::{
-    CreateSolidBrush, DeleteObject, ExtTextOutW, SelectObject, SetBkColor, SetTextColor,
-    ETO_CLIPPED, ETO_OPAQUE,
+    CreateSolidBrush, DeleteObject, ExtTextOutW, SelectObject, SetBkColor, SetTextColor, ETO_OPAQUE,
 };
 use winapi::um::winuser::FillRect;
 
@@ -553,7 +552,7 @@ impl GdiState {
             hdc,
             cell.x,
             cell.y,
-            ETO_OPAQUE | ETO_CLIPPED,
+            ETO_OPAQUE,
             &rect,
             cell.text.as_ptr(),
             cell.text.len() as u32,
@@ -625,7 +624,7 @@ impl GdiState {
                         hdc,
                         cursor.x,
                         cursor.y,
-                        ETO_OPAQUE | ETO_CLIPPED,
+                        ETO_OPAQUE,
                         &rect,
                         cursor.text.as_ptr(),
                         cursor.text.len() as u32,
