@@ -10,8 +10,9 @@
 use std::ptr::null_mut;
 use winapi::shared::windef::{HDC, HFONT};
 use winapi::um::wingdi::{
-    CreateFontW, DeleteObject, GetTextMetricsW, SelectObject, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
-    FF_MODERN, FIXED_PITCH, FW_BOLD, FW_NORMAL, OUT_TT_PRECIS, PROOF_QUALITY, TEXTMETRICW,
+    CreateFontW, DeleteObject, GetTextMetricsW, SelectObject, CLEARTYPE_QUALITY,
+    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, FF_MODERN, FIXED_PITCH, FW_BOLD, FW_NORMAL,
+    OUT_TT_PRECIS, TEXTMETRICW,
 };
 use winapi::um::winuser::{GetDC, ReleaseDC};
 
@@ -60,7 +61,7 @@ unsafe fn create_font(family_w: &[u16], height: i32, weight: i32, italic: u32) -
         DEFAULT_CHARSET,
         OUT_TT_PRECIS,
         CLIP_DEFAULT_PRECIS,
-        PROOF_QUALITY,
+        CLEARTYPE_QUALITY,
         FIXED_PITCH | FF_MODERN,
         family_w.as_ptr(),
     )
