@@ -1711,6 +1711,29 @@ impl KeyEvent {
     pub fn encode_kitty(&self, flags: KittyKeyboardFlags) -> String {
         use KeyCode::*;
 
+        // A `Composed` string containing exactly one char is functionally a
+        // plain character keypress (delivered by an IME, or e.g. the Windows
+        // emoji picker). It never carries a `raw` hardware key event, and
+        // unlike every other key it has no dedicated arm below, so it falls
+        // through to the final `_` catch-all, which requires `raw` to resolve
+        // a kitty function code. With no raw event that's always `None`, so
+        // the whole function silently returns an empty string and the
+        // keypress is dropped outright under Kitty protocols with
+        // REPORT_ALL_KEYS_AS_ESCAPE_CODES set. Normalize it to `Char` up
+        // front so the rest of this function treats it like any other
+        // single character; a genuinely multi-char Composed string (e.g. a
+        // ZWJ emoji sequence) is unaffected and keeps falling through as
+        // before, exactly as-is, since it never reaches encode_kitty via the
+        // Composed match arm in keyevent.rs anyway.
+        if let Composed(s) = &self.key {
+            let mut chars = s.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                let mut normalized = self.clone();
+                normalized.key = Char(c);
+                return normalized.encode_kitty(flags);
+            }
+        }
+
         if !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES) && !self.key_is_down {
             return String::new();
         }
@@ -2340,6 +2363,73 @@ mod test {
             .encode_kitty(flags),
             "\x1b[111;1:3u".to_string()
         );
+    }
+
+    #[test]
+    fn encode_kitty_single_char_composed_matches_char() {
+        // A `Composed` string containing exactly one char happens whenever
+        // the OS delivers synthetic/IME-style text input with no backing
+        // hardware key event (`raw: None`) -- for example the Windows emoji
+        // picker (Win+.). Prior to this fix, `encode_kitty` had no match arm
+        // for `Composed` at all, so it fell through to the catch-all `_` arm,
+        // which requires `raw` to resolve a kitty function code; with `raw`
+        // always `None` for this kind of input, the function silently
+        // returned an empty string and the keystroke was dropped outright
+        // under any protocol with REPORT_ALL_KEYS_AS_ESCAPE_CODES set.
+        let flags = KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+
+        let composed = KeyEvent {
+            key: KeyCode::Composed("\u{2615}".to_string()), // \u{2615} == HOT BEVERAGE
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+        let equivalent_char = KeyEvent {
+            key: KeyCode::Char('\u{2615}'),
+            ..composed.clone()
+        };
+
+        assert_eq!(composed.encode_kitty(flags), "\x1b[9749;1u".to_string());
+        assert_eq!(
+            composed.encode_kitty(flags),
+            equivalent_char.encode_kitty(flags),
+            "a single-char Composed key must encode identically to the equivalent Char key"
+        );
+
+        // With REPORT_ASSOCIATED_TEXT also negotiated, the associated-text
+        // field should be present, matching the real CSI-u sequence WezTerm's
+        // kitty keyboard protocol emits for this input in practice.
+        let flags_with_text =
+            flags | KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT;
+        assert_eq!(
+            composed.encode_kitty(flags_with_text),
+            "\x1b[9749;1;9749u".to_string()
+        );
+    }
+
+    #[test]
+    fn encode_kitty_multi_char_composed_is_unaffected() {
+        // A genuinely multi-char Composed string (e.g. a ZWJ emoji sequence)
+        // never reaches this function via WezTerm's normal routing -- it's
+        // written directly to the pane as raw text in keyevent.rs, bypassing
+        // Kitty encoding entirely. This test locks in that encode_kitty's own
+        // behavior for that case is untouched by the single-char fix above.
+        let flags = KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+        let multi = KeyEvent {
+            key: KeyCode::Composed("ab".to_string()),
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+        assert_eq!(multi.encode_kitty(flags), String::new());
     }
 
     #[test]
