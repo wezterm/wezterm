@@ -1243,6 +1243,12 @@ impl TermWindow {
                         AudibleBell::Disabled => {}
                     }
 
+                    // Bounce the dock/taskbar icon to attract the user's
+                    // attention when this window is not in the foreground.
+                    Connection::get()
+                        .expect("on main thread")
+                        .request_attention();
+
                     log::trace!("Ding! (this is the bell) in pane {}", pane_id);
                     self.emit_window_event("bell", Some(pane_id));
 
