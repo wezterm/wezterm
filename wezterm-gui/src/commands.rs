@@ -27,7 +27,7 @@ pub enum ArgType {
 
 /// A helper function used to synthesize key binding permutations.
 /// If the input is a character on a US ANSI keyboard layout, returns
-/// the the typical character that is produced when holding down
+/// the typical character that is produced when holding down
 /// the shift key and pressing the original key.
 /// This doesn't produce an exhaustive list because there are only
 /// a handful of default assignments in the command DEFS below.

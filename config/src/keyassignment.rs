@@ -279,7 +279,7 @@ pub enum PaneDirection {
 impl PaneDirection {
     pub fn direction_from_str(arg: &str) -> Result<PaneDirection, String> {
         for candidate in PaneDirection::variants() {
-            if candidate.to_lowercase() == arg.to_lowercase() {
+            if candidate.eq_ignore_ascii_case(arg) {
                 if let Ok(direction) = PaneDirection::from_dynamic(
                     &Value::String(candidate.to_string()),
                     FromDynamicOptions::default(),
