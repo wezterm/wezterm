@@ -89,6 +89,12 @@ $ run
 $ bt
 ```
 
+Starting WezTerm with `wezterm-gui start --always-new-process` is useful to ensure Mux logs are not
+hidden in an background process started in an earlier test.
+
+Start WezTerm with `wezterm-gui --config-file ./test-conf.lua ……` to test a custom config file.
+
+
 ### Please include tests to cover your changes!
 
 This will help ensure that your contributions keep working as things change.
@@ -105,6 +111,48 @@ match expectations](https://github.com/wezterm/wezterm/blob/fd532a8c2fb3b5659359
 
 Please also make a point of adding comments to your tests to help
 clarify the intent of the test!
+
+### Testing in a NixOS VM
+
+If you need to test WezTerm in a clean desktop environment (e.g. to reproduce a
+display server bug or verify a desktop integration), you can use the provided
+NixOS VM configurations.
+
+Two desktop variants are available:
+- GNOME (`testing-on-gnome`)
+- KDE Plasma (`testing-on-plasma`).
+
+**Prerequisites:** Nix is installed, with flakes enabled (`experimental-features = nix-command flakes`).
+
+**Workflow:**
+
+```console
+$ cargo build                                            # build wezterm locally
+$ nixos-rebuild build-vm --flake ./nix#testing-on-plasma # build the Plasma VM image
+$ REPO=$PWD ./result/bin/run-nixos-vm                    # start the VM
+```
+
+> [!NOTE]
+> You might need to tweak desktop settings (e.g. the keyboard layout) on first VM start.
+>
+> The VM state is stored in `nixos.qcow2` in the current working directory on the host.
+
+Inside the VM, open a terminal (e.g. _Console_ on GNOME, _Konsole_ on Plasma), then:
+
+```console
+$ cd repo                      # go into ~/repo
+$ ./target/debug/wezterm-gui   # run wezterm for your tests
+```
+
+The host repository is mounted into the VM at `/home/dev/repo` via a 9p shared directory,
+so changes on the host (rebuilds, test config file, ..) are immediately visible inside the VM.
+
+Keep the VM running and make your changes locally, re-build wezterm on your host and kill/start
+wezterm again in the VM for your tests.
+
+> [!WARNING]
+> The host repo is supposed to be mounted in read-write but I (@bew) don't know why changes in the
+> repo are not actually propagated to the host. (PR welcome!)
 
 ### Please also include documentation if you are adding or changing behavior
 

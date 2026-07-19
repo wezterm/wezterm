@@ -571,8 +571,15 @@ pub struct Config {
     pub macos_window_background_blur: i64,
 
     /// Only works on KDE Wayland
-    #[dynamic(default)]
+    #[dynamic(
+        default,
+        deprecated = "this option has been replaced with `wayland_window_background_blur` and will be removed in a future release"
+    )]
     pub kde_window_background_blur: bool,
+
+    /// Only works on Wayland compositors that support ext-background-effect-v1 protocol
+    #[dynamic(default)]
+    pub wayland_window_background_blur: bool,
 
     /// Only works on Windows
     #[dynamic(default)]

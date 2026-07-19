@@ -128,9 +128,9 @@ As features stabilize some brief notes about them will accumulate here.
   @BenBergman! #6328 #6873 #6875
 * [cell_widths](config/lua/config/cell_widths.md) option for explicit
   control over cell widths. Thanks to @hamano! #6289 #6290
-* [kde_window_background_blur](config/lua/config/kde_window_background_blur.md) option
-  to enable window blur when running under KDE Plasma on Wayland systems.
-  Thanks to @psomani16k! #6905
+* [wayland_window_background_blur](config/lua/config/wayland_window_background_blur.md) option
+  to enable window blur on Wayland compositors supporting the `ext-background-effect-v1` protocol.
+  Thanks to @psomani16k, @1Capito1 & @bew! #6905 #7615 #7939
 * [reverse_video_cursor_min_contrast](config/lua/config/reverse_video_cursor_min_contrast.md)
   option. Thanks to @jameshurst! #6584 ?2861
 * [text_min_contrast_ratio](config/lua/config/text_min_contrast_ratio.md) to more generally
@@ -143,6 +143,10 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @masriomarm! #6895
 * Indicate support for OSC 52 (clipboard extensions) in Primary DA Response.
   Thanks to @j4james! #7046
+* internal: Add NixOS-based VMs configurations for live testing in fresh desktop environments.
+  See dedicated section in [CONTRIBUTING.md](https://github.com/wezterm/wezterm/blob/main/CONTRIBUTING.md)
+* The default tab bar rendering now shows an animated spinner when ConEmu style
+  OSC 9 escapes set the progress state to "Indeterminate".
 
 #### Fixed
 * Race condition when very quickly adjusting font scale, and other improvements
@@ -276,6 +280,7 @@ As features stabilize some brief notes about them will accumulate here.
   a zero-sized placement (e.g. `w=0`/`h=0`), or displaying a cell-sized image on a pane
   whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
   Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
+* Fix render loop freeze when closing workspaces. Thanks to @JafarAbdi! #7444
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
