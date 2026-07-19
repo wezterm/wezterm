@@ -236,7 +236,7 @@ impl WaylandWindow {
         let dimensions = Dimensions {
             pixel_width: width,
             pixel_height: height,
-            dpi: config.dpi.unwrap_or(crate::DEFAULT_DPI) as usize,
+            dpi: config.dpi.unwrap_or_else(|| conn.default_dpi()) as usize,
         };
 
         let window = {
