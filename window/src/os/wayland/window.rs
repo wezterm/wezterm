@@ -1449,10 +1449,22 @@ impl CompositorHandler for WaylandState {
         &mut self,
         _conn: &WConnection,
         _qh: &wayland_client::QueueHandle<Self>,
-        _surface: &wayland_client::protocol::wl_surface::WlSurface,
-        _new_factor: i32,
+        surface: &wayland_client::protocol::wl_surface::WlSurface,
+        new_factor: i32,
     ) {
-        // We do nothing, we get the scale_factor from surface_data
+        // The actual scale factor is read from surface_data when the
+        // configure is processed; here we only nudge the window to
+        // re-evaluate its dpi.
+        let Some(surface_data) = SurfaceUserData::try_from_wl(surface) else {
+            // Not one of our window surfaces (eg: a CSD subsurface)
+            return;
+        };
+        let window_id = surface_data.window_id;
+        WaylandConnection::with_window_inner(window_id, move |inner| {
+            inner.pending_event.lock().unwrap().dpi.replace(new_factor);
+            inner.dispatch_pending_event();
+            Ok(())
+        });
     }
 
     fn frame(
