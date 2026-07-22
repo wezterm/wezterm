@@ -200,7 +200,9 @@
                   version
                   src
                   postPatch
-                  cargoLock
+                  # inherit `cargoDeps` here because `buildRustPackage` strips `cargoLock`
+                  # from `finalAttrs` via `excludeDrvArgNames`
+                  cargoDeps
                   meta
                   ;
 

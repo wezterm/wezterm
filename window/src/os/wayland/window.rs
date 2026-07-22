@@ -969,6 +969,7 @@ impl WaylandWindowInner {
                             self.surface_factor = factor;
                         }
                     }
+                    self.update_window_background_blur();
                 }
                 self.do_paint().unwrap();
             }
@@ -1335,6 +1336,7 @@ impl WaylandWindowInner {
                 surface
             });
 
+            // Set/Update region for the blur surface
             let region: WlRegion = wayland_state
                 .compositor
                 .wl_compositor()
