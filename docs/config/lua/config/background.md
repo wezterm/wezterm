@@ -79,6 +79,39 @@ A source can be one of the following:
 * `{Gradient={preset="Warm"}}` - generate a gradient. The gradient definitions
   are the same as those allowed for [window_background_gradient](window_background_gradient.md).
 * `{Color="black"}` - generate an image with the specified color.
+* `{Command={argv={"cmatrix"}}}` - run an arbitrary command attached to a
+  hidden pty and render its *live* terminal output as the background,
+  instead of a static image or a bounded, pre-decoded animation. Accepts:
+    * `argv` - the command and its arguments to run; `argv[1]` is the program.
+    * `cwd` - working directory to run the command in. Defaults to your home directory.
+    * `fps` - how many times per second to re-render the command's current
+      terminal contents into the background layer. Defaults to `25`, which
+      matches `cmatrix`'s own default update rate; there's no benefit to
+      setting this higher than however often the command you're running
+      actually redraws.
+    * `font_scale` - scales the font size used to render this command's
+      output, relative to your main `font_size`. Defaults to `0.7`. Values
+      below `1.0` render smaller, denser text, which helps a busy effect
+      like `cmatrix` read as background texture instead of being mistaken
+      for real foreground text.
+
+  ```lua
+  config.background = {
+    {
+      source = {
+        Command = {
+          argv = { 'cmatrix' },
+        },
+      },
+      width = '100%',
+      height = '100%',
+      -- `opacity` fades the whole layer toward whatever is behind it
+      -- (making it look washed out/transparent). To keep cmatrix solid
+      -- but dim, lower its color brightness instead:
+      hsb = { brightness = 0.55 },
+    },
+  }
+  ```
 
 ## Relationship with other config options
 
