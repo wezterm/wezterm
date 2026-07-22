@@ -73,8 +73,6 @@ struct Inner {
     glyph_cache: GlyphCache,
     fonts: Rc<FontConfiguration>,
     render_metrics: RenderMetrics,
-    cols: usize,
-    rows: usize,
     last_rendered: Instant,
     last_image: Arc<ImageData>,
 
@@ -241,8 +239,6 @@ impl LiveCommand {
                 glyph_cache,
                 fonts,
                 render_metrics,
-                cols,
-                rows,
                 last_rendered: Instant::now() - Duration::from_secs(3600),
                 last_image,
                 prev_buf: Vec::new(),
@@ -532,5 +528,138 @@ fn blit_glyph(
             buf[idx + 2] = ((sb as u32 * a + buf[idx + 2] as u32 * inv) / 255) as u8;
             buf[idx + 3] = 0xff;
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::time::Duration;
+
+    fn test_font_config() -> (Rc<FontConfiguration>, RenderMetrics) {
+        // A config that doesn't depend on the user's environment/fonts,
+        // same as other wezterm-gui tests that need a FontConfiguration
+        // (see eg. shapecache.rs's `ligatures_fira`/`bench_shaping`).
+        config::use_test_configuration();
+        let config = config::configuration();
+        let fonts = Rc::new(
+            FontConfiguration::new(
+                None,
+                config.dpi.unwrap_or_else(|| ::window::default_dpi()) as usize,
+            )
+            .unwrap(),
+        );
+        let render_metrics = RenderMetrics::new(&fonts).unwrap();
+        (fonts, render_metrics)
+    }
+
+    /// Pulls the raw RGBA bytes + dimensions out of an `ImageData`,
+    /// panicking if it isn't the single-frame `Rgba8` shape that
+    /// `LiveCommand` always produces.
+    fn rgba8(image: &Arc<ImageData>) -> (u32, u32, Vec<u8>) {
+        match &*image.data() {
+            ImageDataType::Rgba8 {
+                width,
+                height,
+                data,
+                ..
+            } => (*width, *height, data.clone()),
+            other => panic!("expected Rgba8, got {:?}", other),
+        }
+    }
+
+    fn has_non_black_pixel(data: &[u8]) -> bool {
+        data.chunks_exact(4)
+            .any(|px| px[0] != 0 || px[1] != 0 || px[2] != 0)
+    }
+
+    #[test]
+    fn spawn_requires_non_empty_argv() {
+        let (fonts, render_metrics) = test_font_config();
+        let cmd = CommandSource {
+            argv: vec![],
+            cwd: None,
+            fps: 30.0,
+            font_scale: 1.0,
+        };
+        assert!(LiveCommand::spawn(&cmd, 200, 100, &render_metrics, &fonts).is_err());
+    }
+
+    #[test]
+    fn renders_the_spawned_commands_output() {
+        let (fonts, render_metrics) = test_font_config();
+        let cmd = CommandSource {
+            argv: vec!["printf".to_string(), "hello".to_string()],
+            cwd: None,
+            fps: 30.0,
+            font_scale: 1.0,
+        };
+        let live = LiveCommand::spawn(&cmd, 200, 100, &render_metrics, &fonts)
+            .expect("spawn should succeed");
+
+        // Give the reader thread a moment to receive and advance the
+        // terminal model with the child's output before asking for a
+        // frame; `printf` exits almost immediately, but the terminal
+        // model retains whatever it printed regardless of the child
+        // having exited.
+        std::thread::sleep(Duration::from_millis(300));
+
+        let (image, _due) = live.get_frame(30.0, 200, 100);
+        let (width, height, data) = rgba8(&image);
+        assert_eq!(width, 200);
+        assert_eq!(height, 100);
+        assert_eq!(data.len(), 200 * 100 * 4);
+        assert!(
+            has_non_black_pixel(&data),
+            "expected some rendered (non-black) pixels for \"hello\", got an all-black frame"
+        );
+
+        // A second call, well past the fps interval, re-renders against
+        // unchanged terminal content (the child already exited). This
+        // exercises the cluster-level dirty-tracking path in
+        // `render_frame` -- it should reuse the existing pixels rather
+        // than corrupt or blank them out.
+        std::thread::sleep(Duration::from_millis(100));
+        let (image2, _due2) = live.get_frame(30.0, 200, 100);
+        let (width2, height2, data2) = rgba8(&image2);
+        assert_eq!((width2, height2), (width, height));
+        assert_eq!(
+            data2, data,
+            "unchanged content should still render identically on a later frame"
+        );
+    }
+
+    #[test]
+    fn re_renders_after_content_actually_changes() {
+        // A shell loop that prints a different, deterministic line once
+        // per second gives us two frames we know for certain must differ,
+        // to confirm the dirty-tracking skip logic doesn't get stuck
+        // reusing stale pixels once content genuinely changes.
+        let (fonts, render_metrics) = test_font_config();
+        let cmd = CommandSource {
+            argv: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "for i in 1 2 3 4 5; do echo line$i; sleep 0.2; done".to_string(),
+            ],
+            cwd: None,
+            fps: 30.0,
+            font_scale: 1.0,
+        };
+        let live = LiveCommand::spawn(&cmd, 200, 100, &render_metrics, &fonts)
+            .expect("spawn should succeed");
+
+        std::thread::sleep(Duration::from_millis(150));
+        let (img1, _due) = live.get_frame(30.0, 200, 100);
+        let (_w, _h, first) = rgba8(&img1);
+
+        std::thread::sleep(Duration::from_millis(600));
+        let (img2, _due2) = live.get_frame(30.0, 200, 100);
+        let (_w2, _h2, second) = rgba8(&img2);
+
+        assert_ne!(
+            first, second,
+            "expected the frame to change once the command printed new lines"
+        );
     }
 }

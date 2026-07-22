@@ -70,7 +70,7 @@ fn default_command_font_scale() -> f32 {
 /// Runs an arbitrary command attached to a hidden pty and renders its live
 /// terminal output as the background, instead of a static image or a
 /// pre-decoded, bounded animation loop like an animated gif.
-#[derive(Debug, Clone, FromDynamic, ToDynamic)]
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct CommandSource {
     /// Argument vector for the command to run; argv[0] is the program.
     pub argv: Vec<String>,
@@ -529,6 +529,87 @@ impl Gradient {
             _ => anyhow::bail!(
                 "Gradient must either specify both segment_size and segment_smoothness, or neither"
             ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use maplit::btreemap;
+
+    fn command_source(argv: &[&str], extra: wezterm_dynamic::Object) -> BackgroundSource {
+        let mut fields = btreemap! {
+            "argv".to_dynamic() => argv
+                .iter()
+                .map(|s| s.to_dynamic())
+                .collect::<Vec<_>>()
+                .to_dynamic(),
+        };
+        fields.extend(extra);
+
+        BackgroundSource::from_dynamic(
+            &Value::Object(
+                btreemap! {
+                    "Command".to_dynamic() => Value::Object(fields.into()),
+                }
+                .into(),
+            ),
+            Default::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn command_source_defaults() {
+        match command_source(&["cmatrix"], Default::default()) {
+            BackgroundSource::Command(cmd) => {
+                assert_eq!(cmd.argv, vec!["cmatrix".to_string()]);
+                assert_eq!(cmd.cwd, None);
+                // These match what get baked into `default_command_fps`/
+                // `default_command_font_scale`; if those change, this
+                // should be updated to match rather than silently drift.
+                assert_eq!(cmd.fps, 25.0);
+                assert_eq!(cmd.font_scale, 0.7);
+            }
+            other => panic!("expected BackgroundSource::Command, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn command_source_explicit_values_override_defaults() {
+        let extra = btreemap! {
+            "cwd".to_dynamic() => "/tmp".to_dynamic(),
+            "fps".to_dynamic() => Value::F64(ordered_float::OrderedFloat(10.0)),
+            "font_scale".to_dynamic() => Value::F64(ordered_float::OrderedFloat(1.0)),
+        };
+        match command_source(&["htop"], extra.into()) {
+            BackgroundSource::Command(cmd) => {
+                assert_eq!(
+                    cmd,
+                    CommandSource {
+                        argv: vec!["htop".to_string()],
+                        cwd: Some("/tmp".to_string()),
+                        fps: 10.0,
+                        font_scale: 1.0,
+                    }
+                );
+            }
+            other => panic!("expected BackgroundSource::Command, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn command_source_requires_non_empty_argv_field() {
+        // An empty argv is rejected at spawn time (see
+        // `LiveCommand::spawn` in wezterm-gui), not at parse time -- an
+        // empty `argv = {}` is syntactically valid config, just not
+        // something that can ever actually run. This just pins down that
+        // parsing itself still succeeds with an empty vec, since that's
+        // the layer where the real guard lives.
+        match command_source(&[], Default::default()) {
+            BackgroundSource::Command(cmd) => assert!(cmd.argv.is_empty()),
+            other => panic!("expected BackgroundSource::Command, got {:?}", other),
         }
     }
 }

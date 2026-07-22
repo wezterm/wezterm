@@ -967,6 +967,7 @@ dependencies = [
  "libc",
  "log",
  "luahelper",
+ "maplit",
  "mlua",
  "nix",
  "notify",

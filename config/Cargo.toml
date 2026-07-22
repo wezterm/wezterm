@@ -9,6 +9,7 @@ publish = false
 
 [dev-dependencies]
 env_logger.workspace = true
+maplit.workspace = true
 
 [features]
 distro-defaults = []
