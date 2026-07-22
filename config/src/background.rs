@@ -50,6 +50,43 @@ pub enum BackgroundSource {
     Gradient(Gradient),
     File(ImageFileSourceWrap),
     Color(RgbaColor),
+    Command(CommandSource),
+}
+
+fn default_command_fps() -> f32 {
+    12.0
+}
+
+fn default_command_font_scale() -> f32 {
+    1.0
+}
+
+/// Runs an arbitrary command attached to a hidden pty and renders its live
+/// terminal output as the background, instead of a static image or a
+/// pre-decoded, bounded animation loop like an animated gif.
+#[derive(Debug, Clone, FromDynamic, ToDynamic)]
+pub struct CommandSource {
+    /// Argument vector for the command to run; argv[0] is the program.
+    pub argv: Vec<String>,
+
+    /// Working directory to run the command in; defaults to the
+    /// user's home directory when unset.
+    #[dynamic(default)]
+    pub cwd: Option<String>,
+
+    /// How many times per second to re-render the command's current
+    /// terminal contents into the background layer.
+    #[dynamic(default = "default_command_fps")]
+    pub fps: f32,
+
+    /// Scales the font size used to render this command's output,
+    /// relative to the main `font_size` config. 1.0 (the default) matches
+    /// the interactive terminal's own text size; less than 1.0 renders
+    /// smaller glyphs (more of them, since the layer still fills the same
+    /// pixel area), which helps the background read as texture/noise
+    /// instead of being confused for real foreground text.
+    #[dynamic(default = "default_command_font_scale")]
+    pub font_scale: f32,
 }
 
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]

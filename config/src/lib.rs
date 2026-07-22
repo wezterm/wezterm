@@ -798,6 +798,19 @@ impl ConfigHandle {
         }
     }
 
+    /// Returns a copy of this config with `font_size` overridden. Used by
+    /// features that need to render text at a different size than the
+    /// window's main font (eg: a live command background layer that wants
+    /// smaller glyphs than the interactive terminal in front of it).
+    pub fn with_font_size(&self, font_size: f64) -> Self {
+        let mut cfg = (*self.config).clone();
+        cfg.font_size = font_size;
+        Self {
+            config: Arc::new(cfg),
+            generation: self.generation,
+        }
+    }
+
     pub fn unicode_version(&self) -> UnicodeVersion {
         UnicodeVersion {
             version: self.config.unicode_version,
