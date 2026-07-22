@@ -32,7 +32,7 @@ pub fn running_under_wsl() -> bool {
                 std::ffi::CStr::from_ptr(name.version.as_ptr()).to_string_lossy(),
                 std::ffi::CStr::from_ptr(name.release.as_ptr()).to_string_lossy()
             );
-            return version.to_lowercase().contains("microsoft");
+            return version.to_ascii_lowercase().contains("microsoft");
         }
     };
 

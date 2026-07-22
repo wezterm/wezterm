@@ -30,6 +30,7 @@ use wayland_client::globals::GlobalList;
 use wayland_client::protocol::wl_keyboard::WlKeyboard;
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::{delegate_dispatch, Connection, QueueHandle};
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1;
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwinBlurManager;
@@ -89,6 +90,8 @@ pub(super) struct WaylandState {
     pub(super) shm: Shm,
     pub(super) mem_pool: RefCell<SlotPool>,
     pub(super) kde_blur_manager: Option<OrgKdeKwinBlurManager>,
+    pub(super) ext_background_effect_manager: Option<ExtBackgroundEffectManagerV1>,
+    pub(super) ext_background_effect_can_blur: bool,
 }
 
 impl WaylandState {
@@ -100,7 +103,10 @@ impl WaylandState {
         let subcompositor =
             SubcompositorState::bind(compositor.wl_compositor().clone(), globals, qh)?;
 
-        let blur_manager: Option<OrgKdeKwinBlurManager> = globals.bind(qh, 1..=1, GlobalData).ok();
+        let kde_blur_manager: Option<OrgKdeKwinBlurManager> =
+            globals.bind(qh, 1..=1, GlobalData).ok();
+        let ext_background_effect_manager: Option<ExtBackgroundEffectManagerV1> =
+            globals.bind(qh, 1..=1, GlobalData).ok();
         let wayland_state = WaylandState {
             registry: RegistryState::new(globals),
             output: OutputState::new(globals, qh),
@@ -133,7 +139,9 @@ impl WaylandState {
             primary_selection_source: None,
             shm,
             mem_pool: RefCell::new(mem_pool),
-            kde_blur_manager: blur_manager,
+            kde_blur_manager,
+            ext_background_effect_manager,
+            ext_background_effect_can_blur: false,
         };
         Ok(wayland_state)
     }

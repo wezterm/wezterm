@@ -264,10 +264,10 @@ pub trait Pane: Downcast + Send + Sync {
 
     fn erase_scrollback(&self, _erase_mode: ScrollbackEraseMode) {}
 
-    /// Called to advise on whether this tab has focus
+    /// Called to advise on whether this pane has focus
     fn focus_changed(&self, _focused: bool) {}
 
-    /// Called to advise remote mux that this is the active tab
+    /// Called to advise remote mux that this is the active pane
     /// for the current identity
     fn advise_focus(&self) {}
 

@@ -139,7 +139,7 @@ async fn async_run_ssh(opts: SshCommand) -> anyhow::Result<()> {
         ssh_option.insert("wezterm_ssh_verbose".to_string(), "true".to_string());
     }
     for (k, v) in opts.config_override {
-        ssh_option.insert(k.to_lowercase().to_string(), v);
+        ssh_option.insert(k.to_ascii_lowercase(), v);
     }
 
     let dom = SshDomain {
