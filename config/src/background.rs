@@ -54,11 +54,17 @@ pub enum BackgroundSource {
 }
 
 fn default_command_fps() -> f32 {
-    12.0
+    // Matches cmatrix's own internal update rate (its `-u` delay defaults
+    // to `napms(40)`, ie. 25Hz), so the background never re-renders more
+    // often than the command it's showing actually changes.
+    25.0
 }
 
 fn default_command_font_scale() -> f32 {
-    1.0
+    // Smaller than the interactive terminal's own text by default so a
+    // dense effect like cmatrix reads as background texture rather than
+    // being mistaken for real foreground text.
+    0.7
 }
 
 /// Runs an arbitrary command attached to a hidden pty and renders its live
