@@ -1397,6 +1397,13 @@ fn apply_decorations_to_window(
         } else {
             window.setTitlebarAppearsTransparent_(to_yes_no(!has_decorations));
         }
+
+        if let Some(titlebar_view_container) = get_titlebar_view_container(window) {
+            // hiding the subview prevents it from participating in normal visible/hit-tested view behavior
+            let _: () = msg_send![*titlebar_view_container.load(), setHidden: to_yes_no(!has_decorations)];
+        }
+
+        let _: () = msg_send![**window, setMovable: to_yes_no(has_decorations)];
     }
 }
 
