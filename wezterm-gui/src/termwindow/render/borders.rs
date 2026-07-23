@@ -95,7 +95,18 @@ impl crate::TermWindow {
             // use an estimate, and because the disc meets the straight
             // border edges exactly at the configured width, an estimation
             // error only slightly fattens/thins the ring at the diagonal.
+            //
+            // In native fullscreen (and when the user forces square corners),
+            // the OS doesn't round the window at all - the straight
+            // rectangles above already produce a correct, solid square
+            // corner - so skip the carve entirely; doing it anyway would cut
+            // a rounded notch into a corner that's supposed to be square.
             #[cfg(target_os = "macos")]
+            if !self.window_state.contains(window::WindowState::FULL_SCREEN)
+                && !self
+                    .config
+                    .window_decorations
+                    .contains(window::WindowDecorations::MACOS_FORCE_SQUARE_CORNERS)
             {
                 let top_color = self
                     .config
