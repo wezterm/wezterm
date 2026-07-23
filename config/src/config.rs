@@ -17,7 +17,7 @@ use crate::keys::{Key, LeaderKey, Mouse};
 use crate::lua::make_lua_context;
 use crate::ssh::{SshBackend, SshDomain};
 use crate::tls::{TlsDomainClient, TlsDomainServer};
-use crate::units::Dimension;
+use crate::units::{Dimension, DimensionContext};
 use crate::unix::UnixDomain;
 use crate::wsl::WslDomain;
 use crate::{
@@ -543,6 +543,13 @@ pub struct Config {
     /// Controls the amount of padding to use around the terminal cell area
     #[dynamic(default)]
     pub window_padding: WindowPadding,
+
+    /// Controls the amount of padding reserved as a gutter around each pane
+    /// on the side(s) where it borders a sibling pane in a split. Has no
+    /// effect on a tab with a single, unsplit pane - see window_padding for
+    /// that. Defaults to zero (no gutter, matching prior behavior).
+    #[dynamic(default)]
+    pub pane_padding: PanePadding,
 
     #[dynamic(default)]
     pub window_content_alignment: WindowContentAlignment,
@@ -1940,6 +1947,10 @@ const fn default_half_cell() -> Dimension {
     Dimension::Cells(0.5)
 }
 
+const fn default_zero_dimension() -> Dimension {
+    Dimension::Pixels(0.)
+}
+
 const fn default_reverse_video_cursor_min_contrast() -> f32 {
     2.5
 }
@@ -1964,6 +1975,88 @@ impl Default for WindowPadding {
             top: default_half_cell(),
             bottom: default_half_cell(),
         }
+    }
+}
+
+/// Padding reserved as a gutter around a pane on the side(s) where it
+/// borders a sibling pane in a split. Unlike WindowPadding, this defaults
+/// to zero on every edge: a configured pane_padding is opt-in, so existing
+/// configs see no change in split layout until they set it.
+#[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default)]
+pub struct PanePadding {
+    #[dynamic(
+        try_from = "crate::units::PixelUnit",
+        default = "default_zero_dimension"
+    )]
+    pub left: Dimension,
+    #[dynamic(
+        try_from = "crate::units::PixelUnit",
+        default = "default_zero_dimension"
+    )]
+    pub top: Dimension,
+    #[dynamic(
+        try_from = "crate::units::PixelUnit",
+        default = "default_zero_dimension"
+    )]
+    pub right: Dimension,
+    #[dynamic(
+        try_from = "crate::units::PixelUnit",
+        default = "default_zero_dimension"
+    )]
+    pub bottom: Dimension,
+}
+
+impl PanePadding {
+    /// Resolve this padding to whole cells reserved on each side of a split
+    /// divider, given the pixel size of a single cell. The divider itself
+    /// always keeps its pre-existing 1-cell width; the padding adds
+    /// `leading`/`trailing` cells on either side of it.
+    /// Pass `horizontal = true` for a left/right (Horizontal) split, whose
+    /// gutter is measured in columns using `cell_pixel_width`; pass `false`
+    /// for a top/bottom (Vertical) split, measured in rows using
+    /// `cell_pixel_height`. (Named after mux::tab::SplitDirection, which
+    /// this crate can't reference directly since mux depends on config.)
+    /// Returns (leading_cells, total_gap_cells). `trailing_cells` isn't
+    /// returned since it's trivially `total_gap_cells - leading_cells - 1`
+    /// and no caller has needed it separately.
+    pub fn split_gap_cells(
+        &self,
+        horizontal: bool,
+        cell_pixel_width: f32,
+        cell_pixel_height: f32,
+        dpi: f32,
+    ) -> (usize, usize) {
+        fn cells_for(pad: Dimension, pixel_cell: f32, dpi: f32) -> usize {
+            if pixel_cell <= 0.0 {
+                return 0;
+            }
+            let ctx = DimensionContext {
+                dpi,
+                pixel_max: pixel_cell,
+                pixel_cell,
+            };
+            let px = pad.evaluate_as_pixels(ctx).max(0.0);
+            (px / pixel_cell).ceil() as usize
+        }
+
+        // Horizontal split: first pane is on the left, second on the right.
+        // The gutter on the divider's left edge is the first pane's `right`
+        // padding; on its right edge, the second pane's `left` padding.
+        // Vertical split: first pane on top, second on bottom, using
+        // `bottom`/`top` the same way.
+        let (leading, trailing) = if horizontal {
+            (
+                cells_for(self.right, cell_pixel_width, dpi),
+                cells_for(self.left, cell_pixel_width, dpi),
+            )
+        } else {
+            (
+                cells_for(self.bottom, cell_pixel_height, dpi),
+                cells_for(self.top, cell_pixel_height, dpi),
+            )
+        };
+
+        (leading, 1 + leading + trailing)
     }
 }
 
@@ -2205,4 +2298,61 @@ fn default_macos_forward_mods() -> Modifiers {
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {
     FontRasterizerSelection::Harfbuzz
+}
+
+#[cfg(test)]
+mod pane_padding_test {
+    use super::*;
+    use crate::units::Dimension;
+
+    #[test]
+    fn zero_padding_is_bare_divider() {
+        let padding = PanePadding::default();
+        let (leading, total) = padding.split_gap_cells(true, 10.0, 20.0, 96.0);
+        assert_eq!((leading, total), (0, 1));
+    }
+
+    #[test]
+    fn symmetric_padding_centers_the_divider() {
+        let padding = PanePadding {
+            left: Dimension::Cells(2.0),
+            right: Dimension::Cells(2.0),
+            top: Dimension::Cells(1.0),
+            bottom: Dimension::Cells(1.0),
+        };
+        // Horizontal split: gutter is the left pane's `right` padding plus
+        // the right pane's `left` padding, plus the 1-cell divider itself.
+        let (leading, total) = padding.split_gap_cells(true, 10.0, 20.0, 96.0);
+        assert_eq!((leading, total), (2, 5));
+
+        // Vertical split uses `bottom`/`top` the same way.
+        let (leading, total) = padding.split_gap_cells(false, 10.0, 20.0, 96.0);
+        assert_eq!((leading, total), (1, 3));
+    }
+
+    #[test]
+    fn asymmetric_padding_is_not_centered() {
+        let padding = PanePadding {
+            left: Dimension::Cells(1.0),
+            right: Dimension::Cells(3.0),
+            top: Dimension::default(),
+            bottom: Dimension::default(),
+        };
+        // For a horizontal split, `leading` is this pane's `right` padding
+        // (it sits on the first/left side of the split).
+        let (leading, total) = padding.split_gap_cells(true, 10.0, 20.0, 96.0);
+        assert_eq!((leading, total), (3, 5));
+    }
+
+    #[test]
+    fn zero_cell_pixel_size_is_handled_gracefully() {
+        let padding = PanePadding {
+            left: Dimension::Cells(2.0),
+            right: Dimension::Cells(2.0),
+            top: Dimension::Cells(2.0),
+            bottom: Dimension::Cells(2.0),
+        };
+        let (leading, total) = padding.split_gap_cells(true, 0.0, 0.0, 96.0);
+        assert_eq!((leading, total), (0, 1));
+    }
 }

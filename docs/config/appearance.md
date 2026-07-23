@@ -408,6 +408,12 @@ You may add padding around the edges of the terminal area.
 
 [See the window_padding docs for more info](lua/config/window_padding.md)
 
+### Pane Padding
+
+You may add padding as a gutter between panes in a split.
+
+[See the pane_padding docs for more info](lua/config/pane_padding.md)
+
 ## Styling Inactive Panes
 
 {{since('20201031-154415-9614e117')}}
