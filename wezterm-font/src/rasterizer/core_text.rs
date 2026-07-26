@@ -8,6 +8,9 @@ use anyhow::anyhow;
 use core_foundation::array::CFArray;
 use core_foundation::base::TCFType;
 use core_foundation::data::CFData;
+use core_foundation::dictionary::CFDictionary;
+use core_foundation::number::CFNumber;
+use core_foundation::string::CFString;
 use core_foundation::url::CFURL;
 use core_graphics::base::{
     kCGBitmapByteOrder32Big, kCGImageAlphaPremultipliedLast, CGFloat,
@@ -33,7 +36,11 @@ pub struct CoreTextRasterizer {
 
 impl CoreTextRasterizer {
     pub fn from_locator(parsed: &ParsedFont) -> anyhow::Result<Self> {
-        let ct_font = create_ct_font(&parsed.handle.source, parsed.handle.index)?;
+        let ct_font = create_ct_font(
+            &parsed.handle.source,
+            parsed.handle.index,
+            parsed.handle.variation,
+        )?;
 
         let ct_font = if parsed.synthesize_bold {
             ct_font
@@ -66,8 +73,12 @@ fn clone_with_transform(font: &CTFont, size: f64, matrix: &CGAffineTransform) ->
     }
 }
 
-fn create_ct_font(source: &FontDataSource, index: u32) -> anyhow::Result<CTFont> {
-    match source {
+fn create_ct_font(
+    source: &FontDataSource,
+    index: u32,
+    variation: u32,
+) -> anyhow::Result<CTFont> {
+    let ct_font = match source {
         FontDataSource::OnDisk(path) => {
             let url = CFURL::from_path(path, false)
                 .ok_or_else(|| anyhow!("Failed to create CFURL from path {:?}", path))?;
@@ -91,11 +102,86 @@ fn create_ct_font(source: &FontDataSource, index: u32) -> anyhow::Result<CTFont>
                     path
                 )
             })?;
-            Ok(font::new_from_descriptor(&desc, 0.0))
+            font::new_from_descriptor(&desc, 0.0)
         }
-        FontDataSource::BuiltIn { data, .. } => ct_font_from_bytes(data, index),
-        FontDataSource::Memory { data, .. } => ct_font_from_bytes(data, index),
+        FontDataSource::BuiltIn { data, .. } => ct_font_from_bytes(data, index)?,
+        FontDataSource::Memory { data, .. } => ct_font_from_bytes(data, index)?,
+    };
+
+    if variation == 0 {
+        return Ok(ct_font);
     }
+
+    apply_named_instance(&ct_font, variation)
+}
+
+fn apply_named_instance(ct_font: &CTFont, variation: u32) -> anyhow::Result<CTFont> {
+    let cg_font = ct_font.copy_to_CGFont();
+    let fvar_tag = u32::from_be_bytes(*b"fvar");
+    let fvar_data = cg_font
+        .copy_table_for_tag(fvar_tag)
+        .ok_or_else(|| anyhow!("Font has no fvar table but variation {} requested", variation))?;
+    let fvar = fvar_data.bytes();
+
+    if fvar.len() < 16 {
+        anyhow::bail!("fvar table too short");
+    }
+
+    let axis_count = u16::from_be_bytes([fvar[8], fvar[9]]) as usize;
+    let axis_size = u16::from_be_bytes([fvar[10], fvar[11]]) as usize;
+    let instance_count = u16::from_be_bytes([fvar[12], fvar[13]]) as usize;
+    let instance_size = u16::from_be_bytes([fvar[14], fvar[15]]) as usize;
+
+    let instance_idx = (variation as usize).checked_sub(1).ok_or_else(|| {
+        anyhow!("Invalid variation index {}", variation)
+    })?;
+    if instance_idx >= instance_count {
+        anyhow::bail!(
+            "Variation {} out of range (font has {} named instances)",
+            variation,
+            instance_count
+        );
+    }
+
+    let axes_end = 16 + axis_count * axis_size;
+    let instance_offset = axes_end + instance_idx * instance_size;
+
+    if instance_offset + 4 + axis_count * 4 > fvar.len() {
+        anyhow::bail!("fvar table truncated");
+    }
+
+    let mut axis_tags = Vec::with_capacity(axis_count);
+    for i in 0..axis_count {
+        let offset = 16 + i * axis_size;
+        let tag = u32::from_be_bytes([
+            fvar[offset],
+            fvar[offset + 1],
+            fvar[offset + 2],
+            fvar[offset + 3],
+        ]);
+        axis_tags.push(tag);
+    }
+
+    // Instance record: u16 subfamilyNameID, u16 flags, then Fixed[axisCount] coordinates
+    let coords_offset = instance_offset + 4;
+    let mut pairs: Vec<(CFString, CFNumber)> = Vec::with_capacity(axis_count);
+    for (i, &tag) in axis_tags.iter().enumerate() {
+        let off = coords_offset + i * 4;
+        let raw = i32::from_be_bytes([
+            fvar[off],
+            fvar[off + 1],
+            fvar[off + 2],
+            fvar[off + 3],
+        ]);
+        let value = raw as f64 / 65536.0; // Fixed 16.16 → f64
+        let tag_bytes = tag.to_be_bytes();
+        let tag_str =
+            CFString::new(&String::from_utf8_lossy(&tag_bytes));
+        pairs.push((tag_str, CFNumber::from(value)));
+    }
+
+    let variations = CFDictionary::from_CFType_pairs(&pairs);
+    Ok(font::new_from_CGFont_with_variations(&cg_font, 0.0, &variations))
 }
 
 fn ct_font_from_bytes(data: &[u8], index: u32) -> anyhow::Result<CTFont> {
@@ -152,7 +238,9 @@ impl FontRasterizer for CoreTextRasterizer {
             self.ct_font.clone_with_font_size(pixel_size)
         };
 
-        let glyph = glyph_pos as u16;
+        let glyph: u16 = glyph_pos
+            .try_into()
+            .map_err(|_| anyhow!("Glyph index {} exceeds CGGlyph (u16) range", glyph_pos))?;
         let bounds =
             ct_font.get_bounding_rects_for_glyphs(kCTFontOrientationDefault, &[glyph]);
 
