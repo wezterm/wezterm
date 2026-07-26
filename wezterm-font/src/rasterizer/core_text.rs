@@ -306,7 +306,7 @@ impl FontRasterizer for CoreTextRasterizer {
         ct_font.draw_glyphs(&[glyph], &[position], ctx);
 
         let bearing_x = bounds.origin.x - padding;
-        let bearing_y = (bounds.origin.y + bounds.size.height + padding).ceil();
+        let bearing_y = height as f64 + bounds.origin.y - padding;
 
         Ok(RasterizedGlyph {
             data: buffer,
