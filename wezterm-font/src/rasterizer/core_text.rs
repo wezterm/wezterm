@@ -257,8 +257,14 @@ impl FontRasterizer for CoreTextRasterizer {
         }
 
         let padding = 2.0;
-        let width = (bounds.size.width + padding * 2.0).ceil() as usize;
-        let height = (bounds.size.height + padding * 2.0).ceil() as usize;
+
+        let y_min = (bounds.origin.y - padding).floor();
+        let y_max = (bounds.origin.y + bounds.size.height + padding).ceil();
+        let x_min = (bounds.origin.x - padding).floor();
+        let x_max = (bounds.origin.x + bounds.size.width + padding).ceil();
+
+        let width = (x_max - x_min) as usize;
+        let height = (y_max - y_min) as usize;
 
         if width == 0 || height == 0 {
             return Ok(RasterizedGlyph {
@@ -299,14 +305,14 @@ impl FontRasterizer for CoreTextRasterizer {
             ctx.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
         }
 
-        let origin_x = -bounds.origin.x + padding;
-        let origin_y = -bounds.origin.y + padding;
+        let origin_x = -x_min;
+        let origin_y = -y_min;
         let position = CGPoint::new(origin_x, origin_y);
 
         ct_font.draw_glyphs(&[glyph], &[position], ctx);
 
-        let bearing_x = bounds.origin.x - padding;
-        let bearing_y = height as f64 + bounds.origin.y - padding;
+        let bearing_x = x_min;
+        let bearing_y = y_max;
 
         Ok(RasterizedGlyph {
             data: buffer,
@@ -377,6 +383,7 @@ mod tests {
         assert!(found_nonempty, "Should produce at least one non-empty glyph");
     }
 
+
     #[test]
     fn rasterizer_does_not_crash_on_zero_glyph() {
         let path = match find_menlo() {
@@ -390,5 +397,98 @@ mod tests {
 
         // Glyph 0 is typically .notdef — should not crash
         let _ = rasterizer.rasterize_glyph(0, 14.0, 144);
+    }
+
+    #[test]
+    fn glyphs_with_same_top_edge_have_same_bearing_y() {
+        use std::collections::HashMap;
+
+        let path = match find_menlo() {
+            Some(p) => p,
+            None => {
+                eprintln!("Menlo.ttc not found, skipping test");
+                return;
+            }
+        };
+
+        let parsed = make_parsed_font(path);
+        let rasterizer =
+            CoreTextRasterizer::from_locator(&parsed).expect("Failed to create rasterizer");
+
+        let pixel_size = 14.0 * rasterizer.scale * 144.0 / 72.0;
+        let ct_font = rasterizer.ct_font.clone_with_font_size(pixel_size);
+        let glyph_count = ct_font.glyph_count() as u32;
+
+        // Group glyphs by their typographic top edge (origin.y + height),
+        // rounded to centipixels to absorb float noise.
+        // Key: top edge in centipixels, Value: vec of (glyph_id, bearing_y)
+        let mut top_edge_groups: HashMap<i64, Vec<(u32, f64)>> = HashMap::new();
+        let mut checked = 0u32;
+
+        for gid in 1..glyph_count.min(2000) {
+            let glyph = gid as u16;
+            let bounds =
+                ct_font.get_bounding_rects_for_glyphs(kCTFontOrientationDefault, &[glyph]);
+
+            if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {
+                continue;
+            }
+
+            let g = match rasterizer.rasterize_glyph(gid, 14.0, 144) {
+                Ok(g) if g.width > 0 && g.height > 0 => g,
+                _ => continue,
+            };
+
+            let bearing_y = g.bearing_y.get();
+
+            // bearing_y can exceed bitmap height (glyph sits high above
+            // baseline) and can be negative (glyph is entirely below baseline,
+            // e.g. combining marks), so no range assertion here.
+
+            let top_edge = bounds.origin.y + bounds.size.height;
+            let key = (top_edge * 100.0).round() as i64;
+            top_edge_groups
+                .entry(key)
+                .or_default()
+                .push((gid, bearing_y));
+            checked += 1;
+        }
+
+        let mut failures = Vec::new();
+        let mut groups_checked = 0;
+
+        for (key, members) in &top_edge_groups {
+            if members.len() < 2 {
+                continue;
+            }
+            groups_checked += 1;
+            let expected = members[0].1;
+            for &(gid, by) in &members[1..] {
+                if (by - expected).abs() > 0.01 {
+                    failures.push(format!(
+                        "  top_edge={:.2}: glyph {} has bearing_y={:.2}, \
+                         expected {:.2} (like glyph {})",
+                        *key as f64 / 100.0,
+                        gid,
+                        by,
+                        expected,
+                        members[0].0
+                    ));
+                }
+            }
+        }
+
+        eprintln!(
+            "Checked {checked} glyphs across {groups_checked} alignment groups \
+             ({} total groups, {} singleton)",
+            top_edge_groups.len(),
+            top_edge_groups.values().filter(|v| v.len() == 1).count()
+        );
+
+        assert!(
+            failures.is_empty(),
+            "Glyphs with same typographic top have different bearing_y:\n{}",
+            failures.join("\n")
+        );
     }
 }
