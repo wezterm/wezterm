@@ -326,14 +326,28 @@ impl TerminalState {
         if let Some(msb) = values[2] {
             image_id |= msb << 24;
         }
-        let placement_id = color_encoded_id(pen.underline_color());
+        // An underline color of zero means the same as not specifying one
+        let placement_id = color_encoded_id(pen.underline_color()).filter(|&id| id != 0);
 
         let vp = match self
             .kitty_img
             .virtual_placements
             .get(&(image_id, placement_id))
             .or_else(|| self.kitty_img.virtual_placements.get(&(image_id, None)))
-        {
+            .or_else(|| {
+                // A placeholder that doesn't encode a placement id refers
+                // to any virtual placement of the image, as in kitty
+                if placement_id.is_none() {
+                    self.kitty_img
+                        .virtual_placements
+                        .iter()
+                        .filter(|((id, _), _)| *id == image_id)
+                        .min_by_key(|((_, pid), _)| *pid)
+                        .map(|(_, vp)| vp)
+                } else {
+                    None
+                }
+            }) {
             Some(vp) => *vp,
             None => return false,
         };

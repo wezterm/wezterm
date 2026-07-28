@@ -172,3 +172,25 @@ fn kitty_unicode_placeholder_without_placement_is_text() {
     assert_eq!(cell.str(), "\u{10eeee}\u{305}\u{305}");
     assert_eq!(cell.attrs().images().is_none(), true);
 }
+
+/// Clients like nvim's snacks.image create the virtual placement with an
+/// explicit placement id (a=p,p=NN,U=1), but never emit the underline
+/// color, so their placeholder cells don't encode a placement id. As in
+/// kitty, such placeholders resolve to any virtual placement of the image.
+#[test]
+fn kitty_unicode_placeholder_without_placement_id_matches_any_placement() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    let seq = format!("\x1b_Ga=t,i=42,t=d,f=100;{}\x1b\\", TINY_PNG_BASE64);
+    term.print(seq.as_bytes());
+    term.print("\x1b_Ga=p,U=1,i=42,p=7,C=1,c=2,r=2\x1b\\");
+
+    term.print("\x1b[38;2;0;0;42m");
+    term.print("\u{10eeee}\u{305}\u{305}");
+
+    let lines = term.screen().visible_lines();
+    let cells: Vec<_> = lines[0].visible_cells().collect();
+    assert_eq!(cells[0].str(), " ");
+    let images = cells[0].attrs().images().expect("image tile attached");
+    assert_eq!(images[0].image_id(), Some(42));
+}
