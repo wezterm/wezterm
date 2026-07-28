@@ -149,6 +149,10 @@ As features stabilize some brief notes about them will accumulate here.
   OSC 9 escapes set the progress state to "Indeterminate".
 
 #### Fixed
+* [pane:get_lines_as_text()](config/lua/pane/get_lines_as_text.md) and
+  [pane:get_logical_lines_as_text()](config/lua/pane/get_logical_lines_as_text.md)
+  removed blank lines from anywhere in the pane, rather than only the trailing
+  ones they document stripping. #2490
 * Race condition when very quickly adjusting font scale, and other improvements
   around resizing. Thanks to @jknockel! #4876 #5032 #5033
 * macOS: wacky initial window size with external monitors or certain font

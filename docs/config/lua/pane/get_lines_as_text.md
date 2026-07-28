@@ -19,6 +19,10 @@ Trailing blank lines are stripped, which may result in fewer lines being
 returned than you might expect if the pane only had a couple of lines
 of output.
 
+Blank lines in between lines of output are preserved
+{{since('nightly', inline=True)}}; earlier versions stripped blank lines from
+anywhere in the pane rather than only from the end.
+
 # Example: opening whole scrollback in vim
 
 In the following example, a key is assigned to capture the entire scrollback

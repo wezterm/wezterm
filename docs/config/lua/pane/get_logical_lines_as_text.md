@@ -24,6 +24,10 @@ Trailing blank lines are stripped, which may result in fewer lines being
 returned than you might expect if the pane only had a couple of lines
 of output.
 
+Blank lines in between lines of output are preserved
+{{since('nightly', inline=True)}}; earlier versions stripped blank lines from
+anywhere in the pane rather than only from the end.
+
 To obtain the entire scrollback, you can do something like this:
 
 ```lua

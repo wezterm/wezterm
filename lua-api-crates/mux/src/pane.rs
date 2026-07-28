@@ -6,9 +6,35 @@ use mux::pane::CachePolicy;
 use std::cmp::Ordering;
 use std::sync::Arc;
 use termwiz::cell::SemanticType;
+use termwiz::surface::Line;
 use termwiz_funcs::lines_to_escapes;
 use url_funcs::Url;
 use wezterm_term::{SemanticZone, StableRowIndex};
+
+/// Join lines into the plain text form returned by `pane:get_lines_as_text()`
+/// and `pane:get_logical_lines_as_text()`: trailing space is removed from each
+/// line, the lines are separated by `\n`, and trailing blank lines are stripped.
+///
+/// The per-line trim is deliberately scoped to the line just written. Trimming
+/// the whole buffer instead also consumes the `\n` belonging to the previous
+/// line whenever the current line is blank, because `\n` is itself whitespace,
+/// so blank lines anywhere in the pane disappear rather than only the trailing
+/// ones.
+fn lines_to_text(lines: impl IntoIterator<Item = Line>) -> String {
+    let mut text = String::new();
+    for line in lines {
+        let line_start = text.len();
+        for cell in line.visible_cells() {
+            text.push_str(cell.str());
+        }
+        let trimmed = line_start + text[line_start..].trim_end().len();
+        text.truncate(trimmed);
+        text.push('\n');
+    }
+    let trimmed = text.trim_end().len();
+    text.truncate(trimmed);
+    text
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct MuxPane(pub PaneId);
@@ -223,18 +249,7 @@ impl UserData for MuxPane {
             let bottom_row = dims.physical_top + dims.viewport_rows as isize;
             let top_row = bottom_row.saturating_sub(nlines as isize);
             let (_first_row, lines) = pane.get_lines(top_row..bottom_row);
-            let mut text = String::new();
-            for line in lines {
-                for cell in line.visible_cells() {
-                    text.push_str(cell.str());
-                }
-                let trimmed = text.trim_end().len();
-                text.truncate(trimmed);
-                text.push('\n');
-            }
-            let trimmed = text.trim_end().len();
-            text.truncate(trimmed);
-            Ok(text)
+            Ok(lines_to_text(lines))
         });
 
         methods.add_method("get_lines_as_escapes", |_, this, nlines: Option<usize>| {
@@ -259,18 +274,7 @@ impl UserData for MuxPane {
                 let bottom_row = dims.physical_top + dims.viewport_rows as isize;
                 let top_row = bottom_row.saturating_sub(nlines as isize);
                 let lines = pane.get_logical_lines(top_row..bottom_row);
-                let mut text = String::new();
-                for line in lines {
-                    for cell in line.logical.visible_cells() {
-                        text.push_str(cell.str());
-                    }
-                    let trimmed = text.trim_end().len();
-                    text.truncate(trimmed);
-                    text.push('\n');
-                }
-                let trimmed = text.trim_end().len();
-                text.truncate(trimmed);
-                Ok(text)
+                Ok(lines_to_text(lines.into_iter().map(|line| line.logical)))
             },
         );
 
@@ -493,5 +497,65 @@ impl SplitPane {
             .map_err(|e| mlua::Error::external(format!("{:#?}", e)))?;
 
         Ok(MuxPane(pane.pane_id()))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use termwiz::surface::SEQ_ZERO;
+
+    fn text(lines: &[&str]) -> String {
+        let attr = Default::default();
+        lines_to_text(
+            lines
+                .iter()
+                .map(|line| Line::from_text(line, &attr, SEQ_ZERO, None)),
+        )
+    }
+
+    #[test]
+    fn joins_lines_with_newlines() {
+        assert_eq!(text(&["hello", "there"]), "hello\nthere");
+    }
+
+    #[test]
+    fn trims_trailing_space_per_line() {
+        assert_eq!(text(&["hello   ", "there\t"]), "hello\nthere");
+    }
+
+    /// A blank line between two lines of output is part of what was on screen,
+    /// so it has to survive. Only the *trailing* blank lines are documented as
+    /// being stripped.
+    #[test]
+    fn keeps_interior_blank_lines() {
+        assert_eq!(text(&["hello", "", "there"]), "hello\n\nthere");
+        assert_eq!(text(&["hello", "", "", "there"]), "hello\n\n\nthere");
+    }
+
+    /// A row of spaces is indistinguishable from an empty row once the trailing
+    /// space has been trimmed, so it must be kept as a blank line too.
+    #[test]
+    fn keeps_interior_whitespace_only_lines() {
+        assert_eq!(text(&["hello", "    ", "there"]), "hello\n\nthere");
+    }
+
+    #[test]
+    fn strips_trailing_blank_lines() {
+        assert_eq!(text(&["hello", "", ""]), "hello");
+        assert_eq!(text(&["hello", "   ", ""]), "hello");
+    }
+
+    #[test]
+    fn handles_degenerate_input() {
+        assert_eq!(text(&[]), "");
+        assert_eq!(text(&["", ""]), "");
+    }
+
+    /// Cells wider than one column, and the blank cell that follows them, must
+    /// not confuse the byte offsets used by the per-line trim.
+    #[test]
+    fn keeps_blank_lines_around_wide_characters() {
+        assert_eq!(text(&["日本語", "", "ほげ"]), "日本語\n\nほげ");
     }
 }
