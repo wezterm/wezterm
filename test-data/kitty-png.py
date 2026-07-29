@@ -1,5 +1,10 @@
 #!python3
 # This script encodes a PNG file using the kitty image protocol
+import utils.net
+import utils.clients
+import utils.http_session
+import utils.transport
+import utils.session
 import sys
 from base64 import standard_b64encode
 
