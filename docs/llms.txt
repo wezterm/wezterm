@@ -1,0 +1,42 @@
+# WezTerm
+
+> WezTerm is a GPU-accelerated cross-platform terminal emulator and multiplexer, configured and scriptable in Lua, supporting Linux, macOS, Windows, and FreeBSD/NetBSD.
+
+## Getting Started
+
+- [Home](https://wezterm.org/): Overview and feature highlights
+- [Installation](https://wezterm.org/installation.html): Platform installation index
+- [Install on Linux](https://wezterm.org/install/linux.html)
+- [Install on macOS](https://wezterm.org/install/macos.html)
+- [Install on Windows](https://wezterm.org/install/windows.html)
+- [Quick Start FAQ](https://wezterm.org/faq.html)
+
+## Configuration
+
+- [Configuration Files](https://wezterm.org/config/files.html): Where config lives and how it's loaded
+- [Launching Programs](https://wezterm.org/config/launch.html): Startup programs, default shell, domains
+- [Appearance](https://wezterm.org/config/appearance.html): Color schemes, fonts, tab bar, window decorations
+- [Fonts](https://wezterm.org/config/fonts.html): Font selection and fallback
+- [Keyboard Concepts](https://wezterm.org/config/keyboard-concepts.html): Key assignment fundamentals
+- [Key Bindings](https://wezterm.org/config/keys.html): Default and custom key tables
+- [Mouse Bindings](https://wezterm.org/config/mouse.html): Mouse binding configuration
+- [Plugins](https://wezterm.org/config/plugins.html): Plugin system overview
+
+## Usage
+
+- [Multiplexing](https://wezterm.org/multiplexing.html): Panes, tabs, workspaces, and mux domains
+- [SSH](https://wezterm.org/ssh.html): Using WezTerm as an SSH client
+- [Shell Integration](https://wezterm.org/shell-integration.html): Prompt marking and shell hooks
+- [Copy Mode](https://wezterm.org/copymode.html): Keyboard-driven text selection
+- [Scrollback](https://wezterm.org/scrollback.html): Scrollback buffer behavior
+- [CLI Overview](https://wezterm.org/cli/general.html): `wezterm` command-line subcommands
+
+## Project
+
+- [Contributing](https://wezterm.org/contributing.html): Build-from-source and contribution guide
+- [Changelog](https://wezterm.org/changelog.html): Release history
+- [Troubleshooting](https://wezterm.org/troubleshooting.html)
+
+## Optional
+
+- [GitHub Repository](https://github.com/wezterm/wezterm)
