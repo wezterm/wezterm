@@ -147,6 +147,9 @@ As features stabilize some brief notes about them will accumulate here.
   See dedicated section in [CONTRIBUTING.md](https://github.com/wezterm/wezterm/blob/main/CONTRIBUTING.md)
 * The default tab bar rendering now shows an animated spinner when ConEmu style
   OSC 9 escapes set the progress state to "Indeterminate".
+* [`Search`](./config/lua/keyassignment/Search.md) &
+  [`CycleMatchType`](./config/lua/keyassignment/CopyMode/CycleMatchType.md) can now use Smart-case
+  search matching. Thanks to @mrdziuban! #7385
 
 #### Fixed
 * Race condition when very quickly adjusting font scale, and other improvements
