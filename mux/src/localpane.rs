@@ -668,6 +668,7 @@ impl Pane for LocalPane {
                 if s.chars().any(|c| c.is_uppercase()) {
                     CompiledPattern::CaseSensitiveString(s)
                 } else {
+                    // normalize the case so we match everything lowercase
                     CompiledPattern::CaseInSensitiveString(s.to_lowercase())
                 }
             }
