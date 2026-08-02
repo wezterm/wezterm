@@ -1004,6 +1004,7 @@ rustup default {toolchain}
 TARGETS = [
     Target(container="ubuntu:22.04", continuous_only=True),
     Target(container="ubuntu:24.04", continuous_only=True),
+    Target(container="ubuntu:26.04", continuous_only=True),
     Target(container="debian:12", continuous_only=True),
     Target(name="centos9", container="quay.io/centos/centos:stream9"),
     Target(name="macos", os="macos-latest"),
