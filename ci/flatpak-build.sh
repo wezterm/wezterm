@@ -13,9 +13,9 @@ flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flath
 # NOTE: We install specific version of those components, make sure it corresponds with the
 # runtime-version used in ../assets/flatpak/org.wezfurlong.wezterm.LOCAL-TESTING.json
 flatpak install --user --noninteractive flathub \
-  org.freedesktop.Platform//23.08 \
-  org.freedesktop.Sdk//23.08 \
-  org.freedesktop.Sdk.Extension.rust-stable//23.08
+  org.freedesktop.Platform//25.08 \
+  org.freedesktop.Sdk//25.08 \
+  org.freedesktop.Sdk.Extension.rust-stable//25.08
 
 # Disabled for now: seems like it has an OpenSSL problem and fails to use SSL when
 # validating the screenshot URLs
