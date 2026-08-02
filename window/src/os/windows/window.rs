@@ -2068,14 +2068,19 @@ unsafe fn ime_set_context(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> Option<LRESULT> {
-    let inner = rc_from_hwnd(hwnd)?;
-    let inner = inner.borrow_mut();
+    let use_system_rendering = {
+        let inner = rc_from_hwnd(hwnd)?;
+        let inner = inner.borrow();
+        inner.config.ime_preedit_rendering == ImePreeditRendering::System
+    };
 
-    if inner.config.ime_preedit_rendering == ImePreeditRendering::System {
+    if use_system_rendering {
         return None;
     }
 
-    // Don't show system CompositionWindow because application itself draws it
+    // Don't show system CompositionWindow because application itself draws it.
+    // Note: DefWindowProcW may trigger other window messages, so we must
+    // release the borrow before calling it.
     let lparam = lparam & !(ISC_SHOWUICOMPOSITIONWINDOW as LPARAM);
     let result = DefWindowProcW(hwnd, msg, wparam, lparam);
     Some(result)
@@ -2523,6 +2528,11 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
         // or `ime_endcomposition` when it completes.
 
         if msg == WM_KEYDOWN {
+            // Release the borrow before calling translate_message:
+            // TranslateMessage can trigger other window messages (like WM_SIZE)
+            // via CtfImeCreateInputContext, which would otherwise cause a
+            // RefCell borrow conflict while inner is still borrowed.
+            drop(inner);
             // Explicitly allow the built-in translation to occur for the IME
             translate_message(hwnd, msg, wparam, lparam);
             return Some(0);

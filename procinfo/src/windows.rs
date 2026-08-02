@@ -361,12 +361,19 @@ impl LocalProcessInfo {
         let procs = Snapshot::entries();
         log::trace!("Got snapshot");
 
-        fn build_proc(info: &PROCESSENTRY32W, procs: &[PROCESSENTRY32W]) -> LocalProcessInfo {
+        fn build_proc(
+            info: &PROCESSENTRY32W,
+            procs: &[PROCESSENTRY32W],
+            visited: &mut HashSet<u32>,
+        ) -> LocalProcessInfo {
             let mut children = HashMap::new();
 
             for kid in procs {
-                if kid.th32ParentProcessID == info.th32ProcessID {
-                    children.insert(kid.th32ProcessID, build_proc(kid, procs));
+                if kid.th32ParentProcessID == info.th32ProcessID
+                    && !visited.contains(&kid.th32ProcessID)
+                {
+                    visited.insert(kid.th32ProcessID);
+                    children.insert(kid.th32ProcessID, build_proc(kid, procs, visited));
                 }
             }
 
@@ -411,7 +418,9 @@ impl LocalProcessInfo {
         }
 
         if let Some(info) = procs.iter().find(|info| info.th32ProcessID == pid) {
-            Some(build_proc(info, &procs))
+            let mut visited = HashSet::new();
+            visited.insert(pid);
+            Some(build_proc(info, &procs, &mut visited))
         } else {
             None
         }

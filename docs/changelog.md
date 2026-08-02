@@ -22,6 +22,9 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* DECRQCRA is now disabled by default to prevent silent screen scraping.
+  Set `enable_checksum_rectangular_area = true` to re-enable it.
+  Thanks to @jquast! #7701
 * Wayland: currently being reimplemented, it maybe more unstable than usual.
   Please file GH issues for any problems you see.
   Many thanks to @tzx and @tmccombs! #4777 #5781
@@ -67,6 +70,9 @@ As features stabilize some brief notes about them will accumulate here.
 * `wezterm imgcat --hold` now avoids local echo and accepts pressing `Escape`,
   `CTRL-C` and `CTRL-D` as various ways of exiting hold mode. Thanks to
   @mgpinf! #6801
+* windows: Improve detection of running in WSL. Thanks to @bew! #7137
+* [QuickSelect](quickselect.md) mode now hides non-matching labels as you type, making it
+  easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
@@ -122,9 +128,9 @@ As features stabilize some brief notes about them will accumulate here.
   @BenBergman! #6328 #6873 #6875
 * [cell_widths](config/lua/config/cell_widths.md) option for explicit
   control over cell widths. Thanks to @hamano! #6289 #6290
-* [kde_window_background_blur](config/lua/config/kde_window_background_blur.md) option
-  to enable window blur when running under KDE Plasma on Wayland systems.
-  Thanks to @psomani16k! #6905
+* [wayland_window_background_blur](config/lua/config/wayland_window_background_blur.md) option
+  to enable window blur on Wayland compositors supporting the `ext-background-effect-v1` protocol.
+  Thanks to @psomani16k, @1Capito1 & @bew! #6905 #7615 #7939
 * [reverse_video_cursor_min_contrast](config/lua/config/reverse_video_cursor_min_contrast.md)
   option. Thanks to @jameshurst! #6584 ?2861
 * [text_min_contrast_ratio](config/lua/config/text_min_contrast_ratio.md) to more generally
@@ -137,6 +143,13 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @masriomarm! #6895
 * Indicate support for OSC 52 (clipboard extensions) in Primary DA Response.
   Thanks to @j4james! #7046
+* internal: Add NixOS-based VMs configurations for live testing in fresh desktop environments.
+  See dedicated section in [CONTRIBUTING.md](https://github.com/wezterm/wezterm/blob/main/CONTRIBUTING.md)
+* The default tab bar rendering now shows an animated spinner when ConEmu style
+  OSC 9 escapes set the progress state to "Indeterminate".
+* [`Search`](./config/lua/keyassignment/Search.md) &
+  [`CycleMatchType`](./config/lua/keyassignment/CopyMode/CycleMatchType.md) can now use Smart-case
+  search matching. Thanks to @mrdziuban! #7385
 
 #### Fixed
 * Race condition when very quickly adjusting font scale, and other improvements
@@ -254,6 +267,23 @@ As features stabilize some brief notes about them will accumulate here.
 * macOS: Fix toast notifications. Thanks to @nikhilm! #7483
 * termwiz: Fixed parsing of fragmented mouse reporting sequence. Thanks to
   @jgiannuzzi! #7076 #7504
+* docs: add missing `panes` field to [TabInformation](config/lua/TabInformation.md).
+  Thanks to @KevinSilvester! #7710
+* Windows: Fixed a crash (RefCell borrow conflict) when toggling IME (e.g.
+  pressing Hankaku/Zenkaku) after splitting a pane. Thanks to @shiena! #7529
+* Fixed a stack overflow that could occur on Windows (and other platforms) when
+  the process tree contained cycles due to PID reuse. Thanks to @novoselov-ab! #7706
+* Wayland: Fixed clipboard paste failing in windows that were not focused when
+  the copy happened. Thanks to @bew and @XeroOl! #7863
+* Fixed an infinite loop in pane search when the regex engine hit a backtracking
+  limit. Thanks to @bew! #7864
+* Fix ESC key encoding in kitty mode with disambiguate flag enabled.
+  Thanks to @Felixoid and @the-mikedavis! #7787
+* Fixed two divide-by-zero crashes in Kitty inline image placement when a program requests
+  a zero-sized placement (e.g. `w=0`/`h=0`), or displaying a cell-sized image on a pane
+  whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
+  Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
+* Fix render loop freeze when closing workspaces. Thanks to @JafarAbdi! #7444
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg

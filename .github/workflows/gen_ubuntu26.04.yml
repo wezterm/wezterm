@@ -1,9 +1,7 @@
-name: fedora39_continuous
+name: ubuntu26.04
 
 on:
-  schedule:
-    - cron: "10 3 * * *"
-  push:
+  pull_request:
     branches:
       - main
     paths:
@@ -11,7 +9,7 @@ on:
       - "**/Cargo.lock"
       - "**/Cargo.toml"
       - ".cargo/config.toml"
-      - ".github/workflows/gen_fedora39_continuous.yml"
+      - ".github/workflows/gen_ubuntu26.04.yml"
       - "assets/fonts/**/*"
       - "assets/icon/*"
       - "assets/open-wezterm-here"
@@ -20,7 +18,10 @@ on:
       - "assets/wezterm-nautilus.py"
       - "assets/wezterm.appdata.xml"
       - "assets/wezterm.desktop"
+      - "ci/appimage.sh"
+      - "ci/appstreamcli"
       - "ci/deploy.sh"
+      - "ci/source-archive.sh"
       - "ci/tag-name.sh"
       - "get-deps"
       - "termwiz/data/wezterm.terminfo"
@@ -28,34 +29,41 @@ on:
 jobs:
   build:
     runs-on: "ubuntu-latest"
-    container: "fedora:39"
+    container:
+      image: "ubuntu:26.04"
+      options: --privileged
     env:
-      BUILD_REASON: "Schedule"
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
 
     steps:
-      - name: "Install config manager"
+      - name: "set APT to non-interactive"
         shell: bash
-        run: "dnf install -y 'dnf-command(config-manager)'"
+        run: "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
+      - name: "Update APT"
+        shell: bash
+        run: "apt update"
       - name: "Install git"
         shell: bash
-        run: "yum install -y git"
+        run: "apt-get install -y git"
       - name: "Install curl"
         shell: bash
-        run: "yum install -y curl"
+        run: "apt-get install -y curl"
+      - name: "Update APT"
+        shell: bash
+        run: "apt update"
       - name: "Ensure /run/sshd exists"
         shell: bash
         run: "mkdir -p /run/sshd"
       - name: "Install openssh-server"
         shell: bash
-        run: "yum install -y openssh-server"
+        run: "apt-get install -y openssh-server"
       - name: "Workaround git permissions issue"
         shell: bash
         run: "git config --global --add safe.directory /__w/wezterm/wezterm"
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: "recursive"
       - name: "Install Rust"
@@ -93,51 +101,31 @@ jobs:
         uses: baptiste0928/cargo-install@v3
         with:
           crate: "cargo-nextest"
-          cache-key: "fedora39"
+          cache-key: "ubuntu26.04"
       - name: "Test"
         shell: bash
         run: "cargo nextest run --all --no-fail-fast"
       - name: "Package"
         shell: bash
         run: "bash ci/deploy.sh"
-      - name: "Move RPM"
+      - name: "Install libfuse2"
         shell: bash
-        run: |
-          mv ~/rpmbuild/RPMS/*/wezterm-common-*.rpm wezterm-common-nightly-fedora39.rpm
-          mv ~/rpmbuild/RPMS/*/wezterm-gui-*.rpm wezterm-gui-nightly-fedora39.rpm
-          mv ~/rpmbuild/RPMS/*/wezterm-mux-server-*.rpm wezterm-mux-server-nightly-fedora39.rpm
-          mv ~/rpmbuild/RPMS/*/wezterm-*.rpm wezterm-nightly-fedora39.rpm
+        run: "apt-get install -y libfuse2"
+      - name: "Install file"
+        shell: bash
+        run: "apt-get install -y file"
+      - name: "Source Tarball"
+        shell: bash
+        run: "bash ci/source-archive.sh"
+      - name: "Build AppImage"
+        shell: bash
+        run: "bash ci/appimage.sh"
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: "fedora39"
-          path: "wezterm-*.rpm"
-          retention-days: 5
-
-  upload:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.repository == 'wezterm/wezterm'
-    permissions:
-      contents: write
-      pages: write
-      id-token: write
-
-    steps:
-      - name: "Workaround git permissions issue"
-        shell: bash
-        run: "git config --global --add safe.directory /__w/wezterm/wezterm"
-      - name: "checkout repo"
-        uses: actions/checkout@v4
-      - name: "Download artifact"
-        uses: actions/download-artifact@v4
-        with:
-          name: "fedora39"
-      - name: "Checksum"
-        shell: bash
-        run: "for f in wezterm-*.rpm ; do sha256sum $f > $f.sha256 ; done"
-      - name: "Upload to Nightly Release"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: "bash ci/retry.sh gh release upload --clobber nightly wezterm-*.rpm *.sha256"
+          name: "ubuntu26.04"
+          path: |
+            wezterm-*.deb
+            wezterm-*.xz
+            *src.tar.gz
+            *.AppImage
