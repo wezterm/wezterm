@@ -7,7 +7,8 @@ from copy import deepcopy
 # The build from this target will be pushed to the gemfury APT repo
 GEMFURY_TARGET = "ubuntu:22.04"
 # The build from this target will be baked into the AppImage
-APPIMAGE_TARGET = "ubuntu:24.04"
+# This target is also used for updating the flathub & linuxbrew repos
+APPIMAGE_TARGET = "ubuntu:26.04"
 
 TRIGGER_PATHS = [
     "**/*.rs",
