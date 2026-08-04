@@ -64,13 +64,29 @@ jobs:
           app-id: ${{ secrets.COOLDOWN_APP_ID }}
           private-key: ${{ secrets.COOLDOWN_APP_PRIVATE_KEY }}
 
+      # The App token controls who pushes the branch and opens the PR, but the
+      # commit author and committer are separate trailers. Look up the App
+      # bot's numeric user id to build its noreply address, so the commit is
+      # attributed to the bot rather than to whoever triggered the run.
+      - name: Look up app bot user id
+        id: bot-user
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          id=$(gh api "/users/${{ steps.app-token.outputs.app-slug }}[bot]" --jq .id)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
       - name: Create pull request
         uses: peter-evans/create-pull-request@v8.1.1
+        env:
+          BOT_IDENTITY: "${{ steps.app-token.outputs.app-slug }}[bot] <${{ steps.bot-user.outputs.id }}+${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com>"
         with:
           token: ${{ steps.app-token.outputs.token }}
           branch: cargo-cooldown/update
           add-paths: Cargo.lock
           commit-message: "deps: update Cargo.lock via cooldown"
+          author: ${{ env.BOT_IDENTITY }}
+          committer: ${{ env.BOT_IDENTITY }}
           title: "deps: update Cargo.lock via cooldown"
           body-path: ${{ runner.temp }}/pr-body.md
           delete-branch: true
