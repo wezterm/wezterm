@@ -588,7 +588,7 @@ As features stabilize some brief notes about them will accumulate here.
   [adjust_window_size_when_changing_font_size](config/lua/config/adjust_window_size_when_changing_font_size.md)
   now depends on the window environment and the contents of
   [tiling_desktop_environments](config/lua/config/tiling_desktop_environments.md).
-* Added eigth block corner glyphs to custom block glyphs. Thanks to @joouha! #3559
+* Added eight block corner glyphs to custom block glyphs. Thanks to @joouha! #3559
 * Don't hide mouse cursor when pressing only modifier keys. #3570
 * [PaneSelect](config/lua/keyassignment/PaneSelect.md) will now un-zoom to show
   all panes, then re-zoom after performing its action. #3573
@@ -1603,7 +1603,7 @@ As features stabilize some brief notes about them will accumulate here.
 * Windows: [allow_win32_input_mode](config/lua/config/allow_win32_input_mode.md) now defaults to `true` and enables using [win32-input-mode](https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md) to send high-fidelity keyboard input to ConPTY. This means that win32 console applications, such as [FAR Manager](https://github.com/FarGroup/FarManager) that use the low level `INPUT_RECORD` API will now receive key-up events as well as events for modifier-only key presses. [#1509](https://github.com/wezterm/wezterm/issues/1509) [#2009](https://github.com/wezterm/wezterm/issues/2009) [#2098](https://github.com/wezterm/wezterm/issues/2098) [#1904](https://github.com/wezterm/wezterm/issues/1904)
 * Wayland: [enable_wayland](config/lua/config/enable_wayland.md) now defaults to `true`. [#2104](https://github.com/wezterm/wezterm/issues/2104)
 * [exit_behavior](config/lua/config/exit_behavior.md) now defaults to `"Close"`. [#2105](https://github.com/wezterm/wezterm/issues/2105)
-* Improved [wezterm.action](config/lua/wezterm/action.md) syntax for slightly more ergnomic and understandable key assignments. [#1150](https://github.com/wezterm/wezterm/issues/1150)
+* Improved [wezterm.action](config/lua/wezterm/action.md) syntax for slightly more ergonomic and understandable key assignments. [#1150](https://github.com/wezterm/wezterm/issues/1150)
 
 #### Fixed
 * Flush after replying to `XTGETTCAP`, `DECRQM`, `XTVERSION`, `DA2`, `DA3` [#2060](https://github.com/wezterm/wezterm/issues/2060) [#1850](https://github.com/wezterm/wezterm/issues/1850) [#1950](https://github.com/wezterm/wezterm/issues/1950)
@@ -1827,7 +1827,7 @@ As features stabilize some brief notes about them will accumulate here.
 * X11 now supports IME. It currently defaults to disabled, but you can set `use_ime = true` in your config to enable it (you need to restart wezterm for this to take effect). Many thanks to [@H-M-H](https://github.com/H-M-H) for bringing xcb-imdkit to Rust and implementing this in wezterm! [#250](https://github.com/wezterm/wezterm/issues/250) [#1043](https://github.com/wezterm/wezterm/pull/1043)
 * it is now possible to define colors in the range 16-255 in `colors` and color scheme definitions. Thanks to [@potamides](https://github.com/potamides)! [#841](https://github.com/wezterm/wezterm/issues/841) [#1056](https://github.com/wezterm/wezterm/pull/1056)
 * Added [SendKey](config/lua/keyassignment/SendKey.md) key assignment action that makes it more convenient to rebind the key input that is sent to a pane.
-* Added [Multiple](config/lua/keyassignment/Multiple.md) key assignment action for combining multuple actions in a single press.
+* Added [Multiple](config/lua/keyassignment/Multiple.md) key assignment action for combining multiple actions in a single press.
 * Added [use_resize_increments](config/lua/config/use_resize_increments.md) option to tell X11, Wayland, macOS window resizing to prefers to step in increments of the cell size
 * [visual_bell](config/lua/config/visual_bell.md) and [audible_bell](config/lua/config/audible_bell.md) configuration options, as well as a [bell](config/lua/window-events/bell.md) event allows you to trigger lua code when the bell is rung. [#3](https://github.com/wezterm/wezterm/issues/3)
 * [wezterm.action_callback](config/lua/wezterm/action_callback.md) function to make it easier to use custom events. Thanks to [@bew](https://github.com/bew)! [#1151](https://github.com/wezterm/wezterm/pull/1151)
@@ -1944,9 +1944,9 @@ As features stabilize some brief notes about them will accumulate here.
 * Removed: `Parasio Dark` color scheme; it was a duplicate of the correctly named `Paraiso Dark` scheme. Thanks to [@adrian5](https://github.com/adrian5)! [#906](https://github.com/wezterm/wezterm/pull/906)
 * Fixed: key repeat on Wayland now respects the system specified key repeat rate, and doesn't "stick". [#669](https://github.com/wezterm/wezterm/issues/669)
 * Fixed: `force_reverse_video_cursor` wasn't correctly swapping the cursor colors in all cases. [#706](https://github.com/wezterm/wezterm/issues/706)
-* Fixed: allow multuple `IdentityFile` lines in an ssh_config block to be considered
+* Fixed: allow multiple `IdentityFile` lines in an ssh_config block to be considered
 * Improved: implement braille characters as custom glyphs, to have perfect rendering when `custom_block_glyphs` is enabled. Thanks to [@bew](http://github.com/bew)!
-* Fixed: Mod3 is no longer treater as SUPER on X11 and Wayland [#933](https://github.com/wezterm/wezterm/issues/933)
+* Fixed: Mod3 is no longer treated as SUPER on X11 and Wayland [#933](https://github.com/wezterm/wezterm/issues/933)
 * Fixed: paste now respects `scroll_to_bottom_on_input`. [#931](https://github.com/wezterm/wezterm/issues/931)
 * New: [bypass_mouse_reporting_modifiers](config/lua/config/bypass_mouse_reporting_modifiers.md) to specify which modifier(s) override application mouse reporting mode.
 * Fixed: focus tracking events are now also generated when switching between panes [#941](https://github.com/wezterm/wezterm/issues/941)
