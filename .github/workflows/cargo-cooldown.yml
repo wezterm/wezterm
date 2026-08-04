@@ -8,9 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  COOLDOWN_BRANCH: cargo-cooldown/update
 
-# The default GITHUB_TOKEN is used only for checkout; the branch update and PR
+# The default GITHUB_TOKEN is used only for checkout; the branch push and PR
 # creation use the App token generated below, which has its own installation
 # permissions.
 permissions:
@@ -34,17 +33,7 @@ jobs:
       - name: Run cooldown update
         run: ./ci/update-cargo-deps-with-cooldown.sh 2>&1 | tee "$RUNNER_TEMP/cooldown.log"
 
-      - name: Detect Cargo.lock changes
-        id: detect
-        run: |
-          if git diff --quiet -- Cargo.lock; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Compose pull request body
-        if: steps.detect.outputs.changed == 'true'
         run: |
           {
             echo 'Automated dependency update produced by'
@@ -65,58 +54,24 @@ jobs:
             echo '</details>'
           } > "$RUNNER_TEMP/pr-body.md"
 
-      # Mint a short-lived token for the App installed on this repo. Commits
-      # created through the API with this token are attributed to the App bot
-      # and signed by GitHub, and the PR it opens triggers the build workflows.
+      # Mint a short-lived token for the App installed on this repo. Signing
+      # commits with it attributes them to the App bot and marks them Verified,
+      # and the PR it opens triggers the build workflows.
       - name: Generate app token
-        if: steps.detect.outputs.changed == 'true'
         id: app-token
         uses: actions/create-github-app-token@v3.2.0
         with:
           app-id: ${{ secrets.COOLDOWN_APP_ID }}
           private-key: ${{ secrets.COOLDOWN_APP_PRIVATE_KEY }}
 
-      # Point the update branch at the current commit before committing onto it,
-      # so each run produces a single clean commit on top of the default branch
-      # rather than stacking onto a stale prior run.
-      - name: Reset update branch to base
-        if: steps.detect.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          base=$(git rev-parse HEAD)
-          ref="heads/$COOLDOWN_BRANCH"
-          if gh api "repos/$GITHUB_REPOSITORY/git/refs/$ref" >/dev/null 2>&1; then
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/$ref" \
-              -f sha="$base" -F force=true
-          else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-              -f ref="refs/$ref" -f sha="$base"
-          fi
-
-      - name: Commit Cargo.lock via API
-        if: steps.detect.outputs.changed == 'true'
-        uses: planetscale/ghcommit-action@v0.2.22
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v8.1.1
         with:
-          commit_message: "deps: update Cargo.lock via cooldown"
-          repo: ${{ github.repository }}
-          branch: ${{ env.COOLDOWN_BRANCH }}
-          file_pattern: Cargo.lock
-        env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-
-      - name: Open or update pull request
-        if: steps.detect.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          title="deps: update Cargo.lock via cooldown"
-          if gh pr view "$COOLDOWN_BRANCH" --repo "$GITHUB_REPOSITORY" \
-              --json state --jq .state 2>/dev/null | grep -qx OPEN; then
-            gh pr edit "$COOLDOWN_BRANCH" --repo "$GITHUB_REPOSITORY" \
-              --body-file "$RUNNER_TEMP/pr-body.md"
-          else
-            gh pr create --repo "$GITHUB_REPOSITORY" \
-              --base main --head "$COOLDOWN_BRANCH" \
-              --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
-          fi
+          token: ${{ steps.app-token.outputs.token }}
+          sign-commits: true
+          branch: cargo-cooldown/update
+          delete-branch: true
+          add-paths: Cargo.lock
+          commit-message: "deps: update Cargo.lock via cooldown"
+          title: "deps: update Cargo.lock via cooldown"
+          body-path: ${{ runner.temp }}/pr-body.md
