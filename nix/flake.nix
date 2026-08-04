@@ -255,8 +255,9 @@
 
                 nightly.latest.rustfmt
                 nightly.latest.rust-analyzer
-
-                # For local flatpak build
+              ]
+              ++ lib.optionals stdenv.isLinux [
+                # For local flatpak builds
                 pkgs.flatpak-builder
                 pkgs.flatpak-builder-tools # for flatpak-cargo-generator
                 pkgs.appstream
