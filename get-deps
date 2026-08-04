@@ -1,5 +1,10 @@
 #!/bin/sh
 
+if [ "$(id -u)" -ne 0 ];then
+	echo "$0 requires superuser privileges. Exiting."
+	exit 1
+fi
+
 TESTING=0
 DOCS=0
 for arg in "$@"; do
@@ -22,7 +27,7 @@ done
 NOTFOUND=0
 
 test_cmd() {
-  command -v $1 >/dev/null
+  command -v "$1" >/dev/null
 }
 
 test_flag() {
@@ -110,7 +115,7 @@ fedora_deps() {
 
   # Fedora 41 and above split a part of openssl-devel into openssl-devel-engine.
   # CentOS/RHEL 10 are doing the same thing.
-  if { [ "$VERSION_ID" -ge "41" ] && [ "$ID" == "fedora" ]; } \
+  if { [ "$VERSION_ID" -ge "41" ] && [ "$ID" = "fedora" ]; } \
      || { [ "$VERSION_ID" -ge "10" ] && [ "$ID" != "fedora" ]; }; then
     $YUM install -y 'openssl-devel-engine'
   fi
@@ -119,7 +124,7 @@ fedora_deps() {
 suse_deps() {
   ZYPPER="$SUDO zypper"
   RESOLVE=""
-  if [ "${CI}" == "yes" ] ; then
+  if [ "${CI}" = "yes" ] ; then
     RESOLVE="--allow-downgrade"
   fi
   $ZYPPER install $RESOLVE -yl \
@@ -333,19 +338,20 @@ fallback_method() {
     suse_deps
   fi
 
+  OSTYPE=$(uname -s)
   # OSTYPE is set by bash
   case $OSTYPE in
-    darwin*|msys)
+    Darwin*|msys)
       echo "skipping darwin*/msys"
     ;;
-    freebsd*)
+    FreeBSD*)
       freebsd_deps
     ;;
-    ''|linux-gnu)
+    ''|Linux)
       # catch and known OSTYPE
       echo "\$OSTYPE is '$OSTYPE'"
     ;;
-    netbsd*)
+    NetBSD*)
       netbsd_deps
     ;;
     *)
