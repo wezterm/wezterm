@@ -169,22 +169,21 @@ impl crate::TermWindow {
                 TabBarItem::Tab { active, .. } if active => element
                     .vertical_align(VerticalAlign::Bottom)
                     .item_type(UIItemType::TabBar(item.item.clone()))
-                    .margin( if is_bottom {
+                    .margin(if is_bottom {
                         BoxDimension {
-                                left: Dimension::Cells(0.),
-                                right: Dimension::Cells(0.),
-                                top: Dimension::Cells(0.),
-                                bottom: Dimension::Cells(0.2),
-                            }
-                        } else {
-                            BoxDimension {
-                                left: Dimension::Cells(0.),
-                                right: Dimension::Cells(0.),
-                                top: Dimension::Cells(0.2),
-                                bottom: Dimension::Cells(0.),
-                            }
+                            left: Dimension::Cells(0.),
+                            right: Dimension::Cells(0.),
+                            top: Dimension::Cells(0.),
+                            bottom: Dimension::Cells(0.2),
                         }
-                    )
+                    } else {
+                        BoxDimension {
+                            left: Dimension::Cells(0.),
+                            right: Dimension::Cells(0.),
+                            top: Dimension::Cells(0.2),
+                            bottom: Dimension::Cells(0.),
+                        }
+                    })
                     .padding(BoxDimension {
                         left: Dimension::Cells(0.5),
                         right: Dimension::Cells(0.5),
@@ -243,20 +242,19 @@ impl crate::TermWindow {
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(if is_bottom {
                         BoxDimension {
-                                left: Dimension::Cells(0.),
-                                right: Dimension::Cells(0.),
-                                top: Dimension::Cells(0.),
-                                bottom: Dimension::Cells(0.2),
-                            }
-                        } else {
-                            BoxDimension {
-                                left: Dimension::Cells(0.),
-                                right: Dimension::Cells(0.),
-                                top: Dimension::Cells(0.2),
-                                bottom: Dimension::Cells(0.),
-                            }
+                            left: Dimension::Cells(0.),
+                            right: Dimension::Cells(0.),
+                            top: Dimension::Cells(0.),
+                            bottom: Dimension::Cells(0.2),
                         }
-                    )
+                    } else {
+                        BoxDimension {
+                            left: Dimension::Cells(0.),
+                            right: Dimension::Cells(0.),
+                            top: Dimension::Cells(0.2),
+                            bottom: Dimension::Cells(0.),
+                        }
+                    })
                     .padding(BoxDimension {
                         left: Dimension::Cells(0.5),
                         right: Dimension::Cells(0.5),
