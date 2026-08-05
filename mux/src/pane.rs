@@ -57,6 +57,7 @@ pub struct SearchResult {
 pub enum Pattern {
     CaseSensitiveString(String),
     CaseInSensitiveString(String),
+    CaseSmartString(String),
     Regex(String),
 }
 
@@ -72,6 +73,7 @@ impl std::ops::Deref for Pattern {
         match self {
             Pattern::CaseSensitiveString(s) => s,
             Pattern::CaseInSensitiveString(s) => s,
+            Pattern::CaseSmartString(s) => s,
             Pattern::Regex(s) => s,
         }
     }
@@ -82,6 +84,7 @@ impl std::ops::DerefMut for Pattern {
         match self {
             Pattern::CaseSensitiveString(s) => s,
             Pattern::CaseInSensitiveString(s) => s,
+            Pattern::CaseSmartString(s) => s,
             Pattern::Regex(s) => s,
         }
     }
@@ -91,6 +94,7 @@ impl std::ops::DerefMut for Pattern {
 pub enum PatternType {
     CaseSensitiveString,
     CaseInSensitiveString,
+    CaseSmartString,
     Regex,
 }
 
@@ -99,6 +103,7 @@ impl From<&Pattern> for PatternType {
         match value {
             Pattern::CaseSensitiveString(_) => PatternType::CaseSensitiveString,
             Pattern::CaseInSensitiveString(_) => PatternType::CaseInSensitiveString,
+            Pattern::CaseSmartString(_) => PatternType::CaseSmartString,
             Pattern::Regex(_) => PatternType::Regex,
         }
     }
@@ -268,10 +273,10 @@ pub trait Pane: Downcast + Send + Sync {
 
     fn erase_scrollback(&self, _erase_mode: ScrollbackEraseMode) {}
 
-    /// Called to advise on whether this tab has focus
+    /// Called to advise on whether this pane has focus
     fn focus_changed(&self, _focused: bool) {}
 
-    /// Called to advise remote mux that this is the active tab
+    /// Called to advise remote mux that this is the active pane
     /// for the current identity
     fn advise_focus(&self) {}
 

@@ -133,6 +133,9 @@ impl crate::TermWindow {
                             let win = window.clone();
                             window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
                                 tw.scheduled_animation.borrow_mut().take();
+                                if tw.tab_bar.next_progress_frame_due().is_some() {
+                                    tw.update_title_post_status();
+                                }
                                 win.invalidate();
                             })));
                         })

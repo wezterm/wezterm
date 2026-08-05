@@ -6,6 +6,8 @@ tags:
 
 {{since('nightly')}}
 
+*Deprecated; this option was added & deprecated in the same version. Use [wayland_window_background_blur](wayland_window_background_blur.md) instead*
+
 When combined with `window_background_opacity`, enables background blur
 using the KDE Wayland blur protocol.
 
