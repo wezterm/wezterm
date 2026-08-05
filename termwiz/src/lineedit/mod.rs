@@ -706,6 +706,11 @@ impl<'term> LineEditor<'term> {
 
                 self.state = EditorState::Accepted;
             }
+            Action::ClearLine => {
+                self.clear_completion();
+                self.cancel_search_state();
+                self.line.clear();
+            }
             Action::EndOfFile => {
                 return Err(
                     std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "End Of File").into(),
