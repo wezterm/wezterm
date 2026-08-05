@@ -189,6 +189,7 @@ impl Pane for TermWizTerminalPane {
     }
 
     fn send_composed_text(&self, text: &str) -> anyhow::Result<()> {
+        // The writer is not linked to a real pty, so we send the composed text like a paste
         self.send_paste(text)
     }
 
