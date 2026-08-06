@@ -152,6 +152,15 @@ As features stabilize some brief notes about them will accumulate here.
   search matching. Thanks to @mrdziuban! #7385
 
 #### Fixed
+* Kitty keyboard protocol: a single-character `Composed` key event (delivered
+  by an IME, or e.g. the Windows emoji picker) with no backing raw hardware
+  key event was silently dropped -- `encode_kitty` had no match arm for
+  `Composed` and fell through to the catch-all branch, which requires a raw
+  event to resolve a kitty function code and produced an empty string
+  otherwise. Most visible when using a multiplexer that negotiates
+  `REPORT_ALL_KEYS_AS_ESCAPE_CODES` (e.g. tmux, herdr): plain single-codepoint
+  text arriving this way (multi-codepoint sequences, e.g. ZWJ emoji, were
+  unaffected -- they ride WezTerm's raw text path instead of Kitty encoding).
 * Race condition when very quickly adjusting font scale, and other improvements
   around resizing. Thanks to @jknockel! #4876 #5032 #5033
 * macOS: wacky initial window size with external monitors or certain font
