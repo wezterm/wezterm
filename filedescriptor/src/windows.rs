@@ -234,6 +234,12 @@ impl FileDescriptor {
     }
 
     #[inline]
+    pub(crate) fn into_stdio_impl(self) -> std::process::Stdio {
+        let handle = self.into_raw_handle();
+        unsafe { std::process::Stdio::from_raw_handle(handle) }
+    }
+
+    #[inline]
     pub(crate) fn as_file_impl(&self) -> Result<std::fs::File> {
         let duped = self.handle.try_clone()?;
         let handle = duped.into_raw_handle();
