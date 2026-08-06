@@ -2629,16 +2629,14 @@ impl WindowView {
 
         // Also respect `send_composed_key_when_(left|right)_alt_is_pressed` configs
         // when `use_ime` is true.
-        let forward_to_ime = {
-            if only_left_alt && !send_composed_key_when_left_alt_is_pressed {
-                false
-            } else if only_right_alt && !send_composed_key_when_right_alt_is_pressed {
-                false
-            } else {
-                modifiers.is_empty()
-                    || modifiers.intersects(config_handle.macos_forward_to_ime_modifier_mask)
-            }
-        };
+        let forward_to_ime = should_forward_to_ime(
+            modifiers,
+            config_handle.macos_forward_to_ime_modifier_mask,
+            only_left_alt,
+            only_right_alt,
+            send_composed_key_when_left_alt_is_pressed,
+            send_composed_key_when_right_alt_is_pressed,
+        );
 
         if key_is_down && use_ime && forward_to_ime {
             if let Some(myself) = Self::get_this(this) {
@@ -2756,36 +2754,39 @@ impl WindowView {
                         return;
                     }
                 }
-            } else if (only_left_alt && !send_composed_key_when_left_alt_is_pressed)
-                || (only_right_alt && !send_composed_key_when_right_alt_is_pressed)
-            {
-                // Take the unmodified key only!
-                match key_string_to_key_code(unmod) {
-                    Some(key) => (key, None),
-                    None => return,
-                }
-            } else if chars.is_empty() || chars == unmod {
-                (key, None)
-            } else if swap_unmod_and_chars {
-                match key_string_to_key_code(unmod) {
-                    Some(key) => (key, None),
-                    None => return,
-                }
             } else {
-                let raw = key_string_to_key_code(unmod);
-                match (&key, &raw) {
-                    // Avoid eg: \x01 when we can use CTRL-A.
-                    // This also helps to keep the correct sequence for backspace/delete.
-                    // But take care: on German layouts CTRL-Backslash has unmod="/"
-                    // but chars="\x1c"; we only want to do this transformation when
-                    // chars and unmod have that base ASCII relationship.
-                    // <https://github.com/wezterm/wezterm/issues/1891>
-                    (KeyCode::Char(c), Some(KeyCode::Char(raw)))
-                        if is_ascii_control(*c) == Some(raw.to_ascii_lowercase()) =>
-                    {
-                        (KeyCode::Char(*raw), None)
+                let use_unmod_for_alt = (only_left_alt
+                    && !send_composed_key_when_left_alt_is_pressed)
+                    || (only_right_alt && !send_composed_key_when_right_alt_is_pressed);
+                match classify_key_source(
+                    chars,
+                    unmod,
+                    modifiers,
+                    swap_unmod_and_chars,
+                    use_unmod_for_alt,
+                ) {
+                    KeySource::Primary => (key, None),
+                    KeySource::Unmod => match key_string_to_key_code(unmod) {
+                        Some(key) => (key, None),
+                        None => return,
+                    },
+                    KeySource::OsTranslation => {
+                        let raw = key_string_to_key_code(unmod);
+                        match (&key, &raw) {
+                            // Avoid eg: \x01 when we can use CTRL-A.
+                            // This also helps to keep the correct sequence for backspace/delete.
+                            // But take care: on German layouts CTRL-Backslash has unmod="/"
+                            // but chars="\x1c"; we only want to do this transformation when
+                            // chars and unmod have that base ASCII relationship.
+                            // <https://github.com/wezterm/wezterm/issues/1891>
+                            (KeyCode::Char(c), Some(KeyCode::Char(raw)))
+                                if is_ascii_control(*c) == Some(raw.to_ascii_lowercase()) =>
+                            {
+                                (KeyCode::Char(*raw), None)
+                            }
+                            _ => (key, raw),
+                        }
                     }
-                    _ => (key, raw),
                 }
             };
 
@@ -3436,5 +3437,207 @@ impl WindowView {
         }
 
         cls.register()
+    }
+}
+
+/// Decide whether a key event should be routed via the IME when
+/// `use_ime = true`.
+///
+/// CMD chords are keyboard shortcuts rather than text input: the IME would
+/// echo the key back via `insertText:` as plain, unmodified text, silently
+/// losing the modifiers. A chord such as CMD+SHIFT+D would otherwise be
+/// forwarded when the mask contains SHIFT and reach the terminal as just
+/// "d". Users who really want CMD to reach the IME can add SUPER to
+/// `macos_forward_to_ime_modifier_mask`.
+/// <https://github.com/wezterm/wezterm/issues/4589>
+fn should_forward_to_ime(
+    modifiers: Modifiers,
+    forward_mask: Modifiers,
+    only_left_alt: bool,
+    only_right_alt: bool,
+    send_composed_key_when_left_alt_is_pressed: bool,
+    send_composed_key_when_right_alt_is_pressed: bool,
+) -> bool {
+    if only_left_alt && !send_composed_key_when_left_alt_is_pressed {
+        false
+    } else if only_right_alt && !send_composed_key_when_right_alt_is_pressed {
+        false
+    } else if modifiers.intersects(Modifiers::SUPER - forward_mask) {
+        false
+    } else {
+        modifiers.is_empty() || modifiers.intersects(forward_mask)
+    }
+}
+
+/// Which of the NSEvent `characters` (chars) / `charactersIgnoringModifiers`
+/// (unmod) strings should provide the `KeyCode` for a key event.
+#[derive(Debug, PartialEq, Eq)]
+enum KeySource {
+    /// Use the already-computed key: `chars`, falling back to `unmod`
+    /// when `chars` is empty. The modifiers are preserved.
+    Primary,
+    /// Take the key from `unmod` and preserve the modifiers.
+    Unmod,
+    /// The OS translated the key for us (eg: CTRL-A reports chars="\x01"
+    /// unmod="a", composed ALT chords report the composed char). Use
+    /// `chars` as the key and record `unmod` as the raw key; the modifiers
+    /// are considered consumed by the translation and are discarded.
+    OsTranslation,
+}
+
+fn classify_key_source(
+    chars: &str,
+    unmod: &str,
+    modifiers: Modifiers,
+    swap_unmod_and_chars: bool,
+    use_unmod_for_alt: bool,
+) -> KeySource {
+    if use_unmod_for_alt {
+        // Take the unmodified key only!
+        KeySource::Unmod
+    } else if chars.is_empty() || chars == unmod {
+        KeySource::Primary
+    } else if modifiers.contains(Modifiers::SUPER) {
+        // When CMD is held, macOS reports `chars` from the command
+        // keyboard layer, which strips SHIFT (eg: CMD+SHIFT+D gives
+        // chars="d", unmod="D") and transliterates non-Latin layouts
+        // (eg: Cyrillic gives chars="s", unmod="ы"). That mismatch
+        // would otherwise be mistaken for a layout translation and
+        // cause the modifiers to be discarded, so the terminal would
+        // receive plain text instead of the chord.
+        // CMD chords are shortcuts, not text: take the unmodified
+        // key and preserve the modifiers.
+        // <https://github.com/wezterm/wezterm/issues/4589>
+        KeySource::Unmod
+    } else if swap_unmod_and_chars {
+        KeySource::Unmod
+    } else {
+        KeySource::OsTranslation
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NO_ALT: (bool, bool, bool, bool) = (false, false, false, true);
+
+    fn forward(modifiers: Modifiers, mask: Modifiers) -> bool {
+        let (left, right, send_left, send_right) = NO_ALT;
+        should_forward_to_ime(modifiers, mask, left, right, send_left, send_right)
+    }
+
+    /// Unmodified keys and SHIFT-only keys must go to the IME so that
+    /// regular typing and shifted input keep working with eg: Japanese IME.
+    #[test]
+    fn plain_and_shifted_keys_forward_to_ime() {
+        assert!(forward(Modifiers::NONE, Modifiers::SHIFT));
+        assert!(forward(Modifiers::SHIFT, Modifiers::SHIFT));
+    }
+
+    /// CMD+SHIFT+D with the default mask (SHIFT) must NOT be forwarded:
+    /// the IME would echo it back as plain "d" and the modifiers would
+    /// be lost. <https://github.com/wezterm/wezterm/issues/4589>
+    #[test]
+    fn cmd_chords_are_not_forwarded_to_ime() {
+        assert!(!forward(
+            Modifiers::SUPER | Modifiers::SHIFT,
+            Modifiers::SHIFT
+        ));
+        assert!(!forward(Modifiers::SUPER, Modifiers::SHIFT));
+    }
+
+    /// Users can opt back in by adding SUPER to the mask.
+    #[test]
+    fn super_in_mask_is_respected() {
+        assert!(forward(
+            Modifiers::SUPER | Modifiers::SHIFT,
+            Modifiers::SHIFT | Modifiers::SUPER
+        ));
+    }
+
+    /// CTRL-only chords are not covered by the default mask.
+    #[test]
+    fn ctrl_only_is_not_forwarded_by_default() {
+        assert!(!forward(Modifiers::CTRL, Modifiers::SHIFT));
+    }
+
+    #[test]
+    fn alt_composed_disabled_does_not_forward() {
+        assert!(!should_forward_to_ime(
+            Modifiers::ALT | Modifiers::LEFT_ALT,
+            Modifiers::SHIFT,
+            true,
+            false,
+            false,
+            true
+        ));
+    }
+
+    /// CMD+SHIFT+D: the command layer strips SHIFT from `chars`; the key
+    /// must come from `unmod` with the modifiers preserved.
+    #[test]
+    fn cmd_shift_letter_takes_unmod() {
+        assert_eq!(
+            classify_key_source("d", "D", Modifiers::SUPER | Modifiers::SHIFT, false, false),
+            KeySource::Unmod
+        );
+    }
+
+    /// CMD on a non-Latin layout: the command layer transliterates
+    /// (eg: Cyrillic CMD+S gives chars="s" unmod="ы").
+    /// <https://github.com/wezterm/wezterm/issues/4589>
+    #[test]
+    fn cmd_on_non_latin_layout_takes_unmod() {
+        assert_eq!(
+            classify_key_source("s", "ы", Modifiers::SUPER, false, false),
+            KeySource::Unmod
+        );
+    }
+
+    /// Plain CMD+D reports identical chars/unmod and keeps the fast path.
+    #[test]
+    fn plain_cmd_letter_takes_primary() {
+        assert_eq!(
+            classify_key_source("d", "d", Modifiers::SUPER, false, false),
+            KeySource::Primary
+        );
+    }
+
+    /// CTRL-A reports chars="\x01" unmod="a" and must stay on the
+    /// translation path so it is later rewritten to CTRL-A.
+    #[test]
+    fn ctrl_control_char_is_os_translation() {
+        assert_eq!(
+            classify_key_source("\u{1}", "a", Modifiers::CTRL, false, false),
+            KeySource::OsTranslation
+        );
+    }
+
+    /// Composed ALT chords (eg: Option+E producing a dead key/composed
+    /// char) keep the translation path so the composed text is sent.
+    #[test]
+    fn alt_composed_is_os_translation() {
+        assert_eq!(
+            classify_key_source("´", "e", Modifiers::ALT, false, false),
+            KeySource::OsTranslation
+        );
+    }
+
+    /// ALT+SHIFT+` swaps chars and unmod; see issue #1706.
+    #[test]
+    fn swap_unmod_and_chars_takes_unmod() {
+        assert_eq!(
+            classify_key_source("`", "~", Modifiers::ALT | Modifiers::SHIFT, true, false),
+            KeySource::Unmod
+        );
+    }
+
+    #[test]
+    fn alt_without_composed_takes_unmod() {
+        assert_eq!(
+            classify_key_source("é", "e", Modifiers::ALT, false, true),
+            KeySource::Unmod
+        );
     }
 }
