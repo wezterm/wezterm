@@ -6,16 +6,18 @@ use mux::client::ClientId;
 use mux::domain::SplitSource;
 use mux::pane::{CachePolicy, Pane, PaneId};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
-use mux::tab::TabId;
+use mux::tab::{NotifyMux, TabId};
 use mux::{Mux, MuxNotification};
 use promise::spawn::spawn_into_main_thread;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use termwiz::surface::SequenceNo;
 use url::Url;
 use wezterm_term::terminal::Alert;
 use wezterm_term::StableRowIndex;
+
+const MAX_PENDING_PANE_FOCUS: usize = 256;
 
 #[derive(Clone)]
 pub struct PduSender {
@@ -201,6 +203,9 @@ pub struct SessionHandler {
     per_pane: HashMap<TabId, Arc<Mutex<PerPane>>>,
     client_id: Option<Arc<ClientId>>,
     proxy_client_id: Option<ClientId>,
+    last_sent_pane_focus_seq: u64,
+    last_acknowledged_pane_focus_seq: u64,
+    pending_pane_focus: BTreeMap<u64, PaneId>,
 }
 
 impl Drop for SessionHandler {
@@ -219,7 +224,44 @@ impl SessionHandler {
             per_pane: HashMap::new(),
             client_id: None,
             proxy_client_id: None,
+            last_sent_pane_focus_seq: 0,
+            last_acknowledged_pane_focus_seq: 0,
+            pending_pane_focus: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn next_pane_focus_notification(
+        &mut self,
+        pane_id: PaneId,
+    ) -> anyhow::Result<PaneFocused> {
+        let focus_seq = self
+            .last_sent_pane_focus_seq
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("pane focus sequence exhausted"))?;
+        self.last_sent_pane_focus_seq = focus_seq;
+        self.pending_pane_focus.insert(focus_seq, pane_id);
+        while self.pending_pane_focus.len() > MAX_PENDING_PANE_FOCUS {
+            self.pending_pane_focus.pop_first();
+        }
+        Ok(PaneFocused { pane_id, focus_seq })
+    }
+
+    fn accept_pane_focus_acknowledgement(&mut self, pane_id: PaneId, focus_seq: u64) -> bool {
+        if focus_seq <= self.last_acknowledged_pane_focus_seq
+            || self.pending_pane_focus.get(&focus_seq) != Some(&pane_id)
+        {
+            return false;
+        }
+
+        self.last_acknowledged_pane_focus_seq = focus_seq;
+        self.pending_pane_focus
+            .retain(|pending_seq, _| *pending_seq > focus_seq);
+        true
+    }
+
+    fn supersede_pending_pane_focus_acknowledgements(&mut self) {
+        self.last_acknowledged_pane_focus_seq = self.last_sent_pane_focus_seq;
+        self.pending_pane_focus.clear();
     }
 
     pub(crate) fn per_pane(&mut self, pane_id: PaneId) -> Arc<Mutex<PerPane>> {
@@ -329,6 +371,12 @@ impl SessionHandler {
                 send_response(Ok(Pdu::UnitResponse(UnitResponse {})))
             }
             Pdu::SetFocusedPane(SetFocusedPane { pane_id }) => {
+                // A direct client action is newer than any server focus still
+                // awaiting acknowledgement on this connection. Don't allow a
+                // late acknowledgement to overwrite the action's metadata.
+                if Mux::get().resolve_pane_id(pane_id).is_some() {
+                    self.supersede_pending_pane_focus_acknowledgements();
+                }
                 let client_id = self.client_id.clone();
                 spawn_into_main_thread(async move {
                     catch(
@@ -358,7 +406,9 @@ impl SessionHandler {
                             let tab = mux
                                 .get_tab(tab_id)
                                 .ok_or_else(|| anyhow::anyhow!("tab {tab_id} not found"))?;
-                            tab.set_active_pane(&pane);
+                            // The server broadcasts this focus below after
+                            // recording it for the current client.
+                            tab.set_active_pane_with_notify(&pane, NotifyMux::No);
 
                             mux.record_focus_for_current_identity(pane_id);
                             mux.notify(mux::MuxNotification::PaneFocused(pane_id));
@@ -369,6 +419,17 @@ impl SessionHandler {
                     )
                 })
                 .detach();
+            }
+            Pdu::PaneFocusAcknowledged(PaneFocusAcknowledged { pane_id, focus_seq }) => {
+                let mux = Mux::get();
+                if mux.resolve_pane_id(pane_id).is_some()
+                    && self.accept_pane_focus_acknowledgement(pane_id, focus_seq)
+                {
+                    if let Some(client_id) = &self.client_id {
+                        mux.record_focus_metadata_for_client(client_id, pane_id);
+                    }
+                }
+                send_response(Ok(Pdu::UnitResponse(UnitResponse {})));
             }
             Pdu::GetClientList(GetClientList) => {
                 spawn_into_main_thread(async move {
@@ -1124,4 +1185,93 @@ async fn move_pane(
         tab_id: tab.tab_id(),
         window_id,
     }))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn handler() -> SessionHandler {
+        SessionHandler::new(PduSender::new(|_| Ok(())))
+    }
+
+    #[test]
+    fn pane_focus_acknowledgements_are_correlated_and_monotonic() {
+        // Only acknowledgements for a pane that was actually sent may advance
+        // the client's successfully-applied focus state.
+        let mut handler = handler();
+        let first = handler.next_pane_focus_notification(10).unwrap();
+        let second = handler.next_pane_focus_notification(20).unwrap();
+
+        // A remains a valid applied focus even if B was delivered before A's
+        // acknowledgement and B subsequently fails to apply.
+        assert!(handler.accept_pane_focus_acknowledgement(first.pane_id, first.focus_seq));
+
+        // An acknowledged sequence cannot move backwards or name another pane.
+        assert!(!handler.accept_pane_focus_acknowledgement(first.pane_id, first.focus_seq));
+        assert!(!handler.accept_pane_focus_acknowledgement(99, second.focus_seq));
+
+        assert!(handler.accept_pane_focus_acknowledgement(second.pane_id, second.focus_seq));
+        assert!(!handler.accept_pane_focus_acknowledgement(30, second.focus_seq + 1));
+    }
+
+    #[test]
+    fn pane_focus_notifications_have_connection_local_sequences() {
+        // A reconnect starts a fresh correlation sequence; client-side stale
+        // work filtering uses an independent local receipt ticket.
+        let mut first_connection = handler();
+        assert_eq!(
+            PaneFocused {
+                pane_id: 10,
+                focus_seq: 1,
+            },
+            first_connection.next_pane_focus_notification(10).unwrap()
+        );
+        assert_eq!(
+            PaneFocused {
+                pane_id: 20,
+                focus_seq: 2,
+            },
+            first_connection.next_pane_focus_notification(20).unwrap()
+        );
+
+        let mut reconnected = handler();
+        assert_eq!(
+            PaneFocused {
+                pane_id: 30,
+                focus_seq: 1,
+            },
+            reconnected.next_pane_focus_notification(30).unwrap()
+        );
+    }
+
+    #[test]
+    fn pending_focus_acknowledgements_are_bounded() {
+        // A client that never acknowledges focus must not grow per-connection
+        // correlation state without bound; the newest notification remains valid.
+        let mut handler = handler();
+        let mut newest = None;
+        for pane_id in 0..=MAX_PENDING_PANE_FOCUS {
+            newest = Some(handler.next_pane_focus_notification(pane_id).unwrap());
+        }
+
+        assert_eq!(MAX_PENDING_PANE_FOCUS, handler.pending_pane_focus.len());
+        assert!(!handler.accept_pane_focus_acknowledgement(0, 1));
+        let newest = newest.unwrap();
+        assert!(handler.accept_pane_focus_acknowledgement(newest.pane_id, newest.focus_seq));
+    }
+
+    #[test]
+    fn direct_focus_request_supersedes_pending_acknowledgements() {
+        // Once a newer local action is received, an older remote-focus ACK must
+        // not be able to move that client's focus metadata backwards.
+        let mut handler = handler();
+        let pending = handler.next_pane_focus_notification(10).unwrap();
+
+        handler.supersede_pending_pane_focus_acknowledgements();
+
+        assert!(!handler.accept_pane_focus_acknowledgement(pending.pane_id, pending.focus_seq));
+        let later = handler.next_pane_focus_notification(20).unwrap();
+        assert!(handler.accept_pane_focus_acknowledgement(later.pane_id, later.focus_seq));
+    }
 }

@@ -441,7 +441,7 @@ macro_rules! pdu {
 /// The overall version of the codec.
 /// This must be bumped when backwards incompatible changes
 /// are made to the types and protocol.
-pub const CODEC_VERSION: usize = 45;
+pub const CODEC_VERSION: usize = 46;
 
 // Defines the Pdu enum.
 // Each struct has an explicit identifying number.
@@ -502,6 +502,7 @@ pdu! {
     GetPaneDirection: 60,
     GetPaneDirectionResponse: 61,
     AdjustPaneSize: 62,
+    PaneFocusAcknowledged: 63,
 }
 
 impl Pdu {
@@ -594,7 +595,7 @@ impl Pdu {
             | Pdu::SetPalette(SetPalette { pane_id, .. })
             | Pdu::NotifyAlert(NotifyAlert { pane_id, .. })
             | Pdu::SetClipboard(SetClipboard { pane_id, .. })
-            | Pdu::PaneFocused(PaneFocused { pane_id })
+            | Pdu::PaneFocused(PaneFocused { pane_id, .. })
             | Pdu::PaneRemoved(PaneRemoved { pane_id }) => Some(*pane_id),
             _ => None,
         }
@@ -822,6 +823,7 @@ pub struct WindowTitleChanged {
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct PaneFocused {
     pub pane_id: PaneId,
+    pub focus_seq: u64,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
@@ -839,6 +841,12 @@ pub struct SetClientId {
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct SetFocusedPane {
     pub pane_id: PaneId,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct PaneFocusAcknowledged {
+    pub pane_id: PaneId,
+    pub focus_seq: u64,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
@@ -1248,6 +1256,29 @@ mod test {
             },
             Pdu::decode(encoded.as_slice()).unwrap()
         );
+    }
+
+    #[test]
+    fn pane_focus_pdus_round_trip_with_sequence() {
+        // The notification and its acknowledgement must preserve the same
+        // correlation sequence across the wire.
+        for pdu in [
+            Pdu::PaneFocused(PaneFocused {
+                pane_id: 42,
+                focus_seq: 7,
+            }),
+            Pdu::PaneFocusAcknowledged(PaneFocusAcknowledged {
+                pane_id: 42,
+                focus_seq: 7,
+            }),
+        ] {
+            let mut encoded = Vec::new();
+            pdu.encode(&mut encoded, 0x43).unwrap();
+            assert_eq!(
+                DecodedPdu { serial: 0x43, pdu },
+                Pdu::decode(encoded.as_slice()).unwrap()
+            );
+        }
     }
 
     #[test]

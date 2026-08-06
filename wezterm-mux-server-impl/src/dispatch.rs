@@ -23,6 +23,23 @@ enum Item {
     Readable,
 }
 
+fn pane_focus_notification_pdu(
+    handler: &mut SessionHandler,
+    notification: &MuxNotification,
+) -> Option<anyhow::Result<Pdu>> {
+    let pane_id = match notification {
+        MuxNotification::PaneFocused(pane_id) | MuxNotification::PaneFocusReconciled(pane_id) => {
+            *pane_id
+        }
+        _ => return None,
+    };
+    Some(
+        handler
+            .next_pane_focus_notification(pane_id)
+            .map(Pdu::PaneFocused),
+    )
+}
+
 pub async fn process<T>(stream: T) -> anyhow::Result<()>
 where
     T: 'static,
@@ -166,8 +183,12 @@ where
                     stream.flush().await.context("flushing PDU to client")?;
                 }
             }
-            Ok(Item::Notif(MuxNotification::PaneFocused(pane_id))) => {
-                Pdu::PaneFocused(codec::PaneFocused { pane_id })
+            Ok(Item::Notif(
+                notification @ (MuxNotification::PaneFocused(_)
+                | MuxNotification::PaneFocusReconciled(_)),
+            )) => {
+                pane_focus_notification_pdu(&mut handler, &notification)
+                    .expect("matched pane focus notification")?
                     .encode_async(&mut stream, 0)
                     .await?;
                 stream.flush().await.context("flushing PDU to client")?;
@@ -209,5 +230,30 @@ where
                 return Ok(());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn reconciled_focus_is_forwarded_as_a_sequenced_focus_pdu() {
+        // An upstream focus reconciliation must reach downstream clients as a
+        // normal focus PDU without being echoed back to the upstream domain.
+        let mut handler = SessionHandler::new(PduSender::new(|_| Ok(())));
+
+        let pdu =
+            pane_focus_notification_pdu(&mut handler, &MuxNotification::PaneFocusReconciled(42))
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(
+            Pdu::PaneFocused(codec::PaneFocused {
+                pane_id: 42,
+                focus_seq: 1,
+            }),
+            pdu
+        );
     }
 }
