@@ -337,6 +337,20 @@ fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
 
 fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &TerminalSize) {
     let (min_x, _) = compute_min_size(tree);
+    // A child cannot give up columns that its own splits need. These minimums
+    // depend only on the shape of the tree, which does not change while sizes
+    // are redistributed, so compute them once rather than on every pass.
+    let (first_min_x, second_min_x) = match tree {
+        Tree::Node {
+            left,
+            right,
+            data: Some(_),
+        } => (
+            compute_min_size(&mut *left).0,
+            compute_min_size(&mut *right).0,
+        ),
+        _ => (1, 1),
+    };
     while x_adjust != 0 {
         match tree {
             Tree::Empty | Tree::Leaf(_) => return,
@@ -385,14 +399,14 @@ fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &Termina
                     SplitDirection::Horizontal => {
                         // x_adjust is negative
                         let before = x_adjust;
-                        if data.first.cols > 1 {
+                        if data.first.cols > first_min_x {
                             adjust_x_size(&mut *left, -1, cell_dimensions);
                             data.first.cols -= 1;
                             data.first.pixel_width =
                                 data.first.cols.saturating_mul(cell_dimensions.pixel_width);
                             x_adjust += 1;
                         }
-                        if x_adjust < 0 && data.second.cols > 1 {
+                        if x_adjust < 0 && data.second.cols > second_min_x {
                             adjust_x_size(&mut *right, -1, cell_dimensions);
                             data.second.cols -= 1;
                             data.second.pixel_width =
@@ -400,8 +414,8 @@ fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &Termina
                             x_adjust += 1;
                         }
                         if x_adjust == before {
-                            // Both children are already at the one-column
-                            // minimum, so there is nothing left to take and
+                            // Neither child can give up a column without
+                            // dropping below what its own splits require, so
                             // the remaining adjustment is unsatisfiable.
                             // Give up instead of spinning in the enclosing
                             // `while x_adjust != 0` loop forever.
@@ -416,6 +430,20 @@ fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &Termina
 
 fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &TerminalSize) {
     let (_, min_y) = compute_min_size(tree);
+    // A child cannot give up rows that its own splits need. These minimums
+    // depend only on the shape of the tree, which does not change while sizes
+    // are redistributed, so compute them once rather than on every pass.
+    let (first_min_y, second_min_y) = match tree {
+        Tree::Node {
+            left,
+            right,
+            data: Some(_),
+        } => (
+            compute_min_size(&mut *left).1,
+            compute_min_size(&mut *right).1,
+        ),
+        _ => (1, 1),
+    };
     while y_adjust != 0 {
         match tree {
             Tree::Empty | Tree::Leaf(_) => return,
@@ -465,14 +493,14 @@ fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &Termina
                     SplitDirection::Vertical => {
                         // y_adjust is negative
                         let before = y_adjust;
-                        if data.first.rows > 1 {
+                        if data.first.rows > first_min_y {
                             adjust_y_size(&mut *left, -1, cell_dimensions);
                             data.first.rows -= 1;
                             data.first.pixel_height =
                                 data.first.rows.saturating_mul(cell_dimensions.pixel_height);
                             y_adjust += 1;
                         }
-                        if y_adjust < 0 && data.second.rows > 1 {
+                        if y_adjust < 0 && data.second.rows > second_min_y {
                             adjust_y_size(&mut *right, -1, cell_dimensions);
                             data.second.rows -= 1;
                             data.second.pixel_height = data
@@ -482,8 +510,8 @@ fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &Termina
                             y_adjust += 1;
                         }
                         if y_adjust == before {
-                            // Both children are already at the one-row
-                            // minimum, so there is nothing left to take and
+                            // Neither child can give up a row without
+                            // dropping below what its own splits require, so
                             // the remaining adjustment is unsatisfiable.
                             // Give up instead of spinning in the enclosing
                             // `while y_adjust != 0` loop forever.
@@ -2620,12 +2648,18 @@ mod test {
         assert_eq!(data.second.rows, 1, "second child shrank below the minimum");
     }
 
-    /// The shape seen in a real hang: the outer split still has a row it can
-    /// give up, so it recurses into a subtree that is already fully collapsed.
-    /// The outer level makes progress while the inner level cannot, so a guard
-    /// that only considered the top level would still spin down here.
+    /// A tree that is already inconsistent, which is the shape a real hang was
+    /// caught in: the outer node records 2 rows for a first child whose own
+    /// splits need 3. Trees reach this state in the wild because the
+    /// interactive divider-drag path clamps to 1 without consulting subtree
+    /// minimums.
+    ///
+    /// Nothing here can legitimately shrink, so this exercises the termination
+    /// guard directly -- without it `y_adjust` never changes and the loop
+    /// spins. Correct behaviour is to return without making the existing
+    /// inconsistency any worse.
     #[test]
-    fn adjust_y_size_terminates_when_only_a_nested_subtree_is_at_minimum() {
+    fn adjust_y_size_terminates_without_worsening_an_inconsistent_tree() {
         let at_min = TerminalSize {
             rows: 1,
             cols: 1,
@@ -2651,7 +2685,10 @@ mod test {
         });
 
         let data = split_data(tree);
-        assert_eq!(data.first.rows, 1, "first child shrank below the minimum");
+        assert_eq!(
+            data.first.rows, 2,
+            "shrank a child that was already below its subtree minimum"
+        );
         assert_eq!(data.second.rows, 1, "second child shrank below the minimum");
     }
 
@@ -2668,5 +2705,90 @@ mod test {
         let data = split_data(tree);
         assert_eq!(data.first.cols, 1, "first child shrank below the minimum");
         assert_eq!(data.second.cols, 1, "second child shrank below the minimum");
+    }
+
+    /// An outer split whose first child is itself a fully collapsed split.
+    /// The child's subtree structurally needs 3 cells along the split axis
+    /// (two leaves plus a divider), while the outer node records only a single
+    /// number for it -- so the outer node can be told to shrink it further than
+    /// its own contents allow.
+    fn nested_at_minimum(direction: SplitDirection, first: usize) -> Tree {
+        let at_min = TerminalSize {
+            rows: 1,
+            cols: 1,
+            pixel_width: 8,
+            pixel_height: 18,
+            dpi: 96,
+        };
+        let first = match direction {
+            SplitDirection::Vertical => TerminalSize {
+                rows: first,
+                ..at_min
+            },
+            SplitDirection::Horizontal => TerminalSize {
+                cols: first,
+                ..at_min
+            },
+        };
+        Tree::Node {
+            left: Box::new(node_at_minimum(direction)),
+            right: Box::new(Tree::Empty),
+            data: Some(SplitDirectionAndSize {
+                direction,
+                first,
+                second: at_min,
+            }),
+        }
+    }
+
+    #[test]
+    fn adjust_y_size_leaves_a_child_alone_when_its_subtree_is_already_minimal() {
+        let mut tree = nested_at_minimum(SplitDirection::Vertical, 3);
+        let dims = cell_dims();
+
+        let tree = run_with_timeout(5, "adjust_y_size(-1) on a minimal subtree", move || {
+            adjust_y_size(&mut tree, -1, &dims);
+            tree
+        });
+
+        let data = split_data(tree);
+        assert_eq!(
+            data.first.rows, 3,
+            "shrank a child below its subtree minimum of 3 rows"
+        );
+    }
+
+    #[test]
+    fn adjust_y_size_shrinks_a_child_only_down_to_its_subtree_minimum() {
+        let mut tree = nested_at_minimum(SplitDirection::Vertical, 5);
+        let dims = cell_dims();
+
+        let tree = run_with_timeout(5, "adjust_y_size(-3) past available slack", move || {
+            adjust_y_size(&mut tree, -3, &dims);
+            tree
+        });
+
+        let data = split_data(tree);
+        assert_eq!(
+            data.first.rows, 3,
+            "shrank a child below its subtree minimum of 3 rows"
+        );
+    }
+
+    #[test]
+    fn adjust_x_size_shrinks_a_child_only_down_to_its_subtree_minimum() {
+        let mut tree = nested_at_minimum(SplitDirection::Horizontal, 5);
+        let dims = cell_dims();
+
+        let tree = run_with_timeout(5, "adjust_x_size(-3) past available slack", move || {
+            adjust_x_size(&mut tree, -3, &dims);
+            tree
+        });
+
+        let data = split_data(tree);
+        assert_eq!(
+            data.first.cols, 3,
+            "shrank a child below its subtree minimum of 3 cols"
+        );
     }
 }
