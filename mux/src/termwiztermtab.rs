@@ -188,6 +188,11 @@ impl Pane for TermWizTerminalPane {
         Ok(())
     }
 
+    fn send_composed_text(&self, text: &str) -> anyhow::Result<()> {
+        // The writer is not linked to a real pty, so we send the composed text like a paste
+        self.send_paste(text)
+    }
+
     fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>> {
         Ok(Some(Box::new(self.render_rx.try_clone()?)))
     }
