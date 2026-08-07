@@ -1,10 +1,5 @@
 #!/bin/sh
 
-if [ "$(id -u)" -ne 0 ];then
-	echo "$0 requires superuser privileges. Exiting."
-	exit 1
-fi
-
 TESTING=0
 DOCS=0
 for arg in "$@"; do
@@ -38,16 +33,8 @@ docs_flag() {
   test $DOCS -eq 1
 }
 
-if test -z "$SUDO"; then
-  if test_cmd 'sudo'; then
-    SUDO="sudo"
-  elif test_cmd 'doas'; then
-    SUDO="doas"
-  fi
-fi
-
 alpine_deps() {
-  APK="$SUDO apk"
+  APK="apk"
   $APK add \
     'alpine-sdk' \
     'bash' \
@@ -79,9 +66,9 @@ alpine_deps() {
 
 fedora_deps() {
   if test_cmd 'dnf'; then
-    YUM="$SUDO dnf"
+    YUM="dnf"
   elif test_cmd 'yum'; then
-    YUM="$SUDO yum"
+    YUM="yum"
   else
     echo "No idea what package manager to use, sorry! (perhaps 'dnf' or 'yum' is not in \$PATH?)"
     return 1
@@ -122,7 +109,7 @@ fedora_deps() {
 }
 
 suse_deps() {
-  ZYPPER="$SUDO zypper"
+  ZYPPER="zypper"
   RESOLVE=""
   if [ "${CI}" = "yes" ] ; then
     RESOLVE="--allow-downgrade"
@@ -152,7 +139,7 @@ suse_deps() {
 }
 
 debian_deps() {
-  APT="$SUDO apt-get"
+  APT="apt-get"
   apt-cache show 'libxcb-util-dev' > /dev/null 2>&1 && XCBUTIL="libxcb-util-dev" || XCBUTIL="libxcb-util0-dev"
   $APT install -y \
     'bsdutils' \
@@ -190,7 +177,7 @@ debian_deps() {
 }
 
 arch_deps() {
-  PACMAN="$SUDO pacman"
+  PACMAN="pacman"
   $PACMAN -S --noconfirm --needed \
     'base-devel' \
     'cargo' \
@@ -215,7 +202,7 @@ arch_deps() {
 }
 
 freebsd_deps() {
-  PKG="$SUDO pkg"
+  PKG="pkg"
   $PKG install -y \
     'cmake' \
     'curl' \
@@ -246,7 +233,7 @@ freebsd_deps() {
 }
 
 netbsd_deps() {
-  PKG="$SUDO pkgin"
+  PKG="pkgin"
   $PKG -y install \
     'bash' \
     'fontconfig' \
@@ -265,7 +252,7 @@ netbsd_deps() {
 gentoo_deps() {
   portageq envvar USE | xargs -n 1 | grep '^X$' \
   || (echo 'X is not found in USE flags' && exit 1)
-  EMERGE="$SUDO emerge"
+  EMERGE="emerge"
   for pkg in \
     'cmake' \
     'fontconfig' \
@@ -288,7 +275,7 @@ gentoo_deps() {
 }
 
 void_deps() {
-  XBPS="$SUDO xbps-install"
+  XBPS="xbps-install"
   $XBPS -S \
     'gcc' \
     'pkgconf' \
@@ -311,7 +298,7 @@ void_deps() {
 }
 
 solus_deps() {
-  EOPKG="$SUDO eopkg"
+  EOPKG="eopkg"
   $EOPKG install -y -c system.devel
   $EOPKG install -y \
     xcb-util-devel \
@@ -338,27 +325,6 @@ fallback_method() {
     suse_deps
   fi
 
-  OSTYPE=$(uname -s)
-  # OSTYPE is set by bash
-  case $OSTYPE in
-    Darwin*|msys)
-      echo "skipping darwin*/msys"
-    ;;
-    FreeBSD*)
-      freebsd_deps
-    ;;
-    ''|Linux)
-      # catch and known OSTYPE
-      echo "\$OSTYPE is '$OSTYPE'"
-    ;;
-    NetBSD*)
-      netbsd_deps
-    ;;
-    *)
-      NOTFOUND=1
-      return 1
-    ;;
-  esac
   return 0
 }
 
@@ -369,6 +335,10 @@ else
 fi
 
 set -e
+if [ "$(id -u)" -ne 0 ];then
+	echo "$0 requires superuser privileges. Exiting."
+	exit 1
+fi
 
 case $ID in
   centos|fedora|rhel)
