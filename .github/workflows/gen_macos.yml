@@ -16,7 +16,6 @@ on:
       - "ci/deploy.sh"
       - "ci/macos-entitlement.plist"
       - "ci/tag-name.sh"
-      - "get-deps"
 
 jobs:
   build:
