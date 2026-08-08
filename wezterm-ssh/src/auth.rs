@@ -8,6 +8,70 @@ pub struct AuthenticationPrompt {
     pub echo: bool,
 }
 
+/// Try to extract the public key blob from an OpenSSH-format public key string.
+/// The expected format is: `<algo> <base64-blob> [comment]`
+#[cfg(feature = "ssh2")]
+fn parse_pub_key_blob(content: &str) -> Option<Vec<u8>> {
+    let b64 = content.split_whitespace().nth(1)?;
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.decode(b64).ok()
+}
+
+/// Read a public-key file with a size cap so that FIFOs, device files, or
+/// accidentally huge inputs cannot stall or starve the auth path. Real
+/// OpenSSH public keys are well under 64 KiB.
+#[cfg(feature = "ssh2")]
+fn read_pub_key_file(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut content = String::new();
+    file.take(64 * 1024).read_to_string(&mut content).ok()?;
+    Some(content)
+}
+
+/// Collect allowed public key blobs from the `IdentityFile` entries in the
+/// ssh config. Only public-key material is read: the entry is read directly
+/// when its path already ends in `.pub`, otherwise the `<path>.pub` sibling
+/// is tried. Private-key files are never opened from this path.
+#[cfg(feature = "ssh2")]
+fn collect_identity_blobs(identity_files: &str) -> Vec<Vec<u8>> {
+    let mut blobs = Vec::new();
+    for file in identity_files.split_whitespace() {
+        let pub_path = if file.ends_with(".pub") {
+            file.to_string()
+        } else {
+            format!("{}.pub", file)
+        };
+        if let Some(content) = read_pub_key_file(std::path::Path::new(&pub_path)) {
+            if let Some(blob) = parse_pub_key_blob(&content) {
+                log::trace!("allowing agent key with blob {}", hex::encode(&blob));
+                blobs.push(blob);
+            }
+        }
+    }
+    blobs
+}
+
+/// Determine the set of allowed agent key blobs based on the ssh config.
+/// Returns `None` when all agent keys are allowed (IdentitiesOnly is not
+/// set or not "yes"), or `Some(blobs)` with the restricted set.
+#[cfg(feature = "ssh2")]
+fn allowed_agent_key_blobs(config: &crate::config::ConfigMap) -> Option<Vec<Vec<u8>>> {
+    if config
+        .get("identitiesonly")
+        .map(|s| s.trim().eq_ignore_ascii_case("yes"))
+        .unwrap_or(false)
+    {
+        let blobs = config
+            .get("identityfile")
+            .map(|files| collect_identity_blobs(files))
+            .unwrap_or_default();
+        Some(blobs)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug)]
 pub struct AuthenticationEvent {
     pub username: String,
@@ -29,26 +93,46 @@ impl AuthenticationEvent {
 impl crate::sessioninner::SessionInner {
     #[cfg(feature = "ssh2")]
     fn agent_auth(&mut self, sess: &ssh2::Session, user: &str) -> anyhow::Result<bool> {
-        if let Some(only) = self.config.get("identitiesonly") {
-            if only == "yes" {
-                log::trace!("Skipping agent auth because identitiesonly=yes");
-                return Ok(false);
-            }
-        }
-
         let mut agent = sess.agent()?;
         if agent.connect().is_err() {
-            // If the agent is around, we can proceed with other methods
+            // If the agent is not around, we can proceed with other methods
+            log::trace!("ssh agent not available");
             return Ok(false);
         }
 
         agent.list_identities()?;
         let identities = agent.identities()?;
-        for identity in identities {
-            if agent.userauth(user, &identity).is_ok() {
+        log::trace!("ssh agent has {} identities", identities.len());
+
+        let allowed = allowed_agent_key_blobs(&self.config);
+
+        let identities: Vec<_> = if let Some(allowed) = &allowed {
+            identities
+                .into_iter()
+                .filter(|id| allowed.iter().any(|b| b.as_slice() == id.blob()))
+                .collect()
+        } else {
+            identities
+        };
+
+        for identity in &identities {
+            log::trace!(
+                "considering agent key with blob {}",
+                hex::encode(identity.blob())
+            );
+            if agent.userauth(user, identity).is_ok() {
+                log::trace!(
+                    "agent auth ok for key with blob {}",
+                    hex::encode(identity.blob())
+                );
                 return Ok(true);
             }
+            log::trace!(
+                "agent auth failed for key with blob {}",
+                hex::encode(identity.blob())
+            );
         }
+        log::trace!("agent auth failed for all keys");
 
         Ok(false)
     }
@@ -361,5 +445,249 @@ impl crate::sessioninner::SessionInner {
                 }
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "ssh2"))]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    /// Create a temporary directory with a unique name and return its path.
+    /// The caller is responsible for removing it (see `cleanup`).
+    fn tmpdir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("wezterm_ssh_test_{}_{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cleanup(dir: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parse_rsa_pub_key() {
+        // Minimal valid OpenSSH public key (algo + base64 blob + comment)
+        let content = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA wez@term";
+        let blob = parse_pub_key_blob(content).expect("should parse valid pub key");
+        assert_eq!(
+            blob,
+            base64::engine::general_purpose::STANDARD
+                .decode("AAAAB3NzaC1yc2EAAAADAQABAAAA")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_pub_key_no_comment() {
+        let content = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIQ==";
+        let blob = parse_pub_key_blob(content).expect("should parse key without comment");
+        assert_eq!(
+            blob,
+            base64::engine::general_purpose::STANDARD
+                .decode("AAAAC3NzaC1lZDI1NTE5AAAAIQ==")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_pub_key_empty_string() {
+        assert!(parse_pub_key_blob("").is_none());
+    }
+
+    #[test]
+    fn parse_pub_key_only_algo() {
+        assert!(parse_pub_key_blob("ssh-rsa").is_none());
+    }
+
+    #[test]
+    fn parse_pub_key_invalid_base64() {
+        assert!(parse_pub_key_blob("ssh-rsa !!!not-base64!!!").is_none());
+    }
+
+    #[test]
+    fn collect_blobs_from_pub_file() {
+        let dir = tmpdir("blobs_pub");
+        let pub_path = dir.join("id_test.pub");
+        std::fs::write(&pub_path, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA test\n").unwrap();
+
+        let priv_path = dir.join("id_test");
+        let identity_files = priv_path.to_str().unwrap();
+
+        let blobs = collect_identity_blobs(identity_files);
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(
+            blobs[0],
+            base64::engine::general_purpose::STANDARD
+                .decode("AAAAB3NzaC1yc2EAAAADAQABAAAA")
+                .unwrap()
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn collect_blobs_from_pub_content_at_private_path() {
+        // If the path itself contains a parseable public key (e.g. user
+        // pointed IdentityFile directly at the .pub file)
+        let dir = tmpdir("blobs_priv_path");
+        let path = dir.join("id_test.pub");
+        std::fs::write(&path, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIQ==\n").unwrap();
+
+        let identity_files = path.to_str().unwrap();
+        let blobs = collect_identity_blobs(identity_files);
+        assert_eq!(blobs.len(), 1);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn collect_blobs_missing_files() {
+        let blobs = collect_identity_blobs("/nonexistent/path/id_key");
+        assert!(blobs.is_empty());
+    }
+
+    #[test]
+    fn collect_blobs_never_reads_private_key_path() {
+        // Private path contains an unparseable blob; the only parseable
+        // content is in the .pub sibling. If the private path were read
+        // we would either return a different (wrong) blob or produce a
+        // parse-error log; with the safe implementation we must pick up
+        // the .pub sibling without touching the private path.
+        let dir = tmpdir("blobs_priv_safe");
+        let priv_path = dir.join("id_test");
+        std::fs::write(
+            &priv_path,
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nnot a pub key\n",
+        )
+        .unwrap();
+
+        let pub_path = dir.join("id_test.pub");
+        std::fs::write(&pub_path, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA test\n").unwrap();
+
+        let blobs = collect_identity_blobs(priv_path.to_str().unwrap());
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(
+            blobs[0],
+            base64::engine::general_purpose::STANDARD
+                .decode("AAAAB3NzaC1yc2EAAAADAQABAAAA")
+                .unwrap()
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn collect_blobs_without_pub_sibling_returns_empty() {
+        // With only a private-key file present and no .pub sibling, the
+        // safe implementation returns no blobs. This is strictly better
+        // than the previous skip-on-IdentitiesOnly behavior and matches
+        // the documented `ssh-keygen -y` requirement.
+        let dir = tmpdir("blobs_no_pub");
+        let priv_path = dir.join("id_test");
+        std::fs::write(
+            &priv_path,
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nnot a pub key\n",
+        )
+        .unwrap();
+
+        let blobs = collect_identity_blobs(priv_path.to_str().unwrap());
+        assert!(blobs.is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn collect_blobs_multiple_identity_files() {
+        let dir = tmpdir("blobs_multi");
+
+        let pub1 = dir.join("key1.pub");
+        std::fs::write(&pub1, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA k1\n").unwrap();
+
+        let pub2 = dir.join("key2.pub");
+        std::fs::write(&pub2, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIQ== k2\n").unwrap();
+
+        let files = format!(
+            "{} {}",
+            dir.join("key1").to_str().unwrap(),
+            dir.join("key2").to_str().unwrap()
+        );
+        let blobs = collect_identity_blobs(&files);
+        assert_eq!(blobs.len(), 2);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn identities_only_not_set_allows_all() {
+        // No identitiesonly in config → None (all keys allowed)
+        let config = crate::config::ConfigMap::new();
+        assert!(allowed_agent_key_blobs(&config).is_none());
+    }
+
+    #[test]
+    fn identities_only_no_disables_filtering() {
+        let mut config = crate::config::ConfigMap::new();
+        config.insert("identitiesonly".into(), "no".into());
+        assert!(allowed_agent_key_blobs(&config).is_none());
+    }
+
+    #[test]
+    fn identities_only_yes_returns_matching_blobs() {
+        let dir = tmpdir("id_only_match");
+        let pub_path = dir.join("id_test.pub");
+        std::fs::write(&pub_path, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAA test\n").unwrap();
+
+        let mut config = crate::config::ConfigMap::new();
+        config.insert("identitiesonly".into(), "yes".into());
+        config.insert(
+            "identityfile".into(),
+            dir.join("id_test").to_str().unwrap().into(),
+        );
+
+        let allowed = allowed_agent_key_blobs(&config);
+        assert!(allowed.is_some());
+        let blobs = allowed.unwrap();
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(
+            blobs[0],
+            base64::engine::general_purpose::STANDARD
+                .decode("AAAAB3NzaC1yc2EAAAADAQABAAAA")
+                .unwrap()
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn identities_only_value_is_case_insensitive() {
+        for value in ["YES", "Yes", " yes ", "yEs"] {
+            let mut config = crate::config::ConfigMap::new();
+            config.insert("identitiesonly".into(), value.into());
+            assert!(
+                allowed_agent_key_blobs(&config).is_some(),
+                "value {:?} should enable filtering",
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn identities_only_yes_no_identity_file_returns_empty() {
+        // IdentitiesOnly=yes but no IdentityFile → empty allowed list
+        let mut config = crate::config::ConfigMap::new();
+        config.insert("identitiesonly".into(), "yes".into());
+
+        let allowed = allowed_agent_key_blobs(&config);
+        assert!(allowed.is_some());
+        assert!(allowed.unwrap().is_empty());
+    }
+
+    #[test]
+    fn identities_only_yes_missing_key_files_returns_empty() {
+        // IdentitiesOnly=yes with IdentityFile pointing to nonexistent paths
+        let mut config = crate::config::ConfigMap::new();
+        config.insert("identitiesonly".into(), "yes".into());
+        config.insert("identityfile".into(), "/nonexistent/id_key".into());
+
+        let allowed = allowed_agent_key_blobs(&config);
+        assert!(allowed.is_some());
+        assert!(allowed.unwrap().is_empty());
     }
 }
