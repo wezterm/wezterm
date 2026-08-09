@@ -58,6 +58,17 @@ const NSViewLayerContentsPlacementTopLeft: NSInteger = 11;
 #[allow(non_upper_case_globals)]
 const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
 
+unsafe fn window_background_color(is_opaque: bool) -> id {
+    let clear_color = cocoa::appkit::NSColor::clearColor(nil);
+    if is_opaque {
+        clear_color
+    } else {
+        // Alpha zero tells WindowServer that this may be an irregularly shaped
+        // window, which destabilizes native shadow/edge composition.
+        msg_send![clear_color, colorWithAlphaComponent: 0.01f64]
+    }
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGSMainConnectionID() -> id;
@@ -524,7 +535,9 @@ impl Window {
             let _: () = msg_send![*window, setRestorable: NO];
 
             window.setReleasedWhenClosed_(NO);
-            window.setBackgroundColor_(cocoa::appkit::NSColor::clearColor(nil));
+            window.setBackgroundColor_(window_background_color(
+                config.window_background_opacity >= 1.0,
+            ));
 
             // Tell Cocoa that we output in sRGB, so it handles color space
             // conversion for non-sRGB displays.
@@ -1107,6 +1120,9 @@ impl WindowInner {
                 is_opaque
             };
             self.window.setHasShadow_(shadow);
+
+            self.window
+                .setBackgroundColor_(window_background_color(is_opaque));
         }
     }
 
