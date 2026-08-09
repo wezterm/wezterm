@@ -153,6 +153,12 @@ impl ClientInner {
         log::trace!("remove_old_tab_mapping: {remote_tab_id} -> {old:?}");
     }
 
+    pub fn remove_old_window_mapping(&self, remote_window_id: WindowId) {
+        let mut window_map = self.remote_to_local_window.lock().unwrap();
+        let old = window_map.remove(&remote_window_id);
+        log::trace!("remove_old_window_mapping: {remote_window_id} -> {old:?}");
+    }
+
     fn record_remote_to_local_tab_mapping(&self, remote_tab_id: TabId, local_tab_id: TabId) {
         let mut map = self.remote_to_local_tab.lock().unwrap();
         let prior = map.insert(remote_tab_id, local_tab_id);
@@ -619,18 +625,29 @@ impl ClientDomain {
                 });
 
                 if let Some(local_window_id) = inner.remote_to_local_window(remote_window_id) {
-                    let mut window = mux
-                        .get_window_mut(local_window_id)
-                        .expect("no such window!?");
-                    log::debug!(
-                        "domain: {} adding tab to existing local window {}",
-                        inner.local_domain_id,
-                        local_window_id
-                    );
-                    if window.idx_by_id(tab.tab_id()).is_none() {
-                        window.push(&tab);
+                    match mux.get_window_mut(local_window_id) {
+                        Some(mut window) => {
+                            log::debug!(
+                                "domain: {} adding tab to existing local window {}",
+                                inner.local_domain_id,
+                                local_window_id
+                            );
+                            if window.idx_by_id(tab.tab_id()).is_none() {
+                                window.push(&tab);
+                            }
+                            continue;
+                        }
+                        None => {
+                            // Local window is gone; forget the stale mapping
+                            // and fall through to make a new window.
+                            log::debug!(
+                                "we had remote_to_local_window mapping of \
+                                 {remote_window_id} -> {local_window_id}, but the \
+                                 local window is not in the mux; forgetting it"
+                            );
+                            inner.remove_old_window_mapping(remote_window_id);
+                        }
                     }
-                    continue;
                 }
 
                 if let Some(local_window_id) = primary_window_id {
@@ -671,10 +688,10 @@ impl ClientDomain {
 
         for (remote_window_id, window_title) in panes.window_titles {
             if let Some(local_window_id) = inner.remote_to_local_window(remote_window_id) {
-                let mut window = mux
-                    .get_window_mut(local_window_id)
-                    .expect("no such window!?");
-                window.set_title(&window_title);
+                match mux.get_window_mut(local_window_id) {
+                    Some(mut window) => window.set_title(&window_title),
+                    None => inner.remove_old_window_mapping(remote_window_id),
+                }
             }
         }
 
