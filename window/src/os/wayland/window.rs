@@ -42,6 +42,8 @@ use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection as WConnection, Dispatch, Proxy, QueueHandle};
 use wayland_egl::{is_available as egl_is_available, WlEglSurface};
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1;
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwinBlurManager;
 use wezterm_font::FontConfiguration;
@@ -58,7 +60,29 @@ use crate::{
     WindowEventSender, WindowKeyEvent, WindowOps, WindowState,
 };
 
-use super::copy_and_paste::CopyAndPaste;
+/// Wayland-specific coordinate conversion methods for Dimensions
+trait WaylandDimensions {
+    fn dpi_factor(&self) -> f64;
+    fn pixels_to_surface(&self, pixels: i32) -> i32;
+    fn surface_to_pixels(&self, surface: i32) -> i32;
+}
+
+impl WaylandDimensions for Dimensions {
+    fn dpi_factor(&self) -> f64 {
+        self.dpi as f64 / crate::DEFAULT_DPI as f64
+    }
+
+    fn pixels_to_surface(&self, pixels: i32) -> i32 {
+        // Take care to round up, otherwise we can lose a pixel
+        // and that can effectively lose the final row of the terminal
+        (pixels as f64 / self.dpi_factor()).ceil() as i32
+    }
+
+    fn surface_to_pixels(&self, surface: i32) -> i32 {
+        (surface as f64 * self.dpi_factor()).ceil() as i32
+    }
+}
+
 use super::pointer::{PendingMouse, PointerUserData};
 use super::state::WaylandState;
 
@@ -217,16 +241,21 @@ impl WaylandWindow {
 
         let window = {
             let xdg_shell = &conn.wayland_state.borrow().xdg;
-            xdg_shell.create_window(surface.clone(), Decorations::RequestServer, &qh)
+            let initial_decorations =
+                if !config.window_decorations.contains(WindowDecorations::TITLE) {
+                    Decorations::None
+                } else {
+                    Decorations::RequestServer
+                };
+            xdg_shell.create_window(surface.clone(), initial_decorations, &qh)
         };
 
         window.set_app_id(class_name.to_string());
         window.set_title(name.to_string());
-        let decorations = config.window_decorations;
 
-        let decor_mode = if decorations == WindowDecorations::NONE {
+        let decor_mode = if !config.window_decorations.contains(WindowDecorations::TITLE) {
             None
-        } else if decorations == WindowDecorations::default() {
+        } else if config.window_decorations == WindowDecorations::default() {
             Some(DecorationMode::Server)
         } else {
             Some(DecorationMode::Client)
@@ -256,16 +285,14 @@ impl WaylandWindow {
 
         window.set_min_size(Some((32, 32)));
         let (x, y) = window_frame.location();
-        window.xdg_surface().set_window_geometry(
-            x,
-            y,
-            dimensions.pixel_width as i32,
-            dimensions.pixel_height as i32,
-        );
+        let surface_width = dimensions.pixels_to_surface(dimensions.pixel_width as i32);
+        let surface_height = dimensions.pixels_to_surface(dimensions.pixel_height as i32);
+        window
+            .xdg_surface()
+            .set_window_geometry(x, y, surface_width, surface_height);
         window.commit();
 
-        let copy_and_paste = CopyAndPaste::create();
-        let pending_mouse = PendingMouse::create(window_id, &copy_and_paste);
+        let pending_mouse = PendingMouse::create(window_id);
 
         {
             let surface_to_pending = &mut conn.wayland_state.borrow_mut().surface_to_pending;
@@ -277,7 +304,6 @@ impl WaylandWindow {
         let inner = Rc::new(RefCell::new(WaylandWindowInner {
             events: WindowEventSender::new(event_handler),
             surface_factor: 1.0,
-            copy_and_paste,
             invalidated: false,
             window: Some(window),
             window_frame,
@@ -308,6 +334,7 @@ impl WaylandWindow {
 
             wegl_surface: None,
             gl_state: None,
+            ext_background_effect_surface: None,
         }));
 
         let window_handle = Window::Wayland(WaylandWindow(window_id));
@@ -317,7 +344,7 @@ impl WaylandWindow {
             .events
             .assign_window(window_handle.clone());
 
-        inner.borrow().update_window_background_blur();
+        inner.borrow_mut().update_window_background_blur();
 
         {
             let windows = &conn.wayland_state.borrow().windows;
@@ -424,42 +451,55 @@ impl WindowOps for WaylandWindow {
         let mut promise = Promise::new();
         let future = promise.get_future().unwrap();
         let promise = Arc::new(Mutex::new(promise));
-        WaylandConnection::with_window_inner(self.0, move |inner| {
-            let read = inner
-                .copy_and_paste
+        promise::spawn::spawn_into_main_thread(async move {
+            let conn = crate::Connection::get().unwrap().wayland();
+            // Clone the Arc before dropping the borrow so get_clipboard_data can re-borrow
+            // wayland_state internally (so we don't have to pass all state manually).
+            let copy_paste_offer = conn.wayland_state.borrow().copy_paste_offer.clone();
+            match copy_paste_offer
                 .lock()
                 .unwrap()
-                .get_clipboard_data(clipboard)?;
-            let promise = Arc::clone(&promise);
-            std::thread::spawn(move || {
-                let mut promise = promise.lock().unwrap();
-                match read_pipe_with_timeout(read) {
-                    Ok(result) => {
-                        // Normalize the text to unix line endings, otherwise
-                        // copying from eg: firefox inserts a lot of blank
-                        // lines, and that is super annoying.
-                        promise.ok(result.replace("\r\n", "\n"));
-                    }
-                    Err(e) => {
-                        log::error!("while reading clipboard: {}", e);
-                        promise.err(anyhow!("{}", e));
-                    }
-                };
-            });
-            Ok(())
-        });
+                .get_clipboard_data(clipboard)
+            {
+                Ok(read) => {
+                    std::thread::spawn(move || {
+                        let mut promise = promise.lock().unwrap();
+                        match read_pipe_with_timeout(read) {
+                            Ok(result) => {
+                                // Normalize the text to unix line endings, otherwise
+                                // copying from eg: firefox inserts a lot of blank
+                                // lines, and that is super annoying.
+                                promise.ok(result.replace("\r\n", "\n"));
+                            }
+                            Err(e) => {
+                                log::error!("while reading clipboard: {}", e);
+                                promise.err(anyhow!("{}", e));
+                            }
+                        };
+                    });
+                }
+                Err(e) => {
+                    // Report the error on the Promise
+                    promise.lock().unwrap().err(e);
+                }
+            };
+        })
+        .detach();
         future
     }
 
     fn set_clipboard(&self, clipboard: Clipboard, text: String) {
-        WaylandConnection::with_window_inner(self.0, move |inner| {
-            inner
-                .copy_and_paste
+        promise::spawn::spawn_into_main_thread(async move {
+            let conn = crate::Connection::get().unwrap().wayland();
+            // Clone the Arc before dropping the borrow so set_clipboard_data can re-borrow
+            // wayland_state internally (so we don't have to pass all state manually).
+            let copy_paste_offer = conn.wayland_state.borrow().copy_paste_offer.clone();
+            copy_paste_offer
                 .lock()
                 .unwrap()
                 .set_clipboard_data(clipboard, text);
-            Ok(())
-        });
+        })
+        .detach();
     }
 
     fn toggle_fullscreen(&self) {
@@ -544,7 +584,6 @@ pub(crate) fn read_pipe_with_timeout(mut file: ReadPipe) -> anyhow::Result<Strin
 pub struct WaylandWindowInner {
     pub(crate) events: WindowEventSender,
     surface_factor: f64,
-    copy_and_paste: Arc<Mutex<CopyAndPaste>>,
     window: Option<XdgWindow>,
     pub(super) window_frame: FallbackFrame<WaylandState>,
     dimensions: Dimensions,
@@ -574,6 +613,7 @@ pub struct WaylandWindowInner {
     // libraries will segfault on shutdown
     wegl_surface: Option<WlEglSurface>,
     gl_state: Option<Rc<glium::backend::Context>>,
+    ext_background_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
 }
 
 impl WaylandWindowInner {
@@ -622,11 +662,15 @@ impl WaylandWindowInner {
                 .ok_or(anyhow!("Window does not exist"))?;
             let object_id = window.wl_surface().id();
 
-            wegl_surface = Some(WlEglSurface::new(
-                object_id,
-                self.dimensions.pixel_width as i32,
-                self.dimensions.pixel_height as i32,
-            )?);
+            // Align pixel dimensions to the integer buffer scale factor
+            // to satisfy the Wayland protocol requirement that buffer
+            // dimensions must be an integer multiple of the buffer_scale.
+            let surface_udata = SurfaceUserData::from_wl(window.wl_surface());
+            let scale = surface_udata.surface_data.scale_factor();
+            let pixel_width = (self.dimensions.pixel_width as i32 / scale) * scale;
+            let pixel_height = (self.dimensions.pixel_height as i32 / scale) * scale;
+
+            wegl_surface = Some(WlEglSurface::new(object_id, pixel_width, pixel_height)?);
 
             log::trace!("WEGL Surface here {:?}", wegl_surface);
 
@@ -664,18 +708,15 @@ impl WaylandWindowInner {
     }
 
     fn get_dpi_factor(&self) -> f64 {
-        self.dimensions.dpi as f64 / crate::DEFAULT_DPI as f64
+        self.dimensions.dpi_factor()
     }
 
     fn surface_to_pixels(&self, surface: i32) -> i32 {
-        (surface as f64 * self.get_dpi_factor()).ceil() as i32
+        self.dimensions.surface_to_pixels(surface)
     }
 
     fn pixels_to_surface(&self, pixels: i32) -> i32 {
-        // Take care to round up, otherwise we can lose a pixel
-        // and that can effectively lose the final row of the
-        // terminal
-        ((pixels as f64) / self.get_dpi_factor()).ceil() as i32
+        self.dimensions.pixels_to_surface(pixels)
     }
 
     pub(super) fn dispatch_dropped_files(&mut self, paths: Vec<PathBuf>) {
@@ -857,6 +898,13 @@ impl WaylandWindowInner {
                     }
                 }
 
+                // Align pixel dimensions to the integer buffer scale factor
+                // to satisfy the Wayland protocol requirement that buffer
+                // dimensions must be an integer multiple of the buffer_scale.
+                let scale = factor as i32;
+                pixel_width = (pixel_width / scale) * scale;
+                pixel_height = (pixel_height / scale) * scale;
+
                 log::trace!("Resizing frame");
                 if !self.window_frame.is_hidden() {
                     // Clamp the size to at least one surface heigh/width.
@@ -866,11 +914,13 @@ impl WaylandWindowInner {
                     pending.refresh_decorations = true
                 }
                 let (x, y) = self.window_frame.location();
+                let surface_width = self.pixels_to_surface(pixel_width);
+                let surface_height = self.pixels_to_surface(pixel_height);
                 self.window
                     .as_mut()
                     .unwrap()
                     .xdg_surface()
-                    .set_window_geometry(x, y, pixel_width, pixel_height);
+                    .set_window_geometry(x, y, surface_width, surface_height);
                 // Compute the new pixel dimensions
                 let new_dimensions = Dimensions {
                     pixel_width: pixel_width.try_into().unwrap(),
@@ -921,11 +971,10 @@ impl WaylandWindowInner {
                         ) {
                             self.surface().attach(Some(buffer.wl_buffer()), 0, 0);
                             self.surface().set_buffer_scale(factor as i32);
-                            self.surface().commit();
-
                             self.surface_factor = factor;
                         }
                     }
+                    self.update_window_background_blur();
                 }
                 self.do_paint().unwrap();
             }
@@ -1249,18 +1298,80 @@ impl WaylandWindowInner {
         self.update_window_background_blur();
     }
 
-    fn update_window_background_blur(&self) {
+    fn update_window_background_blur(&mut self) {
         let conn = WaylandConnection::get().unwrap().wayland();
         let qh = conn.event_queue.borrow().handle();
         let wayland_state = conn.wayland_state.borrow();
-        if let Some(manager) = &wayland_state.kde_blur_manager {
-            let kde_blur = manager.create(self.surface(), &qh, GlobalData);
-            if self.config.kde_window_background_blur {
-                kde_blur.set_region(None);
-            } else {
-                kde_blur.release();
+        let win_wl_surface = self.surface().clone();
+        let bg_blur_wanted =
+            self.config.wayland_window_background_blur || self.config.kde_window_background_blur;
+
+        if wayland_state.ext_background_effect_manager.is_some() {
+            let manager = &wayland_state.ext_background_effect_manager.clone().unwrap();
+            // Check if bg blur is disabled -> cleanup past state & return
+            if !bg_blur_wanted {
+                if let Some(ext_effect_surface) = self.ext_background_effect_surface.take() {
+                    log::trace!(
+                        "ext window bg: dropping surface {:?}, associated with win {:?}",
+                        ext_effect_surface.id(),
+                        win_wl_surface.id(),
+                    );
+                    ext_effect_surface.destroy();
+                }
+                return;
             }
-            kde_blur.commit();
+
+            if !wayland_state.ext_background_effect_can_blur {
+                // Nothing else to do here
+                return;
+            }
+
+            // Get or create the associated surface used for background effects
+            let blur_surface = self.ext_background_effect_surface.get_or_insert_with(|| {
+                log::trace!(
+                    "ext window bg: creating blur surface, for win {:?}",
+                    win_wl_surface.id(),
+                );
+                let surface = manager.get_background_effect(&win_wl_surface, &qh, GlobalData);
+                log::trace!(
+                    "ext window bg: created blur surface {:?}, for win {:?}",
+                    surface.id(),
+                    win_wl_surface.id(),
+                );
+                surface
+            });
+
+            // Set/Update region for the blur surface
+            let region: WlRegion = wayland_state
+                .compositor
+                .wl_compositor()
+                .create_region(&qh, GlobalData);
+            region.add(
+                0,
+                0,
+                self.dimensions.pixel_width as i32,
+                self.dimensions.pixel_height as i32,
+            );
+            blur_surface.set_blur_region(Some(&region));
+            region.destroy();
+        } else if let Some(manager) = &wayland_state.kde_blur_manager {
+            let blur_surface = manager.create(&win_wl_surface, &qh, GlobalData);
+            if bg_blur_wanted {
+                log::trace!(
+                    "kde window bg: setting up blur surface for win {:?}",
+                    win_wl_surface.id()
+                );
+                blur_surface.set_region(None);
+            } else {
+                log::trace!(
+                    "kde window bg: clearing blur surface for win {:?}",
+                    win_wl_surface.id()
+                );
+                blur_surface.release();
+            }
+            blur_surface.commit();
+        } else if bg_blur_wanted {
+            log::warn!("window bg: blur wanted but no provider available");
         }
     }
 }
@@ -1455,17 +1566,62 @@ impl Dispatch<WlRegion, GlobalData> for WaylandState {
     }
 }
 
-pub(super) struct SurfaceUserData {
+impl Dispatch<ExtBackgroundEffectManagerV1, GlobalData> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _proxy: &ExtBackgroundEffectManagerV1,
+        event: <ExtBackgroundEffectManagerV1 as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::Event;
+        const BLUR_CAPABILITY_FLAG: u32 = 1;
+        if let Event::Capabilities { flags } = event {
+            let flags: u32 = flags.into();
+            log::trace!("ext window bg: got capabilities: {flags:#x?}");
+            state.ext_background_effect_can_blur = flags & BLUR_CAPABILITY_FLAG != 0;
+            log::trace!(
+                "ext window bg: can blur: {}",
+                state.ext_background_effect_can_blur
+            );
+        }
+    }
+}
+
+impl Dispatch<ExtBackgroundEffectSurfaceV1, GlobalData> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ExtBackgroundEffectSurfaceV1,
+        _event: <ExtBackgroundEffectSurfaceV1 as Proxy>::Event,
+        _data: &GlobalData,
+        _conn: &WConnection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+/// User-data attached to each [`WlSurface`] via [`smithay_client_toolkit`].
+///
+/// Associates a surface with its owning window ID, allowing lookups
+/// from raw surface references (e.g. during DnD or pointer events).
+pub struct SurfaceUserData {
+    /// [`smithay_client_toolkit`] surface data
     surface_data: SurfaceData,
-    pub(super) window_id: usize,
+    /// ID of the window
+    pub window_id: usize,
 }
 
 impl SurfaceUserData {
-    pub(super) fn from_wl(wl: &WlSurface) -> &Self {
+    /// Returns the [`SurfaceUserData`] associated with the given [`WlSurface`].
+    pub fn from_wl(wl: &WlSurface) -> &Self {
         wl.data()
             .expect("User data should be associated with WlSurface")
     }
-    pub(super) fn try_from_wl(wl: &WlSurface) -> Option<&SurfaceUserData> {
+
+    /// Returns an [`Option`] with the [`SurfaceUserData`] associated with the given [`WlSurface`],
+    /// `None` if the surface has no associated user-data.
+    pub fn try_from_wl(wl: &WlSurface) -> Option<&SurfaceUserData> {
         wl.data()
     }
 }
@@ -1477,7 +1633,7 @@ impl SurfaceDataExt for SurfaceUserData {
 }
 
 impl HasDisplayHandle for WaylandWindowInner {
-    fn display_handle(&self) -> Result<DisplayHandle, HandleError> {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         let conn = WaylandConnection::get().unwrap().wayland();
         let backend = conn.connection.backend();
         let handle = backend.display_handle()?;
@@ -1486,7 +1642,7 @@ impl HasDisplayHandle for WaylandWindowInner {
 }
 
 impl HasWindowHandle for WaylandWindowInner {
-    fn window_handle(&self) -> Result<WindowHandle, HandleError> {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
         let handle = WaylandWindowHandle::new(
             NonNull::new(self.surface().id().as_ptr() as _).expect("non-null"),
         );
@@ -1495,7 +1651,7 @@ impl HasWindowHandle for WaylandWindowInner {
 }
 
 impl HasDisplayHandle for WaylandWindow {
-    fn display_handle(&self) -> Result<DisplayHandle, HandleError> {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         let conn = WaylandConnection::get().unwrap().wayland();
         let backend = conn.connection.backend();
         let handle = backend.display_handle()?;
@@ -1504,7 +1660,7 @@ impl HasDisplayHandle for WaylandWindow {
 }
 
 impl HasWindowHandle for WaylandWindow {
-    fn window_handle(&self) -> Result<WindowHandle, HandleError> {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
         let conn = Connection::get().expect("raw_window_handle only callable on main thread");
         let handle = conn
             .wayland()

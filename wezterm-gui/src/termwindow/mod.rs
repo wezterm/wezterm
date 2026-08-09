@@ -380,6 +380,9 @@ pub struct TermWindow {
     terminal_size: TerminalSize,
     pub mux_window_id: MuxWindowId,
     pub mux_window_id_for_subscriptions: Arc<Mutex<MuxWindowId>>,
+    /// `true` when the mux subscription must be unsubscribed from.
+    /// This is done asynchronously to avoid races between mux events.
+    mux_subscription_dead: Arc<AtomicBool>,
     pub render_metrics: RenderMetrics,
     render_state: Option<RenderState>,
     input_map: InputMap,
@@ -696,6 +699,7 @@ impl TermWindow {
             focused: None,
             mux_window_id,
             mux_window_id_for_subscriptions: Arc::new(Mutex::new(mux_window_id)),
+            mux_subscription_dead: Arc::new(AtomicBool::new(false)),
             fonts: Rc::clone(&fontconfig),
             render_metrics,
             dimensions,
@@ -1467,21 +1471,14 @@ impl TermWindow {
             | MuxNotification::PaneFocused(pane_id)
             | MuxNotification::PaneRemoved(pane_id)
             | MuxNotification::PaneOutput(pane_id) => {
-                // Ideally we'd check to see if pane_id is part of this window,
-                // but overlays may not be 100% associated with the window
-                // in the mux and we don't want to lose the invalidation
-                // signal for that case, so we just check window validity
-                // here and propagate to the window event handler that
-                // will then do the check with full context.
+                // Check window validity and propagate to the window event handler
+                // that will do the full pane visibility check.
                 let mux = Mux::get();
                 if mux.get_window(mux_window_id).is_none() {
-                    // Something inconsistent: cancel subscription
-                    log::debug!(
-                        "PaneOutput: wanted mux_window_id={} from mux, but \
-                         was not found, cancel mux subscription",
-                        mux_window_id
-                    );
-                    return false;
+                    // If the window is not found, the mux_window_id may be stale during
+                    // a workspace switch - skip this notif but keep the subscription.
+                    // (next notifs should finish the workspace switch & reconcile the state)
+                    return true;
                 }
                 let _ = pane_id;
             }
@@ -1492,12 +1489,21 @@ impl TermWindow {
                 return mux.get_window(mux_window_id).is_some();
             }
             MuxNotification::TabAddedToWindow { window_id, .. }
-            | MuxNotification::WindowRemoved(window_id)
             | MuxNotification::WindowTitleChanged { window_id, .. }
             | MuxNotification::WindowInvalidated(window_id) => {
                 if window_id != mux_window_id {
                     return true;
                 }
+            }
+            MuxNotification::WindowRemoved(window_id) => {
+                if window_id != mux_window_id {
+                    return true;
+                }
+                // The removed window matches our current mux_window_id.
+                // During workspace switches, mux_window_id may be stale.
+                // Skip this notification but keep the subscription alive.
+                // (next notifs should finish the workspace switch & reconcile the state)
+                return true;
             }
             MuxNotification::TabResized(tab_id)
             | MuxNotification::TabTitleChanged { tab_id, .. } => {
@@ -1536,8 +1542,12 @@ impl TermWindow {
         let window = self.window.clone().expect("window to be valid on startup");
         let mux_window_id = Arc::clone(&self.mux_window_id_for_subscriptions);
         let mux = Mux::get();
-        let dead = Arc::new(AtomicBool::new(false));
+        let dead = Arc::clone(&self.mux_subscription_dead);
         mux.subscribe(move |n| {
+            if dead.load(Ordering::Relaxed) {
+                // Unsubscribe this handler from the mux
+                return false;
+            }
             let mux_window_id = *mux_window_id.lock().unwrap();
             let window = window.clone();
             let dead = dead.clone();
@@ -2187,8 +2197,8 @@ impl TermWindow {
 
             drop(window);
 
-            if let Some(tab) = self.get_active_pane_or_overlay() {
-                tab.focus_changed(true);
+            if let Some(pane) = self.get_active_pane_or_overlay() {
+                pane.focus_changed(true);
             }
 
             self.update_title();
@@ -3289,13 +3299,13 @@ impl TermWindow {
         }
     }
 
-    pub fn pane_state(&self, pane_id: PaneId) -> RefMut<PaneState> {
+    pub fn pane_state(&self, pane_id: PaneId) -> RefMut<'_, PaneState> {
         RefMut::map(self.pane_state.borrow_mut(), |state| {
             state.entry(pane_id).or_insert_with(PaneState::default)
         })
     }
 
-    pub fn tab_state(&self, tab_id: TabId) -> RefMut<TabState> {
+    pub fn tab_state(&self, tab_id: TabId) -> RefMut<'_, TabState> {
         RefMut::map(self.tab_state.borrow_mut(), |state| {
             state.entry(tab_id).or_insert_with(TabState::default)
         })
@@ -3607,6 +3617,7 @@ impl TermWindow {
         match pattern.pattern {
             InnerPattern::CaseSensitiveString(s) => MuxPattern::CaseSensitiveString(s),
             InnerPattern::CaseInSensitiveString(s) => MuxPattern::CaseInSensitiveString(s),
+            InnerPattern::CaseSmartString(s) => MuxPattern::CaseSmartString(s),
             InnerPattern::Regex(s) => MuxPattern::Regex(s),
             InnerPattern::CurrentSelectionOrEmptyString => {
                 MuxPattern::CaseSensitiveString(self.get_selection_text_first_line(pane))
@@ -3625,6 +3636,9 @@ impl TermWindow {
 
 impl Drop for TermWindow {
     fn drop(&mut self) {
+        // Mark the mux subscription as dead.
+        // (will actually unsubscribe on the next notif from mux)
+        self.mux_subscription_dead.store(true, Ordering::Relaxed);
         self.clear_all_overlays();
         if let Some(window) = self.window.take() {
             if let Some(fe) = try_front_end() {

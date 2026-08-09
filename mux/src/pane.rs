@@ -57,6 +57,7 @@ pub struct SearchResult {
 pub enum Pattern {
     CaseSensitiveString(String),
     CaseInSensitiveString(String),
+    CaseSmartString(String),
     Regex(String),
 }
 
@@ -72,6 +73,7 @@ impl std::ops::Deref for Pattern {
         match self {
             Pattern::CaseSensitiveString(s) => s,
             Pattern::CaseInSensitiveString(s) => s,
+            Pattern::CaseSmartString(s) => s,
             Pattern::Regex(s) => s,
         }
     }
@@ -82,6 +84,7 @@ impl std::ops::DerefMut for Pattern {
         match self {
             Pattern::CaseSensitiveString(s) => s,
             Pattern::CaseInSensitiveString(s) => s,
+            Pattern::CaseSmartString(s) => s,
             Pattern::Regex(s) => s,
         }
     }
@@ -91,6 +94,7 @@ impl std::ops::DerefMut for Pattern {
 pub enum PatternType {
     CaseSensitiveString,
     CaseInSensitiveString,
+    CaseSmartString,
     Regex,
 }
 
@@ -99,6 +103,7 @@ impl From<&Pattern> for PatternType {
         match value {
             Pattern::CaseSensitiveString(_) => PatternType::CaseSensitiveString,
             Pattern::CaseInSensitiveString(_) => PatternType::CaseInSensitiveString,
+            Pattern::CaseSmartString(_) => PatternType::CaseSmartString,
             Pattern::Regex(_) => PatternType::Regex,
         }
     }
@@ -236,8 +241,12 @@ pub trait Pane: Downcast + Send + Sync {
         Progress::None
     }
     fn send_paste(&self, text: &str) -> anyhow::Result<()>;
+    fn send_composed_text(&self, text: &str) -> anyhow::Result<()> {
+        self.writer().write_all(text.as_bytes())?;
+        Ok(())
+    }
     fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>>;
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write>;
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write>;
     fn resize(&self, size: TerminalSize) -> anyhow::Result<()>;
     /// Called as a hint that the pane is being resized as part of
     /// a zoom-to-fill-all-the-tab-space operation.
@@ -264,10 +273,10 @@ pub trait Pane: Downcast + Send + Sync {
 
     fn erase_scrollback(&self, _erase_mode: ScrollbackEraseMode) {}
 
-    /// Called to advise on whether this tab has focus
+    /// Called to advise on whether this pane has focus
     fn focus_changed(&self, _focused: bool) {}
 
-    /// Called to advise remote mux that this is the active tab
+    /// Called to advise remote mux that this is the active pane
     /// for the current identity
     fn advise_focus(&self) {}
 
@@ -627,7 +636,7 @@ mod test {
         fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>> {
             Ok(None)
         }
-        fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+        fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
             unimplemented!()
         }
         fn resize(&self, _: TerminalSize) -> anyhow::Result<()> {
@@ -685,7 +694,7 @@ mod test {
         physical_lines
     }
 
-    fn summarize_logical_lines(lines: &[LogicalLine]) -> Vec<(StableRowIndex, Cow<str>)> {
+    fn summarize_logical_lines(lines: &[LogicalLine]) -> Vec<(StableRowIndex, Cow<'_, str>)> {
         lines
             .iter()
             .map(|l| (l.first_row, l.logical.as_str()))
@@ -698,7 +707,7 @@ mod test {
         let width = 20;
         let physical_lines = physical_lines_from_text(text, width);
 
-        fn text_from_lines(lines: &[Line]) -> Vec<Cow<str>> {
+        fn text_from_lines(lines: &[Line]) -> Vec<Cow<'_, str>> {
             lines.iter().map(|l| l.as_str()).collect::<Vec<_>>()
         }
 

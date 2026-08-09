@@ -62,19 +62,19 @@ fn toml_encode_pretty(_: &Lua, value: LuaValue) -> mlua::Result<String> {
     toml::to_string_pretty(&json).map_err(|err| mlua::Error::external(format!("{err:#}")))
 }
 
-fn json_decode(lua: &Lua, text: String) -> mlua::Result<LuaValue> {
+fn json_decode(lua: &Lua, text: String) -> mlua::Result<LuaValue<'_>> {
     let value =
         serde_json::from_str(&text).map_err(|err| mlua::Error::external(format!("{err:#}")))?;
     json_value_to_lua_value(lua, value)
 }
 
-fn yaml_decode(lua: &Lua, text: String) -> mlua::Result<LuaValue> {
+fn yaml_decode(lua: &Lua, text: String) -> mlua::Result<LuaValue<'_>> {
     let value: JValue =
         serde_yaml::from_str(&text).map_err(|err| mlua::Error::external(format!("{err:#}")))?;
     json_value_to_lua_value(lua, value)
 }
 
-fn toml_decode(lua: &Lua, text: String) -> mlua::Result<LuaValue> {
+fn toml_decode(lua: &Lua, text: String) -> mlua::Result<LuaValue<'_>> {
     let value: JValue =
         toml::from_str(&text).map_err(|err| mlua::Error::external(format!("{err:#}")))?;
     json_value_to_lua_value(lua, value)

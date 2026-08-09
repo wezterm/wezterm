@@ -468,7 +468,7 @@ __wezterm_semantic_precmd() {
     __wezterm_save_ps2="$PS2"
     # Markup the left and right prompts so that the terminal
     # knows that they are semantically prompt output.
-    if [[ -n "$ZSH_NAME" ]] ; then
+    if [[ -n "${ZSH_NAME-}" ]] ; then
       PS1=$'%{\e]133;P;k=i\a%}'$PS1$'%{\e]133;B\a%}'
       PS2=$'%{\e]133;P;k=s\a%}'$PS2$'%{\e]133;B\a%}'
     else

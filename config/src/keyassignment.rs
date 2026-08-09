@@ -122,6 +122,7 @@ pub enum ActivateMatchPosition {
 pub enum InnerPattern {
     CaseSensitiveString(String),
     CaseInSensitiveString(String),
+    CaseSmartString(String),
     Regex(String),
     CurrentSelectionOrEmptyString,
 }
@@ -139,6 +140,7 @@ impl Pattern {
         &[
             "CaseSensitiveString",
             "CaseInSensitiveString",
+            "CaseSmartString",
             "Regex",
             "CurrentSelectionOrEmptyString",
         ]
@@ -195,6 +197,9 @@ impl FromDynamic for Pattern {
                                 "CaseInSensitiveString" => InnerPattern::CaseInSensitiveString(
                                     String::from_dynamic(inner_value, options)?,
                                 ),
+                                "CaseSmartString" => InnerPattern::CaseSmartString(
+                                    String::from_dynamic(inner_value, options)?,
+                                ),
                                 "Regex" => {
                                     InnerPattern::Regex(String::from_dynamic(inner_value, options)?)
                                 }
@@ -240,6 +245,7 @@ impl Pattern {
         match &self.pattern {
             InnerPattern::CaseSensitiveString(s)
             | InnerPattern::CaseInSensitiveString(s)
+            | InnerPattern::CaseSmartString(s)
             | InnerPattern::Regex(s) => s.is_empty(),
             InnerPattern::CurrentSelectionOrEmptyString => true,
         }
@@ -398,7 +404,7 @@ pub enum PaneDirection {
 impl PaneDirection {
     pub fn direction_from_str(arg: &str) -> Result<PaneDirection, String> {
         for candidate in PaneDirection::variants() {
-            if candidate.to_lowercase() == arg.to_lowercase() {
+            if candidate.eq_ignore_ascii_case(arg) {
                 if let Ok(direction) = PaneDirection::from_dynamic(
                     &Value::String(candidate.to_string()),
                     FromDynamicOptions::default(),

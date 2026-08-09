@@ -529,10 +529,10 @@ impl portable_pty::MasterPty for FailedSpawnPty {
     fn get_size(&self) -> anyhow::Result<PtySize> {
         self.inner.lock().get_size()
     }
-    fn try_clone_reader(&self) -> anyhow::Result<Box<(dyn std::io::Read + Send + 'static)>> {
+    fn try_clone_reader(&self) -> anyhow::Result<Box<dyn std::io::Read + Send + 'static>> {
         self.inner.lock().try_clone_reader()
     }
-    fn take_writer(&self) -> anyhow::Result<Box<(dyn std::io::Write + Send + 'static)>> {
+    fn take_writer(&self) -> anyhow::Result<Box<dyn std::io::Write + Send + 'static>> {
         self.inner.lock().take_writer()
     }
 

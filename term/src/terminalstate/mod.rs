@@ -1290,6 +1290,7 @@ impl TerminalState {
                 ident.push_str(";6"); // Selective erase
                 ident.push_str(";18"); // windowing extensions
                 ident.push_str(";22"); // ANSI color, vt525
+                ident.push_str(";52"); // Clipboard access
                 ident.push('c');
 
                 self.writer.write(ident.as_bytes()).ok();
@@ -2072,14 +2073,16 @@ impl TerminalState {
                 right,
                 ..
             } => {
-                let checksum = self.checksum_rectangle(
-                    left.as_zero_based(),
-                    top.as_zero_based(),
-                    right.as_zero_based(),
-                    bottom.as_zero_based(),
-                );
-                write!(self.writer, "\x1bP{}!~{:04x}\x1b\\", request_id, checksum).ok();
-                self.writer.flush().ok();
+                if self.config.enable_checksum_rectangular_area() {
+                    let checksum = self.checksum_rectangle(
+                        left.as_zero_based(),
+                        top.as_zero_based(),
+                        right.as_zero_based(),
+                        bottom.as_zero_based(),
+                    );
+                    write!(self.writer, "\x1bP{}!~{:04x}\x1b\\", request_id, checksum).ok();
+                    self.writer.flush().ok();
+                }
             }
             Window::ResizeWindowCells { .. } => {
                 // We don't allow the application to change the window size; that's

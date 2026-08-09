@@ -278,7 +278,7 @@ impl Modal for PaneSelector {
     fn computed_element(
         &self,
         term_window: &mut TermWindow,
-    ) -> anyhow::Result<Ref<[ComputedElement]>> {
+    ) -> anyhow::Result<Ref<'_, [ComputedElement]>> {
         if self.element.borrow().is_none() {
             let (element, labels) = Self::compute(term_window, &self.alphabet, self.show_pane_ids)?;
             self.element.borrow_mut().replace(element);

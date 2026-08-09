@@ -37,7 +37,6 @@ use objc::declare::ClassDecl;
 use objc::rc::{StrongPtr, WeakPtr};
 use objc::runtime::{Class, Object, Protocol, Sel};
 use objc::*;
-use objc2_core_graphics::CGColorCreateSRGB;
 use promise::Future;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle,
@@ -587,8 +586,7 @@ impl Window {
             window.setTitle_(*nsstring(&name));
             window.setAcceptsMouseMovedEvents_(YES);
 
-            let view = WindowView::alloc(&inner)?;
-            view.initWithFrame_(rect);
+            let view = WindowView::init_with_frame(&inner, rect)?;
             view.setAutoresizingMask_(NSViewHeightSizable | NSViewWidthSizable);
 
             let () = msg_send![
@@ -668,7 +666,7 @@ impl Window {
 }
 
 impl HasDisplayHandle for Window {
-    fn display_handle(&self) -> Result<DisplayHandle, HandleError> {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         unsafe {
             Ok(DisplayHandle::borrow_raw(RawDisplayHandle::AppKit(
                 AppKitDisplayHandle::new(),
@@ -678,7 +676,7 @@ impl HasDisplayHandle for Window {
 }
 
 impl HasWindowHandle for Window {
-    fn window_handle(&self) -> Result<WindowHandle, HandleError> {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
         let handle =
             AppKitWindowHandle::new(NonNull::new(self.ns_view as *mut _).expect("non-null"));
         unsafe { Ok(WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle))) }
@@ -1138,7 +1136,7 @@ impl WindowInner {
                 }
 
                 // We need to make sure to convert the config color into an sRGB CGColor or the color will be slightly off
-                let srgb_cgcolor = CGColorCreateSRGB(
+                let srgb_cgcolor = objc2_core_graphics::CGColor::new_srgb(
                     color.0.into(),
                     color.1.into(),
                     color.2.into(),
@@ -1386,7 +1384,6 @@ fn apply_decorations_to_window(
         };
 
         for titlebar_button in &[
-            appkit::NSWindowButton::NSWindowFullScreenButton,
             appkit::NSWindowButton::NSWindowMiniaturizeButton,
             appkit::NSWindowButton::NSWindowCloseButton,
             appkit::NSWindowButton::NSWindowZoomButton,
@@ -3037,7 +3034,9 @@ impl WindowView {
         log::trace!("make_backing_layer");
         let class = class!(CAMetalLayer);
         unsafe {
-            let layer: id = msg_send![class, new];
+            // Use type method to get a instance of CAMetalLayer.
+            // So that we don't have to worry about retaining/releasing it.
+            let layer: id = msg_send![class, layer];
             let () = msg_send![layer, setDelegate: view];
             let () = msg_send![layer, setContentsScale: 1.0];
             let () = msg_send![layer, setOpaque: NO];
@@ -3154,11 +3153,11 @@ impl WindowView {
         }
     }
 
-    fn alloc(inner: &Rc<RefCell<Inner>>) -> anyhow::Result<StrongPtr> {
+    fn init_with_frame(inner: &Rc<RefCell<Inner>>, rect: NSRect) -> anyhow::Result<StrongPtr> {
         let cls = Self::get_class();
 
-        let view_id: StrongPtr = unsafe { StrongPtr::new(msg_send![cls, new]) };
-
+        let view_id: id = unsafe { msg_send![cls, alloc] };
+        let view_id: StrongPtr = unsafe { StrongPtr::new(msg_send![view_id, initWithFrame:rect]) };
         inner.borrow_mut().view_id.replace(view_id.weak());
 
         let view = Box::into_raw(Box::new(Self {
