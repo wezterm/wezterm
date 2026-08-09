@@ -1038,6 +1038,19 @@ impl Reconnectable {
 }
 
 impl Client {
+    #[cfg(test)]
+    pub(crate) fn dummy() -> Self {
+        let (sender, _rx) = unbounded();
+        Self {
+            sender,
+            local_domain_id: None,
+            client_id: ClientId::new(),
+            client_domain_config: ClientDomainConfig::Unix(config::UnixDomain::default()),
+            is_reconnectable: false,
+            is_local: false,
+        }
+    }
+
     fn new(local_domain_id: Option<DomainId>, mut reconnectable: Reconnectable) -> Self {
         let client_domain_config = reconnectable.config.clone();
         let is_reconnectable = reconnectable.reconnectable();
