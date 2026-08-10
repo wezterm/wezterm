@@ -1990,12 +1990,21 @@ pub enum VerticalWindowContentAlignment {
 }
 
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, PartialEq, Eq)]
+#[dynamic(fallback = "bool")]
 pub enum NewlineCanon {
-    // FIXME: also allow deserialziing from bool
     None,
     LineFeed,
     CarriageReturn,
     CarriageReturnAndLineFeed,
+}
+
+impl From<bool> for NewlineCanon {
+    fn from(value: bool) -> Self {
+        match value {
+            true => NewlineCanon::CarriageReturnAndLineFeed,
+            false => NewlineCanon::None,
+        }
+    }
 }
 
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default)]
