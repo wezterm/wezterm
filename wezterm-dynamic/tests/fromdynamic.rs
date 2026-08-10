@@ -313,7 +313,10 @@ fn fallback_struct_primary_succeeds() {
         .into(),
     );
     assert_eq!(
-        StructWithSimplerFallback { field: "hello".to_string(), other: 99 },
+        StructWithSimplerFallback {
+            field: "hello".to_string(),
+            other: 99
+        },
         StructWithSimplerFallback::from_dynamic(&val, Default::default()).unwrap(),
     );
 }
@@ -324,7 +327,10 @@ fn fallback_struct_simpler_string_used() {
     // converts it into the primary type.
     let val = Value::String("simpler-value".to_string());
     assert_eq!(
-        StructWithSimplerFallback { field: "simpler-value".to_string(), other: 0 },
+        StructWithSimplerFallback {
+            field: "simpler-value".to_string(),
+            other: 0
+        },
         StructWithSimplerFallback::from_dynamic(&val, Default::default()).unwrap(),
     );
 }
@@ -335,11 +341,17 @@ fn fallback_struct_both_fail_returns_fallback_failed() {
     // both errors are returned.
     let val = Value::U64(999); // not an Object and not a String
     let err = StructWithSimplerFallback::from_dynamic(&val, Default::default()).unwrap_err();
-    let Error::FallbackFailed { primary_error, fallback_error } = err else {
+    let Error::FallbackFailed {
+        primary_error,
+        fallback_error,
+    } = err
+    else {
         panic!("expected FallbackFailed, got: {err:?}");
     };
     assert!(
-        primary_error.to_string().contains("StructWithSimplerFallback"),
+        primary_error
+            .to_string()
+            .contains("StructWithSimplerFallback"),
         "primary error should mention the primary type name, got: {primary_error}",
     );
     assert!(
@@ -377,7 +389,9 @@ fn fallback_enum_primary_succeeds() {
         .into(),
     );
     assert_eq!(
-        EnumWithSimplerFallback::Complex { field: "yes".to_string() },
+        EnumWithSimplerFallback::Complex {
+            field: "yes".to_string()
+        },
         EnumWithSimplerFallback::from_dynamic(&val, Default::default()).unwrap(),
     );
 }
@@ -387,7 +401,9 @@ fn fallback_enum_simpler_string_used() {
     // When input is a bare string, fallback path runs.
     let val = Value::String("simpler-enum".to_string());
     assert_eq!(
-        EnumWithSimplerFallback::Complex { field: "simpler-enum".to_string() },
+        EnumWithSimplerFallback::Complex {
+            field: "simpler-enum".to_string()
+        },
         EnumWithSimplerFallback::from_dynamic(&val, Default::default()).unwrap(),
     );
 }
@@ -398,11 +414,17 @@ fn fallback_enum_both_fail_returns_fallback_failed() {
     // both errors are returned.
     let val = Value::U64(42); // not a valid enum Object, not a String
     let err = EnumWithSimplerFallback::from_dynamic(&val, Default::default()).unwrap_err();
-    let Error::FallbackFailed { primary_error, fallback_error } = err else {
+    let Error::FallbackFailed {
+        primary_error,
+        fallback_error,
+    } = err
+    else {
         panic!("expected FallbackFailed, got: {err:?}");
     };
     assert!(
-        primary_error.to_string().contains("EnumWithSimplerFallback"),
+        primary_error
+            .to_string()
+            .contains("EnumWithSimplerFallback"),
         "primary error should mention the primary type name, got: {primary_error}",
     );
     assert!(
