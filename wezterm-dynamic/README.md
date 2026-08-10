@@ -12,7 +12,7 @@ between Lua table <-> Rust struct allows for richer error messages and WezTerm-s
 The data flow is:
 ```mermaid
 flowchart TD
-    luaval["luaval::Value\n(Lua code)"]
+    luaval["mlua::Value\n(Lua code)"]
     dynval["wezterm_dynamic::Value"]
     rust["Rust types\n(struct/enums/..)"]
 
