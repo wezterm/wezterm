@@ -187,7 +187,7 @@ impl crate::TermWindow {
                     .padding(BoxDimension {
                         left: Dimension::Cells(0.5),
                         right: Dimension::Cells(0.5),
-                        top: Dimension::Cells(0.2),
+                        top: Dimension::Cells(0.25),
                         bottom: Dimension::Cells(0.25),
                     })
                     .border(BoxDimension::new(Dimension::Pixels(1.)))
@@ -258,7 +258,7 @@ impl crate::TermWindow {
                     .padding(BoxDimension {
                         left: Dimension::Cells(0.5),
                         right: Dimension::Cells(0.5),
-                        top: Dimension::Cells(0.2),
+                        top: Dimension::Cells(0.25),
                         bottom: Dimension::Cells(0.25),
                     })
                     .border(BoxDimension::new(Dimension::Pixels(1.)))
