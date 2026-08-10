@@ -1378,3 +1378,36 @@ fn test_hyperlinks() {
         Compare::TEXT | Compare::ATTRS,
     );
 }
+
+#[test]
+fn resize_taller_and_narrower_keeps_cursor_below_the_output() {
+    // The Android window is always bigger than the 24x80 the first pane is
+    // spawned at, so the very first thing that happens to it is a resize that
+    // grows the rows and shrinks the columns. Anything already printed must
+    // stay put, and the cursor must stay on the line below it -- otherwise the
+    // next write lands on top of the shell's first prompt and erases it.
+    let mut term = TestTerm::new(24, 80, 0);
+    term.print("M1_BEFORE\r\n");
+    assert_eq!(term.cursor_pos().y, 1, "cursor starts below the output");
+
+    term.resize(TerminalSize {
+        rows: 46,
+        cols: 52,
+        pixel_width: 52 * 8,
+        pixel_height: 46 * 16,
+        dpi: 0,
+    });
+
+    let lines = term.screen().visible_lines();
+    assert_eq!(lines[0].as_str(), "M1_BEFORE", "the output survives");
+    assert_eq!(
+        term.cursor_pos().y,
+        1,
+        "the cursor is still below the output"
+    );
+
+    term.print("M2_AFTER\r\n");
+    let lines = term.screen().visible_lines();
+    assert_eq!(lines[0].as_str(), "M1_BEFORE");
+    assert_eq!(lines[1].as_str(), "M2_AFTER");
+}
