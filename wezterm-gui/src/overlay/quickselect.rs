@@ -1011,7 +1011,7 @@ impl QuickSelectRenderable {
                         let mut selection = term_window.selection(pane_id);
                         let start = SelectionCoordinate::x_y(result.start_x, result.start_y);
                         selection.origin = Some(start);
-                        selection.range = Some(SelectionRange {
+                        selection.set_range(Some(SelectionRange {
                             start,
                             // inclusive range for selection, but the result
                             // range is exclusive
@@ -1019,7 +1019,7 @@ impl QuickSelectRenderable {
                                 result.end_x.saturating_sub(1),
                                 result.end_y,
                             ),
-                        });
+                        }));
                         // Ensure that selection doesn't get invalidated when
                         // the overlay is closed
                         selection.seqno = pane.get_current_seqno();

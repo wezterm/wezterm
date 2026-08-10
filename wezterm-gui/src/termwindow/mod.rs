@@ -1676,40 +1676,62 @@ impl TermWindow {
     }
 
     fn check_for_dirty_lines_and_invalidate_selection(&mut self, pane: &Arc<dyn Pane>) {
-        let dims = pane.get_dimensions();
-        let viewport = self
-            .get_viewport(pane.pane_id())
-            .unwrap_or(dims.physical_top);
-        let visible_range = viewport..viewport + dims.viewport_rows as StableRowIndex;
-        let seqno = self.selection(pane.pane_id()).seqno;
-        let dirty = pane.get_changed_since(visible_range, seqno);
-
-        if dirty.is_empty() {
+        // The search/copy overlays deliberately mark lines dirty (for match
+        // highlighting) while managing the selection themselves, so leave them
+        // alone.
+        if pane.downcast_ref::<CopyOverlay>().is_some()
+            || pane.downcast_ref::<QuickSelectOverlay>().is_some()
+        {
             return;
         }
-        if pane.downcast_ref::<CopyOverlay>().is_none()
-            && pane.downcast_ref::<QuickSelectOverlay>().is_none()
-        {
-            // If any of the changed lines intersect with the
-            // selection, then we need to clear the selection, but not
-            // when the search overlay is active; the search overlay
-            // marks lines as dirty to force invalidate them for
-            // highlighting purpose but also manipulates the selection
-            // and we want to allow it to retain the selection it made!
 
-            let clear_selection =
-                if let Some(selection_range) = self.selection(pane.pane_id()).range.as_ref() {
-                    let selection_rows = selection_range.rows();
-                    selection_rows.into_iter().any(|row| dirty.contains(row))
-                } else {
-                    false
-                };
-
-            if clear_selection {
-                self.selection(pane.pane_id()).range.take();
-                self.selection(pane.pane_id()).origin.take();
-                self.selection(pane.pane_id()).seqno = pane.get_current_seqno();
+        let pane_id = pane.pane_id();
+        let (range, baseline_seqno, has_text) = {
+            let selection = self.selection(pane_id);
+            match selection.range {
+                Some(range) => (range, selection.seqno, selection.text.is_some()),
+                None => return,
             }
+        };
+
+        // First frame for this selection: sample the text it covers, to compare
+        // later redraws against.
+        if !has_text {
+            let text = self.selection_text(pane);
+            let mut selection = self.selection(pane_id);
+            selection.text = Some(text);
+            selection.seqno = pane.get_current_seqno();
+            return;
+        }
+
+        let dims = pane.get_dimensions();
+        let viewport = self.get_viewport(pane_id).unwrap_or(dims.physical_top);
+        let visible_range = viewport..viewport + dims.viewport_rows as StableRowIndex;
+        let dirty = pane.get_changed_since(visible_range, baseline_seqno);
+        // Rows outside the selection can be rewritten freely, and extracting the
+        // selected text on every frame would be wasteful, so stop here unless a
+        // selected row was touched.
+        if dirty.is_empty() || !range.rows().any(|row| dirty.contains(row)) {
+            return;
+        }
+
+        // A selected row was rewritten, which says nothing about whether the
+        // selected cells changed. Compare the text, and when it is unchanged
+        // move the baseline forward so that the comparison is not redone on
+        // every frame while unrelated cells on those rows keep churning.
+        //
+        // Keeping the selection when the cells are rewritten identically is
+        // intended, and by design also covers switching between two tmux windows
+        // that look the same: a switch emits no full erase and no alt-screen
+        // toggle, so nothing distinguishes it from an in-place repaint.
+        let text = self.selection_text(pane);
+        let seqno = pane.get_current_seqno();
+        let mut selection = self.selection(pane_id);
+        if selection.text.as_deref() == Some(text.as_str()) {
+            selection.seqno = seqno;
+        } else {
+            selection.clear();
+            selection.seqno = seqno;
         }
     }
 }
