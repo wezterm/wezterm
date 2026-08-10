@@ -184,7 +184,27 @@ impl GuiFrontEnd {
                             selection,
                             clipboard
                         );
-                        if let Some(window) = fe.known_windows.borrow().keys().next() {
+                        // Route the assignment to the window that actually
+                        // contains the pane that emitted OSC 52.
+                        let target = {
+                            let windows = fe.known_windows.borrow();
+                            Mux::get()
+                                .resolve_pane_id(pane_id)
+                                .and_then(|(_domain, mux_window_id, _tab_id)| {
+                                    windows
+                                        .iter()
+                                        .find(|(_window, id)| **id == mux_window_id)
+                                        .map(|(window, _mux_window_id)| window.clone())
+                                })
+                                // The pane may not be shown by any window: it
+                                // can belong to a mux window that has no gui
+                                // window attached to it. The clipboard is owned
+                                // per window, so we need some window to assert
+                                // that ownership; fall back to any one of them
+                                // rather than dropping the request.
+                                .or_else(|| windows.keys().next().cloned())
+                        };
+                        if let Some(window) = target {
                             window.set_clipboard(
                                 match selection {
                                     ClipboardSelection::Clipboard => Clipboard::Clipboard,
