@@ -756,6 +756,38 @@ impl TerminalState {
         self.screen.is_alt_screen_active()
     }
 
+    pub fn mouse_tracking_enabled(&self) -> bool {
+        self.mouse_tracking
+    }
+
+    pub fn button_event_mouse_enabled(&self) -> bool {
+        self.button_event_mouse
+    }
+
+    pub fn any_event_mouse_enabled(&self) -> bool {
+        self.any_event_mouse
+    }
+
+    pub fn get_mouse_encoding(&self) -> MouseEncoding {
+        self.mouse_encoding
+    }
+
+    pub fn focus_tracking_enabled(&self) -> bool {
+        self.focus_tracking
+    }
+
+    pub fn application_cursor_keys_enabled(&self) -> bool {
+        self.application_cursor_keys
+    }
+
+    pub fn application_keypad_enabled(&self) -> bool {
+        self.application_keypad
+    }
+
+    pub fn dec_auto_wrap_enabled(&self) -> bool {
+        self.dec_auto_wrap
+    }
+
     /// Returns true if the associated application has enabled
     /// bracketed paste mode, which can be helpful to the hosting
     /// GUI application to decide about fragmenting a large paste.
