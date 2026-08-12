@@ -53,6 +53,7 @@ pub struct LauncherArgs {
     flags: LauncherFlags,
     domains: Vec<LauncherDomainEntry>,
     tabs: Vec<LauncherTabEntry>,
+    active_tab_idx: usize,
     pane_id: PaneId,
     domain_id_of_current_tab: DomainId,
     title: String,
@@ -85,7 +86,7 @@ impl LauncherArgs {
             vec![]
         };
 
-        let tabs = if flags.contains(LauncherFlags::TABS) {
+        let (tabs, active_tab_idx) = if flags.contains(LauncherFlags::TABS) {
             // Ideally we'd resolve the tabs on the fly once we've started the
             // overlay, but since the overlay runs in a different thread, accessing
             // the mux list is a bit awkward.  To get the ball rolling we capture
@@ -93,7 +94,8 @@ impl LauncherArgs {
             let window = mux
                 .get_window(mux_window_id)
                 .expect("to resolve my own window_id");
-            window
+            let active_tab_idx = window.get_active_idx();
+            let tabs = window
                 .iter()
                 .enumerate()
                 .map(|(tab_idx, tab)| {
@@ -111,9 +113,10 @@ impl LauncherArgs {
                         pane_count: tab.count_panes(),
                     }
                 })
-                .collect()
+                .collect();
+            (tabs, active_tab_idx)
         } else {
-            vec![]
+            (vec![], 0)
         };
 
         let domains = if flags.contains(LauncherFlags::DOMAINS) {
@@ -157,6 +160,7 @@ impl LauncherArgs {
             flags,
             domains,
             tabs,
+            active_tab_idx,
             pane_id,
             domain_id_of_current_tab,
             title: title.to_string(),
@@ -187,6 +191,7 @@ struct LauncherState {
     alphabet: String,
     selection: String,
     always_fuzzy: bool,
+    scrolled_to_active: bool,
 }
 
 impl LauncherState {
@@ -228,6 +233,13 @@ impl LauncherState {
 
     fn build_entries(&mut self, args: LauncherArgs) {
         let config = configuration();
+        // When the launcher also offers domain entries we keep the existing
+        // behavior of preselecting the entry for the current domain (so that
+        // pressing Enter spawns a tab in that domain).  Otherwise, for the
+        // workspace/tab focused launchers, preselect the entry that
+        // corresponds to where we currently are, rather than jumping to the
+        // top of the list.
+        let preselect_current = !args.flags.contains(LauncherFlags::DOMAINS);
         // Pull in the user defined entries from the launch_menu
         // section of the configuration.
         if args.flags.contains(LauncherFlags::LAUNCH_MENU_ITEMS) {
@@ -272,15 +284,23 @@ impl LauncherState {
 
         if args.flags.contains(LauncherFlags::WORKSPACES) {
             for ws in &args.workspaces {
-                if *ws != args.active_workspace {
-                    self.entries.push(Entry {
-                        label: format!("Switch to workspace: `{}`", ws),
-                        action: KeyAssignment::SwitchToWorkspace {
-                            name: Some(ws.clone()),
-                            spawn: None,
-                        },
-                    });
+                let is_active = *ws == args.active_workspace;
+                // Preselect the entry for the workspace we're currently in, so
+                // that opening the switcher highlights "you are here".
+                if is_active && preselect_current {
+                    self.active_idx = self.entries.len();
                 }
+                self.entries.push(Entry {
+                    label: if is_active {
+                        format!("Switch to workspace: `{}` (current)", ws)
+                    } else {
+                        format!("Switch to workspace: `{}`", ws)
+                    },
+                    action: KeyAssignment::SwitchToWorkspace {
+                        name: Some(ws.clone()),
+                        spawn: None,
+                    },
+                });
             }
             self.entries.push(Entry {
                 label: format!(
@@ -295,6 +315,10 @@ impl LauncherState {
         }
 
         for tab in &args.tabs {
+            // Preselect the entry for the tab we're currently in.
+            if preselect_current && tab.tab_idx == args.active_tab_idx {
+                self.active_idx = self.entries.len();
+            }
             self.entries.push(Entry {
                 label: match tab.pane_count {
                     Some(pane_count) => format!("{}. {pane_count} panes", tab.title),
@@ -374,6 +398,17 @@ impl LauncherState {
                 self.filtered_entries.len().min(max_items + 1),
             );
             self.max_items = max_items;
+        }
+
+        // On the first render, once we know how many rows fit on screen,
+        // scroll so that the (possibly preselected) active entry is visible.
+        if !self.scrolled_to_active {
+            self.scrolled_to_active = true;
+            if self.active_idx < self.top_row {
+                self.top_row = self.active_idx;
+            } else if self.active_idx > self.top_row + self.max_items {
+                self.top_row = self.active_idx.saturating_sub(self.max_items);
+            }
         }
 
         let mut changes = vec![
@@ -667,6 +702,7 @@ pub fn launcher(
         selection: String::new(),
         alphabet: args.alphabet.clone(),
         always_fuzzy: filtering,
+        scrolled_to_active: false,
     };
 
     term.set_raw_mode()?;

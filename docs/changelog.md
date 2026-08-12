@@ -22,6 +22,10 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* [ShowLauncherArgs](config/lua/keyassignment/ShowLauncherArgs.md) with the
+  `WORKSPACES` flag now includes the active workspace in the list and selects
+  it by default, instead of jumping to the top of the list. Likewise, with the
+  `TABS` flag the active tab is now selected by default.
 * DECRQCRA is now disabled by default to prevent silent screen scraping.
   Set `enable_checksum_rectangular_area = true` to re-enable it.
   Thanks to @jquast! #7701

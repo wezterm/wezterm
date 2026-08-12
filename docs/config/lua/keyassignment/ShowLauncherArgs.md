@@ -28,11 +28,13 @@ an empty launcher:
   to type a search term and reduce the set of matches.
   When you use the `"FUZZY"` flag, the launcher activates directly in fuzzy filtering
   mode.
-* `"TABS"` - include the list of tabs from the current window
+* `"TABS"` - include the list of tabs from the current window. The active tab is
+  selected by default. {{since('nightly', inline=True)}}
 * `"LAUNCH_MENU_ITEMS"` - include the [launch_menu](../config/launch_menu.md) items
 * `"DOMAINS"` - include multiplexing domains
 * `"KEY_ASSIGNMENTS"` - include items taken from your key assignments
-* `"WORKSPACES"` - include workspaces
+* `"WORKSPACES"` - include workspaces. The active workspace is included in the
+  list and selected by default. {{since('nightly', inline=True)}}
 * `"COMMANDS"` - include a number of default commands {{since('20220408-101518-b908e2dd', inline=True)}}
 
 The flags can be joined together using a `|` character, so `"TABS|DOMAINS"` is
