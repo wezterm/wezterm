@@ -158,6 +158,10 @@ As features stabilize some brief notes about them will accumulate here.
   search matching. Thanks to @mrdziuban! #7385
 
 #### Fixed
+* `ResetTerminal` (RIS) did not reset the `modifyOtherKeys` state. A program
+  that left it enabled and exited uncleanly could leave ctrl keys emitting
+  escape sequences that the shell doesn't expect. RIS now also resets the
+  left/right margin mode and bidi state.
 * Race condition when very quickly adjusting font scale, and other improvements
   around resizing. Thanks to @jknockel! #4876 #5032 #5033
 * macOS: wacky initial window size with external monitors or certain font
