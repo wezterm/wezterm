@@ -287,12 +287,13 @@ impl TerminalState {
         &mut self,
         data: ImageDataType,
     ) -> Result<Arc<ImageData>, termwiz::error::InternalError> {
-        let key = data.compute_hash();
+        let blur = 0.0;
+        let key = data.compute_hash(blur);
         if let Some(item) = self.image_cache.get(&key) {
             Ok(Arc::clone(item))
         } else {
             let data = data.swap_out()?;
-            let image_data = Arc::new(ImageData::with_data(data));
+            let image_data = Arc::new(ImageData::with_data(data, blur));
             self.image_cache.put(key, Arc::clone(&image_data));
             Ok(image_data)
         }

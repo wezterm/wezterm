@@ -302,7 +302,7 @@ impl ImageDataType {
         hasher.finalize().into()
     }
 
-    pub fn compute_hash(&self) -> [u8; 32] {
+    pub fn compute_hash(&self, blur: f32) -> [u8; 32] {
         use sha2::Digest;
         let mut hasher = sha2::Sha256::new();
         match self {
@@ -322,6 +322,7 @@ impl ImageDataType {
                 }
             }
         };
+        hasher.update(blur.to_ne_bytes());
         hasher.finalize().into()
     }
 
@@ -518,6 +519,7 @@ pub enum ImageCellError {
 pub struct ImageData {
     data: Mutex<ImageDataType>,
     hash: [u8; 32],
+    blur: f32,
 }
 
 struct HexSlice<'a>(&'a [u8]);
@@ -557,14 +559,16 @@ impl ImageData {
         Self {
             data: Mutex::new(data),
             hash,
+            blur: 0.0,
         }
     }
 
-    pub fn with_data(data: ImageDataType) -> Self {
-        let hash = data.compute_hash();
+    pub fn with_data(data: ImageDataType, blur: f32) -> Self {
+        let hash = data.compute_hash(blur);
         Self {
             data: Mutex::new(data),
             hash,
+            blur,
         }
     }
 
@@ -584,5 +588,9 @@ impl ImageData {
 
     pub fn hash(&self) -> [u8; 32] {
         self.hash
+    }
+
+    pub fn blur(&self) -> f32 {
+        self.blur
     }
 }

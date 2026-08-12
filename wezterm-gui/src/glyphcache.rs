@@ -11,6 +11,7 @@ use config::{AllowSquareGlyphOverflow, TextStyle};
 use euclid::num::Zero;
 use image::{
     AnimationDecoder, DynamicImage, Frame, Frames, ImageDecoder, ImageFormat, ImageResult, Limits,
+    RgbaImage,
 };
 use lfucache::LfuCache;
 use ordered_float::NotNan;
@@ -233,7 +234,7 @@ struct DecodedFrame {
 struct FrameDecoder {}
 
 impl FrameDecoder {
-    pub fn start(lease: BlobLease) -> anyhow::Result<Receiver<DecodedFrame>> {
+    pub fn start(lease: BlobLease, blur: f32) -> anyhow::Result<Receiver<DecodedFrame>> {
         let (tx, rx) = sync_channel(2);
 
         let buf_reader = lease.get_reader().context("lease.get_reader()")?;
@@ -245,7 +246,7 @@ impl FrameDecoder {
             .ok_or_else(|| anyhow::anyhow!("cannot determine image format"))?;
 
         std::thread::spawn(move || {
-            if let Err(err) = Self::run_decoder_thread(reader, format, tx) {
+            if let Err(err) = Self::run_decoder_thread(reader, format, blur, tx) {
                 if err
                     .downcast_ref::<std::sync::mpsc::SendError<DecodedFrame>>()
                     .is_none()
@@ -261,6 +262,7 @@ impl FrameDecoder {
     fn run_decoder_thread(
         reader: image::ImageReader<BoxedReader>,
         format: ImageFormat,
+        blur: f32,
         tx: SyncSender<DecodedFrame>,
     ) -> anyhow::Result<()> {
         let start = Instant::now();
@@ -326,7 +328,15 @@ impl FrameDecoder {
         let duration: Duration = frame.delay().into();
         log::debug!("first frame took {:?} to decode.", start.elapsed());
 
-        let data = frame.into_buffer().into_raw();
+        fn process_frame(frame: Frame, blur: f32) -> RgbaImage {
+            if blur > 0.0 {
+                image::imageops::blur(frame.buffer(), blur)
+            } else {
+                frame.into_buffer()
+            }
+        }
+
+        let data = process_frame(frame, blur).into_raw();
         let lease = BlobManager::store(&data).context("BlobManager::store")?;
         let decoded_frame = DecodedFrame {
             lease,
@@ -342,7 +352,7 @@ impl FrameDecoder {
             let frame = frame?;
 
             let duration: Duration = frame.delay().into();
-            let data = frame.into_buffer().into_raw();
+            let data = process_frame(frame, blur).into_raw();
             let lease = BlobManager::store(&data).context("BlobManager::store")?;
 
             let decoded_frame = DecodedFrame {
@@ -494,7 +504,7 @@ pub struct DecodedImage {
 
 impl DecodedImage {
     fn placeholder() -> Self {
-        let image = ImageData::with_data(ImageDataType::placeholder());
+        let image = ImageData::with_data(ImageDataType::placeholder(), 0.0);
         Self {
             frame_start: RefCell::new(Instant::now()),
             current_frame: RefCell::new(0),
@@ -504,7 +514,7 @@ impl DecodedImage {
     }
 
     fn start_frame_decoder(lease: BlobLease, image_data: &Arc<ImageData>) -> Self {
-        match FrameDecoder::start(lease.clone()) {
+        match FrameDecoder::start(lease.clone(), image_data.blur()) {
             Ok(rx) => Self {
                 frame_start: RefCell::new(Instant::now()),
                 current_frame: RefCell::new(0),

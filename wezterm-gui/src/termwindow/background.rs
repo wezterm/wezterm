@@ -141,9 +141,10 @@ impl CachedGradient {
         }
 
         let data = imgbuf.into_vec();
-        let image = Arc::new(ImageData::with_data(ImageDataType::new_single_frame(
-            width, height, data,
-        )));
+        let image = Arc::new(ImageData::with_data(
+            ImageDataType::new_single_frame(width, height, data),
+            0.0,
+        ));
 
         Ok(image)
     }
@@ -192,13 +193,13 @@ struct CachedImage {
 }
 
 impl CachedImage {
-    fn load(path: &str, speed: f32) -> anyhow::Result<Arc<ImageData>> {
+    fn load(path: &str, speed: f32, blur: f32) -> anyhow::Result<Arc<ImageData>> {
         let modified = std::fs::metadata(path)
             .and_then(|m| m.modified())
             .with_context(|| format!("getting metadata for {}", path))?;
         let mut cache = IMAGE_CACHE.lock().unwrap();
         if let Some(cached) = cache.get_mut(path) {
-            if cached.modified == modified && cached.speed == speed {
+            if cached.modified == modified && cached.speed == speed && cached.image.blur() == blur {
                 cached.marked = false;
                 return Ok(Arc::clone(&cached.image));
             }
@@ -209,7 +210,7 @@ impl CachedImage {
         log::trace!("loaded {}", path);
         let mut data = ImageDataType::EncodedFile(data);
         data.adjust_speed(speed);
-        let image = Arc::new(ImageData::with_data(data));
+        let image = Arc::new(ImageData::with_data(data, blur));
 
         cache.insert(
             path.to_string(),
@@ -323,11 +324,14 @@ fn load_background_layer(
                 *pixel = src_pixel;
             }
             let data = imgbuf.into_vec();
-            Arc::new(ImageData::with_data(ImageDataType::new_single_frame(
-                size, size, data,
-            )))
+            Arc::new(ImageData::with_data(
+                ImageDataType::new_single_frame(size, size, data),
+                0.0,
+            ))
         }
-        BackgroundSource::File(source) => CachedImage::load(&source.path, source.speed)?,
+        BackgroundSource::File(source) => {
+            CachedImage::load(&source.path, source.speed, source.blur)?
+        }
     };
 
     Ok(LoadedBackgroundLayer {
