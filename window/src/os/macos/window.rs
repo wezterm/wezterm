@@ -885,9 +885,22 @@ impl WindowOps for Window {
             && !native_full_screen
             && !config.macos_fullscreen_extend_behind_notch
         {
-            let main_screen = unsafe { NSScreen::mainScreen(nil) };
+            // Compute notch avoidance from the window's OWN screen, not
+            // NSScreen::mainScreen. mainScreen is documented as "the screen
+            // containing the window with keyboard focus", so it is
+            // focus-dependent: a non-native fullscreen window on a notchless
+            // external display would otherwise inherit the built-in notched
+            // screen's safeAreaInsets whenever focus moved to that display,
+            // producing a spurious black top border. Fall back to mainScreen
+            // when the window reports no screen (e.g. it is offscreen).
+            let window_screen: id = unsafe { msg_send![self.ns_window, screen] };
+            let screen = if window_screen == nil {
+                unsafe { NSScreen::mainScreen(nil) }
+            } else {
+                window_screen
+            };
             let has_safe_area_insets: BOOL =
-                unsafe { msg_send![main_screen, respondsToSelector: sel!(safeAreaInsets)] };
+                unsafe { msg_send![screen, respondsToSelector: sel!(safeAreaInsets)] };
             if has_safe_area_insets == YES {
                 #[derive(Debug)]
                 struct NSEdgeInsets {
@@ -896,12 +909,12 @@ impl WindowOps for Window {
                     bottom: CGFloat,
                     right: CGFloat,
                 }
-                let insets: NSEdgeInsets = unsafe { msg_send![main_screen, safeAreaInsets] };
+                let insets: NSEdgeInsets = unsafe { msg_send![screen, safeAreaInsets] };
                 log::trace!("{:?}", insets);
 
                 let scale = unsafe {
-                    let frame = NSScreen::frame(main_screen);
-                    let backing_frame = NSScreen::convertRectToBacking_(main_screen, frame);
+                    let frame = NSScreen::frame(screen);
+                    let backing_frame = NSScreen::convertRectToBacking_(screen, frame);
                     backing_frame.size.height / frame.size.height
                 };
 
