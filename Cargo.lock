@@ -7165,6 +7165,8 @@ dependencies = [
  "wezterm-gui-subcommands",
  "wezterm-mux-server-impl",
  "wezterm-open-url",
+ "wezterm-shader-codegen",
+ "wezterm-shader-types",
  "wezterm-ssh",
  "wezterm-term",
  "wezterm-toast-notification",
@@ -7254,6 +7256,20 @@ version = "0.1.0"
 dependencies = [
  "winapi",
 ]
+
+[[package]]
+name = "wezterm-shader-codegen"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+ "wezterm-shader-types",
+]
+
+[[package]]
+name = "wezterm-shader-types"
+version = "0.1.0"
 
 [[package]]
 name = "wezterm-ssh"

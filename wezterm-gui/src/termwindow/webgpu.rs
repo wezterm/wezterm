@@ -4,6 +4,8 @@ use config::{ConfigHandle, GpuInfo, WebGpuPowerPreference};
 use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
+use wezterm_shader_codegen::UniformBuffer;
+use wezterm_shader_types::{UniformField, UniformType};
 use wgpu::util::DeviceExt;
 use window::bitmaps::Texture2d;
 use window::raw_window_handle::{
@@ -23,12 +25,17 @@ pub struct ShaderUniform {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Default, Debug, bytemuck::Pod, bytemuck::Zeroable, UniformBuffer)]
 pub struct PostProcessUniform {
+    #[uniform_type(Vec2)]
     pub resolution: [f32; 2],
+    #[uniform_type(Float)]
     pub time: f32,
+    #[uniform_type(Float)]
     pub time_delta: f32,
+    #[uniform_type(UInt)]
     pub frame: u32,
+    #[uniform_ignore]
     pub _padding: [u32; 3],
 }
 
@@ -53,19 +60,9 @@ pub struct PostProcessState {
     pub format: wgpu::TextureFormat,
 }
 
-/// The preamble from postprocess.wgsl minus the default fs_postprocess function.
-/// User shaders only need to provide `fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32>`.
-const POSTPROCESS_PREAMBLE: &str = "\
-struct PostProcessUniform {
-    resolution: vec2<f32>,
-    time: f32,
-    time_delta: f32,
-    frame: u32,
-    _padding_0: u32,
-    _padding_1: u32,
-    _padding_2: u32,
-};
-
+/// Static post-process preamble tail. The `PostProcessUniform` struct
+/// declaration is rendered from `UNIFORM_FIELDS` and prepended.
+const POSTPROCESS_PREAMBLE_TAIL: &str = "\
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -88,50 +85,68 @@ fn vs_postprocess(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
 ";
 
+fn uniform_type_wgsl(ty: UniformType) -> &'static str {
+    match ty {
+        UniformType::Vec2 => "vec2<f32>",
+        UniformType::Float => "f32",
+        UniformType::UInt => "u32",
+        UniformType::Vec4 => "vec4<f32>",
+    }
+}
+
+/// Render the `PostProcessUniform` WGSL struct declaration from the
+/// reflected field list.
+fn render_wgsl_uniform_struct(fields: &[UniformField]) -> String {
+    let mut out = String::from("struct PostProcessUniform {\n");
+    for field in fields {
+        out.push_str(&format!(
+            "    {}: {},\n",
+            field.name,
+            uniform_type_wgsl(field.ty)
+        ));
+    }
+    out.push_str("};\n");
+    out
+}
+
+/// The full post-process preamble: rendered uniform struct + static tail.
+/// Rendered once and cached.
+fn postprocess_preamble() -> &'static str {
+    static PREAMBLE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PREAMBLE.get_or_init(|| {
+        let mut preamble = render_wgsl_uniform_struct(UNIFORM_FIELDS);
+        preamble.push_str(POSTPROCESS_PREAMBLE_TAIL);
+        preamble
+    })
+}
+
 /// Strip BOM, decode UTF-8, validate non-empty, and prepend the standard
 /// preamble. Returns the full WGSL source ready for compilation, or None
 /// on any input problem (logged).
 pub(crate) fn prepare_shader_source(raw_bytes: &[u8], path: &Path) -> Option<String> {
-    // Handle BOM and decode as UTF-8
-    let source_str = if raw_bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        // UTF-8 BOM — skip it
-        match std::str::from_utf8(&raw_bytes[3..]) {
-            Ok(s) => s.to_string(),
-            Err(e) => {
-                log::error!(
-                    "postprocess: shader file {} is not valid UTF-8: {:#}",
-                    path.display(),
-                    e
-                );
-                return None;
-            }
-        }
-    } else {
-        match std::str::from_utf8(raw_bytes) {
-            Ok(s) => s.to_string(),
-            Err(e) => {
-                log::error!(
-                    "postprocess: shader file {} is not valid UTF-8: {:#}",
-                    path.display(),
-                    e
-                );
-                return None;
-            }
+    // Skip a potential BOM that Windows software may have placed in the file,
+    // then decode as UTF-8.
+    let source_str = match std::str::from_utf8(raw_bytes) {
+        Ok(s) => s.trim_start_matches('\u{FEFF}').to_string(),
+        Err(e) => {
+            log::error!(
+                "postprocess: shader file {} is not valid UTF-8: {:#}",
+                path.display(),
+                e
+            );
+            return None;
         }
     };
 
     let trimmed = source_str.trim();
     if trimmed.is_empty() {
-        log::error!(
-            "postprocess: shader file {} is empty",
-            path.display()
-        );
+        log::error!("postprocess: shader file {} is empty", path.display());
         return None;
     }
 
     // Prepend the standard preamble (structs, bindings, vertex shader)
     // so user only needs to define fs_postprocess
-    Some(format!("{}{}", POSTPROCESS_PREAMBLE, source_str))
+    Some(format!("{}{}", postprocess_preamble(), source_str))
 }
 
 /// Compile a single post-process shader from a file path.
@@ -340,8 +355,7 @@ impl PostProcessState {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let intermediate_view =
@@ -359,12 +373,11 @@ impl PostProcessState {
         });
 
         // Uniform buffer
-        let uniform_buffer =
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("PostProcess Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[PostProcessUniform::default()]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("PostProcess Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[PostProcessUniform::default()]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
 
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &uniform_bind_group_layout,
@@ -376,21 +389,20 @@ impl PostProcessState {
         });
 
         // Pre-create bind group for reading the intermediate texture
-        let bind_group_intermediate =
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &texture_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&intermediate_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-                label: Some("PostProcess Intermediate Bind Group"),
-            });
+        let bind_group_intermediate = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&intermediate_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+            label: Some("PostProcess Intermediate Bind Group"),
+        });
 
         // Ping-pong texture only needed when >1 shader in the chain
         let (ping_pong_texture, ping_pong_view, bind_group_pingpong) = if pipelines.len() > 1 {
@@ -409,24 +421,22 @@ impl PostProcessState {
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
-            let pp_view =
-                pp_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let pp_view = pp_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-            let pp_bind_group =
-                device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    layout: &texture_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&pp_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&sampler),
-                        },
-                    ],
-                    label: Some("PostProcess Ping-Pong Bind Group"),
-                });
+            let pp_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&pp_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+                label: Some("PostProcess Ping-Pong Bind Group"),
+            });
 
             (Some(pp_texture), Some(pp_view), Some(pp_bind_group))
         } else {
@@ -473,8 +483,7 @@ impl PostProcessState {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         self.intermediate_view = self
@@ -482,21 +491,20 @@ impl PostProcessState {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Recreate bind group for intermediate
-        self.bind_group_intermediate =
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&self.intermediate_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-                label: Some("PostProcess Intermediate Bind Group"),
-            });
+        self.bind_group_intermediate = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&self.intermediate_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+            label: Some("PostProcess Intermediate Bind Group"),
+        });
 
         // Recreate ping-pong if present
         if self.ping_pong_texture.is_some() {
@@ -515,24 +523,22 @@ impl PostProcessState {
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
-            let pp_view =
-                pp_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let pp_view = pp_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-            self.bind_group_pingpong =
-                Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&pp_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                    ],
-                    label: Some("PostProcess Ping-Pong Bind Group"),
-                }));
+            self.bind_group_pingpong = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&pp_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+                label: Some("PostProcess Ping-Pong Bind Group"),
+            }));
 
             self.ping_pong_texture = Some(pp_texture);
             self.ping_pong_view = Some(pp_view);
@@ -1100,7 +1106,7 @@ mod tests {
         // Parse the preamble + a minimal valid fragment shader
         let source = format!(
             "{}\n{}",
-            POSTPROCESS_PREAMBLE,
+            postprocess_preamble(),
             r#"
 @fragment
 fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -1109,7 +1115,11 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
 "#
         );
         let result = naga::front::wgsl::parse_str(&source);
-        assert!(result.is_ok(), "Preamble + minimal shader must parse: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Preamble + minimal shader must parse: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1211,16 +1221,13 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         })
         .ok()?;
 
-        let (device, queue) = smol::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults()
-                    .using_resolution(adapter.limits()),
-                label: Some("Test Device"),
-                memory_hints: Default::default(),
-                trace: wgpu::Trace::Off,
-            },
-        ))
+        let (device, queue) = smol::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            label: Some("Test Device"),
+            memory_hints: Default::default(),
+            trace: wgpu::Trace::Off,
+        }))
         .ok()?;
 
         Some((device, queue))
@@ -1344,7 +1351,10 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         assert!(state.is_some(), "Single valid shader should create state");
         let state = state.unwrap();
         assert_eq!(state.pipelines.len(), 1);
-        assert!(state.ping_pong_texture.is_none(), "Single shader needs no ping-pong texture");
+        assert!(
+            state.ping_pong_texture.is_none(),
+            "Single shader needs no ping-pong texture"
+        );
     }
 
     #[test]
@@ -1371,7 +1381,10 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         assert!(state.is_some(), "Two valid shaders should create state");
         let state = state.unwrap();
         assert_eq!(state.pipelines.len(), 2);
-        assert!(state.ping_pong_texture.is_some(), "Multi shader needs ping-pong texture");
+        assert!(
+            state.ping_pong_texture.is_some(),
+            "Multi shader needs ping-pong texture"
+        );
     }
 
     #[test]
@@ -1415,7 +1428,9 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
     #[test]
     fn test_postprocess_state_mixed_valid_invalid() {
         let Some((device, _queue)) = create_test_device() else {
-            eprintln!("Skipping test_postprocess_state_mixed_valid_invalid: no GPU adapter available");
+            eprintln!(
+                "Skipping test_postprocess_state_mixed_valid_invalid: no GPU adapter available"
+            );
             return;
         };
 
@@ -1440,7 +1455,10 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
             600,
             &[valid_path, PathBuf::from("/no/such/bad.wgsl")],
         );
-        assert!(state.is_some(), "Mixed valid/invalid should still create state");
+        assert!(
+            state.is_some(),
+            "Mixed valid/invalid should still create state"
+        );
         assert_eq!(state.unwrap().pipelines.len(), 1);
     }
 
@@ -1467,9 +1485,18 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         let format = wgpu::TextureFormat::Bgra8UnormSrgb;
         let mut state = PostProcessState::new(&device, format, 800, 600, &[shader_path]).unwrap();
 
-        assert!(state.resize(&device, 1024, 768), "Resize to valid dims should return true");
-        assert!(!state.resize(&device, 0, 768), "Resize to zero width should return false");
-        assert!(!state.resize(&device, 1024, 0), "Resize to zero height should return false");
+        assert!(
+            state.resize(&device, 1024, 768),
+            "Resize to valid dims should return true"
+        );
+        assert!(
+            !state.resize(&device, 0, 768),
+            "Resize to zero width should return false"
+        );
+        assert!(
+            !state.resize(&device, 1024, 0),
+            "Resize to zero height should return false"
+        );
     }
 
     #[test]
@@ -1544,8 +1571,7 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let render_target_view =
-            render_target.create_view(&wgpu::TextureViewDescriptor::default());
+        let render_target_view = render_target.create_view(&wgpu::TextureViewDescriptor::default());
 
         // --- Bind group layouts ---
         let (texture_bgl, uniform_bgl) = create_test_bind_group_layouts(&device);
@@ -1701,7 +1727,13 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
                     assert!(
                         diff <= tolerance as u16,
                         "Pixel ({},{}) channel {}: expected {}, got {} (diff {} > tolerance {})",
-                        col, row, ch, exp, got, diff, tolerance
+                        col,
+                        row,
+                        ch,
+                        exp,
+                        got,
+                        diff,
+                        tolerance
                     );
                 }
             }
