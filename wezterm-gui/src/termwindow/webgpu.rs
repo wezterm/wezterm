@@ -1,6 +1,6 @@
 use crate::quad::Vertex;
 use anyhow::anyhow;
-use config::{ConfigHandle, GpuInfo, WebGpuPowerPreference};
+use config::{ConfigHandle, GpuInfo, ShaderPathBuf, WebGpuPowerPreference};
 use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
@@ -154,10 +154,17 @@ impl ResolvedShader {
     }
 }
 
-/// Resolve a native WGSL shader path into a fully composed shader, reading
-/// the file and prepending the preamble. Both stages share the same source
-/// for now; imported shaders will supply independent stages later.
-pub(crate) fn resolve_shader(path: &Path) -> Option<ResolvedShader> {
+/// Resolve a shader path into a fully composed WGSL shader.
+/// Native paths are read and given the standard preamble. Imported paths
+/// are not yet supported.
+pub(crate) fn resolve_shader(shader: &ShaderPathBuf) -> Option<ResolvedShader> {
+    let path = match shader {
+        ShaderPathBuf::Native(path) => path,
+        ShaderPathBuf::Imported => {
+            log::warn!("postprocess: imported shaders are not yet supported");
+            return None;
+        }
+    };
     let raw_source = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -323,7 +330,7 @@ impl PostProcessState {
         format: wgpu::TextureFormat,
         width: u32,
         height: u32,
-        shader_paths: &[std::path::PathBuf],
+        shader_paths: &[ShaderPathBuf],
     ) -> Option<Self> {
         if width == 0 || height == 0 {
             log::warn!("postprocess: skipping creation with zero dimensions");
@@ -1315,8 +1322,9 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         let format = wgpu::TextureFormat::Bgra8UnormSrgb;
         let (texture_bgl, uniform_bgl) = create_test_bind_group_layouts(&device);
 
-        let resolved = resolve_shader(&shader_path).unwrap();
-        let result = compile_postprocess_shader(&device, &resolved, format, &texture_bgl, &uniform_bgl);
+        let resolved = resolve_shader(&ShaderPathBuf::Native(shader_path.clone())).unwrap();
+        let result =
+            compile_postprocess_shader(&device, &resolved, format, &texture_bgl, &uniform_bgl);
         assert!(result.is_some(), "Valid shader should compile successfully");
     }
 
@@ -1334,8 +1342,9 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         let format = wgpu::TextureFormat::Bgra8UnormSrgb;
         let (texture_bgl, uniform_bgl) = create_test_bind_group_layouts(&device);
 
-        let resolved = resolve_shader(&shader_path).unwrap();
-        let result = compile_postprocess_shader(&device, &resolved, format, &texture_bgl, &uniform_bgl);
+        let resolved = resolve_shader(&ShaderPathBuf::Native(shader_path.clone())).unwrap();
+        let result =
+            compile_postprocess_shader(&device, &resolved, format, &texture_bgl, &uniform_bgl);
         assert!(result.is_none(), "Invalid shader should return None");
     }
 
@@ -1363,8 +1372,9 @@ fn wrong_name(in: VertexOutput) -> @location(0) vec4<f32> {
         let format = wgpu::TextureFormat::Bgra8UnormSrgb;
         let (texture_bgl, uniform_bgl) = create_test_bind_group_layouts(&device);
 
-        let resolved = resolve_shader(&shader_path).unwrap();
-        let result = compile_postprocess_shader(&device, &resolved, format, &texture_bgl, &uniform_bgl);
+        let resolved = resolve_shader(&ShaderPathBuf::Native(shader_path.clone())).unwrap();
+        let result =
+            compile_postprocess_shader(&device, &resolved, format, &texture_bgl, &uniform_bgl);
         assert!(result.is_none(), "Missing entry point should return None");
     }
 
@@ -1378,7 +1388,9 @@ fn wrong_name(in: VertexOutput) -> @location(0) vec4<f32> {
         let format = wgpu::TextureFormat::Bgra8UnormSrgb;
         let (texture_bgl, uniform_bgl) = create_test_bind_group_layouts(&device);
 
-        let resolved = resolve_shader(&PathBuf::from("/nonexistent/shader.wgsl"));
+        let resolved = resolve_shader(&ShaderPathBuf::Native(PathBuf::from(
+            "/nonexistent/shader.wgsl",
+        )));
         let result = resolved.and_then(|r| {
             compile_postprocess_shader(&device, &r, format, &texture_bgl, &uniform_bgl)
         });
@@ -1406,7 +1418,13 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         .unwrap();
 
         let format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        let state = PostProcessState::new(&device, format, 800, 600, &[shader_path]);
+        let state = PostProcessState::new(
+            &device,
+            format,
+            800,
+            600,
+            &[ShaderPathBuf::Native(shader_path)],
+        );
         assert!(state.is_some(), "Single valid shader should create state");
         let state = state.unwrap();
         assert_eq!(state.pipelines.len(), 1);
@@ -1436,7 +1454,13 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         std::fs::write(&path2, shader_body).unwrap();
 
         let format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        let state = PostProcessState::new(&device, format, 800, 600, &[path1, path2]);
+        let state = PostProcessState::new(
+            &device,
+            format,
+            800,
+            600,
+            &[ShaderPathBuf::Native(path1), ShaderPathBuf::Native(path2)],
+        );
         assert!(state.is_some(), "Two valid shaders should create state");
         let state = state.unwrap();
         assert_eq!(state.pipelines.len(), 2);
@@ -1462,8 +1486,22 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         .unwrap();
 
         let format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        assert!(PostProcessState::new(&device, format, 0, 600, &[shader_path.clone()]).is_none());
-        assert!(PostProcessState::new(&device, format, 800, 0, &[shader_path]).is_none());
+        assert!(PostProcessState::new(
+            &device,
+            format,
+            0,
+            600,
+            &[ShaderPathBuf::Native(shader_path.clone())]
+        )
+        .is_none());
+        assert!(PostProcessState::new(
+            &device,
+            format,
+            800,
+            0,
+            &[ShaderPathBuf::Native(shader_path)]
+        )
+        .is_none());
     }
 
     #[test]
@@ -1479,7 +1517,10 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
             format,
             800,
             600,
-            &[PathBuf::from("/no/such/a.wgsl"), PathBuf::from("/no/such/b.wgsl")],
+            &[
+                ShaderPathBuf::Native(PathBuf::from("/no/such/a.wgsl")),
+                ShaderPathBuf::Native(PathBuf::from("/no/such/b.wgsl")),
+            ],
         );
         assert!(result.is_none(), "No valid shaders should return None");
     }
@@ -1512,7 +1553,10 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
             format,
             800,
             600,
-            &[valid_path, PathBuf::from("/no/such/bad.wgsl")],
+            &[
+                ShaderPathBuf::Native(valid_path),
+                ShaderPathBuf::Native(PathBuf::from("/no/such/bad.wgsl")),
+            ],
         );
         assert!(
             state.is_some(),
@@ -1542,7 +1586,14 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         .unwrap();
 
         let format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        let mut state = PostProcessState::new(&device, format, 800, 600, &[shader_path]).unwrap();
+        let mut state = PostProcessState::new(
+            &device,
+            format,
+            800,
+            600,
+            &[ShaderPathBuf::Native(shader_path)],
+        )
+        .unwrap();
 
         assert!(
             state.resize(&device, 1024, 768),
@@ -1692,7 +1743,8 @@ fn fs_postprocess(in: VertexOutput) -> @location(0) vec4<f32> {
         )
         .unwrap();
 
-        let resolved = resolve_shader(&shader_path).expect("Inversion shader should resolve");
+        let resolved = resolve_shader(&ShaderPathBuf::Native(shader_path))
+            .expect("Inversion shader should resolve");
         let pipeline =
             compile_postprocess_shader(&device, &resolved, format, &texture_bgl, &uniform_bgl)
                 .expect("Inversion shader should compile");

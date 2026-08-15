@@ -24,8 +24,8 @@ use crate::{
     default_config_with_overrides_applied, default_one_point_oh, default_one_point_oh_f64,
     default_true, default_win32_acrylic_accent_color, CellWidth, GpuInfo,
     IntegratedTitleButtonColor, KeyMapPreference, LoadedConfig, MouseEventTriggerMods, RgbaColor,
-    SerialDomain, SystemBackdrop, WebGpuPowerPreference, CONFIG_DIRS, CONFIG_FILE_OVERRIDE,
-    CONFIG_OVERRIDES, CONFIG_SKIP, HOME_DIR,
+    SerialDomain, ShaderPathBuf, SystemBackdrop, WebGpuPowerPreference, CONFIG_DIRS,
+    CONFIG_FILE_OVERRIDE, CONFIG_OVERRIDES, CONFIG_SKIP, HOME_DIR,
 };
 use anyhow::Context;
 use luahelper::impl_lua_conversion_dynamic;
@@ -566,11 +566,13 @@ pub struct Config {
     #[dynamic(default)]
     pub background: Vec<BackgroundLayer>,
 
-    /// Paths to custom post-processing fragment shaders (WGSL).
+    /// Paths to custom post-processing fragment shaders.
+    /// Each entry is a bare path (native WGSL) or a tagged object for
+    /// imported formats that get cross-compiled to WGSL.
     /// These are applied in order after the terminal is rendered.
     /// Relative paths are resolved relative to the config file directory.
     #[dynamic(default)]
-    pub custom_shaders: Vec<PathBuf>,
+    pub custom_shaders: Vec<ShaderPathBuf>,
 
     /// Only works on MacOS
     #[dynamic(default)]
@@ -1349,12 +1351,11 @@ impl Config {
                 }
             }
 
-            for shader_path in &mut cfg.custom_shaders {
-                if !shader_path.is_absolute() {
-                    let dir = config_dir.join(&shader_path);
-                    *shader_path = dir;
-                }
-            }
+            cfg.custom_shaders = cfg
+                .custom_shaders
+                .into_iter()
+                .map(|s| s.join_relative_to(&config_dir))
+                .collect();
         }
 
         // Add some reasonable default font rules

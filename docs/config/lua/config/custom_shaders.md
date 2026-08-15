@@ -15,6 +15,15 @@ of each pass becomes the input to the next.
 
 This option currently requires `front_end = "WebGpu"`.
 
+A shader entry may be specified in one of two forms:
+
+* A bare string holding a path to a native WGSL fragment shader file.  The
+  shader is used as-is.
+* A tagged object for an imported (non-native) shader.
+
+Relative paths are resolved relative to the directory of the config file that
+defined them.
+
 ## Native WGSL shaders
 
 A native shader is a `.wgsl` file that you provide directly.  Your shader
