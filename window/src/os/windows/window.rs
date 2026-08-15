@@ -118,6 +118,7 @@ pub(crate) struct WindowInner {
     dead_pending: Option<(Modifiers, u32)>,
     saved_placement: Option<WINDOWPLACEMENT>,
     track_mouse_leave: bool,
+    track_nc_mouse_leave: bool,
     window_drag_position: Option<ScreenPoint>,
     maximize_button_position: Option<ScreenRect>,
 
@@ -542,6 +543,7 @@ impl Window {
             dead_pending: None,
             saved_placement: None,
             track_mouse_leave: false,
+            track_nc_mouse_leave: false,
             window_drag_position: None,
             maximize_button_position: None,
             config: config.clone(),
@@ -1850,8 +1852,8 @@ unsafe fn nc_mouse_move(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
 
-    if !inner.track_mouse_leave {
-        inner.track_mouse_leave = true;
+    if !inner.track_nc_mouse_leave {
+        inner.track_nc_mouse_leave = true;
 
         let mut trk = TRACKMOUSEEVENT {
             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
@@ -1860,7 +1862,7 @@ unsafe fn nc_mouse_move(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
             dwHoverTime: 0,
         };
 
-        inner.track_mouse_leave = TrackMouseEvent(&mut trk) == winapi::shared::minwindef::TRUE;
+        inner.track_nc_mouse_leave = TrackMouseEvent(&mut trk) == winapi::shared::minwindef::TRUE;
     }
 
     if wparam != HTMAXBUTTON as usize {
@@ -1884,11 +1886,48 @@ unsafe fn nc_mouse_move(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
     Some(0)
 }
 
-unsafe fn mouse_leave(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
+/// Returns true if the mouse cursor is currently within the client area
+/// of hwnd, and hwnd is the window that would receive mouse events for
+/// that position.
+unsafe fn cursor_is_in_client_area(hwnd: HWND) -> bool {
+    let mut point = POINT { x: 0, y: 0 };
+    if GetCursorPos(&mut point) != winapi::shared::minwindef::TRUE {
+        return false;
+    }
+
+    if WindowFromPoint(point) != hwnd {
+        return false;
+    }
+
+    if ScreenToClient(hwnd, &mut point) != winapi::shared::minwindef::TRUE {
+        return false;
+    }
+
+    let mut rect = RECT::default();
+    if GetClientRect(hwnd, &mut rect) != winapi::shared::minwindef::TRUE {
+        return false;
+    }
+
+    point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
+}
+
+unsafe fn mouse_leave(hwnd: HWND, msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
 
-    inner.track_mouse_leave = false;
+    if msg == WM_NCMOUSELEAVE {
+        inner.track_nc_mouse_leave = false;
+    } else {
+        inner.track_mouse_leave = false;
+    }
+
+    // These notifications are posted asynchronously by the system, so they
+    // can be delivered after we've already processed a mouse move for the
+    // new cursor position.
+    if cursor_is_in_client_area(hwnd) {
+        return Some(0);
+    }
+
     inner.events.dispatch(WindowEvent::MouseLeave);
 
     Some(0)

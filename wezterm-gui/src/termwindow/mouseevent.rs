@@ -246,6 +246,10 @@ impl super::TermWindow {
 
     pub fn mouse_leave_impl(&mut self, context: &dyn WindowOps) {
         self.current_mouse_event = None;
+        // The mouse is no longer over any UI item
+        if let Some(item) = self.last_ui_item.take() {
+            self.leave_ui_item(&item);
+        }
         self.update_title();
         context.set_cursor(Some(MouseCursor::Arrow));
         context.invalidate();
