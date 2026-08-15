@@ -55,3 +55,8 @@ UseOnTheSpot=True
 ```
 
 Restart Fcitx5, then re-launch WezTerm for the change to take full effect.
+If that is not sufficient, log out of the desktop session and log back in.
+
+For more background on Fcitx5's XIM inline preedit behavior and why this
+option is not enabled by default, see [fcitx/fcitx5#590](https://github.com/fcitx/fcitx5/issues/590)
+and [fcitx/fcitx5#1162](https://github.com/fcitx/fcitx5/issues/1162).
