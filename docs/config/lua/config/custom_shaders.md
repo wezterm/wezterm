@@ -39,12 +39,51 @@ buffer:
 * `time_delta` (`f32`) - seconds since the previous frame
 * `frame` (`u32`) - frame counter
 
+## Imported (Ghostty) shaders
+
+A Ghostty shader is a GLSL file written against the
+[shadertoy](https://www.shadertoy.com/) convention used by the
+[Ghostty](https://ghostty.org/) terminal.  Refer to the Ghostty and shadertoy
+documentation for authoring details.
+
+The shader is cross-compiled to WGSL at build time, so existing Ghostty
+and shadertoy shaders can be used without modification.
+
+The following shadertoy-style globals are currently populated by wezterm:
+
+* `iResolution` (`vec3`) - output resolution
+* `iTime` (`float`) - seconds since the pipeline started
+* `iTimeDelta` (`float`) - seconds since the previous frame
+* `iFrame` (`int`) - frame counter
+* `iChannel0` (`sampler2D`) - the rendered terminal image
+
 ## Example
+
+Apply a native WGSL shader:
 
 ```lua
 config.front_end = 'WebGpu'
 config.custom_shaders = {
   '/absolute/path/to/my_effect.wgsl',
   'shaders/another_effect.wgsl', -- relative to the config file
+}
+```
+
+Apply a Ghostty-format GLSL shader:
+
+```lua
+config.front_end = 'WebGpu'
+config.custom_shaders = {
+  { format = 'Ghostty', path = '/path/to/crt.glsl' },
+}
+```
+
+Mix both kinds in the same list; they are applied in order:
+
+```lua
+config.front_end = 'WebGpu'
+config.custom_shaders = {
+  { format = 'Ghostty', path = 'shaders/crt.glsl' },
+  'shaders/scanlines.wgsl',
 }
 ```
