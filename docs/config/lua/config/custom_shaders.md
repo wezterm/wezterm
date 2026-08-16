@@ -19,7 +19,8 @@ A shader entry may be specified in one of two forms:
 
 * A bare string holding a path to a native WGSL fragment shader file.  The
   shader is used as-is.
-* A tagged object for an imported (non-native) shader.
+* A tagged object with `format` and `path` fields for an imported (non-native)
+  shader.  Currently the only supported `format` is `"Ghostty"`.
 
 Relative paths are resolved relative to the directory of the config file that
 defined them.

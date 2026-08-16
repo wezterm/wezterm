@@ -81,6 +81,7 @@ mod prevcursor;
 pub mod render;
 pub mod resize;
 mod selection;
+pub mod shader_import;
 pub mod spawn;
 pub mod webgpu;
 use crate::spawn::SpawnWhere;

@@ -156,30 +156,40 @@ impl ResolvedShader {
 
 /// Resolve a shader path into a fully composed WGSL shader.
 /// Native paths are read and given the standard preamble. Imported paths
-/// are not yet supported.
+/// are cross-compiled by the shader import module.
 pub(crate) fn resolve_shader(shader: &ShaderPathBuf) -> Option<ResolvedShader> {
-    let path = match shader {
-        ShaderPathBuf::Native(path) => path,
-        ShaderPathBuf::Imported => {
-            log::warn!("postprocess: imported shaders are not yet supported");
-            return None;
+    match shader {
+        ShaderPathBuf::Native(path) => {
+            let raw_source = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    log::error!(
+                        "postprocess: failed to read shader file {}: {:#}",
+                        path.display(),
+                        e
+                    );
+                    return None;
+                }
+            };
+            let source = prepare_shader_source(&raw_source, path)?;
+            let vs_source = std::sync::Arc::new(ShaderSource::new(source, path.to_path_buf()));
+            let fs_source = vs_source.clone();
+            Some(ResolvedShader::new(vs_source, fs_source))
         }
-    };
-    let raw_source = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            log::error!(
-                "postprocess: failed to read shader file {}: {:#}",
-                path.display(),
-                e
-            );
-            return None;
+        ShaderPathBuf::Imported(imported) => {
+            match crate::termwindow::shader_import::import_shader(imported) {
+                Ok(resolved) => Some(resolved),
+                Err(e) => {
+                    log::error!(
+                        "postprocess: failed to import shader {}: {:#}",
+                        shader.as_path().display(),
+                        e
+                    );
+                    None
+                }
+            }
         }
-    };
-    let source = prepare_shader_source(&raw_source, path)?;
-    let vs_source = std::sync::Arc::new(ShaderSource::new(source, path.to_path_buf()));
-    let fs_source = vs_source.clone();
-    Some(ResolvedShader::new(vs_source, fs_source))
+    }
 }
 
 /// Strip BOM, decode UTF-8, validate non-empty, and prepend the standard
