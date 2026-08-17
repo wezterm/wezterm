@@ -216,6 +216,8 @@ pub enum ImageDataType {
         data: Vec<u8>,
         width: u32,
         height: u32,
+        /// sha256 of data, which is what compute_hash reports. Update it
+        /// whenever data changes.
         hash: [u8; 32],
     },
     /// Data is an animated sequence
@@ -308,7 +310,7 @@ impl ImageDataType {
         match self {
             ImageDataType::EncodedFile(data) => hasher.update(data),
             ImageDataType::EncodedLease(lease) => return lease.content_id().as_hash_bytes(),
-            ImageDataType::Rgba8 { data, .. } => hasher.update(data),
+            ImageDataType::Rgba8 { hash, .. } => return *hash,
             ImageDataType::AnimRgba8 {
                 frames, durations, ..
             } => {
@@ -584,5 +586,30 @@ impl ImageData {
 
     pub fn hash(&self) -> [u8; 32] {
         self.hash
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// The hash stored with an Rgba8 is the hash of its data.
+    #[test]
+    fn rgba8_compute_hash_matches_its_data() {
+        let data: Vec<u8> = (0..=255u8).cycle().take(16 * 16 * 4).collect();
+        let expected = ImageDataType::hash_bytes(&data);
+
+        let img = ImageDataType::new_single_frame(16, 16, data);
+
+        assert_eq!(img.compute_hash(), expected);
+    }
+
+    /// Distinct pixels must produce distinct hashes.
+    #[test]
+    fn rgba8_compute_hash_follows_the_data() {
+        let a = ImageDataType::new_single_frame(2, 2, vec![0u8; 16]);
+        let b = ImageDataType::new_single_frame(2, 2, vec![1u8; 16]);
+
+        assert_ne!(a.compute_hash(), b.compute_hash());
     }
 }
