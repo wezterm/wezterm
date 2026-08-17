@@ -984,6 +984,7 @@ pub struct KittyImageFrame {
 
     /// Gap in milliseconds of this frame from the next one.
     /// Zero or omitted values are interpreted as 40ms.
+    /// A negative gap asks for a gapless frame, which is not supported.
     /// z=...
     pub duration_ms: Option<u32>,
 
@@ -1011,7 +1012,7 @@ impl KittyImageFrame {
                 None | Some(0) => None,
                 n => n,
             },
-            duration_ms: match geti(keys, "Z") {
+            duration_ms: match geti(keys, "z") {
                 None | Some(0) => None,
                 n => n,
             },
@@ -1029,7 +1030,7 @@ impl KittyImageFrame {
         set(keys, "y", &self.y);
         set(keys, "c", &self.base_frame);
         set(keys, "r", &self.frame_number);
-        set(keys, "Z", &self.duration_ms);
+        set(keys, "z", &self.duration_ms);
         match &self.composition_mode {
             KittyFrameCompositionMode::AlphaBlending => {}
             KittyFrameCompositionMode::Overwrite => {

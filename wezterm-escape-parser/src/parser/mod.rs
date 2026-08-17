@@ -977,6 +977,45 @@ mod test {
         );
     }
 
+    /// The inter-frame gap is `z`, so it survives a round trip.
+    #[test]
+    fn kitty_frame_gap() {
+        use crate::apc::*;
+
+        assert_eq!(
+            parse_as(
+                "\x1b_Ga=f,i=1,z=100;YWJjZA==\x1b\\",
+                "\x1b_Ga=f,i=1,z=100;YWJjZA==\x1b\\"
+            ),
+            vec![
+                Action::KittyImage(Box::new(KittyImage::TransmitFrame {
+                    transmit: KittyImageTransmit {
+                        format: None,
+                        data: KittyImageData::Direct("YWJjZA==".to_string()),
+                        width: None,
+                        height: None,
+                        image_id: Some(1),
+                        image_number: None,
+                        compression: KittyImageCompression::None,
+                        more_data_follows: false,
+                    },
+                    frame: KittyImageFrame {
+                        x: None,
+                        y: None,
+                        base_frame: None,
+                        frame_number: None,
+                        duration_ms: Some(100),
+                        composition_mode: KittyFrameCompositionMode::AlphaBlending,
+                        background_pixel: None,
+                    },
+                    verbosity: KittyImageVerbosity::Verbose,
+                })),
+                Action::Esc(Esc::Code(EscCode::StringTerminator)),
+            ]
+        );
+    }
+
+
     /* Withdrawn because xterm introduced a conflict:
      * <https://github.com/mintty/mintty/issues/1171#issuecomment-1336174469>
      * <https://github.com/mintty/mintty/issues/1189>
