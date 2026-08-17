@@ -1015,6 +1015,40 @@ mod test {
         );
     }
 
+    /// `S` defaults to zero, so `S=0` is a size that was not given and the
+    /// whole file is read.
+    #[test]
+    fn kitty_zero_size_is_no_size() {
+        use crate::apc::*;
+
+        assert_eq!(
+            parse_as(
+                "\x1b_Ga=q,t=t,s=1,v=1,i=4,S=0;L3Zhci90bXAvdG1wdGYxd3E4Ym4=\x1b\\",
+                "\x1b_Ga=q,i=4,s=1,t=t,v=1;L3Zhci90bXAvdG1wdGYxd3E4Ym4=\x1b\\"
+            ),
+            vec![
+                Action::KittyImage(Box::new(KittyImage::Query {
+                    transmit: KittyImageTransmit {
+                        format: None,
+                        data: KittyImageData::TemporaryFile {
+                            path: "/var/tmp/tmptf1wq8bn".to_string(),
+                            data_offset: None,
+                            data_size: None,
+                        },
+                        width: Some(1),
+                        height: Some(1),
+                        image_id: Some(4),
+                        image_number: None,
+                        compression: KittyImageCompression::None,
+                        more_data_follows: false,
+                    },
+                })),
+                Action::Esc(Esc::Code(EscCode::StringTerminator)),
+            ]
+        );
+    }
+
+
     /// Transmit and display is `a=T`, so it survives a round trip.
     #[test]
     fn kitty_transmit_and_display() {

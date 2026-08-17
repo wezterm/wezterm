@@ -111,17 +111,26 @@ impl KittyImageData {
             "d" => Some(Self::Direct(String::from_utf8(payload.to_vec()).ok()?)),
             "f" => Some(Self::File {
                 path: String::from_utf8(base64_decode(payload.to_vec()).ok()?).ok()?,
-                data_size: geti(keys, "S"),
+                data_size: match geti(keys, "S") {
+                    None | Some(0) => None,
+                    n => n,
+                },
                 data_offset: geti(keys, "O"),
             }),
             "t" => Some(Self::TemporaryFile {
                 path: String::from_utf8(base64_decode(payload.to_vec()).ok()?).ok()?,
-                data_size: geti(keys, "S"),
+                data_size: match geti(keys, "S") {
+                    None | Some(0) => None,
+                    n => n,
+                },
                 data_offset: geti(keys, "O"),
             }),
             "s" => Some(Self::SharedMem {
                 name: String::from_utf8(base64_decode(payload.to_vec()).ok()?).ok()?,
-                data_size: geti(keys, "S"),
+                data_size: match geti(keys, "S") {
+                    None | Some(0) => None,
+                    n => n,
+                },
                 data_offset: geti(keys, "O"),
             }),
             _ => None,
