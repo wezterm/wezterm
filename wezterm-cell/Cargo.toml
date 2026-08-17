@@ -23,6 +23,13 @@ wezterm-color-types.workspace = true
 wezterm-escape-parser.workspace = true
 wezterm-dynamic.workspace = true
 
+# sha2 compiles its aarch64 sha256 intrinsics only under the asm feature; x86
+# and x86_64 select their backend by architecture and do not need it. The
+# feature also pulls in sha2-asm, which refuses to build for Windows targets,
+# hence the target gate.
+[target.'cfg(all(target_arch = "aarch64", not(target_os = "windows")))'.dependencies]
+sha2 = {workspace=true, optional=true, features=["asm"]}
+
 [features]
 std = ["serde/std", "wezterm-char-props/std", "wezterm-color-types/std", "wezterm-escape-parser/std", "wezterm-dynamic/std", "finl_unicode/std"]
 use_serde = ["dep:serde", "wezterm-color-types/use_serde"]
