@@ -74,17 +74,51 @@ where
 
     let thread_waker = Arc::clone(&holder);
     std::thread::spawn(move || {
-        // Run the thread
-        let res = f();
-        // Pass the result back
-        tx.send(res).unwrap();
-        // If someone polled the thread before we got here,
-        // they will have populated the waker; extract it
-        // and wake up the scheduler so that it will poll
-        // the result again.
-        let mut waker = thread_waker.waker.lock().unwrap();
-        if let Some(waker) = waker.take() {
-            waker.wake();
+        // Wake the poller from a drop guard rather than inline at the end of
+        // this closure, so that it happens on every exit from this thread --
+        // including `f()` panicking and unwinding straight past here. `poll`
+        // below already knows how to report a thread that produced no result
+        // (it turns the disconnected channel into an error), but it only gets
+        // the chance if something wakes it up to look; without this the future
+        // would stay parked for the rest of the process's life.
+        struct WakeOnExit(Arc<WakerHolder>);
+
+        impl Drop for WakeOnExit {
+            fn drop(&mut self) {
+                // Tolerate a poisoned lock rather than unwrapping: this may
+                // run while already unwinding, where panicking a second time
+                // aborts the process. `wake()` below is left unguarded --
+                // `Waker`'s contract says it doesn't panic, and the only way
+                // it could here is a poisoned scheduler mutex, which has
+                // already broken every other spawn in the process.
+                let mut waker = match self.0.waker.lock() {
+                    Ok(waker) => waker,
+                    Err(err) => err.into_inner(),
+                };
+                // If someone polled the thread before we got here,
+                // they will have populated the waker; extract it
+                // and wake up the scheduler so that it will poll
+                // the result again.
+                if let Some(waker) = waker.take() {
+                    waker.wake();
+                }
+            }
+        }
+
+        let _wake_on_exit = WakeOnExit(thread_waker);
+
+        {
+            // Rebinding moves the sender into this inner scope, so that it is
+            // dropped before the guard above wakes anyone. The order matters:
+            // a poll racing in between a wake and the sender's drop would find
+            // the channel empty but still connected, re-register its waker,
+            // and go back to sleep with nothing left to wake it.
+            let tx = tx;
+            // Run the thread
+            let res = f();
+            // Pass the result back, but don't panic if the receiving future
+            // was already dropped/cancelled (channel disconnected).
+            let _ = tx.send(res);
         }
     });
 
@@ -97,15 +131,28 @@ where
         type Output = Result<T>;
 
         fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
+            // Check if result is already available
             match self.rx.try_recv() {
                 Ok(res) => Poll::Ready(res),
-                Err(TryRecvError::Empty) => {
-                    let mut waker = self.holder.waker.lock().unwrap();
-                    waker.replace(cx.waker().clone());
-                    Poll::Pending
-                }
                 Err(TryRecvError::Disconnected) => {
                     Poll::Ready(Err(anyhow!("thread terminated without providing a result")))
+                }
+                Err(TryRecvError::Empty) => {
+                    // Register the waker, then re-check: closes the race
+                    // window where the worker sends between the first
+                    // `try_recv` above and the waker being stored, which
+                    // would otherwise have nothing left to wake it.
+                    let mut waker = self.holder.waker.lock().unwrap();
+                    waker.replace(cx.waker().clone());
+                    drop(waker);
+
+                    match self.rx.try_recv() {
+                        Ok(res) => Poll::Ready(res),
+                        Err(TryRecvError::Disconnected) => Poll::Ready(Err(anyhow!(
+                            "thread terminated without providing a result"
+                        ))),
+                        Err(TryRecvError::Empty) => Poll::Pending,
+                    }
                 }
             }
         }
@@ -246,5 +293,56 @@ impl ScopedExecutor {
 impl Drop for ScopedExecutor {
     fn drop(&mut self) {
         SCOPED_EXECUTOR.lock().unwrap().take();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ScopedExecutor` publishes itself into the process-global
+    /// `SCOPED_EXECUTOR` for the duration of its lifetime, so two of these
+    /// tests running concurrently (the default for `cargo test`) would
+    /// stomp on each other's executor. Serializes this module's tests
+    /// against each other while leaving the rest of the crate free to run
+    /// in parallel as normal.
+    static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Sanity check on the ordinary path, so a future regression that
+    /// breaks the channel or the wake outright (eg. removing `tx.send`, or
+    /// the wake it triggers) fails here instead of only in a harder-to-read
+    /// hang somewhere else in the tree.
+    #[test]
+    fn spawn_into_new_thread_returns_the_closures_result() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let scoped = ScopedExecutor::new();
+        let result = block_on(scoped.run(async { spawn_into_new_thread(|| Ok(42)).await }));
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    /// Regression test for the hang `WakeOnExit` fixes: before it existed, a
+    /// panic in `f` unwound past both the send and the wake, so nothing
+    /// ever polled this future again and it stayed `Pending` forever. That
+    /// failure mode is a hang, not a wrong answer, so this test is only a
+    /// regression test if it can actually distinguish the two outcomes --
+    /// which it does by construction: on the old code this test would never
+    /// return, and would show up as a hung test process rather than a
+    /// clean failure. On the fixed code it returns an error deterministically,
+    /// regardless of how the panicking thread happens to be scheduled.
+    #[test]
+    fn spawn_into_new_thread_panic_reports_an_error_instead_of_hanging() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let scoped = ScopedExecutor::new();
+        let result: anyhow::Result<()> = block_on(scoped.run(async {
+            spawn_into_new_thread(|| -> anyhow::Result<()> {
+                panic!("intentional test panic, exercising the WakeOnExit unwind path")
+            })
+            .await
+        }));
+        assert!(
+            result.is_err(),
+            "a thread that panics before producing a result must report an error \
+             (\"thread terminated without providing a result\"), not hang forever"
+        );
     }
 }
