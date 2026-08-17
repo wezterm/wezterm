@@ -144,7 +144,7 @@ impl KittyImageData {
                 keys.insert("t", "f".to_string());
                 keys.insert("payload", base64_encode(&path));
                 set(keys, "S", data_size);
-                set(keys, "S", data_offset);
+                set(keys, "O", data_offset);
             }
             Self::TemporaryFile {
                 path,
@@ -154,7 +154,7 @@ impl KittyImageData {
                 keys.insert("t", "t".to_string());
                 keys.insert("payload", base64_encode(&path));
                 set(keys, "S", data_size);
-                set(keys, "S", data_offset);
+                set(keys, "O", data_offset);
             }
             Self::SharedMem {
                 name,
@@ -164,7 +164,7 @@ impl KittyImageData {
                 keys.insert("t", "s".to_string());
                 keys.insert("payload", base64_encode(&name));
                 set(keys, "S", data_size);
-                set(keys, "S", data_offset);
+                set(keys, "O", data_offset);
             }
         }
     }
