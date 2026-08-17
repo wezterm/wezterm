@@ -1048,6 +1048,28 @@ mod test {
         );
     }
 
+    /// Deleting placements at a cell with a given z-index is `d=q`; `d=p` is
+    /// the same delete without the z-index, so the two must not collapse.
+    #[test]
+    fn kitty_delete_at_cell_with_z() {
+        use crate::apc::*;
+
+        assert_eq!(
+            round_trip_parse("\x1b_Ga=d,d=q,x=3,y=4,z=-1\x1b\\"),
+            vec![
+                Action::KittyImage(Box::new(KittyImage::Delete {
+                    what: KittyImageDelete::DeleteAtZ {
+                        x: 3,
+                        y: 4,
+                        z: -1,
+                        delete: false,
+                    },
+                    verbosity: KittyImageVerbosity::Verbose,
+                })),
+                Action::Esc(Esc::Code(EscCode::StringTerminator)),
+            ]
+        );
+    }
 
     /// Transmit and display is `a=T`, so it survives a round trip.
     #[test]

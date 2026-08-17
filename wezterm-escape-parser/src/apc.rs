@@ -816,7 +816,7 @@ impl KittyImageDelete {
                 keys.insert("y", y.to_string());
             }
             Self::DeleteAtZ { x, y, z, delete } => {
-                keys.insert("d", d('p', delete));
+                keys.insert("d", d('q', delete));
                 keys.insert("x", x.to_string());
                 keys.insert("y", y.to_string());
                 keys.insert("z", z.to_string());
