@@ -943,11 +943,35 @@ impl Config {
         }
     }
 
+    /// Returns the WSL domain list for this config.
+    ///
+    /// **This can block the calling thread**, potentially for tens of seconds, if `wsl_domains`
+    /// isn't configured explicitly: it falls through to `WslDomain::default_domains()`, which shells
+    /// out to `wsl.exe -l -v` (or waits for another in-flight invocation of it) on a cache miss.
+    /// Nothing in this crate calls this method anymore -- prefer `wsl_domains_cached()`, the
+    /// non-blocking accessor used everywhere latency matters, and treat a `None` result as "not
+    /// discovered yet" rather than triggering discovery yourself.
     pub fn wsl_domains(&self) -> Vec<WslDomain> {
         if let Some(domains) = &self.wsl_domains {
             domains.clone()
         } else {
             WslDomain::default_domains()
+        }
+    }
+
+    /// Like `wsl_domains()`, but returns a non-blocking result for the
+    /// auto-discovery case: if `wsl_domains` is not configured, returns
+    /// `Some(cached list)` once discovery has populated it, or `None` while
+    /// discovery hasn't completed yet. Callers must treat `None` differently
+    /// from `Some(vec![])` ("discovery finished and found nothing") -- see
+    /// `LocalDomain::resolve_wsl_domain` for why. Never shells out to
+    /// `wsl.exe`. Use this on latency-sensitive paths (like pane spawn) to
+    /// avoid blocking.
+    pub fn wsl_domains_cached(&self) -> Option<Vec<WslDomain>> {
+        if let Some(domains) = &self.wsl_domains {
+            Some(domains.clone())
+        } else {
+            WslDomain::cached_default_domains()
         }
     }
 

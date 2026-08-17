@@ -333,7 +333,13 @@ end
 
         wezterm_mod.set(
             "default_wsl_domains",
-            lua.create_function(|_, ()| Ok(crate::WslDomain::default_domains()))?,
+            // Deliberately calls the uncached compute_default_domains(),
+            // not default_domains() (used internally by discovery/spawn
+            // paths that shouldn't repeatedly shell out): this function
+            // is documented to reflect what's currently installed, and a
+            // caller invoking it directly is opting into paying the
+            // `wsl.exe` cost for a live answer.
+            lua.create_function(|_, ()| Ok(crate::WslDomain::compute_default_domains()))?,
         )?;
 
         wezterm_mod.set("font", lua.create_function(font)?)?;

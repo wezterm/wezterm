@@ -121,6 +121,25 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
 
     mux_mod.set(
         "get_domain",
+        // Deliberately a *synchronous* lua function, like all_domains
+        // below. It is reachable from synchronous callbacks
+        // (format-tab-title, format-window-title,
+        // augment-command-palette, mux-is-process-stateful), which
+        // config::lua::emit_sync_callback invokes with a plain
+        // `Function::call`. An mlua async function compiles down to a lua
+        // wrapper that does `coroutine.yield` whenever the underlying
+        // future returns Pending, so waiting for domain discovery in here
+        // would make those callbacks fail outright with "attempt to yield
+        // from outside a coroutine" -- and it would do so precisely
+        // during the post-startup window this whole change introduces.
+        //
+        // So this is a snapshot lookup: while a background discovery is
+        // still in flight, a domain it hasn't registered yet reads as
+        // nil, the same way it does for all_domains. Spawning into a
+        // domain *by name* does wait for discovery, though only up to
+        // mux::DOMAIN_DISCOVERY_TIMEOUT (see Mux::resolve_spawn_tab_domain,
+        // and that constant for why the bound is there and when it can
+        // bite); it's only this accessor that doesn't wait at all.
         lua.create_function(|_, domain: LuaValue| {
             let mux = get_mux()?;
             match domain {
@@ -149,6 +168,18 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
     mux_mod.set(
         "all_domains",
         lua.create_function(|_, _: ()| {
+            // This is a snapshot of whatever domains are registered at
+            // the moment of the call. If a background domain discovery
+            // (eg. WSL) is still in flight -- which can be the case for
+            // a few seconds right after startup -- domains it hasn't
+            // found yet won't appear here. Like `mux.get_domain(name)`,
+            // this is a synchronous snapshot that does NOT wait for
+            // discovery. `wezterm.mux.spawn_window{domain=...}` does wait
+            // (via `Mux::resolve_spawn_tab_domain` and
+            // `await_domain_resolution_async`), but only up to
+            // `mux::DOMAIN_DISCOVERY_TIMEOUT` -- a config that needs a
+            // specific WSL domain guaranteed available this early should
+            // set `wsl_domains` explicitly rather than rely on either.
             let mux = get_mux()?;
             Ok(mux
                 .iter_domains()

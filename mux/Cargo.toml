@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+async-io.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bintree.workspace = true

@@ -14,3 +14,14 @@ Resolves `name_or_id` to a domain and returns a
 
 If the name or id don't map to a valid domain, this function will return `nil`.
 
+!!! note
+    This is a snapshot of the domains registered at the moment of the call.
+    On Windows, when [wsl_domains](../config/wsl_domains.md) is left
+    unconfigured, the default WSL domain list is discovered in the
+    background rather than blocking startup, so for the first moment or two
+    after wezterm starts a WSL domain that hasn't been discovered yet will
+    read as `nil` here. Spawning into such a domain by name does wait for
+    discovery, though only briefly, so it is not a reliable substitute; it
+    is only this lookup that doesn't wait at all. If you need a startup
+    event handler to see a specific WSL domain deterministically, set
+    `wsl_domains` explicitly.
