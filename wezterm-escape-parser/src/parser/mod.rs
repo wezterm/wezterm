@@ -1015,6 +1015,47 @@ mod test {
         );
     }
 
+    /// Transmit and display is `a=T`, so it survives a round trip.
+    #[test]
+    fn kitty_transmit_and_display() {
+        use crate::apc::*;
+
+        assert_eq!(
+            parse_as(
+                "\x1b_Ga=T,s=1,v=1,i=2;YWJjZA==\x1b\\",
+                "\x1b_Ga=T,i=2,s=1,v=1;YWJjZA==\x1b\\"
+            ),
+            vec![
+                Action::KittyImage(Box::new(KittyImage::TransmitDataAndDisplay {
+                    transmit: KittyImageTransmit {
+                        format: None,
+                        data: KittyImageData::Direct("YWJjZA==".to_string()),
+                        width: Some(1),
+                        height: Some(1),
+                        image_id: Some(2),
+                        image_number: None,
+                        compression: KittyImageCompression::None,
+                        more_data_follows: false,
+                    },
+                    placement: KittyImagePlacement {
+                        x: None,
+                        y: None,
+                        w: None,
+                        h: None,
+                        x_offset: None,
+                        y_offset: None,
+                        columns: None,
+                        rows: None,
+                        do_not_move_cursor: false,
+                        placement_id: None,
+                        z_index: None,
+                    },
+                    verbosity: KittyImageVerbosity::Verbose,
+                })),
+                Action::Esc(Esc::Code(EscCode::StringTerminator)),
+            ]
+        );
+    }
 
     /* Withdrawn because xterm introduced a conflict:
      * <https://github.com/mintty/mintty/issues/1171#issuecomment-1336174469>

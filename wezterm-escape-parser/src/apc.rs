@@ -1133,7 +1133,7 @@ impl KittyImage {
                 verbosity,
                 placement,
             } => {
-                keys.insert("a", "Q".to_string());
+                keys.insert("a", "T".to_string());
                 verbosity.to_keys(keys);
                 placement.to_keys(keys);
                 transmit.to_keys(keys);
