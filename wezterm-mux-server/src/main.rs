@@ -273,7 +273,16 @@ async fn async_run(cmd: Option<CommandBuilder>) -> anyhow::Result<()> {
         true
     });
 
-    let domain = mux.default_domain();
+    // Waits for an in-flight background domain discovery (see
+    // update_mux_domains_for_server / Mux::begin_domain_discovery) if the
+    // configured default_mux_server_domain named a domain that hasn't
+    // been registered yet, instead of silently falling back to whatever
+    // default was already in place.
+    // The pre-wait above is the wait; resolving must not block a second
+    // time if a fresh discovery run happened to start in the gap.
+    mux.await_domain_resolution_async(None, &config::keyassignment::SpawnTabDomain::DefaultDomain)
+        .await;
+    let domain = mux.resolve_default_domain_no_wait()?;
 
     {
         if let Err(err) = config::with_lua_config_on_main_thread(trigger_mux_startup).await {

@@ -3055,7 +3055,17 @@ impl TermWindow {
                 }
             }
             DetachDomain(domain) => {
-                let domain = Mux::get().resolve_spawn_tab_domain(Some(pane.pane_id()), domain)?;
+                // Wait-free resolve: this runs synchronously on the GUI
+                // thread, and the waiting variant can park it for the
+                // duration of an in-flight background domain discovery
+                // (unbounded, for the DefaultDomain case) -- ie. exactly
+                // the freeze that moving discovery off the startup path
+                // was meant to eliminate, just relocated to a key press.
+                // Detaching only makes sense for a domain that is already
+                // attached, and therefore already registered, so there is
+                // nothing for it to wait on in the first place.
+                let domain =
+                    Mux::get().resolve_spawn_tab_domain_no_wait(Some(pane.pane_id()), domain)?;
                 domain.detach()?;
             }
             AttachDomain(domain) => {

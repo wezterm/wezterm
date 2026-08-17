@@ -444,9 +444,31 @@ async fn async_run_terminal_gui(
     let mux = Mux::get();
 
     let domain = if let Some(name) = &opts.domain {
-        let domain = mux
-            .get_domain_by_name(name)
-            .ok_or_else(|| anyhow!("invalid domain {name}"))?;
+        // Waits unbounded (not resolve_spawn_tab_domain's own bounded
+        // DOMAIN_DISCOVERY_TIMEOUT) for a background discovery kicked off
+        // by setup_mux/update_mux_domains to register this domain if it
+        // hasn't yet. This is an explicit, user-requested startup domain,
+        // so a bounded cutoff would incorrectly treat "still discovering"
+        // as "doesn't exist" and fail startup outright -- on exactly the
+        // slow-`wsl.exe` machines this whole fix targets, where discovery
+        // can easily take longer than the bound. Mirrors setup_mux's own
+        // wait, for the same reason. Goes through the async wrapper
+        // (rather than blocking this thread directly) since this runs on
+        // the main-thread executor.
+        if mux.get_domain_by_name(name).is_none() {
+            let _ = mux.await_domain_discovery_unbounded_async().await;
+        }
+        // Wait-free lookup after the async pre-wait above, rather than
+        // the plain synchronous `resolve_spawn_tab_domain`: if a brand
+        // new discovery run started in the gap between the pre-wait
+        // finishing and this call running, the synchronous resolver
+        // would block this main-thread executor again -- unbounded, for
+        // this DefaultDomain-adjacent path -- defeating the point of
+        // having awaited already.
+        let domain = mux.resolve_spawn_tab_domain_no_wait(
+            None,
+            &SpawnTabDomain::DomainName(name.to_string()),
+        )?;
         Some(domain)
     } else {
         None
@@ -697,12 +719,26 @@ fn setup_mux(
     let default_name =
         default_domain_name.unwrap_or(config.default_domain.as_deref().unwrap_or("local"));
 
-    let domain = mux.get_domain_by_name(default_name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "desired default domain '{}' was not found in mux!?",
-            default_name
-        )
-    })?;
+    let domain = match mux.get_domain_by_name(default_name) {
+        Some(domain) => domain,
+        None => {
+            // The requested domain may be a WSL domain that a background
+            // discovery kicked off by update_mux_domains hasn't finished
+            // registering yet. Wait for it to finish rather than bailing
+            // out after an arbitrary timeout: `wsl.exe` can legitimately
+            // take many seconds on a cold start, and this is the domain
+            // the user explicitly asked wezterm to start in, so failing
+            // startup just because discovery hadn't caught up yet would
+            // be a regression from the old fully-synchronous behavior.
+            mux.await_domain_discovery_unbounded();
+            mux.get_domain_by_name(default_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "desired default domain '{}' was not found in mux!?",
+                    default_name
+                )
+            })?
+        }
+    };
     mux.set_default_domain(&domain);
 
     Ok(mux)

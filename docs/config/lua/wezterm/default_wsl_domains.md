@@ -65,3 +65,32 @@ that the default shell if possible, so that you can avoid this additional config
 The `default_cwd` field is now automatically set to `"~"` to make it more
 convenient to launch a WSL instance in the home directory of the configured
 distribution.
+
+!!! note
+    This function always computes a fresh, live list by running `wsl -l -v`,
+    and its result is never cached, so every call pays that cost again --
+    several seconds, and longer on a cold WSL start. If you use the recipe
+    above of calling `wezterm.default_wsl_domains()` directly from your
+    config, that means paying it synchronously every time your config is
+    evaluated, including on every reload. If you don't need a live answer,
+    consider setting `wsl_domains` once with an explicit, hand-written list
+    instead of calling this function from your config.
+
+    This is a different function from the one wezterm itself uses
+    internally to populate the default `wsl_domains` list when it isn't
+    configured explicitly: that internal discovery runs off the startup
+    path in the background and its result is cached for the life of the
+    process, so it doesn't pay this cost on every spawn or every reload the
+    way a config that calls this function directly would. One consequence
+    of that internal caching is that a long-lived process (in particular
+    `wezterm-mux-server`) won't notice a WSL distro installed or removed
+    after it started, even across a config reload, unless it's restarted.
+    If you need that, call `wezterm.default_wsl_domains()` directly from
+    your config (as in the recipe above, or even just `wsl_domains =
+    wezterm.default_wsl_domains()` with no filtering) to get a fresh
+    enumeration on every reload instead. Note that this makes *newly
+    installed* distributions show up, but does not make *removed* ones go
+    away: domains already registered with the multiplexer are never
+    unregistered, so a domain for a since-removed distribution remains
+    listed until the process restarts, and attempting to spawn into it
+    will not do what you want.

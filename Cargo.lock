@@ -3550,6 +3550,7 @@ name = "mux"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-io",
  "async-trait",
  "base64",
  "bintree",
