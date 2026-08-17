@@ -156,6 +156,11 @@ As features stabilize some brief notes about them will accumulate here.
 #### Fixed
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
   an RGBA image already carries is now reused instead. Thanks to @i-am-logger! #8065
+* macOS: Fixed the kitty image protocol shared memory transport (`t=s`), which
+  never drew anything. A POSIX shared memory object can only be mapped on macOS,
+  so reading one failed with `Device not configured` and the image was dropped
+  without any reply to the application. Such objects are now mapped rather than
+  read from, on all unix systems. Thanks to @eschnett! #7631
 * `ResetTerminal` (RIS) did not reset the `modifyOtherKeys` state. A program
   that left it enabled and exited uncleanly could leave ctrl keys emitting
   escape sequences that the shell doesn't expect. RIS now also resets the
