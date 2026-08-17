@@ -40,3 +40,4 @@ winreg.workspace = true
 [dev-dependencies]
 futures.workspace = true
 smol.workspace = true
+tempfile.workspace = true

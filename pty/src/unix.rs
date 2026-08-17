@@ -142,12 +142,13 @@ fn tty_name(fd: RawFd) -> Option<PathBuf> {
 /// also need to make an effort to clean up the mess.
 ///
 /// This function enumerates the open filedescriptors in the current process
-/// and then will forcibly call close(2) on each open fd that is numbered
-/// 3 or higher, effectively closing all descriptors except for the stdio
-/// streams.
+/// and marks each fd numbered 3 or higher as close-on-exec. That prevents
+/// descriptor leakage into the final exec'd program without breaking the
+/// internal error-reporting pipe used by `std::process::Command` when `exec`
+/// itself fails.
 ///
 /// The implementation of this function relies on `/dev/fd` being available
-/// to provide the list of open fds.  Any errors in enumerating or closing
+/// to provide the list of open fds.  Any errors in enumerating or marking
 /// the fds are silently ignored.
 pub fn close_random_fds() {
     // FreeBSD, macOS and presumably other BSDish systems have /dev/fd as
@@ -169,9 +170,7 @@ pub fn close_random_fds() {
             }
         }
         for fd in fds {
-            unsafe {
-                libc::close(fd);
-            }
+            let _ = cloexec(fd);
         }
     }
 }
@@ -410,5 +409,37 @@ impl Write for UnixMasterWriter {
     }
     fn flush(&mut self) -> Result<(), io::Error> {
         self.fd.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_spawn_command_returns_error_when_exec_fails() {
+        // Create an executable whose interpreter does not exist.
+        let mut bad_exec_script = NamedTempFile::new().unwrap();
+        bad_exec_script
+            .write_all(b"#!/no/such/interpreter\n")
+            .unwrap();
+
+        let mut perms = fs::metadata(bad_exec_script.path()).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(bad_exec_script.path(), perms).unwrap();
+
+        // Spawn it through a PTY.
+        let (_master, slave) = openpty(PtySize::default()).unwrap();
+
+        let mut cmd = CommandBuilder::new(bad_exec_script.path().as_os_str());
+        cmd.arg("--version");
+
+        // Exec should fail synchronously rather than yielding an aborted child.
+        let result = slave.spawn_command(cmd);
+
+        assert!(result.is_err());
     }
 }
