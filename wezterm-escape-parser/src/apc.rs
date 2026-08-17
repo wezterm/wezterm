@@ -111,17 +111,26 @@ impl KittyImageData {
             "d" => Some(Self::Direct(String::from_utf8(payload.to_vec()).ok()?)),
             "f" => Some(Self::File {
                 path: String::from_utf8(base64_decode(payload.to_vec()).ok()?).ok()?,
-                data_size: geti(keys, "S"),
+                data_size: match geti(keys, "S") {
+                    None | Some(0) => None,
+                    n => n,
+                },
                 data_offset: geti(keys, "O"),
             }),
             "t" => Some(Self::TemporaryFile {
                 path: String::from_utf8(base64_decode(payload.to_vec()).ok()?).ok()?,
-                data_size: geti(keys, "S"),
+                data_size: match geti(keys, "S") {
+                    None | Some(0) => None,
+                    n => n,
+                },
                 data_offset: geti(keys, "O"),
             }),
             "s" => Some(Self::SharedMem {
                 name: String::from_utf8(base64_decode(payload.to_vec()).ok()?).ok()?,
-                data_size: geti(keys, "S"),
+                data_size: match geti(keys, "S") {
+                    None | Some(0) => None,
+                    n => n,
+                },
                 data_offset: geti(keys, "O"),
             }),
             _ => None,
@@ -1426,9 +1435,10 @@ mod shm_test {
         assert!(!present(&name), "the object is unlinked once it is read");
     }
 
-    /// `S=0` asks for no bytes, which is not an error.
+    /// An explicit size of nothing reads nothing. A client that means "all of
+    /// it" omits `S`, which the parser also produces for `S=0`.
     #[test]
-    fn shm_reads_nothing_when_asked_for_nothing() {
+    fn shm_reads_nothing_for_a_size_of_nothing() {
         let name = stage("/wtshm-none", &pattern(64));
 
         let got = KittyImageData::SharedMem {
