@@ -948,6 +948,33 @@ mod test {
                 Action::Esc(Esc::Code(EscCode::StringTerminator)),
             ]
         );
+
+        // The offset goes out under O, and leaves the size under S alone.
+        assert_eq!(
+            parse_as(
+                "\x1b_Ga=q,t=s,s=1,v=1,i=3,O=10,S=80;L3dlenRlcm0tc2htLXJ0\x1b\\",
+                "\x1b_GO=10,S=80,a=q,i=3,s=1,t=s,v=1;L3dlenRlcm0tc2htLXJ0\x1b\\"
+            ),
+            vec![
+                Action::KittyImage(Box::new(KittyImage::Query {
+                    transmit: KittyImageTransmit {
+                        format: None,
+                        data: KittyImageData::SharedMem {
+                            name: "/wezterm-shm-rt".to_string(),
+                            data_offset: Some(10),
+                            data_size: Some(80),
+                        },
+                        width: Some(1),
+                        height: Some(1),
+                        image_id: Some(3),
+                        image_number: None,
+                        compression: KittyImageCompression::None,
+                        more_data_follows: false,
+                    },
+                })),
+                Action::Esc(Esc::Code(EscCode::StringTerminator)),
+            ]
+        );
     }
 
     /* Withdrawn because xterm introduced a conflict:
