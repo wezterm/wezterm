@@ -13,9 +13,9 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Networking::WinSock::{
     accept, bind, closesocket, connect, getsockname, getsockopt, htonl, ioctlsocket, listen, recv,
-    send, WSAGetLastError, WSAPoll, WSASocketW, WSAStartup, AF_INET, FIONBIO, INADDR_LOOPBACK,
-    INVALID_SOCKET, SOCKADDR_IN, SOCKET, SOCK_STREAM, SOL_SOCKET, SO_ERROR, WSADATA, WSAENOTSOCK,
-    WSA_FLAG_NO_HANDLE_INHERIT,
+    send, WSAGetLastError, WSAPoll, WSASocketW, WSAStartup, ADDRESS_FAMILY, AF_INET, FIONBIO,
+    INADDR_LOOPBACK, INVALID_SOCKET, SOCKADDR_IN, SOCKET, SOCK_STREAM, SOL_SOCKET, SO_ERROR,
+    WSADATA, WSAENOTSOCK, WSA_FLAG_NO_HANDLE_INHERIT,
 };
 pub use windows_sys::Win32::Networking::WinSock::{
     POLLERR, POLLHUP, POLLIN, POLLOUT, WSAPOLLFD as pollfd,
@@ -463,10 +463,10 @@ fn init_winsock() {
     });
 }
 
-fn socket(af: i32, sock_type: i32, proto: i32) -> Result<FileDescriptor> {
+fn socket(af: ADDRESS_FAMILY, sock_type: i32, proto: i32) -> Result<FileDescriptor> {
     let s = unsafe {
         WSASocketW(
-            af,
+            af as _,
             sock_type,
             proto,
             ptr::null_mut(),
@@ -490,10 +490,10 @@ fn socket(af: i32, sock_type: i32, proto: i32) -> Result<FileDescriptor> {
 pub fn socketpair_impl() -> Result<(FileDescriptor, FileDescriptor)> {
     init_winsock();
 
-    let s = socket(AF_INET as _, SOCK_STREAM, 0)?;
+    let s = socket(AF_INET, SOCK_STREAM, 0)?;
 
     let mut in_addr: SOCKADDR_IN = unsafe { std::mem::zeroed() };
-    in_addr.sin_family = AF_INET as _;
+    in_addr.sin_family = AF_INET;
     in_addr.sin_addr.S_un.S_addr = unsafe { htonl(INADDR_LOOPBACK) };
 
     unsafe {
@@ -526,7 +526,7 @@ pub fn socketpair_impl() -> Result<(FileDescriptor, FileDescriptor)> {
         }
     }
 
-    let client = socket(AF_INET as _, SOCK_STREAM, 0)?;
+    let client = socket(AF_INET, SOCK_STREAM, 0)?;
 
     unsafe {
         if connect(
