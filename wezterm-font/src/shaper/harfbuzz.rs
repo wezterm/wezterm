@@ -249,7 +249,7 @@ impl HarfbuzzShaper {
                 Ok(fb) => fb,
                 Err(e) => {
                     log::error!(
-                        "failed to load fallback font idx {font_idx}: {e:#}                          — skipping and trying next fallback"
+                        "failed to load fallback font_idx={font_idx}: {e:#} - trying next fallback"
                     );
                     font_idx += 1;
                     continue;
