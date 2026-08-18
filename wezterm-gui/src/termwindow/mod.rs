@@ -205,6 +205,8 @@ pub struct PaneState {
 
     bell_start: Option<Instant>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
+    /// Cursor render state for the post-process shader uniforms.
+    pub cursor_render_state: crate::termwindow::prevcursor::CursorRenderState,
 }
 
 /// Data used when synchronously formatting pane and window titles
@@ -2181,28 +2183,33 @@ impl TermWindow {
 
     fn update_text_cursor(&mut self, pos: &PositionedPane) {
         if let Some(win) = self.window.as_ref() {
-            let cursor = pos.pane.get_cursor_position();
-            let top = pos.pane.get_dimensions().physical_top;
-            let tab_bar_height = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
-                self.tab_bar_pixel_height().unwrap()
-            } else {
-                0.0
-            };
-            let (padding_left, padding_top) = self.padding_left_top();
-
-            let r = Rect::new(
-                Point::new(
-                    (((cursor.x + pos.left) as isize).max(0) * self.render_metrics.cell_size.width)
-                        .add(padding_left as isize),
-                    ((cursor.y + pos.top as isize - top).max(0)
-                        * self.render_metrics.cell_size.height)
-                        .add(tab_bar_height as isize)
-                        .add(padding_top as isize),
-                ),
-                self.render_metrics.cell_size,
-            );
+            let r = self.cursor_pixel_rect(pos);
             win.set_text_cursor_position(r);
         }
+    }
+
+    /// Compute the cursor's pixel rect in full-window coordinates, matching
+    /// the coordinate space of the post-process shader's `fragCoord`.
+    fn cursor_pixel_rect(&self, pos: &PositionedPane) -> Rect {
+        let cursor = pos.pane.get_cursor_position();
+        let top = pos.pane.get_dimensions().physical_top;
+        let tab_bar_height = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
+            self.tab_bar_pixel_height().unwrap()
+        } else {
+            0.0
+        };
+        let (padding_left, padding_top) = self.padding_left_top();
+
+        Rect::new(
+            Point::new(
+                (((cursor.x + pos.left) as isize).max(0) * self.render_metrics.cell_size.width)
+                    .add(padding_left as isize),
+                ((cursor.y + pos.top as isize - top).max(0) * self.render_metrics.cell_size.height)
+                    .add(tab_bar_height as isize)
+                    .add(padding_top as isize),
+            ),
+            self.render_metrics.cell_size,
+        )
     }
 
     fn activate_window(&mut self, window_idx: usize) -> anyhow::Result<()> {

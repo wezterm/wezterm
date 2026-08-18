@@ -1,6 +1,6 @@
 --- ghostty_shadertoy_prefix.glsl
 +++ ghostty_shadertoy_prefix_patched.glsl
-@@ -1,34 +1,38 @@
+@@ -1,34 +1,77 @@
  #version 430 core
  
 -layout(binding = 1, std140) uniform Globals {
@@ -44,6 +44,23 @@
 +    vec4 iMouse;
 +    vec4 iDate;
 +    float iSampleRate;
++    vec4 iCurrentCursor;
++    vec4 iPreviousCursor;
++    vec4 iCurrentCursorColor;
++    vec4 iPreviousCursorColor;
++    int iCurrentCursorStyle;
++    int iPreviousCursorStyle;
++    int iCursorVisible;
++    float iTimeCursorChange;
++    float iTimeFocus;
++    int iFocus;
++    vec3 iPalette[256];
++    vec3 iBackgroundColor;
++    vec3 iForegroundColor;
++    vec3 iCursorColor;
++    vec3 iCursorText;
++    vec3 iSelectionForegroundColor;
++    vec3 iSelectionBackgroundColor;
  };
 +Globals _g;
 +
@@ -52,6 +69,11 @@
 +    _g.iTime = time;
 +    _g.iTimeDelta = time_delta;
 +    _g.iFrame = int(frame);
++    _g.iCurrentCursor = vec4(current_cursor.x, current_cursor.y + current_cursor.w, current_cursor.z, current_cursor.w);
++    _g.iPreviousCursor = vec4(previous_cursor.x, previous_cursor.y + previous_cursor.w, previous_cursor.z, previous_cursor.w);
++    _g.iCurrentCursorColor = current_cursor_color;
++    _g.iPreviousCursorColor = previous_cursor_color;
++    _g.iTimeCursorChange = cursor_change_time;
 +}
 +
 +#define iResolution _g.iResolution
@@ -64,10 +86,27 @@
 +#define iMouse _g.iMouse
 +#define iDate _g.iDate
 +#define iSampleRate _g.iSampleRate
++#define iCurrentCursor _g.iCurrentCursor
++#define iPreviousCursor _g.iPreviousCursor
++#define iCurrentCursorColor _g.iCurrentCursorColor
++#define iPreviousCursorColor _g.iPreviousCursorColor
++#define iCurrentCursorStyle _g.iCurrentCursorStyle
++#define iPreviousCursorStyle _g.iPreviousCursorStyle
++#define iCursorVisible _g.iCursorVisible
++#define iTimeCursorChange _g.iTimeCursorChange
++#define iTimeFocus _g.iTimeFocus
++#define iFocus _g.iFocus
++#define iPalette _g.iPalette
++#define iBackgroundColor _g.iBackgroundColor
++#define iForegroundColor _g.iForegroundColor
++#define iCursorColor _g.iCursorColor
++#define iCursorText _g.iCursorText
++#define iSelectionForegroundColor _g.iSelectionForegroundColor
++#define iSelectionBackgroundColor _g.iSelectionBackgroundColor
  
  #define CURSORSTYLE_BLOCK        0
  #define CURSORSTYLE_BLOCK_HOLLOW 1
-@@ -36,12 +40,18 @@
+@@ -36,12 +79,18 @@
  #define CURSORSTYLE_UNDERLINE    3
  #define CURSORSTYLE_LOCK         4
  
@@ -92,7 +131,7 @@
  
  layout(location = 0) in vec4 gl_FragCoord;
  layout(location = 0) out vec4 _fragColor;
-@@ -49,4 +59,4 @@
+@@ -49,4 +98,4 @@
  #define texture2D texture
  
  void mainImage( out vec4 fragColor, in vec2 fragCoord );

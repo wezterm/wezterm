@@ -317,4 +317,64 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             result.err()
         );
     }
+
+    #[test]
+    fn test_import_cursor_uniforms() {
+        let glsl = r#"
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec4 terminal = texture(iChannel0, uv);
+    vec2 currentCenter = iCurrentCursor.xy + vec2(iCurrentCursor.z * 0.5, -iCurrentCursor.w * 0.5);
+    vec2 previousCenter = iPreviousCursor.xy + vec2(iPreviousCursor.z * 0.5, -iPreviousCursor.w * 0.5);
+    float age = clamp((iTime - iTimeCursorChange) / 0.14, 0.0, 1.0);
+    vec3 color = mix(iCurrentCursorColor.rgb, iPreviousCursorColor.rgb, age);
+    fragColor = vec4(mix(terminal.rgb, color, age), terminal.a);
+}
+"#;
+        let result = compile_ghostty(glsl, "cursor.glsl");
+        assert!(
+            result.is_ok(),
+            "Cursor-uniform shader should import: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_import_real_cursor_blaze() {
+        let result = compile_ghostty(
+            include_str!("shaders/test_fixtures/cursor_blaze.glsl"),
+            "cursor_blaze.glsl",
+        );
+        assert!(
+            result.is_ok(),
+            "cursor_blaze.glsl should import: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_import_real_cursor_lightning() {
+        let result = compile_ghostty(
+            include_str!("shaders/test_fixtures/cursor_lightning.glsl"),
+            "cursor_lightning.glsl",
+        );
+        assert!(
+            result.is_ok(),
+            "cursor_lightning.glsl should import: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_import_real_in_game_crt_cursor() {
+        let result = compile_ghostty(
+            include_str!("shaders/test_fixtures/in-game-crt-cursor.glsl"),
+            "in-game-crt-cursor.glsl",
+        );
+        assert!(
+            result.is_ok(),
+            "in-game-crt-cursor.glsl should import: {:?}",
+            result.err()
+        );
+    }
 }

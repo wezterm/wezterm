@@ -38,6 +38,11 @@ buffer:
 * `time` (`f32`) - seconds since the shader pipeline started
 * `time_delta` (`f32`) - seconds since the previous frame
 * `frame` (`u32`) - frame counter
+* `current_cursor` (`vec4<f32>`) - current cursor rectangle as `(x, y, width, height)` in pixels
+* `previous_cursor` (`vec4<f32>`) - previous cursor rectangle, same form as `current_cursor`
+* `current_cursor_color` (`vec4<f32>`) - current cursor color (RGBA)
+* `previous_cursor_color` (`vec4<f32>`) - previous cursor color (RGBA)
+* `cursor_change_time` (`f32`) - seconds since the cursor last changed position or style
 
 ## Imported (Ghostty) shaders
 
@@ -56,6 +61,11 @@ The following shadertoy-style globals are currently populated by wezterm:
 * `iTimeDelta` (`float`) - seconds since the previous frame
 * `iFrame` (`int`) - frame counter
 * `iChannel0` (`sampler2D`) - the rendered terminal image
+* `iCurrentCursor` (`vec4`) - current cursor rectangle as `(x, y, width, height)`
+* `iPreviousCursor` (`vec4`) - previous cursor rectangle
+* `iCurrentCursorColor` (`vec4`) - current cursor color
+* `iPreviousCursorColor` (`vec4`) - previous cursor color
+* `iTimeCursorChange` (`float`) - seconds since the cursor last changed
 
 ## Example
 

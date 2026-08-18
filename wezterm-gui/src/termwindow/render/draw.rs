@@ -196,6 +196,11 @@ impl crate::TermWindow {
             self.last_post_process_time = Some(now);
             self.post_process_frame = self.post_process_frame.wrapping_add(1);
 
+            let cursor_state = self
+                .get_active_pane_or_overlay()
+                .map(|pane| self.pane_state(pane.pane_id()).cursor_render_state.clone())
+                .unwrap_or_default();
+
             let uniform = PostProcessUniform {
                 resolution: [
                     self.dimensions.pixel_width as f32,
@@ -205,6 +210,12 @@ impl crate::TermWindow {
                 time_delta,
                 frame: self.post_process_frame,
                 _padding: [0; 3],
+                current_cursor: cursor_state.current_cursor.unwrap_or([0.0; 4]),
+                previous_cursor: cursor_state.previous_cursor.unwrap_or([0.0; 4]),
+                current_cursor_color: cursor_state.current_cursor_color,
+                previous_cursor_color: cursor_state.previous_cursor_color,
+                cursor_change_time: cursor_state.cursor_change_time,
+                _padding_2: [0; 3],
             };
             webgpu
                 .queue
