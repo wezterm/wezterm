@@ -647,7 +647,11 @@ impl KittyImagePlacement {
                 None | Some(0) => None,
                 n => n,
             },
-            placement_id: geti(keys, "p"),
+            // A placement id runs from 1, so a zero is no placement id.
+            placement_id: match geti(keys, "p") {
+                None | Some(0) => None,
+                n => n,
+            },
             do_not_move_cursor: match get(keys, "C") {
                 None | Some("0") => false,
                 Some("1") => true,
@@ -750,14 +754,22 @@ impl KittyImageDelete {
         let delete = d.is_ascii_uppercase();
         match d {
             'a' | 'A' => Some(Self::All { delete }),
+            // A placement id runs from 1, so a zero names every placement of
+            // the image rather than one recorded under an id of zero.
             'i' | 'I' => Some(Self::ByImageId {
                 image_id: geti(keys, "i")?,
-                placement_id: geti(keys, "p"),
+                placement_id: match geti(keys, "p") {
+                    None | Some(0) => None,
+                    n => n,
+                },
                 delete,
             }),
             'n' | 'N' => Some(Self::ByImageNumber {
                 image_number: geti(keys, "I")?,
-                placement_id: geti(keys, "p"),
+                placement_id: match geti(keys, "p") {
+                    None | Some(0) => None,
+                    n => n,
+                },
                 delete,
             }),
             'c' | 'C' => Some(Self::AtCursorPosition { delete }),
@@ -1298,6 +1310,46 @@ mod test {
                     background_pixel: None,
                     duration_ms: None,
                 },
+            }
+        );
+    }
+
+    /// A placement id runs from 1, so `p=0` is the same command as omitting it.
+    /// A delete carrying it names every placement of the image, not a placement
+    /// recorded under an id of zero.
+    #[test]
+    fn kitty_zero_placement_id_is_absent() {
+        assert_eq!(
+            KittyImage::parse_apc("Ga=d,d=i,i=10,p=0".as_bytes()).unwrap(),
+            KittyImage::Delete {
+                what: KittyImageDelete::ByImageId {
+                    image_id: 10,
+                    placement_id: None,
+                    delete: false,
+                },
+                verbosity: KittyImageVerbosity::Verbose,
+            }
+        );
+
+        assert_eq!(
+            KittyImage::parse_apc("Ga=p,i=10,p=0".as_bytes()).unwrap(),
+            KittyImage::Display {
+                image_id: Some(10),
+                image_number: None,
+                placement: KittyImagePlacement {
+                    x: None,
+                    y: None,
+                    w: None,
+                    h: None,
+                    x_offset: None,
+                    y_offset: None,
+                    columns: None,
+                    rows: None,
+                    do_not_move_cursor: false,
+                    placement_id: None,
+                    z_index: None,
+                },
+                verbosity: KittyImageVerbosity::Verbose,
             }
         );
     }
