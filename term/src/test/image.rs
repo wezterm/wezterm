@@ -124,3 +124,38 @@ fn kitty_frame_edit_keeps_the_stored_hash_current() {
 
     assert_ne!(edited_hash, transmitted_hash);
 }
+
+/// A 2x2 RGBA image, base64 encoded, with four bytes of padding after it.
+const TINY_RGBA_PADDED_BASE64: &str = "AQID/wQFBv8HCAn/CgsM/wAAAAA=";
+
+/// For the raw formats the protocol derives the pixel count from `f`, `s` and
+/// `v`, so a source holding more than that is read up to the length the image
+/// needs. A shared memory object reporting more than was staged in it is the
+/// case that matters.
+#[test]
+fn kitty_raw_image_longer_than_its_dimensions_is_accepted() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    // f=32: RGBA, s/v: 2x2 pixels, so 16 bytes are needed and 20 are sent.
+    let seq = format!(
+        "\x1b_Ga=T,t=d,f=32,s=2,v=2,i=1;{}\x1b\\",
+        TINY_RGBA_PADDED_BASE64
+    );
+    term.advance_bytes(seq.as_bytes());
+
+    let image = first_image(&term);
+    let image = image.data();
+    match &*image {
+        ImageDataType::Rgba8 {
+            data,
+            width,
+            height,
+            ..
+        } => {
+            k9::assert_equal!(*width, 2);
+            k9::assert_equal!(*height, 2);
+            k9::assert_equal!(data.len(), 16);
+        }
+        other => panic!("expected Rgba8, got {:?}", other),
+    }
+}
