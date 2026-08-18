@@ -284,10 +284,48 @@ As features stabilize some brief notes about them will accumulate here.
 * Fix ESC key encoding in kitty mode with disambiguate flag enabled.
   Thanks to @Felixoid and @the-mikedavis! #7787
 * Fixed two divide-by-zero crashes in Kitty inline image placement when a program requests
-  a zero-sized placement (e.g. `w=0`/`h=0`), or displaying a cell-sized image on a pane
+  a placement with nothing to draw, or displaying a cell-sized image on a pane
   whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
   Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
 * Fix render loop freeze when closing workspaces. Thanks to @JafarAbdi! #7444
+* macOS: Fixed the kitty image protocol shared memory transport (`t=s`), which
+  never drew anything. A POSIX shared memory object can only be mapped on macOS,
+  so reading one failed with `Device not configured` and the image was dropped
+  without any reply to the application. Such objects are now mapped rather than
+  read from, on all unix systems. Thanks to @eschnett! #7631
+* Fixed raw format kitty images being refused when the file or shared memory
+  object holding them is longer than the image itself, which a shared memory
+  object always is once it is rounded up to a page. The pixel count follows from
+  `f`, `s` and `v`, so only that much is read.
+* Fixed a kitty image data size of zero being read as a request for no bytes.
+  `S` defaults to zero, so that is a size the client did not give.
+* Fixed the kitty image protocol data offset being re-encoded under the `S` key,
+  which overwrote the size and dropped `O` entirely. This affects anything that
+  parses an image escape sequence and writes it back out through `Display`.
+* Fixed the kitty animation frame gap being read and written as `Z` rather than
+  the `z` the protocol uses, so a client's frame gap was ignored and every
+  animated frame fell back to the 40ms default.
+* Fixed transmit-and-display re-encoding as `a=Q`, which is not an action the
+  protocol defines; it is `a=T`. This affects anything that parses an image
+  escape sequence and writes it back out through `Display`.
+* Fixed a delete that names a z-index re-encoding as `d=p`, which deletes every
+  placement in the cell whatever its z-index; it is `d=q`. This affects anything
+  that parses an image escape sequence and writes it back out through `Display`.
+* Fixed kitty images being refused when the placement gives `w`, `h`, `c` or `r`
+  as zero. All four default to zero, and zero is how the protocol spells "not
+  given": for `w` and `h` it says the entire width and height are used, and it
+  gives `c` and `r` the same default without defining a zero. Reading those
+  zeros as dimensions is what divided by zero in #6344. A placement with nothing
+  to draw, where the source origin lies outside the image, is still refused.
+* Fixed a kitty animation frame composition with `w=0` or `h=0` composing
+  nothing. Both default to zero, which the protocol reads as the whole frame.
+* Fixed a kitty delete with `p=0` matching only placements recorded under a
+  placement id of zero. Placement ids run from 1, so `p=0` is the same command
+  as omitting `p`: it names every placement of the image.
+* Terminal images are no longer hashed three times each on the transmit path,
+  and aarch64 builds now use the CPU's sha256 instructions. Together this cuts
+  the per-frame cost of a 2400x1440 RGBA image from about 66ms to 4ms, which
+  matters for programs that stream images.
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
