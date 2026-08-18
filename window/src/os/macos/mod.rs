@@ -17,6 +17,7 @@ mod keycodes;
 pub use self::window::*;
 pub use bitmap::*;
 pub use connection::*;
+use objc::runtime::{BOOL, NO, YES};
 
 /// Convert a rust string to a cocoa string
 fn nsstring(s: &str) -> StrongPtr {
