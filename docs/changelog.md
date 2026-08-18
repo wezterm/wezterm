@@ -152,6 +152,11 @@ As features stabilize some brief notes about them will accumulate here.
   search matching. Thanks to @mrdziuban! #7385
 
 #### Fixed
+* `wezterm connect` and other operations backed by `spawn_into_new_thread`
+  (overlays such as the launcher and debug overlay, `wezterm-client`'s
+  domain attach) could hang forever instead of completing or reporting an
+  error, if the background thread finished its work in a narrow window
+  while the caller was going to sleep, or if it panicked.
 * `ResetTerminal` (RIS) did not reset the `modifyOtherKeys` state. A program
   that left it enabled and exited uncleanly could leave ctrl keys emitting
   escape sequences that the shell doesn't expect. RIS now also resets the
