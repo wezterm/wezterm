@@ -625,12 +625,28 @@ impl KittyImagePlacement {
         Some(Self {
             x: geti(keys, "x"),
             y: geti(keys, "y"),
-            w: geti(keys, "w"),
-            h: geti(keys, "h"),
+            // w, h, c and r all default to zero, and zero is not a rectangle of
+            // nothing: for w and h the protocol says the entire width and height
+            // are used. It gives c and r the same default without defining what
+            // a zero means, so they are read the same way.
+            w: match geti(keys, "w") {
+                None | Some(0) => None,
+                n => n,
+            },
+            h: match geti(keys, "h") {
+                None | Some(0) => None,
+                n => n,
+            },
             x_offset: geti(keys, "X"),
             y_offset: geti(keys, "Y"),
-            columns: geti(keys, "c"),
-            rows: geti(keys, "r"),
+            columns: match geti(keys, "c") {
+                None | Some(0) => None,
+                n => n,
+            },
+            rows: match geti(keys, "r") {
+                None | Some(0) => None,
+                n => n,
+            },
             placement_id: geti(keys, "p"),
             do_not_move_cursor: match get(keys, "C") {
                 None | Some("0") => false,

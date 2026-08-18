@@ -8,21 +8,34 @@ use wezterm_surface::change::ImageData;
 /// Taken from the reproduction in <https://github.com/wezterm/wezterm/issues/6344>.
 const TINY_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAsAAAALCAYAAACprHcmAAAACXBIWXMAAAGKAAABigEzlzBYAAAAOUlEQVQYlZXOwQ0AMAzCQEdi7yaT0xWAN7JuDCac2PQKYxflycOoICOKtPIuqFCg4/LzKxiz6xjyAYh9DR1sLUN1AAAAAElFTkSuQmCC";
 
-/// Feeding a Kitty graphics escape that requests a zero-sized placement (here `r=0,h=0`)
-/// must not panic the terminal.
-/// Prior to the fix for <https://github.com/wezterm/wezterm/issues/6344> this divided by zero
-/// while computing the per-cell pixel deltas and took down the whole pane.
+/// `r` and `h` default to zero, so `r=0,h=0` asks for the whole image over as
+/// many rows as its own height needs, and it is displayed.
+/// Reading those zeros as literal dimensions is what divided by zero in
+/// <https://github.com/wezterm/wezterm/issues/6344>.
 #[test]
-fn kitty_zero_dimension_image_does_not_panic() {
+fn kitty_zero_dimension_image_is_displayed() {
     let mut term = TestTerm::new(3, 10, 0);
 
     // a=T: transmit and display, t=d: data is directly embedded,
-    // f=100: PNG, r=0/h=0: zero rows / zero source height.
+    // f=100: PNG, r=0/h=0: neither given.
     let seq = format!("\x1b_Gr=0,h=0,a=T,t=d,f=100;{}\x1b\\", TINY_PNG_BASE64);
     term.print(seq.as_bytes());
 
-    // The image is refused, so the cursor never moved;
-    // Printing normal text and observing it confirms we recovered rather than crashing.
+    // The image was placed, so the cursor moved past it.
+    term.print(b"ok");
+    assert_visible_contents(&term, file!(), line!(), &["  ok", "", ""]);
+}
+
+/// A source origin outside the image leaves nothing to draw, whatever the keys
+/// say, and that is still refused rather than dividing by zero.
+#[test]
+fn kitty_image_drawn_entirely_outside_itself_is_refused() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    // x/y put the source origin past the 11x11 image, so no pixels remain.
+    let seq = format!("\x1b_Gx=99,y=99,a=T,t=d,f=100;{}\x1b\\", TINY_PNG_BASE64);
+    term.print(seq.as_bytes());
+
     term.print(b"ok");
     assert_visible_contents(&term, file!(), line!(), &["ok", "", ""]);
 }
