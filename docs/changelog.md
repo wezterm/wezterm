@@ -288,6 +288,10 @@ As features stabilize some brief notes about them will accumulate here.
   whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
   Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
 * Fix render loop freeze when closing workspaces. Thanks to @JafarAbdi! #7444
+* Selections were cleared by applications that repaint the screen on a timer,
+  even when the text under the selection was unchanged. This also affected
+  selections made by hand in Copy Mode, which could vanish before they could be
+  copied. Thanks to @xloudmax! #7984
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg

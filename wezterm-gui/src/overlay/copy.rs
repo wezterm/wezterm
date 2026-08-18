@@ -307,7 +307,10 @@ impl CopyRenderable {
 
         self.results.clear();
         self.by_line.clear();
-        self.result_pos.take();
+        // Whether we are discarding an active search match, which owns the
+        // selection it highlighted. Captured before clearing, and consulted in
+        // the empty-pattern branch below.
+        let had_active_match = self.result_pos.take().is_some();
 
         SAVED_PATTERN.lock().insert(self.tab_id, self.get_pattern());
 
@@ -352,7 +355,15 @@ impl CopyRenderable {
             .detach();
         } else {
             self.searching.take();
-            self.clear_selection();
+            // No pattern to search for, so there are no matches to highlight.
+            // Only drop the selection if it belonged to a match we just
+            // discarded: update_search() also runs on every sequence number
+            // advance of the delegate (see get_lines/with_lines_mut), so
+            // clearing unconditionally would wipe a selection the user made by
+            // hand in Copy Mode as soon as the underlying pane redraws.
+            if had_active_match {
+                self.clear_selection();
+            }
         }
         self.window.invalidate();
     }
@@ -423,9 +434,7 @@ impl CopyRenderable {
         let pane_id = self.delegate.pane_id();
         self.window
             .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
-                let mut selection = term_window.selection(pane_id);
-                selection.origin.take();
-                selection.range.take();
+                term_window.selection(pane_id).clear();
             })));
     }
 
@@ -516,7 +525,7 @@ impl CopyRenderable {
             .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
                 let mut selection = term_window.selection(pane_id);
                 selection.origin = Some(start);
-                selection.range = Some(range);
+                selection.set_range(Some(range));
                 selection.rectangular = mode == SelectionMode::Block;
                 window.invalidate();
             })));

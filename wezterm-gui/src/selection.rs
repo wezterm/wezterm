@@ -8,15 +8,21 @@ use termwiz::surface::line::DoubleClickRange;
 use termwiz::surface::SequenceNo;
 use wezterm_term::{SemanticZone, StableRowIndex};
 
-#[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct Selection {
     /// Remembers the starting coordinate of the selection prior to
     /// dragging.
     pub origin: Option<SelectionCoordinate>,
-    /// Holds the not-normalized selection range.
+    /// Holds the not-normalized selection range. Assign it through
+    /// [`Self::set_range`] so that `text` cannot go stale.
     pub range: Option<SelectionRange>,
-    /// When the selection was made wrt. the pane content
+    /// The pane seqno `text` was sampled at.
     pub seqno: SequenceNo,
+    /// The text covered by `range`, as of `seqno`, or None until it has been
+    /// sampled. Redraws are checked against it rather than against the dirty
+    /// flag of the selected rows, because the terminal marks a line dirty on
+    /// any write to it, even a rewrite with identical content.
+    pub text: Option<String>,
     /// Whether the selection is rectangular
     pub rectangular: bool,
 }
@@ -25,13 +31,19 @@ pub use config::keyassignment::SelectionMode;
 
 impl Selection {
     pub fn clear(&mut self) {
-        self.range = None;
+        self.set_range(None);
         self.origin = None;
     }
 
     pub fn begin(&mut self, origin: SelectionCoordinate) {
-        self.range = None;
+        self.set_range(None);
         self.origin = Some(origin);
+    }
+
+    /// Moves the selection, dropping the now meaningless `text`.
+    pub fn set_range(&mut self, range: Option<SelectionRange>) {
+        self.range = range;
+        self.text = None;
     }
 
     pub fn is_empty(&self) -> bool {
