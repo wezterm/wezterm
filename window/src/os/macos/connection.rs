@@ -12,7 +12,7 @@ use crate::Appearance;
 use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSScreen};
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSArray, NSInteger};
-use objc::runtime::{Object};
+use objc::runtime::Object;
 use objc::*;
 use serde::Deserialize;
 use std::cell::RefCell;
