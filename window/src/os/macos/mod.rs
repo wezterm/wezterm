@@ -33,3 +33,17 @@ unsafe fn nsstring_to_str<'a>(mut ns: *mut Object) -> &'a str {
     let bytes = std::slice::from_raw_parts(data, len);
     std::str::from_utf8_unchecked(bytes)
 }
+
+/// Helper function to easily convert a Rust' bool to an objc' BOOL
+fn to_yes_no(value: bool) -> BOOL {
+    if value {
+        YES
+    } else {
+        NO
+    }
+}
+
+/// Helper function to easily convert an objc' BOOL to a Rust' bool
+fn from_yes_no(value: BOOL) -> bool {
+    value == YES
+}
