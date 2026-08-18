@@ -1744,7 +1744,7 @@ version = "0.8.3"
 dependencies = [
  "libc",
  "thiserror 1.0.69",
- "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
