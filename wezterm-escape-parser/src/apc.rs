@@ -916,8 +916,16 @@ impl KittyImageFrameCompose {
             y: geti(keys, "y"),
             src_x: geti(keys, "X"),
             src_y: geti(keys, "Y"),
-            w: geti(keys, "w"),
-            h: geti(keys, "h"),
+            // w and h default to zero, which asks for the whole frame rather
+            // than a rectangle of nothing.
+            w: match geti(keys, "w") {
+                None | Some(0) => None,
+                n => n,
+            },
+            h: match geti(keys, "h") {
+                None | Some(0) => None,
+                n => n,
+            },
             target_frame: match geti(keys, "c") {
                 None | Some(0) => None,
                 n => n,
@@ -1290,6 +1298,32 @@ mod test {
                     background_pixel: None,
                     duration_ms: None,
                 },
+            }
+        );
+    }
+
+    /// `w` and `h` give the size of the rectangle a composition reads and
+    /// writes, and both default to zero, which asks for the whole frame rather
+    /// than a rectangle of nothing.
+    #[test]
+    fn kitty_zero_composition_width_or_height_is_absent() {
+        assert_eq!(
+            KittyImage::parse_apc("Ga=c,i=1,r=1,c=2,w=0,h=0".as_bytes()).unwrap(),
+            KittyImage::ComposeFrame {
+                frame: KittyImageFrameCompose {
+                    image_id: Some(1),
+                    image_number: None,
+                    target_frame: Some(2),
+                    source_frame: Some(1),
+                    x: None,
+                    y: None,
+                    w: None,
+                    h: None,
+                    src_x: None,
+                    src_y: None,
+                    composition_mode: KittyFrameCompositionMode::AlphaBlending,
+                },
+                verbosity: KittyImageVerbosity::Verbose,
             }
         );
     }
