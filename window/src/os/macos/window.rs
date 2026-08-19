@@ -58,13 +58,19 @@ const NSViewLayerContentsPlacementTopLeft: NSInteger = 11;
 #[allow(non_upper_case_globals)]
 const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
 
+/// Returns the background color to use for the window.
 unsafe fn window_background_color(is_opaque: bool) -> id {
     let clear_color = cocoa::appkit::NSColor::clearColor(nil);
     if is_opaque {
         clear_color
     } else {
-        // Alpha zero tells WindowServer that this may be an irregularly shaped
-        // window, which destabilizes native shadow/edge composition.
+        // An alpha of zero puts NSWindow into a special mode for irregularly
+        // shaped windows, where shadows are generated from the window contents.
+        // A nearly transparent color avoids that mode while preserving transparency.
+        // See:
+        // <https://notes.yvt.jp/Desktop-Apps/Enabling-Backdrop-Blur/#cgssetwindowbackgroundblurradius>
+        // iTerm2 uses the same workaround:
+        // <https://github.com/gnachman/iTerm2/commit/d5ebd6a00e3522399a47b1a9a739581f69247ccd>
         msg_send![clear_color, colorWithAlphaComponent: 0.01f64]
     }
 }
