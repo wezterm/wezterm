@@ -288,6 +288,10 @@ As features stabilize some brief notes about them will accumulate here.
   whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
   Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
 * Fix render loop freeze when closing workspaces. Thanks to @JafarAbdi! #7444
+* tmux control mode: an empty line arriving outside a guarded reply block
+  (observed on tmux 3.6a during detach) caused a parser error that discarded
+  the remainder of the batch. Empty lines outside a guarded block are now
+  ignored. #7656
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg

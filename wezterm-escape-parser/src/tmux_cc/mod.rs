@@ -945,6 +945,9 @@ impl Parser {
         if self.begun.is_some() {
             return self.process_guarded_line();
         }
+        if self.buffer.is_empty() {
+            return Ok(None);
+        }
 
         let result = match parse_line(&self.buffer) {
             Ok(Event::Begin {
@@ -1172,5 +1175,24 @@ here
         assert!(matches!(&layout[0], WindowLayout::SplitHorizontal(_x)));
         assert!(matches!(&layout[1], WindowLayout::SplitVertical(_x)));
         assert!(matches!(&layout[2], WindowLayout::SplitHorizontal(_x)));
+    }
+
+    #[test]
+    fn test_empty_line_tolerance() {
+        // An empty line outside a guarded block must not error (#7656).
+        let mut p = Parser::new();
+        assert_eq!(Vec::<Event>::new(), p.advance_string("\n").unwrap());
+
+        // A blank line between the guarded reply and %exit must not swallow
+        // the %exit event.
+        let mut p = Parser::new();
+        assert_eq!(
+            vec![Event::Exit { reason: None }],
+            p.advance_string("%exit\n\n").unwrap()
+        );
+
+        // Genuine garbage must still be rejected.
+        let mut p = Parser::new();
+        assert!(p.advance_string("this is not a tmux cc line\n").is_err());
     }
 }
