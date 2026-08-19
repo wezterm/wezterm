@@ -102,7 +102,7 @@ fn kitty_frame_edit_keeps_the_stored_hash_current() {
     // a=T: transmit and display, f=32: RGBA, s/v: 2x2 pixels.
     let seq = format!("\x1b_Ga=T,t=d,f=32,s=2,v=2,i=1;{}\x1b\\", TINY_RGBA_BASE64);
     term.advance_bytes(seq.as_bytes());
-    let transmitted = first_image(&term).data().compute_hash();
+    let transmitted_hash = first_image(&term).data().compute_hash();
 
     // a=f: transmit a frame, r=1: edit frame 1 in place, painting the top left
     // pixel opaque red over the 0x01,0x02,0x03 it arrived with.
@@ -110,17 +110,17 @@ fn kitty_frame_edit_keeps_the_stored_hash_current() {
 
     let image = first_image(&term);
     let image = image.data();
-    let edited = image.compute_hash();
+    let edited_hash = image.compute_hash();
 
     match &*image {
         ImageDataType::Rgba8 { data, .. } => {
             // Asserted on the pixels rather than on the hash, so a blit that
             // did nothing cannot be mistaken for a hash that went stale.
             k9::assert_equal!(&data[0..4], &[0xff, 0x00, 0x00, 0xff][..]);
-            k9::assert_equal!(edited, ImageDataType::hash_bytes(data));
+            k9::assert_equal!(edited_hash, ImageDataType::hash_bytes(data));
         }
         other => panic!("expected Rgba8, got {:?}", other),
     }
 
-    assert_ne!(edited, transmitted);
+    assert_ne!(edited_hash, transmitted_hash);
 }

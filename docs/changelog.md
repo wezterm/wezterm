@@ -152,8 +152,8 @@ As features stabilize some brief notes about them will accumulate here.
   search matching. Thanks to @mrdziuban! #7385
 
 #### Fixed
-* Terminal images were hashed three times each on the transmit path; the sha256
-  an RGBA image already carries is now reused instead. #8065
+* perf: Terminal images were hashed three times each on the transmit path; the sha256
+  an RGBA image already carries is now reused instead. Thanks to @i-am-logger! #8065
 * `ResetTerminal` (RIS) did not reset the `modifyOtherKeys` state. A program
   that left it enabled and exited uncleanly could leave ctrl keys emitting
   escape sequences that the shell doesn't expect. RIS now also resets the
