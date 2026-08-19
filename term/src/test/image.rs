@@ -92,8 +92,9 @@ fn first_image(term: &TestTerm) -> Arc<ImageData> {
     panic!("no image was attached to the screen");
 }
 
-/// An Rgba8 stores the hash of its pixels, and a kitty frame transmission edits
-/// those pixels in place, so the stored hash must be updated with them.
+/// An Rgba8 stores the hash of its pixels and `compute_hash` reports it without
+/// recomputing, so a kitty frame transmission that edits those pixels in place
+/// must leave the stored hash describing what is now there.
 #[test]
 fn kitty_frame_edit_keeps_the_stored_hash_current() {
     let mut term = TestTerm::new(3, 10, 0);
@@ -103,18 +104,23 @@ fn kitty_frame_edit_keeps_the_stored_hash_current() {
     term.advance_bytes(seq.as_bytes());
     let transmitted = first_image(&term).data().compute_hash();
 
-    // a=f: transmit a frame, r=1: edit frame 1 in place, recolouring one pixel.
+    // a=f: transmit a frame, r=1: edit frame 1 in place, painting the top left
+    // pixel opaque red over the 0x01,0x02,0x03 it arrived with.
     term.advance_bytes(b"\x1b_Ga=f,t=d,f=32,s=1,v=1,i=1,r=1,x=0,y=0;/wAA/w==\x1b\\");
 
     let image = first_image(&term);
     let image = image.data();
+    let edited = image.compute_hash();
+
     match &*image {
-        ImageDataType::Rgba8 { data, hash, .. } => {
-            // The edit reached the pixels, so this is not asserting on an
-            // image that was never touched.
-            assert_ne!(*hash, transmitted);
-            k9::assert_equal!(*hash, ImageDataType::hash_bytes(data));
+        ImageDataType::Rgba8 { data, .. } => {
+            // Asserted on the pixels rather than on the hash, so a blit that
+            // did nothing cannot be mistaken for a hash that went stale.
+            k9::assert_equal!(&data[0..4], &[0xff, 0x00, 0x00, 0xff][..]);
+            k9::assert_equal!(edited, ImageDataType::hash_bytes(data));
         }
         other => panic!("expected Rgba8, got {:?}", other),
     }
+
+    assert_ne!(edited, transmitted);
 }
