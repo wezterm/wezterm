@@ -22,6 +22,9 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* DECRQCRA is now disabled by default to prevent silent screen scraping.
+  Set `enable_checksum_rectangular_area = true` to re-enable it.
+  Thanks to @jquast! #7701
 * Wayland: currently being reimplemented, it maybe more unstable than usual.
   Please file GH issues for any problems you see.
   Many thanks to @tzx and @tmccombs! #4777 #5781
@@ -67,6 +70,9 @@ As features stabilize some brief notes about them will accumulate here.
 * `wezterm imgcat --hold` now avoids local echo and accepts pressing `Escape`,
   `CTRL-C` and `CTRL-D` as various ways of exiting hold mode. Thanks to
   @mgpinf! #6801
+* windows: Improve detection of running in WSL. Thanks to @bew! #7137
+* [QuickSelect](quickselect.md) mode now hides non-matching labels as you type, making it
+  easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
@@ -122,9 +128,9 @@ As features stabilize some brief notes about them will accumulate here.
   @BenBergman! #6328 #6873 #6875
 * [cell_widths](config/lua/config/cell_widths.md) option for explicit
   control over cell widths. Thanks to @hamano! #6289 #6290
-* [kde_window_background_blur](config/lua/config/kde_window_background_blur.md) option
-  to enable window blur when running under KDE Plasma on Wayland systems.
-  Thanks to @psomani16k! #6905
+* [wayland_window_background_blur](config/lua/config/wayland_window_background_blur.md) option
+  to enable window blur on Wayland compositors supporting the `ext-background-effect-v1` protocol.
+  Thanks to @psomani16k, @1Capito1 & @bew! #6905 #7615 #7939
 * [reverse_video_cursor_min_contrast](config/lua/config/reverse_video_cursor_min_contrast.md)
   option. Thanks to @jameshurst! #6584 ?2861
 * [text_min_contrast_ratio](config/lua/config/text_min_contrast_ratio.md) to more generally
@@ -137,8 +143,21 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @masriomarm! #6895
 * Indicate support for OSC 52 (clipboard extensions) in Primary DA Response.
   Thanks to @j4james! #7046
+* internal: Add NixOS-based VMs configurations for live testing in fresh desktop environments.
+  See dedicated section in [CONTRIBUTING.md](https://github.com/wezterm/wezterm/blob/main/CONTRIBUTING.md)
+* The default tab bar rendering now shows an animated spinner when ConEmu style
+  OSC 9 escapes set the progress state to "Indeterminate".
+* [`Search`](./config/lua/keyassignment/Search.md) &
+  [`CycleMatchType`](./config/lua/keyassignment/CopyMode/CycleMatchType.md) can now use Smart-case
+  search matching. Thanks to @mrdziuban! #7385
 
 #### Fixed
+* perf: Terminal images were hashed three times each on the transmit path; the sha256
+  an RGBA image already carries is now reused instead. Thanks to @i-am-logger! #8065
+* `ResetTerminal` (RIS) did not reset the `modifyOtherKeys` state. A program
+  that left it enabled and exited uncleanly could leave ctrl keys emitting
+  escape sequences that the shell doesn't expect. RIS now also resets the
+  left/right margin mode and bidi state.
 * Race condition when very quickly adjusting font scale, and other improvements
   around resizing. Thanks to @jknockel! #4876 #5032 #5033
 * macOS: wacky initial window size with external monitors or certain font
@@ -254,6 +273,23 @@ As features stabilize some brief notes about them will accumulate here.
 * macOS: Fix toast notifications. Thanks to @nikhilm! #7483
 * termwiz: Fixed parsing of fragmented mouse reporting sequence. Thanks to
   @jgiannuzzi! #7076 #7504
+* docs: add missing `panes` field to [TabInformation](config/lua/TabInformation.md).
+  Thanks to @KevinSilvester! #7710
+* Windows: Fixed a crash (RefCell borrow conflict) when toggling IME (e.g.
+  pressing Hankaku/Zenkaku) after splitting a pane. Thanks to @shiena! #7529
+* Fixed a stack overflow that could occur on Windows (and other platforms) when
+  the process tree contained cycles due to PID reuse. Thanks to @novoselov-ab! #7706
+* Wayland: Fixed clipboard paste failing in windows that were not focused when
+  the copy happened. Thanks to @bew and @XeroOl! #7863
+* Fixed an infinite loop in pane search when the regex engine hit a backtracking
+  limit. Thanks to @bew! #7864
+* Fix ESC key encoding in kitty mode with disambiguate flag enabled.
+  Thanks to @Felixoid and @the-mikedavis! #7787
+* Fixed two divide-by-zero crashes in Kitty inline image placement when a program requests
+  a zero-sized placement (e.g. `w=0`/`h=0`), or displaying a cell-sized image on a pane
+  whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
+  Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
+* Fix render loop freeze when closing workspaces. Thanks to @JafarAbdi! #7444
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
@@ -552,7 +588,7 @@ As features stabilize some brief notes about them will accumulate here.
   [adjust_window_size_when_changing_font_size](config/lua/config/adjust_window_size_when_changing_font_size.md)
   now depends on the window environment and the contents of
   [tiling_desktop_environments](config/lua/config/tiling_desktop_environments.md).
-* Added eigth block corner glyphs to custom block glyphs. Thanks to @joouha! #3559
+* Added eight block corner glyphs to custom block glyphs. Thanks to @joouha! #3559
 * Don't hide mouse cursor when pressing only modifier keys. #3570
 * [PaneSelect](config/lua/keyassignment/PaneSelect.md) will now un-zoom to show
   all panes, then re-zoom after performing its action. #3573
@@ -1567,7 +1603,7 @@ As features stabilize some brief notes about them will accumulate here.
 * Windows: [allow_win32_input_mode](config/lua/config/allow_win32_input_mode.md) now defaults to `true` and enables using [win32-input-mode](https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md) to send high-fidelity keyboard input to ConPTY. This means that win32 console applications, such as [FAR Manager](https://github.com/FarGroup/FarManager) that use the low level `INPUT_RECORD` API will now receive key-up events as well as events for modifier-only key presses. [#1509](https://github.com/wezterm/wezterm/issues/1509) [#2009](https://github.com/wezterm/wezterm/issues/2009) [#2098](https://github.com/wezterm/wezterm/issues/2098) [#1904](https://github.com/wezterm/wezterm/issues/1904)
 * Wayland: [enable_wayland](config/lua/config/enable_wayland.md) now defaults to `true`. [#2104](https://github.com/wezterm/wezterm/issues/2104)
 * [exit_behavior](config/lua/config/exit_behavior.md) now defaults to `"Close"`. [#2105](https://github.com/wezterm/wezterm/issues/2105)
-* Improved [wezterm.action](config/lua/wezterm/action.md) syntax for slightly more ergnomic and understandable key assignments. [#1150](https://github.com/wezterm/wezterm/issues/1150)
+* Improved [wezterm.action](config/lua/wezterm/action.md) syntax for slightly more ergonomic and understandable key assignments. [#1150](https://github.com/wezterm/wezterm/issues/1150)
 
 #### Fixed
 * Flush after replying to `XTGETTCAP`, `DECRQM`, `XTVERSION`, `DA2`, `DA3` [#2060](https://github.com/wezterm/wezterm/issues/2060) [#1850](https://github.com/wezterm/wezterm/issues/1850) [#1950](https://github.com/wezterm/wezterm/issues/1950)
@@ -1791,7 +1827,7 @@ As features stabilize some brief notes about them will accumulate here.
 * X11 now supports IME. It currently defaults to disabled, but you can set `use_ime = true` in your config to enable it (you need to restart wezterm for this to take effect). Many thanks to [@H-M-H](https://github.com/H-M-H) for bringing xcb-imdkit to Rust and implementing this in wezterm! [#250](https://github.com/wezterm/wezterm/issues/250) [#1043](https://github.com/wezterm/wezterm/pull/1043)
 * it is now possible to define colors in the range 16-255 in `colors` and color scheme definitions. Thanks to [@potamides](https://github.com/potamides)! [#841](https://github.com/wezterm/wezterm/issues/841) [#1056](https://github.com/wezterm/wezterm/pull/1056)
 * Added [SendKey](config/lua/keyassignment/SendKey.md) key assignment action that makes it more convenient to rebind the key input that is sent to a pane.
-* Added [Multiple](config/lua/keyassignment/Multiple.md) key assignment action for combining multuple actions in a single press.
+* Added [Multiple](config/lua/keyassignment/Multiple.md) key assignment action for combining multiple actions in a single press.
 * Added [use_resize_increments](config/lua/config/use_resize_increments.md) option to tell X11, Wayland, macOS window resizing to prefers to step in increments of the cell size
 * [visual_bell](config/lua/config/visual_bell.md) and [audible_bell](config/lua/config/audible_bell.md) configuration options, as well as a [bell](config/lua/window-events/bell.md) event allows you to trigger lua code when the bell is rung. [#3](https://github.com/wezterm/wezterm/issues/3)
 * [wezterm.action_callback](config/lua/wezterm/action_callback.md) function to make it easier to use custom events. Thanks to [@bew](https://github.com/bew)! [#1151](https://github.com/wezterm/wezterm/pull/1151)
@@ -1908,9 +1944,9 @@ As features stabilize some brief notes about them will accumulate here.
 * Removed: `Parasio Dark` color scheme; it was a duplicate of the correctly named `Paraiso Dark` scheme. Thanks to [@adrian5](https://github.com/adrian5)! [#906](https://github.com/wezterm/wezterm/pull/906)
 * Fixed: key repeat on Wayland now respects the system specified key repeat rate, and doesn't "stick". [#669](https://github.com/wezterm/wezterm/issues/669)
 * Fixed: `force_reverse_video_cursor` wasn't correctly swapping the cursor colors in all cases. [#706](https://github.com/wezterm/wezterm/issues/706)
-* Fixed: allow multuple `IdentityFile` lines in an ssh_config block to be considered
+* Fixed: allow multiple `IdentityFile` lines in an ssh_config block to be considered
 * Improved: implement braille characters as custom glyphs, to have perfect rendering when `custom_block_glyphs` is enabled. Thanks to [@bew](http://github.com/bew)!
-* Fixed: Mod3 is no longer treater as SUPER on X11 and Wayland [#933](https://github.com/wezterm/wezterm/issues/933)
+* Fixed: Mod3 is no longer treated as SUPER on X11 and Wayland [#933](https://github.com/wezterm/wezterm/issues/933)
 * Fixed: paste now respects `scroll_to_bottom_on_input`. [#931](https://github.com/wezterm/wezterm/issues/931)
 * New: [bypass_mouse_reporting_modifiers](config/lua/config/bypass_mouse_reporting_modifiers.md) to specify which modifier(s) override application mouse reporting mode.
 * Fixed: focus tracking events are now also generated when switching between panes [#941](https://github.com/wezterm/wezterm/issues/941)

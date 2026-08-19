@@ -33,6 +33,7 @@ winapi = { workspace=true, features = [
     "handleapi",
     "fileapi",
     "namedpipeapi",
+    "processenv",
     "synchapi",
 ]}
 winreg.workspace = true
