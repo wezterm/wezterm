@@ -589,7 +589,12 @@ pub enum KeyAssignment {
 
     SelectTextAtMouseCursor(SelectionMode),
     ExtendSelectionToMouseCursor(SelectionMode),
-    OpenLinkAtMouseCursor,
+    /// Open the hyperlink under the mouse cursor, if any.
+    /// When no link is present, optionally perform `fallback` instead.
+    OpenLinkAtMouseCursor {
+        #[dynamic(default)]
+        fallback: Option<Box<KeyAssignment>>,
+    },
     ClearSelection,
     CompleteSelection(ClipboardCopyDestination),
     CompleteSelectionOrOpenLinkAtMouseCursor(ClipboardCopyDestination),
@@ -735,4 +740,61 @@ pub struct KeyTables {
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyTableEntry {
     pub action: KeyAssignment,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wezterm_dynamic::Value;
+
+    fn obj(pairs: impl IntoIterator<Item = (Value, Value)>) -> Value {
+        Value::Object(pairs.into_iter().collect())
+    }
+
+    #[test]
+    fn open_link_at_mouse_cursor_round_trip_no_fallback() {
+        let original = KeyAssignment::OpenLinkAtMouseCursor { fallback: None };
+        let encoded = original.to_dynamic();
+        let decoded =
+            KeyAssignment::from_dynamic(&encoded, FromDynamicOptions::default()).unwrap();
+        assert_eq!(original, decoded);
+    }
+
+    /// `wezterm.action.OpenLinkAtMouseCursor` (no args) is produced by the
+    /// `Enum::__index` metatable as the empty-table form; it must decode back
+    /// to the variant with no fallback. This is the backward-compatibility
+    /// guarantee for existing configs.
+    #[test]
+    fn open_link_at_mouse_cursor_decodes_empty_table_form() {
+        let empty_table_form = obj(std::iter::once((
+            Value::String("OpenLinkAtMouseCursor".to_string()),
+            obj(std::iter::empty()),
+        )));
+        let decoded =
+            KeyAssignment::from_dynamic(&empty_table_form, FromDynamicOptions::default()).unwrap();
+        assert_eq!(
+            decoded,
+            KeyAssignment::OpenLinkAtMouseCursor { fallback: None }
+        );
+    }
+
+    #[test]
+    fn open_link_at_mouse_cursor_decodes_fallback() {
+        let with_fallback = obj(std::iter::once((
+            Value::String("OpenLinkAtMouseCursor".to_string()),
+            obj(std::iter::once((
+                Value::String("fallback".to_string()),
+                // A unit-variant KeyAssignment encodes as a bare string.
+                Value::String("ClearSelection".to_string()),
+            ))),
+        )));
+        let decoded =
+            KeyAssignment::from_dynamic(&with_fallback, FromDynamicOptions::default()).unwrap();
+        assert_eq!(
+            decoded,
+            KeyAssignment::OpenLinkAtMouseCursor {
+                fallback: Some(Box::new(KeyAssignment::ClearSelection)),
+            }
+        );
+    }
 }

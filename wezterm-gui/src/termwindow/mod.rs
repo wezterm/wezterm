@@ -206,6 +206,17 @@ pub struct PaneState {
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
 }
 
+/// The terminal cell currently under the mouse cursor.
+///
+/// `column` is the cell column (0 = leftmost) and `stable_row` is the
+/// stable row index, matching the coordinate convention used by
+/// `pane:get_semantic_zone_at(x, y)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MousePosition {
+    pub column: usize,
+    pub stable_row: StableRowIndex,
+}
+
 /// Data used when synchronously formatting pane and window titles
 #[derive(Debug, Clone)]
 pub struct TabInformation {
@@ -423,6 +434,10 @@ pub struct TermWindow {
 
     /// The URL over which we are currently hovering
     current_highlight: Option<Arc<Hyperlink>>,
+
+    /// The terminal cell currently under the mouse cursor (column, stable row),
+    /// updated on every mouse event alongside `current_highlight`.
+    pub current_mouse_position: Option<MousePosition>,
 
     quad_generation: usize,
     shape_generation: usize,
@@ -730,6 +745,7 @@ impl TermWindow {
             current_mouse_capture: None,
             last_mouse_click: None,
             current_highlight: None,
+            current_mouse_position: None,
             quad_generation: 0,
             shape_generation: 0,
             shape_cache: RefCell::new(LfuCache::new(
@@ -2828,8 +2844,14 @@ impl TermWindow {
             StartWindowDrag => {
                 self.window_drag_position = self.current_mouse_event.clone();
             }
-            OpenLinkAtMouseCursor => {
-                self.do_open_link_at_mouse_cursor(pane);
+            OpenLinkAtMouseCursor { fallback } => {
+                if self.current_highlight.is_some() {
+                    self.do_open_link_at_mouse_cursor(pane);
+                } else if let Some(fb) = fallback.as_ref() {
+                    // No link under the cursor: run the user-provided
+                    // fallback action (if any) instead of doing nothing.
+                    return self.perform_key_assignment(pane, fb);
+                }
             }
             EmitEvent(name) => {
                 self.emit_window_event(name, None);
@@ -3164,6 +3186,13 @@ impl TermWindow {
             Confirmation(args) => self.show_confirmation(args),
         };
         Ok(PerformAssignmentResult::Handled)
+    }
+
+    /// Returns the URI of the hyperlink currently under the mouse cursor, if any.
+    /// This is the same link that `OpenLinkAtMouseCursor` would open, and
+    /// includes both OSC-8 hyperlinks and matches against `hyperlink_rules`.
+    pub fn current_hyperlink_uri(&self) -> Option<String> {
+        self.current_highlight.as_ref().map(|h| h.uri().to_string())
     }
 
     fn do_open_link_at_mouse_cursor(&self, pane: &Arc<dyn Pane>) {

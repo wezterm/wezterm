@@ -1614,9 +1614,11 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: None,
         },
-        OpenLinkAtMouseCursor => CommandDef {
+        OpenLinkAtMouseCursor { .. } => CommandDef {
             brief: "Open link at mouse cursor".into(),
-            doc: "If there is no link under the mouse cursor, has no effect.".into(),
+            doc: "If there is no link under the mouse cursor, has no effect, \
+                  unless an optional `fallback` action is provided."
+                .into(),
             keys: vec![],
             args: &[ArgType::ActivePane],
             menubar: &["Shell"],
@@ -2142,6 +2144,6 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         OpenUri("https://github.com/wezterm/wezterm/issues/".to_string()),
         ShowDebugOverlay,
         // ----------------- Misc
-        OpenLinkAtMouseCursor,
+        OpenLinkAtMouseCursor { fallback: None },
     ];
 }

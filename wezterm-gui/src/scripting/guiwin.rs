@@ -11,6 +11,7 @@ use mux::Mux;
 use mux_lua::MuxPane;
 use termwiz_funcs::lines_to_escapes;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
+use wezterm_term::StableRowIndex;
 use wezterm_toast_notification::ToastNotification;
 use window::{Connection, ConnectionOps, DeadKeyStatus, WindowOps, WindowState};
 
@@ -157,6 +158,46 @@ impl UserData for GuiWin {
             let result = rx.recv().await.map_err(mlua::Error::external)?;
             luahelper::dynamic_to_lua_value(lua, result)
         });
+        methods.add_async_method(
+            "get_mouse_position",
+            |lua, this, _: ()| async move {
+                let (tx, rx) = smol::channel::bounded(1);
+                this.window
+                    .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                        tx.try_send(
+                            term_window
+                                .current_mouse_position
+                                .map(|pos| (pos.column, pos.stable_row)),
+                        )
+                        .ok();
+                    })));
+                let result: Option<(usize, StableRowIndex)> =
+                    rx.recv().await.map_err(mlua::Error::external)?;
+                match result {
+                    // `x` is the cell column, `y` is the stable row index, matching
+                    // the argument convention of pane:get_semantic_zone_at(x, y).
+                    Some((x, y)) => {
+                        let table = lua.create_table()?;
+                        table.set("x", x)?;
+                        table.set("y", y)?;
+                        Ok(Some(table))
+                    }
+                    None => Ok(None),
+                }
+            },
+        );
+        methods.add_async_method(
+            "get_hyperlink_at_mouse_cursor",
+            |_, this, _: ()| async move {
+                let (tx, rx) = smol::channel::bounded(1);
+                this.window
+                    .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                        tx.try_send(term_window.current_hyperlink_uri()).ok();
+                    })));
+                let uri: Option<String> = rx.recv().await.map_err(mlua::Error::external)?;
+                Ok(uri)
+            },
+        );
         methods.add_async_method(
             "perform_action",
             |_, this, (assignment, pane): (KeyAssignment, UserDataRef<MuxPane>)| async move {
