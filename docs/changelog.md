@@ -156,35 +156,16 @@ As features stabilize some brief notes about them will accumulate here.
 #### Fixed
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
   an RGBA image already carries is now reused instead. Thanks to @i-am-logger! #8065
-* Fixed raw format kitty images being refused when the file or shared memory
-  object holding them is longer than the image itself, which a shared memory
-  object always is once it is rounded up to a page. The pixel count follows from
-  `f`, `s` and `v`, so only that much is read.
-* Fixed a kitty image data size of zero being read as a request for no bytes.
-  `S` defaults to zero, so that is a size the client did not give.
-* Fixed the kitty image protocol data offset being re-encoded under the `S` key,
-  which overwrote the size and dropped `O` entirely. This affects anything that
-  parses an image escape sequence and writes it back out through `Display`.
-* Fixed the kitty animation frame gap being read and written as `Z` rather than
-  the `z` the protocol uses, so a client's frame gap was ignored and every
-  animated frame fell back to the 40ms default.
-* Fixed transmit-and-display re-encoding as `a=Q`, which is not an action the
-  protocol defines; it is `a=T`. This affects anything that parses an image
-  escape sequence and writes it back out through `Display`.
-* Fixed a delete that names a z-index re-encoding as `d=p`, which deletes every
-  placement in the cell whatever its z-index; it is `d=q`. This affects anything
-  that parses an image escape sequence and writes it back out through `Display`.
-* Fixed kitty images being refused when the placement gives `w`, `h`, `c` or `r`
-  as zero. All four default to zero, and zero is how the protocol spells "not
-  given": for `w` and `h` it says the entire width and height are used, and it
-  gives `c` and `r` the same default without defining a zero. Reading those
-  zeros as dimensions is what divided by zero in #6344. A placement with nothing
-  to draw, where the source origin lies outside the image, is still refused.
-* Fixed a kitty animation frame composition with `w=0` or `h=0` composing
-  nothing. Both default to zero, which the protocol reads as the whole frame.
-* Fixed a kitty delete with `p=0` matching only placements recorded under a
-  placement id of zero. Placement ids run from 1, so `p=0` is the same command
-  as omitting `p`: it names every placement of the image.
+* Fixed nine places where the kitty image protocol implementation disagreed with
+  the spec. Keys whose protocol default is `0` were read as a literal zero
+  rather than as absent, and raw images were refused when their source held more
+  bytes than their dimensions imply, as a shared memory object always does.
+  Between them these refused conformant images, and were the root of the divide
+  by zero in #6344. #8064
+* Fixed the kitty image data offset, the animation frame gap, transmit-and-display
+  and delete-at-a-z-index being re-encoded under the wrong keys. This affects
+  anything that parses an image escape sequence and writes it back out through
+  `Display`. #8064
 * `ResetTerminal` (RIS) did not reset the `modifyOtherKeys` state. A program
   that left it enabled and exited uncleanly could leave ctrl keys emitting
   escape sequences that the shell doesn't expect. RIS now also resets the
