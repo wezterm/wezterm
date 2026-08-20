@@ -222,6 +222,12 @@ impl SessionHandler {
         }
     }
 
+    /// The identity of the client on the other end of this session, once
+    /// they have told us who they are.
+    pub fn client_id(&self) -> Option<Arc<ClientId>> {
+        self.client_id.clone()
+    }
+
     pub(crate) fn per_pane(&mut self, pane_id: PaneId) -> Arc<Mutex<PerPane>> {
         Arc::clone(
             self.per_pane
@@ -343,7 +349,7 @@ impl SessionHandler {
                             let (_domain_id, window_id, tab_id) = mux
                                 .resolve_pane_id(pane_id)
                                 .ok_or_else(|| anyhow::anyhow!("pane {pane_id} not found"))?;
-                            {
+                            let tab_changed = {
                                 let mut window =
                                     mux.get_window_mut(window_id).ok_or_else(|| {
                                         anyhow::anyhow!("window {window_id} not found")
@@ -353,15 +359,27 @@ impl SessionHandler {
                                         "tab {tab_id} isn't really in window {window_id}!?"
                                     )
                                 })?;
+                                let changed = window.get_active_idx() != tab_idx;
                                 window.save_and_then_set_active(tab_idx);
-                            }
+                                changed
+                            };
                             let tab = mux
                                 .get_tab(tab_id)
                                 .ok_or_else(|| anyhow::anyhow!("tab {tab_id} not found"))?;
+                            let pane_changed =
+                                tab.get_active_pane().map(|p| p.pane_id()) != Some(pane_id);
                             tab.set_active_pane(&pane);
 
                             mux.record_focus_for_current_identity(pane_id);
-                            mux.notify(mux::MuxNotification::PaneFocused(pane_id));
+                            // Tab::set_active_pane has already notified if the
+                            // active pane changed, so only speak up for a plain
+                            // tab switch, and stay silent when nothing moved at
+                            // all. Either way the notification is attributed to
+                            // the requesting client, so it doesn't come back to
+                            // them.
+                            if tab_changed && !pane_changed {
+                                mux.notify_pane_focused(pane_id);
+                            }
 
                             Ok(Pdu::UnitResponse(UnitResponse {}))
                         },

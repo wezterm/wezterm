@@ -3,9 +3,11 @@ use anyhow::Context;
 use async_ossl::AsyncSslStream;
 use codec::{DecodedPdu, Pdu};
 use futures::FutureExt;
+use mux::client::ClientId;
 use mux::{Mux, MuxNotification};
 use smol::prelude::*;
 use smol::Async;
+use std::sync::Arc;
 use wezterm_uds::UnixStream;
 
 #[cfg(unix)]
@@ -15,6 +17,26 @@ pub trait AsRawDesc: std::os::windows::io::AsRawSocket + std::os::windows::io::A
 
 impl AsRawDesc for UnixStream {}
 impl AsRawDesc for AsyncSslStream {}
+
+/// Should a PaneFocused notification attributed to `origin` be sent to the
+/// client on the other end of this session?
+///
+/// Not if that client is the one who asked for it: it moved its own view the
+/// moment the user pressed the key and doesn't need our permission. Telling it
+/// again would be worse than redundant, because over a slow link the user has
+/// often moved on to another tab by the time the notification lands, and
+/// applying it would drag them back to where they were.
+fn should_forward_pane_focused(
+    origin: &Option<Arc<ClientId>>,
+    session_client_id: &Option<Arc<ClientId>>,
+) -> bool {
+    match (origin, session_client_id) {
+        (Some(origin), Some(session_client_id)) => origin != session_client_id,
+        // A change the mux made by itself, or a session that hasn't told us
+        // who it is yet: nobody here is responsible for it, so pass it on.
+        _ => true,
+    }
+}
 
 #[derive(Debug)]
 enum Item {
@@ -166,7 +188,10 @@ where
                     stream.flush().await.context("flushing PDU to client")?;
                 }
             }
-            Ok(Item::Notif(MuxNotification::PaneFocused(pane_id))) => {
+            Ok(Item::Notif(MuxNotification::PaneFocused { pane_id, origin })) => {
+                if !should_forward_pane_focused(&origin, &handler.client_id()) {
+                    continue;
+                }
                 Pdu::PaneFocused(codec::PaneFocused { pane_id })
                     .encode_async(&mut stream, 0)
                     .await?;
@@ -209,5 +234,42 @@ where
                 return Ok(());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// A client that asks the mux to move the focus has already moved its own
+    /// view to match, so the notification that results from its request must
+    /// not be sent back to it. Everyone else still needs to hear about it.
+    #[test]
+    fn pane_focused_is_not_echoed_to_the_client_that_asked() {
+        let me = Arc::new(ClientId::new());
+        let someone_else = Arc::new(ClientId::new());
+
+        // The echo of our own request.
+        assert!(!should_forward_pane_focused(
+            &Some(me.clone()),
+            &Some(me.clone())
+        ));
+
+        // Another attached client, or a `wezterm cli activate-pane` run by
+        // some script: this is news to us and we want it.
+        assert!(should_forward_pane_focused(
+            &Some(someone_else),
+            &Some(me.clone())
+        ));
+
+        // A focus change the mux made by itself, on nobody's behalf.
+        assert!(should_forward_pane_focused(&None, &Some(me)));
+
+        // A session that hasn't identified itself yet can't be the one that
+        // asked, so it hears about everything.
+        assert!(should_forward_pane_focused(
+            &Some(Arc::new(ClientId::new())),
+            &None
+        ));
     }
 }

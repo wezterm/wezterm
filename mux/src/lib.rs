@@ -81,7 +81,15 @@ pub enum MuxNotification {
         tab_id: TabId,
         window_id: WindowId,
     },
-    PaneFocused(PaneId),
+    PaneFocused {
+        pane_id: PaneId,
+        /// The client on whose behalf the focus was moved, if any. That
+        /// client asked for this and has already applied it to its own
+        /// view, so there is nothing to be gained by telling it again --
+        /// and a good deal to be lost, because by the time the round trip
+        /// completes the user may well have moved on somewhere else.
+        origin: Option<Arc<ClientId>>,
+    },
     TabResized(TabId),
     TabTitleChanged {
         tab_id: TabId,
@@ -508,6 +516,15 @@ impl Mux {
         if let Some(ident) = self.identity.read().as_ref() {
             self.record_focus_for_client(ident, pane_id);
         }
+    }
+
+    /// Notify subscribers that `pane_id` has gained the focus, attributing
+    /// the change to whichever client we are currently acting on behalf of.
+    /// The mux server uses that attribution to avoid echoing the change back
+    /// to the client that asked for it.
+    pub fn notify_pane_focused(&self, pane_id: PaneId) {
+        let origin = self.identity.read().clone();
+        self.notify(MuxNotification::PaneFocused { pane_id, origin });
     }
 
     pub fn resolve_focused_pane(
