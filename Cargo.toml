@@ -273,9 +273,9 @@ xcb = "1.3"
 xcb-imdkit = { version="0.3", git="https://github.com/wezterm/xcb-imdkit-rs.git", rev="212330f7c6c37794d78061a773e8f4f9e4785bbb"}
 xkbcommon = "0.7.0"
 xml-rs = "0.8"
-zbus = "4.2"
+zbus = "5"
 zstd = "0.11"
-zvariant = "4.0"
+zvariant = "5"
 
 [patch.crates-io]
 # We use our own vendored cairo, which has minimal deps and should just
