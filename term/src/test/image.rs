@@ -142,9 +142,13 @@ fn kitty_frame_edit_keeps_the_stored_hash_current() {
 const TINY_RGBA_PADDED_BASE64: &str = "AQID/wQFBv8HCAn/CgsM/wAAAAA=";
 
 /// For the raw formats the protocol derives the pixel count from `f`, `s` and
-/// `v`, so a source holding more than that is read up to the length the image
-/// needs. A shared memory object reporting more than was staged in it is the
-/// case that matters.
+/// `v`, so a source holding more bytes than that is read up to the length the
+/// image needs rather than refused.
+///
+/// The transport that makes this matter is `t=s`: a POSIX shared memory object
+/// reports its size rounded up to a page, so it is nearly always longer than
+/// the frame staged in it. This test sends the same over-long payload inline,
+/// which exercises the same length check without needing a shm object.
 #[test]
 fn kitty_raw_image_longer_than_its_dimensions_is_accepted() {
     let mut term = TestTerm::new(3, 10, 0);
