@@ -10,6 +10,16 @@ fn geti<T: core::str::FromStr>(keys: &BTreeMap<&str, &str>, k: &str) -> Option<T
     get(keys, k).and_then(|s| s.parse().ok())
 }
 
+/// Read a key that the protocol gives a default of zero, where that default is
+/// how it spells "not given". A literal zero and an absent key are the same
+/// command, so both come back as `None`.
+fn geti_zero_is_absent<T: core::str::FromStr + Default + PartialEq>(
+    keys: &BTreeMap<&str, &str>,
+    k: &str,
+) -> Option<T> {
+    geti(keys, k).filter(|v| *v != T::default())
+}
+
 fn set<T: ToString>(keys: &mut BTreeMap<&'static str, String>, k: &'static str, v: &Option<T>) {
     if let Some(v) = v {
         keys.insert(k, v.to_string());
@@ -111,26 +121,17 @@ impl KittyImageData {
             "d" => Some(Self::Direct(String::from_utf8(payload.to_vec()).ok()?)),
             "f" => Some(Self::File {
                 path: String::from_utf8(base64_decode(payload.to_vec()).ok()?).ok()?,
-                data_size: match geti(keys, "S") {
-                    None | Some(0) => None,
-                    n => n,
-                },
+                data_size: geti_zero_is_absent(keys, "S"),
                 data_offset: geti(keys, "O"),
             }),
             "t" => Some(Self::TemporaryFile {
                 path: String::from_utf8(base64_decode(payload.to_vec()).ok()?).ok()?,
-                data_size: match geti(keys, "S") {
-                    None | Some(0) => None,
-                    n => n,
-                },
+                data_size: geti_zero_is_absent(keys, "S"),
                 data_offset: geti(keys, "O"),
             }),
             "s" => Some(Self::SharedMem {
                 name: String::from_utf8(base64_decode(payload.to_vec()).ok()?).ok()?,
-                data_size: match geti(keys, "S") {
-                    None | Some(0) => None,
-                    n => n,
-                },
+                data_size: geti_zero_is_absent(keys, "S"),
                 data_offset: geti(keys, "O"),
             }),
             _ => None,
@@ -629,29 +630,14 @@ impl KittyImagePlacement {
             // nothing: for w and h the protocol says the entire width and height
             // are used. It gives c and r the same default without defining what
             // a zero means, so they are read the same way.
-            w: match geti(keys, "w") {
-                None | Some(0) => None,
-                n => n,
-            },
-            h: match geti(keys, "h") {
-                None | Some(0) => None,
-                n => n,
-            },
+            w: geti_zero_is_absent(keys, "w"),
+            h: geti_zero_is_absent(keys, "h"),
             x_offset: geti(keys, "X"),
             y_offset: geti(keys, "Y"),
-            columns: match geti(keys, "c") {
-                None | Some(0) => None,
-                n => n,
-            },
-            rows: match geti(keys, "r") {
-                None | Some(0) => None,
-                n => n,
-            },
+            columns: geti_zero_is_absent(keys, "c"),
+            rows: geti_zero_is_absent(keys, "r"),
             // A placement id runs from 1, so a zero is no placement id.
-            placement_id: match geti(keys, "p") {
-                None | Some(0) => None,
-                n => n,
-            },
+            placement_id: geti_zero_is_absent(keys, "p"),
             do_not_move_cursor: match get(keys, "C") {
                 None | Some("0") => false,
                 Some("1") => true,
@@ -758,18 +744,12 @@ impl KittyImageDelete {
             // the image rather than one recorded under an id of zero.
             'i' | 'I' => Some(Self::ByImageId {
                 image_id: geti(keys, "i")?,
-                placement_id: match geti(keys, "p") {
-                    None | Some(0) => None,
-                    n => n,
-                },
+                placement_id: geti_zero_is_absent(keys, "p"),
                 delete,
             }),
             'n' | 'N' => Some(Self::ByImageNumber {
                 image_number: geti(keys, "I")?,
-                placement_id: match geti(keys, "p") {
-                    None | Some(0) => None,
-                    n => n,
-                },
+                placement_id: geti_zero_is_absent(keys, "p"),
                 delete,
             }),
             'c' | 'C' => Some(Self::AtCursorPosition { delete }),
@@ -930,22 +910,10 @@ impl KittyImageFrameCompose {
             src_y: geti(keys, "Y"),
             // w and h default to zero, which asks for the whole frame rather
             // than a rectangle of nothing.
-            w: match geti(keys, "w") {
-                None | Some(0) => None,
-                n => n,
-            },
-            h: match geti(keys, "h") {
-                None | Some(0) => None,
-                n => n,
-            },
-            target_frame: match geti(keys, "c") {
-                None | Some(0) => None,
-                n => n,
-            },
-            source_frame: match geti(keys, "r") {
-                None | Some(0) => None,
-                n => n,
-            },
+            w: geti_zero_is_absent(keys, "w"),
+            h: geti_zero_is_absent(keys, "h"),
+            target_frame: geti_zero_is_absent(keys, "c"),
+            source_frame: geti_zero_is_absent(keys, "r"),
             composition_mode: match geti(keys, "C") {
                 None | Some(0) => KittyFrameCompositionMode::AlphaBlending,
                 Some(1) => KittyFrameCompositionMode::Overwrite,
@@ -1015,18 +983,9 @@ impl KittyImageFrame {
         Some(Self {
             x: geti(keys, "x"),
             y: geti(keys, "y"),
-            base_frame: match geti(keys, "c") {
-                None | Some(0) => None,
-                n => n,
-            },
-            frame_number: match geti(keys, "r") {
-                None | Some(0) => None,
-                n => n,
-            },
-            duration_ms: match geti(keys, "z") {
-                None | Some(0) => None,
-                n => n,
-            },
+            base_frame: geti_zero_is_absent(keys, "c"),
+            frame_number: geti_zero_is_absent(keys, "r"),
+            duration_ms: geti_zero_is_absent(keys, "z"),
             composition_mode: match geti(keys, "X") {
                 None | Some(0) => KittyFrameCompositionMode::AlphaBlending,
                 Some(1) => KittyFrameCompositionMode::Overwrite,
