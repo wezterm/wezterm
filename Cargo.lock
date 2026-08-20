@@ -3590,7 +3590,7 @@ dependencies = [
  "wezterm-dynamic",
  "wezterm-ssh",
  "wezterm-term",
- "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7244,7 +7244,7 @@ dependencies = [
  "wezterm-client",
  "wezterm-term",
  "wezterm-uds",
- "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
