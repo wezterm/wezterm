@@ -17,6 +17,11 @@ wezterm-dynamic = { workspace=true, optional = true, features=["std"]}
 
 [target."cfg(windows)".dependencies]
 ntapi.workspace = true
+windows-sys = { workspace = true, features = [
+    "Wdk_System_Threading",
+    "Win32_System_Kernel",
+    "Win32_System_Threading",
+] }
 winapi = { workspace=true, features = [
     "handleapi",
     "memoryapi",
@@ -25,4 +30,3 @@ winapi = { workspace=true, features = [
     "shellapi",
     "tlhelp32",
 ]}
-
