@@ -612,3 +612,27 @@ Line {
 "#
     );
 }
+
+/// A URL that spans two physical lines (the first line is wrapped) should
+/// be linked as a single hyperlink across both lines when scanned as a
+/// logical line.
+/// <https://github.com/wezterm/wezterm/issues/3987>
+#[test]
+fn apply_hyperlink_rules_wrapped_line() {
+    let rules = vec![Rule::new(r"\b\w+://(?:[\w.-]+)\.[a-z]{2,15}\S*\b", "$0").unwrap()];
+
+    // First physical line is wrapped (the URL continues on the next line)
+    let mut line1: Line = "http://example.com/very/long/".into();
+    line1.set_last_cell_was_wrapped(true, SEQ_ZERO);
+    // Second physical line completes the logical line (not wrapped)
+    let mut line2: Line = "path".into();
+
+    let mut logical_line = vec![&mut line1, &mut line2];
+    Line::apply_hyperlink_rules(&rules, &mut logical_line);
+
+    // The full URL should be linked across both physical lines. line2
+    // ("path") only gets a hyperlink when scanned as part of the logical
+    // line; a per-physical-line scan would not match it.
+    assert!(line1.has_hyperlink());
+    assert!(line2.has_hyperlink());
+}

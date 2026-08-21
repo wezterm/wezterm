@@ -22,6 +22,8 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* Implicit hyperlinks that span wrapped lines are now linked correctly for
+  mux client panes. #3987
 * DECRQCRA is now disabled by default to prevent silent screen scraping.
   Set `enable_checksum_rectangular_area = true` to re-enable it.
   Thanks to @jquast! #7701
