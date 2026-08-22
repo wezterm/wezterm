@@ -154,6 +154,9 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Resizing the window could pull the cursor up onto the previous line when it
+  was resting at the start of an otherwise empty line, so that the next thing
+  written overwrote that line.
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
   an RGBA image already carries is now reused instead. Thanks to @i-am-logger! #8065
 * `ResetTerminal` (RIS) did not reset the `modifyOtherKeys` state. A program

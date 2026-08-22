@@ -149,7 +149,15 @@ impl Screen {
                 // line and it won't resize with the line correctly.
                 // Put it back on the prior line. The cursor is now
                 // technically outside of the viewport width.
-                if adjusted_cursor.0 == 0 && adjusted_cursor.1 > 0 {
+                //
+                // Only when the rewrap is what put it there. `num_lines == 0`
+                // means the cursor sits at the start of its own logical line
+                // rather than at the head of a continuation of the one above,
+                // so the row above is a different line and moving onto it
+                // would leave the next thing written on top of it. That is
+                // the common case for a cursor resting on the empty line
+                // below a shell's prompt.
+                if num_lines > 0 && adjusted_cursor.0 == 0 {
                     if physical_cols < self.physical_cols {
                         // getting smaller: preserve its original position
                         // on the prior line
