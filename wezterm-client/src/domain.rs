@@ -153,6 +153,12 @@ impl ClientInner {
         log::trace!("remove_old_tab_mapping: {remote_tab_id} -> {old:?}");
     }
 
+    pub fn remove_old_window_mapping(&self, remote_window_id: WindowId) {
+        let mut window_map = self.remote_to_local_window.lock().unwrap();
+        let old = window_map.remove(&remote_window_id);
+        log::trace!("remove_old_window_mapping: {remote_window_id} -> {old:?}");
+    }
+
     fn record_remote_to_local_tab_mapping(&self, remote_tab_id: TabId, local_tab_id: TabId) {
         let mut map = self.remote_to_local_tab.lock().unwrap();
         let prior = map.insert(remote_tab_id, local_tab_id);
@@ -619,18 +625,29 @@ impl ClientDomain {
                 });
 
                 if let Some(local_window_id) = inner.remote_to_local_window(remote_window_id) {
-                    let mut window = mux
-                        .get_window_mut(local_window_id)
-                        .expect("no such window!?");
-                    log::debug!(
-                        "domain: {} adding tab to existing local window {}",
-                        inner.local_domain_id,
-                        local_window_id
-                    );
-                    if window.idx_by_id(tab.tab_id()).is_none() {
-                        window.push(&tab);
+                    match mux.get_window_mut(local_window_id) {
+                        Some(mut window) => {
+                            log::debug!(
+                                "domain: {} adding tab to existing local window {}",
+                                inner.local_domain_id,
+                                local_window_id
+                            );
+                            if window.idx_by_id(tab.tab_id()).is_none() {
+                                window.push(&tab);
+                            }
+                            continue;
+                        }
+                        None => {
+                            // Local window is gone; forget the stale mapping
+                            // and fall through to make a new window.
+                            log::debug!(
+                                "we had remote_to_local_window mapping of \
+                                 {remote_window_id} -> {local_window_id}, but the \
+                                 local window is not in the mux; forgetting it"
+                            );
+                            inner.remove_old_window_mapping(remote_window_id);
+                        }
                     }
-                    continue;
                 }
 
                 if let Some(local_window_id) = primary_window_id {
@@ -671,10 +688,10 @@ impl ClientDomain {
 
         for (remote_window_id, window_title) in panes.window_titles {
             if let Some(local_window_id) = inner.remote_to_local_window(remote_window_id) {
-                let mut window = mux
-                    .get_window_mut(local_window_id)
-                    .expect("no such window!?");
-                window.set_title(&window_title);
+                match mux.get_window_mut(local_window_id) {
+                    Some(mut window) => window.set_title(&window_title),
+                    None => inner.remove_old_window_mapping(remote_window_id),
+                }
             }
         }
 
@@ -1004,5 +1021,74 @@ impl Domain for ClientDomain {
         } else {
             DomainState::Detached
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use mux::domain::alloc_domain_id;
+    use mux::pane::alloc_pane_id;
+    use mux::renderable::StableCursorPosition;
+    use mux::tab::{PaneEntry, PaneNode, Tab};
+    use std::collections::HashMap;
+    use wezterm_term::TerminalSize;
+
+    /// A remote->local window mapping can reference a local window that was
+    /// closed and removed from the mux while a client domain sync was in
+    /// flight. Syncing must forget the stale mapping and make a fresh window
+    /// rather than panic (GH#8033).
+    #[test]
+    fn process_pane_list_forgets_stale_window_mapping() {
+        let mux = Arc::new(Mux::new(None));
+        Mux::set_mux(&mux);
+        let _exec = promise::spawn::SimpleExecutor::new();
+        // Real ids whose windows have since been closed: one plays the part
+        // of the remote window, one is the stale local mapping target.
+        let remote_window_id = *mux.new_empty_window(None, None);
+        mux.kill_window(remote_window_id);
+        let stale_local_window_id = *mux.new_empty_window(None, None);
+        mux.kill_window(stale_local_window_id);
+        let remote_tab_id = Tab::new(&TerminalSize::default()).tab_id();
+
+        let inner = Arc::new(ClientInner::new(
+            alloc_domain_id(),
+            Client::dummy(),
+            None,
+            false,
+        ));
+        inner.record_remote_to_local_window_mapping(remote_window_id, stale_local_window_id);
+
+        let panes = ListPanesResponse {
+            tabs: vec![PaneNode::Leaf(PaneEntry {
+                window_id: remote_window_id,
+                tab_id: remote_tab_id,
+                pane_id: alloc_pane_id(),
+                title: "remote pane".to_string(),
+                size: TerminalSize::default(),
+                working_dir: None,
+                is_active_pane: true,
+                is_zoomed_pane: false,
+                workspace: "default".to_string(),
+                cursor_pos: StableCursorPosition::default(),
+                physical_top: 0,
+                top_row: 0,
+                left_col: 0,
+                tty_name: None,
+            })],
+            tab_titles: vec!["remote tab".to_string()],
+            window_titles: HashMap::new(),
+        };
+
+        ClientDomain::process_pane_list(Arc::clone(&inner), panes, None)
+            .expect("sync with a stale window mapping must not panic");
+
+        // The stale id is forgotten and the remote window is re-mapped to a
+        // fresh local window that actually exists in the mux.
+        let local_window_id = inner
+            .remote_to_local_window(remote_window_id)
+            .expect("remote window should be re-mapped");
+        assert_ne!(local_window_id, stale_local_window_id);
+        assert!(mux.get_window(local_window_id).is_some());
     }
 }
