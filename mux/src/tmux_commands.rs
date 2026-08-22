@@ -342,7 +342,7 @@ impl TmuxDomainState {
                     match mux.get_tab(local_tab.tab_id) {
                         Some(tab) => {
                             tab.set_active_pane(&local_pane);
-                            mux.notify(MuxNotification::PaneFocused(local_pane.pane_id()));
+                            mux.notify_pane_focused(local_pane.pane_id());
                         }
                         None => {}
                     }
@@ -567,7 +567,7 @@ impl TmuxDomainState {
                 }
 
                 match n {
-                    MuxNotification::PaneFocused(pane_id) => {
+                    MuxNotification::PaneFocused { pane_id, .. } => {
                         let tmux_pane_id = match tmux_domain
                             .inner
                             .remote_panes

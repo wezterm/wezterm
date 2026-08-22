@@ -1779,11 +1779,11 @@ impl TabInner {
             (Some(prior), Some(current)) if prior.pane_id() != current.pane_id() => {
                 prior.focus_changed(false);
                 current.focus_changed(true);
-                mux.notify(MuxNotification::PaneFocused(current.pane_id()));
+                mux.notify_pane_focused(current.pane_id());
             }
             (None, Some(current)) => {
                 current.focus_changed(true);
-                mux.notify(MuxNotification::PaneFocused(current.pane_id()));
+                mux.notify_pane_focused(current.pane_id());
             }
             (Some(prior), None) => {
                 prior.focus_changed(false);

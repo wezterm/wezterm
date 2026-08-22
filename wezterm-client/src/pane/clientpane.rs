@@ -226,6 +226,17 @@ impl ClientPane {
                 // it here.
                 log::trace!("advised of remote pane focus: {pane_id}");
 
+                // Applying the notification below runs through
+                // Tab::set_active_pane -> Pane::focus_changed -> advise_focus,
+                // which would send a SetFocusedPane telling the server what it
+                // has just told us. Claim the focus up front so that
+                // advise_focus sees no change and stays quiet.
+                self.client
+                    .focused_remote_pane_id
+                    .lock()
+                    .unwrap()
+                    .replace(self.remote_pane_id);
+
                 let mux = Mux::get();
                 if let Err(err) = mux.focus_pane_and_containing_tab(self.local_pane_id) {
                     log::error!("Error reconciling remote PaneFocused notification: {err:#}");
@@ -582,6 +593,10 @@ impl Pane for ClientPane {
             focused_pane.replace(self.remote_pane_id);
             let client = Arc::clone(&self.client);
             let remote_pane_id = self.remote_pane_id;
+            // This tells the server where the focus went; it isn't a request
+            // for permission. We have already moved our own view, and the
+            // server attributes the change to us so that it doesn't come
+            // back to us as a notification.
             promise::spawn::spawn(async move {
                 client
                     .client
