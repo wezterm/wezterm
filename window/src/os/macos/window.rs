@@ -2,7 +2,7 @@
 #![allow(clippy::let_unit_value)]
 
 use super::keycodes::*;
-use super::{nsstring, nsstring_to_str};
+use super::{from_yes_no, nsstring, nsstring_to_str, to_yes_no};
 use crate::clipboard::Clipboard as ClipboardContext;
 use crate::connection::ConnectionOps;
 use crate::os::macos::menu::{MenuItem, RepresentedItem};
@@ -886,9 +886,10 @@ impl WindowOps for Window {
             && !config.macos_fullscreen_extend_behind_notch
         {
             let main_screen = unsafe { NSScreen::mainScreen(nil) };
-            let has_safe_area_insets: BOOL =
-                unsafe { msg_send![main_screen, respondsToSelector: sel!(safeAreaInsets)] };
-            if has_safe_area_insets == YES {
+            let has_safe_area_insets = from_yes_no(unsafe {
+                msg_send![main_screen, respondsToSelector: sel!(safeAreaInsets)]
+            });
+            if has_safe_area_insets {
                 #[derive(Debug)]
                 struct NSEdgeInsets {
                     top: CGFloat,
@@ -1078,35 +1079,31 @@ impl WindowInner {
     }
 
     fn update_window_shadow(&mut self) {
-        let is_opaque = if self.config.window_background_opacity >= 1.0 {
-            YES
-        } else {
-            NO
-        };
+        let is_opaque = self.config.window_background_opacity >= 1.0;
         unsafe {
-            self.window.setOpaque_(is_opaque);
+            self.window.setOpaque_(to_yes_no(is_opaque));
             // when transparent, also turn off the window shadow,
             // because having the shadow enabled seems to correlate
             // with ghostly remnants see:
             // https://github.com/wezterm/wezterm/issues/310.
             // But allow overriding the shadows independent of opacity as well:
             // <https://github.com/wezterm/wezterm/issues/2669>
-            let shadow = if self
+            let needs_shadow = if self
                 .config
                 .window_decorations
                 .contains(WindowDecorations::MACOS_FORCE_ENABLE_SHADOW)
             {
-                YES
+                true
             } else if self
                 .config
                 .window_decorations
                 .contains(WindowDecorations::MACOS_FORCE_DISABLE_SHADOW)
             {
-                NO
+                false
             } else {
                 is_opaque
             };
-            self.window.setHasShadow_(shadow);
+            self.window.setHasShadow_(to_yes_no(needs_shadow));
         }
     }
 
@@ -1375,13 +1372,8 @@ fn apply_decorations_to_window(
     unsafe {
         window.setStyleMask_(mask);
 
-        let hidden = if decorations.contains(WindowDecorations::TITLE)
-            || decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
-        {
-            NO
-        } else {
-            YES
-        };
+        let has_decorations = decorations.contains(WindowDecorations::TITLE)
+            || decorations.contains(WindowDecorations::INTEGRATED_BUTTONS);
 
         for titlebar_button in &[
             appkit::NSWindowButton::NSWindowMiniaturizeButton,
@@ -1389,7 +1381,7 @@ fn apply_decorations_to_window(
             appkit::NSWindowButton::NSWindowZoomButton,
         ] {
             let button = window.standardWindowButton_(*titlebar_button);
-            let _: () = msg_send![button, setHidden: hidden];
+            let _: () = msg_send![button, setHidden: to_yes_no(!has_decorations)];
         }
 
         window.setTitleVisibility_(if decorations.contains(WindowDecorations::TITLE) {
@@ -1403,8 +1395,16 @@ fn apply_decorations_to_window(
         {
             window.setTitlebarAppearsTransparent_(YES);
         } else {
-            window.setTitlebarAppearsTransparent_(hidden);
+            window.setTitlebarAppearsTransparent_(to_yes_no(!has_decorations));
         }
+
+        if let Some(titlebar_view_container) = get_titlebar_view_container(window) {
+            // hiding the subview prevents it from participating in normal visible/hit-tested view behavior
+            let _: () =
+                msg_send![*titlebar_view_container.load(), setHidden: to_yes_no(!has_decorations)];
+        }
+
+        let _: () = msg_send![**window, setMovable: to_yes_no(has_decorations)];
     }
 }
 
@@ -2370,8 +2370,8 @@ impl WindowView {
     }
 
     extern "C" fn scroll_wheel(this: &mut Object, _sel: Sel, nsevent: id) {
-        let precise = unsafe { nsevent.hasPreciseScrollingDeltas() } == YES;
-        let scale = if precise {
+        let has_precise_deltas = from_yes_no(unsafe { nsevent.hasPreciseScrollingDeltas() });
+        let scale = if has_precise_deltas {
             // Devices with precise deltas report number of pixels scrolled.
             // At this layer we don't know how many pixels comprise a cell
             // in the terminal widget, and our abstraction doesn't allow being
@@ -2470,7 +2470,7 @@ impl WindowView {
     }
 
     fn key_common(this: &mut Object, nsevent: id, key_is_down: bool) {
-        let is_a_repeat = unsafe { nsevent.isARepeat() == YES };
+        let is_a_repeat = from_yes_no(unsafe { nsevent.isARepeat() });
         let chars = unsafe { nsstring_to_str(nsevent.characters()) };
         let unmod = unsafe { nsstring_to_str(nsevent.charactersIgnoringModifiers()) };
         let modifier_flags = unsafe { nsevent.modifierFlags() };
