@@ -5,20 +5,103 @@ use crate::termwindow::RenderState;
 use crate::utilsprites::RenderMetrics;
 use crate::Dimensions;
 use anyhow::Context;
+use config::CommandSource;
 use config::{
     BackgroundHorizontalAlignment, BackgroundLayer, BackgroundRepeat, BackgroundSize,
     BackgroundSource, BackgroundVerticalAlignment, ConfigHandle, DimensionContext, Gradient,
     GradientOrientation,
 };
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use termwiz::image::{ImageData, ImageDataType};
 use wezterm_term::StableRowIndex;
 
+use crate::termwindow::live_command::{LiveCommand, LiveCommandKey};
+
 lazy_static::lazy_static! {
     static ref IMAGE_CACHE: Mutex<HashMap<String, CachedImage>> = Mutex::new(HashMap::new());
     static ref GRADIENT_CACHE: Mutex<Vec<CachedGradient>> = Mutex::new(vec![]);
+}
+
+impl crate::TermWindow {
+    /// Looks up (or spawns) the `LiveCommand` for this layer's command +
+    /// current pixel size, keyed on the resulting terminal grid dimensions
+    /// so that a resize naturally spawns a freshly-sized instance.
+    ///
+    /// This lives on `TermWindow` (rather than in a module-level cache like
+    /// `IMAGE_CACHE`/`GRADIENT_CACHE` above) because `LiveCommand` holds a
+    /// `GlyphCache`, which is `Rc`-based and therefore not `Send`/`Sync` —
+    /// it can't live behind a `lazy_static`, which requires `Sync`. That's
+    /// fine: unlike a static image, a `LiveCommand` is inherently tied to
+    /// one window's rendering thread anyway.
+    ///
+    /// Config-level removal of a Command layer is swept separately (see
+    /// the call to `reload_background_image`'s caller in `mod.rs`, keyed
+    /// only on argv/cwd, which doesn't depend on window size); a resize of
+    /// a layer that's still configured is handled right here instead,
+    /// since only this call site knows both the old and new size for the
+    /// same argv/cwd.
+    fn resolve_live_command(
+        &self,
+        cmd: &CommandSource,
+        width: usize,
+        height: usize,
+    ) -> anyhow::Result<Rc<LiveCommand>> {
+        // Keyed on the layer's raw pixel size (rather than a cols/rows
+        // derived from it) because the cell size used to derive cols/rows
+        // depends on `font_scale`, which `LiveCommand::spawn` resolves
+        // internally -- this call site doesn't need to duplicate that.
+        let key = LiveCommandKey {
+            argv: cmd.argv.clone(),
+            cwd: cmd.cwd.clone(),
+            width,
+            height,
+            font_scale_bits: cmd.font_scale.to_bits(),
+        };
+
+        let mut cache = self.live_command_cache.borrow_mut();
+        if let Some(existing) = cache.get(&key) {
+            return Ok(Rc::clone(existing));
+        }
+
+        // Drop any other instance of this same command at a different size
+        // (eg: left over from before a window resize) so it doesn't linger
+        // running in the background forever.
+        cache.retain(|k, _| !(k.argv == key.argv && k.cwd == key.cwd));
+
+        let live = Rc::new(LiveCommand::spawn(
+            cmd,
+            width,
+            height,
+            &self.render_metrics,
+            &self.fonts,
+        )?);
+        cache.insert(key, Rc::clone(&live));
+        Ok(live)
+    }
+
+    /// Kills off any live command whose (argv, cwd) is no longer
+    /// referenced by any configured background layer. Called after a
+    /// config reload; a resize of a layer that's still configured is
+    /// handled separately, at resolve time (see `resolve_live_command`),
+    /// since the cache key also includes the terminal grid size, which
+    /// isn't meaningful independent of the window's current dimensions the
+    /// way argv/cwd are.
+    pub fn sweep_dead_live_commands(&self, config: &ConfigHandle) {
+        let active: std::collections::HashSet<(Vec<String>, Option<String>)> = config
+            .background
+            .iter()
+            .filter_map(|layer| match &layer.source {
+                BackgroundSource::Command(cmd) => Some((cmd.argv.clone(), cmd.cwd.clone())),
+                _ => None,
+            })
+            .collect();
+        self.live_command_cache
+            .borrow_mut()
+            .retain(|key, _| active.contains(&(key.argv.clone(), key.cwd.clone())));
+    }
 }
 
 struct CachedGradient {
@@ -328,6 +411,35 @@ fn load_background_layer(
             )))
         }
         BackgroundSource::File(source) => CachedImage::load(&source.path, source.speed)?,
+        BackgroundSource::Command(_cmd) => {
+            let width = match layer.width {
+                BackgroundSize::Dimension(d) => d.evaluate_as_pixels(h_context),
+                unsup => anyhow::bail!(
+                    "{unsup:?} is not implemented for background commands. \
+                     Use e.g. `width = '100%'` instead"
+                ),
+            } as u32;
+            let height = match layer.height {
+                BackgroundSize::Dimension(d) => d.evaluate_as_pixels(v_context),
+                unsup => anyhow::bail!(
+                    "{unsup:?} is not implemented for background commands. \
+                     Use e.g. `height = '100%'` instead"
+                ),
+            } as u32;
+
+            // Placeholder only: a running process isn't a bounded,
+            // cacheable image the way a gradient/color/file is, so
+            // `render_background` below replaces this on every paint with
+            // a freshly rasterized frame from the live command. This just
+            // avoids a flash of transparency before the first real frame.
+            let mut data = vec![0u8; (width as usize) * (height as usize) * 4];
+            for px in data.chunks_exact_mut(4) {
+                px[3] = 0xff;
+            }
+            Arc::new(ImageData::with_data(ImageDataType::new_single_frame(
+                width, height, data,
+            )))
+        }
     };
 
     Ok(LoadedBackgroundLayer {
@@ -425,24 +537,8 @@ impl crate::TermWindow {
 
         let color = bg_color.mul_alpha(layer.def.opacity);
 
-        let (sprite, next_due, load_state) = gl_state.glyph_cache.borrow_mut().cached_image(
-            &layer.source,
-            None,
-            self.allow_images,
-        )?;
-        self.update_next_frame_time(next_due);
-
-        if load_state == LoadState::Loading {
-            return Ok(false);
-        }
-
         let pixel_width = self.dimensions.pixel_width as f32;
         let pixel_height = self.dimensions.pixel_height as f32;
-        let tex_width = sprite.coords.width() as f32;
-        let tex_height = sprite.coords.height() as f32;
-
-        let scale_width = pixel_width / tex_width as f32;
-        let scale_height = pixel_height / tex_height as f32;
 
         let h_context = DimensionContext {
             dpi: self.dimensions.dpi as f32,
@@ -454,6 +550,49 @@ impl crate::TermWindow {
             pixel_max: pixel_height,
             pixel_cell: self.render_metrics.cell_size.height as f32,
         };
+
+        // A `Command` source is a live, unbounded process rather than a
+        // bounded, cacheable image, so its current frame is resolved (and,
+        // if the configured fps interval has elapsed, re-rasterized) on
+        // every paint, with our own repaint scheduled explicitly: unlike
+        // an animated gif/png, `cached_image` below has no bounded frame
+        // list to infer a "next frame due" time from for this source.
+        let live_source;
+        let source: &Arc<ImageData> = if let BackgroundSource::Command(cmd) = &layer.def.source {
+            let width = match layer.def.width {
+                BackgroundSize::Dimension(d) => d.evaluate_as_pixels(h_context) as usize,
+                _ => pixel_width as usize,
+            };
+            let height = match layer.def.height {
+                BackgroundSize::Dimension(d) => d.evaluate_as_pixels(v_context) as usize,
+                _ => pixel_height as usize,
+            };
+
+            let live = self.resolve_live_command(cmd, width, height)?;
+            let (image, due) = live.get_frame(cmd.fps, width, height);
+            self.update_next_frame_time(Some(due));
+            live_source = image;
+            &live_source
+        } else {
+            &layer.source
+        };
+
+        let (sprite, next_due, load_state) =
+            gl_state
+                .glyph_cache
+                .borrow_mut()
+                .cached_image(source, None, self.allow_images)?;
+        self.update_next_frame_time(next_due);
+
+        if load_state == LoadState::Loading {
+            return Ok(false);
+        }
+
+        let tex_width = sprite.coords.width() as f32;
+        let tex_height = sprite.coords.height() as f32;
+
+        let scale_width = pixel_width / tex_width as f32;
+        let scale_height = pixel_height / tex_height as f32;
 
         // log::info!("tex {tex_width}x{tex_height} aspect={aspect}");
 

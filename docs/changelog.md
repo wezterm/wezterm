@@ -75,6 +75,10 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* [background](config/lua/config/background.md) gained a `Command` source:
+  run an arbitrary command (eg: `cmatrix`) attached to a hidden pty and
+  render its live output as the window background, instead of only static
+  images or bounded/pre-decoded animations like animated gifs.
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
   and deserialization of JSON, TOML and YAML. Thanks to @expnn! #4969
 * `wezterm ssh` now supports agent forwarding. Thanks to @Riatre! #5345

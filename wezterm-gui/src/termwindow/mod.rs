@@ -73,6 +73,7 @@ pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
 pub mod keyevent;
+mod live_command;
 pub mod modal;
 mod mouseevent;
 pub mod palette;
@@ -411,6 +412,8 @@ pub struct TermWindow {
     semantic_zones: HashMap<PaneId, SemanticZoneCache>,
 
     window_background: Vec<LoadedBackgroundLayer>,
+    live_command_cache:
+        RefCell<HashMap<crate::termwindow::live_command::LiveCommandKey, Rc<crate::termwindow::live_command::LiveCommand>>>,
 
     current_modifier_and_leds: (Modifiers, KeyboardLedStatus),
     current_mouse_buttons: Vec<MousePress>,
@@ -693,6 +696,7 @@ impl TermWindow {
             webgpu: None,
             window: None,
             window_background,
+            live_command_cache: RefCell::new(HashMap::new()),
             config: config.clone(),
             config_overrides: wezterm_dynamic::Value::default(),
             palette: None,
@@ -1836,6 +1840,7 @@ impl TermWindow {
             &self.dimensions,
             &self.render_metrics,
         );
+        self.sweep_dead_live_commands(&config);
 
         self.invalidate_modal();
         self.emit_window_event("window-config-reloaded", None);
