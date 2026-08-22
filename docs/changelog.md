@@ -154,6 +154,17 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Clicking on an unfocused window reported a spurious mouse drag to the
+  application in addition to the click, because Windows 10 and later synthesize
+  a zero-distance mouse move in between the button-down and button-up of the
+  click that activates a window. Programs with mouse reporting enabled took
+  that to mean a real drag; in tmux it entered copy mode and clobbered the
+  clipboard on every click that focused the window. Motion is now reported only
+  when the pointer has actually moved away from the position last reported to
+  the application, as specified by xterm. As a side effect, repeating the exact
+  same drag gesture twice in a row no longer drops the second motion report.
+  Thanks to @scy, @mliszcz and @PHPCraftdream for the reports and diagnosis!
+  #2414 #5309
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
   an RGBA image already carries is now reused instead. Thanks to @i-am-logger! #8065
 * `ResetTerminal` (RIS) did not reset the `modifyOtherKeys` state. A program
