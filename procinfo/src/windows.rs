@@ -1,10 +1,5 @@
 #![cfg(windows)]
 use super::*;
-use ntapi::ntpebteb::PEB;
-use ntapi::ntpsapi::{
-    NtQueryInformationProcess, ProcessBasicInformation, ProcessWow64Information,
-    PROCESS_BASIC_INFORMATION,
-};
 use ntapi::ntrtl::RTL_USER_PROCESS_PARAMETERS;
 use ntapi::ntwow64::RTL_USER_PROCESS_PARAMETERS32;
 use std::ffi::OsString;
@@ -19,6 +14,10 @@ use winapi::um::shellapi::CommandLineToArgvW;
 use winapi::um::tlhelp32::*;
 use winapi::um::winbase::{LocalFree, QueryFullProcessImageNameW};
 use winapi::um::winnt::{HANDLE, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+use windows_sys::Wdk::System::Threading::{
+    NtQueryInformationProcess, ProcessBasicInformation, ProcessWow64Information, PROCESSINFOCLASS,
+};
+use windows_sys::Win32::System::Threading::{PEB, PROCESS_BASIC_INFORMATION};
 
 /// Manages a Toolhelp32 snapshot handle
 struct Snapshot(HANDLE);
@@ -133,11 +132,11 @@ impl ProcHandle {
     }
 
     /// Wrapper around NtQueryInformationProcess that fetches `what` as `T`
-    fn query_proc<T>(&self, what: u32) -> Option<T> {
+    fn query_proc<T>(&self, what: PROCESSINFOCLASS) -> Option<T> {
         let mut data = MaybeUninit::<T>::uninit();
         let res = unsafe {
             NtQueryInformationProcess(
-                self.proc,
+                self.proc.cast(),
                 what,
                 data.as_mut_ptr() as _,
                 std::mem::size_of::<T>() as _,

@@ -3570,7 +3570,6 @@ dependencies = [
  "mlua",
  "names",
  "nix",
- "ntapi",
  "parking_lot",
  "percent-encoding",
  "portable-pty",
@@ -4514,6 +4513,7 @@ dependencies = [
  "ntapi",
  "wezterm-dynamic",
  "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
