@@ -58,6 +58,23 @@ const NSViewLayerContentsPlacementTopLeft: NSInteger = 11;
 #[allow(non_upper_case_globals)]
 const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
 
+/// Returns the background color to use for the window.
+unsafe fn window_background_color(is_opaque: bool) -> id {
+    let clear_color = cocoa::appkit::NSColor::clearColor(nil);
+    if is_opaque {
+        clear_color
+    } else {
+        // An alpha of zero puts NSWindow into a special mode for irregularly
+        // shaped windows, where shadows are generated from the window contents.
+        // A nearly transparent color avoids that mode while preserving transparency.
+        // See:
+        // <https://notes.yvt.jp/Desktop-Apps/Enabling-Backdrop-Blur/#cgssetwindowbackgroundblurradius>
+        // iTerm2 uses the same workaround:
+        // <https://github.com/gnachman/iTerm2/commit/d5ebd6a00e3522399a47b1a9a739581f69247ccd>
+        msg_send![clear_color, colorWithAlphaComponent: 0.01f64]
+    }
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGSMainConnectionID() -> id;
@@ -524,7 +541,8 @@ impl Window {
             let _: () = msg_send![*window, setRestorable: NO];
 
             window.setReleasedWhenClosed_(NO);
-            window.setBackgroundColor_(cocoa::appkit::NSColor::clearColor(nil));
+            let is_opaque = config.window_background_opacity >= 1.0;
+            window.setBackgroundColor_(window_background_color(is_opaque));
 
             // Tell Cocoa that we output in sRGB, so it handles color space
             // conversion for non-sRGB displays.
@@ -1104,6 +1122,9 @@ impl WindowInner {
                 is_opaque
             };
             self.window.setHasShadow_(to_yes_no(needs_shadow));
+
+            self.window
+                .setBackgroundColor_(window_background_color(is_opaque));
         }
     }
 
