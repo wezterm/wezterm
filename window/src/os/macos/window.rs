@@ -541,9 +541,8 @@ impl Window {
             let _: () = msg_send![*window, setRestorable: NO];
 
             window.setReleasedWhenClosed_(NO);
-            window.setBackgroundColor_(window_background_color(
-                config.window_background_opacity >= 1.0,
-            ));
+            let is_opaque = self.config.window_background_opacity >= 1.0;
+            window.setBackgroundColor_(window_background_color(is_opaque));
 
             // Tell Cocoa that we output in sRGB, so it handles color space
             // conversion for non-sRGB displays.
