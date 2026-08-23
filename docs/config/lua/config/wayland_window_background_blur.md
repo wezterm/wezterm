@@ -17,7 +17,7 @@ config.wayland_window_background_blur = true
 ```
 
 !!! note
-    Wayland compositors may need to have blur enabled explicitely.
+    Wayland compositors may need to have blur enabled explicitly.
     e.g. on KDE Plasma, enable the _Blur_ plugin in _Window Effect_ settings.
 
 [Screenshot](../../../screenshots/wezterm-ext-background-effects-v1.png)

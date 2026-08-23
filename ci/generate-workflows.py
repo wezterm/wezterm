@@ -7,7 +7,8 @@ from copy import deepcopy
 # The build from this target will be pushed to the gemfury APT repo
 GEMFURY_TARGET = "ubuntu:22.04"
 # The build from this target will be baked into the AppImage
-APPIMAGE_TARGET = "ubuntu:24.04"
+# This target is also used for updating the flathub & linuxbrew repos
+APPIMAGE_TARGET = "ubuntu:26.04"
 
 TRIGGER_PATHS = [
     "**/*.rs",
@@ -1004,6 +1005,7 @@ rustup default {toolchain}
 TARGETS = [
     Target(container="ubuntu:22.04", continuous_only=True),
     Target(container="ubuntu:24.04", continuous_only=True),
+    Target(container="ubuntu:26.04", continuous_only=True),
     Target(container="debian:12", continuous_only=True),
     Target(name="centos9", container="quay.io/centos/centos:stream9"),
     Target(name="macos", os="macos-latest"),

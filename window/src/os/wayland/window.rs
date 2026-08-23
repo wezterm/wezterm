@@ -241,16 +241,21 @@ impl WaylandWindow {
 
         let window = {
             let xdg_shell = &conn.wayland_state.borrow().xdg;
-            xdg_shell.create_window(surface.clone(), Decorations::RequestServer, &qh)
+            let initial_decorations =
+                if !config.window_decorations.contains(WindowDecorations::TITLE) {
+                    Decorations::None
+                } else {
+                    Decorations::RequestServer
+                };
+            xdg_shell.create_window(surface.clone(), initial_decorations, &qh)
         };
 
         window.set_app_id(class_name.to_string());
         window.set_title(name.to_string());
-        let decorations = config.window_decorations;
 
-        let decor_mode = if decorations == WindowDecorations::NONE {
+        let decor_mode = if !config.window_decorations.contains(WindowDecorations::TITLE) {
             None
-        } else if decorations == WindowDecorations::default() {
+        } else if config.window_decorations == WindowDecorations::default() {
             Some(DecorationMode::Server)
         } else {
             Some(DecorationMode::Client)
