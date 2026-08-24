@@ -1,6 +1,6 @@
 use crate::domain::ClientInner;
 use crate::pane::mousestate::MouseState;
-use crate::pane::renderable::{hydrate_lines, RenderableInner, RenderableState};
+use crate::pane::renderable::{RenderableInner, RenderableState, hydrate_lines};
 use anyhow::bail;
 use async_trait::async_trait;
 use codec::*;
@@ -8,8 +8,8 @@ use config::configuration;
 use config::keyassignment::ScrollbackEraseMode;
 use mux::domain::DomainId;
 use mux::pane::{
-    alloc_pane_id, CachePolicy, CloseReason, ForEachPaneLogicalLine, LogicalLine, Pane, PaneId,
-    Pattern, SearchResult, WithPaneLines,
+    CachePolicy, CloseReason, ForEachPaneLogicalLine, LogicalLine, Pane, PaneId, Pattern,
+    SearchResult, WithPaneLines, alloc_pane_id,
 };
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::TabId;
@@ -45,6 +45,7 @@ pub struct ClientPane {
     clipboard: Mutex<Option<Arc<dyn Clipboard>>>,
     mouse_grabbed: Mutex<bool>,
     ignore_next_kill: Mutex<bool>,
+    suppress_next_focus_advise: Mutex<bool>,
     user_vars: Mutex<HashMap<String, String>>,
     config: Mutex<Option<Arc<dyn TerminalConfiguration>>>,
     unseen_output: Mutex<bool>,
@@ -127,6 +128,7 @@ impl ClientPane {
             clipboard: Mutex::new(None),
             mouse_grabbed: Mutex::new(false),
             ignore_next_kill: Mutex::new(false),
+            suppress_next_focus_advise: Mutex::new(false),
             unseen_output: Mutex::new(false),
             user_vars: Mutex::new(HashMap::new()),
             config: Mutex::new(None),
@@ -225,6 +227,7 @@ impl ClientPane {
                 // has been changed on the server, so we work to apply
                 // it here.
                 log::trace!("advised of remote pane focus: {pane_id}");
+                *self.suppress_next_focus_advise.lock() = true;
 
                 let mux = Mux::get();
                 if let Err(err) = mux.focus_pane_and_containing_tab(self.local_pane_id) {
@@ -556,8 +559,13 @@ impl Pane for ClientPane {
 
     fn focus_changed(&self, focused: bool) {
         if focused {
-            self.advise_focus();
+            let suppress = std::mem::replace(&mut *self.suppress_next_focus_advise.lock(), false);
+            if !suppress {
+                self.advise_focus();
+            }
             *self.unseen_output.lock() = false;
+        } else {
+            *self.suppress_next_focus_advise.lock() = false;
         }
     }
 
