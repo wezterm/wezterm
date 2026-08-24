@@ -788,7 +788,7 @@ impl TerminalState {
         self.dec_auto_wrap
     }
 
-        /// The DECSTBM scroll region, as inclusive-start/exclusive-end visible rows.
+    /// The DECSTBM scroll region, as inclusive-start/exclusive-end visible rows.
     pub fn get_top_and_bottom_margins(&self) -> Range<VisibleRowIndex> {
         self.top_and_bottom_margins.clone()
     }
