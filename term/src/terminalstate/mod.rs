@@ -55,7 +55,7 @@ pub(crate) enum CharSet {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MouseEncoding {
+pub enum MouseEncoding {
     X10,
     Utf8,
     SGR,
