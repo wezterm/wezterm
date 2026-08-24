@@ -466,6 +466,10 @@ impl Pane for LocalPane {
         self.terminal.lock().get_progress()
     }
 
+    fn get_pointer_shape(&self) -> Option<&'static str> {
+        self.terminal.lock().get_pointer_shape()
+    }
+
     fn palette(&self) -> ColorPalette {
         self.terminal.lock().palette()
     }

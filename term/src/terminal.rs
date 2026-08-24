@@ -71,6 +71,7 @@ pub enum Alert {
     OutputSinceFocusLost,
     /// A change to the progress bar state
     Progress(Progress),
+    PointerShapeChanged,
 }
 
 pub trait AlertHandler: Send + Sync {

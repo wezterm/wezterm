@@ -240,6 +240,9 @@ pub trait Pane: Downcast + Send + Sync {
     fn get_progress(&self) -> Progress {
         Progress::None
     }
+    fn get_pointer_shape(&self) -> Option<&'static str> {
+        None
+    }
     fn send_paste(&self, text: &str) -> anyhow::Result<()>;
     fn send_composed_text(&self, text: &str) -> anyhow::Result<()> {
         self.writer().write_all(text.as_bytes())?;

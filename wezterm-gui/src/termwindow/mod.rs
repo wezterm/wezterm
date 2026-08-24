@@ -1229,6 +1229,22 @@ impl TermWindow {
                     self.mux_pane_output_event(pane_id);
                 }
                 MuxNotification::Alert {
+                    alert: Alert::PointerShapeChanged,
+                    pane_id,
+                } => {
+                    if self.last_ui_item.is_none() && self.current_highlight.is_none() {
+                        if let Some(pane) = self.get_active_pane_or_overlay() {
+                            if pane.pane_id() == pane_id {
+                                window.set_cursor(Some(
+                                    pane.get_pointer_shape()
+                                        .map(MouseCursor::Named)
+                                        .unwrap_or(MouseCursor::Text),
+                                ));
+                            }
+                        }
+                    }
+                }
+                MuxNotification::Alert {
                     alert: Alert::Bell,
                     pane_id,
                 } => {
@@ -1466,6 +1482,7 @@ impl TermWindow {
                     | Alert::IconTitleChanged(_)
                     | Alert::Progress(_)
                     | Alert::SetUserVar { .. }
+                    | Alert::PointerShapeChanged
                     | Alert::Bell,
             }
             | MuxNotification::PaneFocused(pane_id)

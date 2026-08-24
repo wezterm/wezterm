@@ -1,6 +1,6 @@
 use crate::terminal::{Alert, Progress};
 use crate::terminalstate::{
-    default_color_map, CharSet, MouseEncoding, TabStop, UnicodeVersionStackEntry,
+    default_color_map, pointer_shape, CharSet, MouseEncoding, TabStop, UnicodeVersionStackEntry,
 };
 use crate::{ClipboardSelection, Position, TerminalState, VisibleRowIndex, DCS, ST};
 use finl_unicode::grapheme_clusters::Graphemes;
@@ -22,7 +22,7 @@ use wezterm_escape_parser::csi::{
 };
 use wezterm_escape_parser::osc::{
     ChangeColorPair, ColorOrQuery, FinalTermSemanticPrompt, ITermProprietary,
-    ITermUnicodeVersionOp, Selection,
+    ITermUnicodeVersionOp, PointerShapeCommand, Selection,
 };
 use wezterm_escape_parser::{
     Action, ControlCode, DeviceControlMode, Esc, EscCode, OperatingSystemCommand, CSI,
@@ -728,6 +728,7 @@ impl<'a> Performer<'a> {
                 self.erase_in_display(EraseInDisplay::EraseScrollback);
                 self.erase_in_display(EraseInDisplay::EraseDisplay);
                 self.palette_did_change();
+                self.notify_pointer_shape_changed();
             }
 
             _ => {
@@ -1095,7 +1096,73 @@ impl<'a> Performer<'a> {
                     }
                 }
             }
-            OperatingSystemCommand::PointerShape(_) => {}
+            OperatingSystemCommand::PointerShape(command) => match command {
+                PointerShapeCommand::Set(shape) => {
+                    let shape = if shape.is_empty() {
+                        Some(None)
+                    } else {
+                        pointer_shape(&shape).map(Some)
+                    };
+                    if let Some(shape) = shape {
+                        if let Some(current) = self.screen.pointer_shape_stack.last_mut() {
+                            *current = shape;
+                        } else {
+                            self.screen.pointer_shape_stack.push(shape);
+                        }
+                        self.notify_pointer_shape_changed();
+                    }
+                }
+                PointerShapeCommand::Push(shapes) => {
+                    let mut changed = false;
+                    for shape in shapes {
+                        let shape = if shape.is_empty() {
+                            Some(None)
+                        } else {
+                            pointer_shape(&shape).map(Some)
+                        };
+                        if let Some(shape) = shape {
+                            if self.screen.pointer_shape_stack.len() == 16 {
+                                self.screen.pointer_shape_stack.remove(0);
+                            }
+                            self.screen.pointer_shape_stack.push(shape);
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        self.notify_pointer_shape_changed();
+                    }
+                }
+                PointerShapeCommand::Pop => {
+                    if self.screen.pointer_shape_stack.pop().is_some() {
+                        self.notify_pointer_shape_changed();
+                    }
+                }
+                PointerShapeCommand::Query(shapes) => {
+                    let response = shapes
+                        .iter()
+                        .map(|shape| match shape.as_str() {
+                            "__current__" => self.get_pointer_shape().unwrap_or("0"),
+                            "__default__" => "text",
+                            "__grabbed__" => "default",
+                            shape => {
+                                if pointer_shape(shape).is_some() {
+                                    "1"
+                                } else {
+                                    "0"
+                                }
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    write!(
+                        self.writer,
+                        "{}",
+                        OperatingSystemCommand::PointerShape(PointerShapeCommand::Set(response))
+                    )
+                    .ok();
+                    self.writer.flush().ok();
+                }
+            },
         }
     }
 }

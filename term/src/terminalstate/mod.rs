@@ -42,6 +42,42 @@ lazy_static::lazy_static! {
     };
 }
 
+fn pointer_shape(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "alias" => "alias",
+        "cell" => "cell",
+        "copy" => "copy",
+        "crosshair" => "crosshair",
+        "default" => "default",
+        "e-resize" => "e-resize",
+        "ew-resize" => "ew-resize",
+        "grab" => "grab",
+        "grabbing" => "grabbing",
+        "help" => "help",
+        "move" => "move",
+        "n-resize" => "n-resize",
+        "ne-resize" => "ne-resize",
+        "nesw-resize" => "nesw-resize",
+        "no-drop" => "no-drop",
+        "not-allowed" => "not-allowed",
+        "ns-resize" => "ns-resize",
+        "nw-resize" => "nw-resize",
+        "nwse-resize" => "nwse-resize",
+        "pointer" => "pointer",
+        "progress" => "progress",
+        "s-resize" => "s-resize",
+        "se-resize" => "se-resize",
+        "sw-resize" => "sw-resize",
+        "text" => "text",
+        "vertical-text" => "vertical-text",
+        "w-resize" => "w-resize",
+        "wait" => "wait",
+        "zoom-in" => "zoom-in",
+        "zoom-out" => "zoom-out",
+        _ => return None,
+    })
+}
+
 pub(crate) struct TabStop {
     tabs: Vec<bool>,
     tab_width: usize,
@@ -240,6 +276,11 @@ impl ScreenOrAlt {
     pub fn full_reset(&mut self) {
         self.screen.full_reset();
         self.alt_screen.full_reset();
+    }
+
+    fn clear_pointer_shapes(&mut self) {
+        self.screen.pointer_shape_stack.clear();
+        self.alt_screen.pointer_shape_stack.clear();
     }
 }
 
@@ -644,6 +685,16 @@ impl TerminalState {
 
     pub fn get_progress(&self) -> Progress {
         self.progress.clone()
+    }
+
+    pub fn get_pointer_shape(&self) -> Option<&'static str> {
+        self.screen.pointer_shape_stack.last().copied().flatten()
+    }
+
+    fn notify_pointer_shape_changed(&mut self) {
+        if let Some(handler) = self.alert_handler.as_mut() {
+            handler.alert(Alert::PointerShapeChanged);
+        }
     }
 
     /// Returns the current working directory associated with the
@@ -1274,6 +1325,8 @@ impl TerminalState {
                 self.screen.saved_cursor().take();
                 self.screen.activate_primary_screen(self.seqno);
                 self.screen.saved_cursor().take();
+                self.screen.clear_pointer_shapes();
+                self.notify_pointer_shape_changed();
                 self.kitty_remove_all_placements(true);
 
                 self.reverse_wraparound_mode = false;
@@ -1679,6 +1732,7 @@ impl TerminalState {
                 if !self.screen.is_alt_screen_active() {
                     self.screen.activate_alt_screen(self.seqno);
                     self.pen = CellAttributes::default();
+                    self.notify_pointer_shape_changed();
                 }
             }
             Mode::ResetDecPrivateMode(DecPrivateMode::Code(
@@ -1688,6 +1742,7 @@ impl TerminalState {
                     self.pen = CellAttributes::default();
                     self.erase_in_display(EraseInDisplay::EraseDisplay);
                     self.screen.activate_primary_screen(self.seqno);
+                    self.notify_pointer_shape_changed();
                 }
             }
 
@@ -1697,6 +1752,7 @@ impl TerminalState {
                 if self.screen.is_alt_screen_active() {
                     self.screen.activate_primary_screen(self.seqno);
                     self.pen = CellAttributes::default();
+                    self.notify_pointer_shape_changed();
                 }
             }
 
@@ -1896,6 +1952,7 @@ impl TerminalState {
                     self.set_cursor_pos(&Position::Absolute(0), &Position::Absolute(0));
                     self.pen = CellAttributes::default();
                     self.erase_in_display(EraseInDisplay::EraseDisplay);
+                    self.notify_pointer_shape_changed();
                 }
             }
             Mode::ResetDecPrivateMode(DecPrivateMode::Code(
@@ -1904,6 +1961,7 @@ impl TerminalState {
                 if self.screen.is_alt_screen_active() {
                     self.screen.activate_primary_screen(self.seqno);
                     self.dec_restore_cursor();
+                    self.notify_pointer_shape_changed();
                 }
             }
             Mode::SaveDecPrivateMode(DecPrivateMode::Code(n))

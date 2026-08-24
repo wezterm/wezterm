@@ -36,6 +36,7 @@ pub struct Screen {
     allow_scrollback: bool,
 
     pub(crate) keyboard_stack: Vec<KeyboardEncoding>,
+    pub(crate) pointer_shape_stack: Vec<Option<&'static str>>,
 
     /// Physical, visible height of the screen (not including scrollback)
     pub physical_rows: usize,
@@ -85,12 +86,14 @@ impl Screen {
             stable_row_index_offset: 0,
             dpi: size.dpi,
             keyboard_stack: vec![],
+            pointer_shape_stack: vec![],
             saved_cursor: None,
         }
     }
 
     pub fn full_reset(&mut self) {
         self.keyboard_stack.clear();
+        self.pointer_shape_stack.clear();
     }
 
     fn scrollback_size(&self) -> usize {
