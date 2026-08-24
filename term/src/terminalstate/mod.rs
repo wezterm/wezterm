@@ -788,6 +788,65 @@ impl TerminalState {
         self.dec_auto_wrap
     }
 
+        /// The DECSTBM scroll region, as inclusive-start/exclusive-end visible rows.
+    pub fn get_top_and_bottom_margins(&self) -> Range<VisibleRowIndex> {
+        self.top_and_bottom_margins.clone()
+    }
+
+    /// The DECSLRM margins. These are only in force when
+    /// [`Self::left_and_right_margin_mode_enabled`] is also true; the range
+    /// keeps its full-width value while the mode is off.
+    pub fn get_left_and_right_margins(&self) -> Range<usize> {
+        self.left_and_right_margins.clone()
+    }
+
+    pub fn left_and_right_margin_mode_enabled(&self) -> bool {
+        self.left_and_right_margin_mode
+    }
+
+    pub fn dec_origin_mode_enabled(&self) -> bool {
+        self.dec_origin_mode
+    }
+
+    pub fn insert_mode_enabled(&self) -> bool {
+        self.insert
+    }
+
+    pub fn shift_out_enabled(&self) -> bool {
+        self.shift_out
+    }
+
+    /// The SCS final byte designating G0: `b'B'` ASCII, `b'A'` UK, `b'0'` DEC
+    /// line drawing. Emit as `ESC ( <byte>`.
+    ///
+    /// Returns the designator rather than `CharSet` because `CharSet` is
+    /// `pub(crate)`: a getter returning it would widen an existing item, and
+    /// this crate already carries one such widening. The byte is what a caller
+    /// reconstructing terminal state needs anyway, so nothing is lost.
+    pub fn g0_charset_designator(&self) -> u8 {
+        match self.g0_charset {
+            CharSet::Ascii => b'B',
+            CharSet::Uk => b'A',
+            CharSet::DecLineDrawing => b'0',
+        }
+    }
+
+    /// The SCS final byte designating G1. See
+    /// [`Self::g0_charset_designator`]; emit as `ESC ) <byte>`.
+    pub fn g1_charset_designator(&self) -> u8 {
+        match self.g1_charset {
+            CharSet::Ascii => b'B',
+            CharSet::Uk => b'A',
+            CharSet::DecLineDrawing => b'0',
+        }
+    }
+
+    /// Tab stops by column: `true` where a stop is set. Length tracks the screen
+    /// width, so index is column.
+    pub fn tab_stops(&self) -> Vec<bool> {
+        self.tabs.tabs.clone()
+    }
+
     /// Returns true if the associated application has enabled
     /// bracketed paste mode, which can be helpful to the hosting
     /// GUI application to decide about fragmenting a large paste.
