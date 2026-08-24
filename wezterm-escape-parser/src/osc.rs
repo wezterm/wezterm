@@ -1,6 +1,6 @@
 use crate::color::SrgbaTuple;
 pub use crate::hyperlink::Hyperlink;
-use crate::{Result, bail, ensure, format_err};
+use crate::{bail, ensure, format_err, Result};
 use base64::Engine;
 use bitflags::bitflags;
 use core::fmt::{Display, Error as FmtError, Formatter, Result as FmtResult};
@@ -50,8 +50,17 @@ pub enum OperatingSystemCommand {
     ResetColors(Vec<u8>),
     RxvtExtension(Vec<String>),
     ConEmuProgress(Progress),
+    PointerShape(PointerShapeCommand),
 
     Unspecified(Vec<Vec<u8>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PointerShapeCommand {
+    Set(String),
+    Push(Vec<String>),
+    Pop,
+    Query(Vec<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
@@ -253,6 +262,27 @@ impl OperatingSystemCommand {
         ))
     }
 
+    fn parse_pointer_shape(osc: &[&[u8]]) -> Result<Self> {
+        ensure!(osc.len() == 2, "wrong param count");
+        let value = str::from_utf8(osc[1])?;
+        let names = |value: &str| {
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                value.split(',').map(str::to_owned).collect()
+            }
+        };
+
+        let command = match value.as_bytes().first() {
+            Some(b'=') => PointerShapeCommand::Set(value[1..].to_owned()),
+            Some(b'>') => PointerShapeCommand::Push(names(&value[1..])),
+            Some(b'<') => PointerShapeCommand::Pop,
+            Some(b'?') => PointerShapeCommand::Query(names(&value[1..])),
+            _ => PointerShapeCommand::Set(value.to_owned()),
+        };
+        Ok(OperatingSystemCommand::PointerShape(command))
+    }
+
     fn internal_parse(osc: &[&[u8]]) -> Result<Self> {
         ensure!(!osc.is_empty(), "no params");
         let p1str = String::from_utf8_lossy(osc[0]);
@@ -314,6 +344,7 @@ impl OperatingSystemCommand {
                 p1str[1..].to_owned(),
             )),
             SetHyperlink => Ok(OperatingSystemCommand::SetHyperlink(Hyperlink::parse(osc)?)),
+            SetPointerShape => Self::parse_pointer_shape(osc),
             ManipulateSelectionData => Self::parse_selection(osc),
             SystemNotification => {
                 if osc.len() >= 3 && osc[1] == b"4" {
@@ -478,6 +509,7 @@ osc_entries!(
     SetHighlightBackgroundColor = "17",
     SetTektronixCursorColor = "18",
     SetHighlightForegroundColor = "19",
+    SetPointerShape = "22",
     SetLogFileName = "46",
     SetFont = "50",
     EmacsShell = "51",
@@ -610,6 +642,15 @@ impl Display for OperatingSystemCommand {
             ConEmuProgress(Progress::SetError(pct)) => write!(f, "9;4;2;{pct}")?,
             ConEmuProgress(Progress::SetIndeterminate) => write!(f, "9;4;3")?,
             ConEmuProgress(Progress::Paused) => write!(f, "9;4;4")?,
+            PointerShape(command) => {
+                write!(f, "22;")?;
+                match command {
+                    PointerShapeCommand::Set(shape) => write!(f, "{shape}")?,
+                    PointerShapeCommand::Push(shapes) => write!(f, ">{}", shapes.join(","))?,
+                    PointerShapeCommand::Pop => write!(f, "<")?,
+                    PointerShapeCommand::Query(shapes) => write!(f, "?{}", shapes.join(","))?,
+                }
+            }
         };
         // Use the longer form ST as neovim doesn't like the BEL version
         write!(f, "\x1b\\")?;
@@ -1419,6 +1460,44 @@ mod test {
         assert_eq!(
             parse(&["112"], "\x1b]112\x1b\\"),
             OperatingSystemCommand::ResetDynamicColor(DynamicColorNumber::TextCursorColor)
+        );
+    }
+
+    #[test]
+    fn pointer_shape() {
+        assert_eq!(
+            parse(&["22", "pointer"], "\x1b]22;pointer\x1b\\"),
+            OperatingSystemCommand::PointerShape(PointerShapeCommand::Set("pointer".into()))
+        );
+        assert_eq!(
+            parse(&["22", "=crosshair"], "\x1b]22;crosshair\x1b\\"),
+            OperatingSystemCommand::PointerShape(PointerShapeCommand::Set("crosshair".into()))
+        );
+        assert_eq!(
+            parse(&["22", ""], "\x1b]22;\x1b\\"),
+            OperatingSystemCommand::PointerShape(PointerShapeCommand::Set(String::new()))
+        );
+        assert_eq!(
+            parse(&["22", ">wait,crosshair"], "\x1b]22;>wait,crosshair\x1b\\"),
+            OperatingSystemCommand::PointerShape(PointerShapeCommand::Push(vec![
+                "wait".into(),
+                "crosshair".into()
+            ]))
+        );
+        assert_eq!(
+            parse(&["22", "<ignored"], "\x1b]22;<\x1b\\"),
+            OperatingSystemCommand::PointerShape(PointerShapeCommand::Pop)
+        );
+        assert_eq!(
+            parse(
+                &["22", "?pointer,crosshair,__current__"],
+                "\x1b]22;?pointer,crosshair,__current__\x1b\\"
+            ),
+            OperatingSystemCommand::PointerShape(PointerShapeCommand::Query(vec![
+                "pointer".into(),
+                "crosshair".into(),
+                "__current__".into()
+            ]))
         );
     }
 

@@ -1095,6 +1095,7 @@ impl<'a> Performer<'a> {
                     }
                 }
             }
+            OperatingSystemCommand::PointerShape(_) => {}
         }
     }
 }
