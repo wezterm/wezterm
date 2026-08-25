@@ -55,6 +55,7 @@ winapi = { workspace=true, features = [
     "handleapi",
     "imm",
     "libloaderapi",
+    "shellapi",
     "shellscalingapi",
     "synchapi",
     "sysinfoapi",
