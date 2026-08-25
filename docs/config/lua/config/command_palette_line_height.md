@@ -16,9 +16,8 @@ If the command palette feels too vertically cramped then you can set
 Conversely, setting `command_palette_line_height = 0.9` will decrease the
 vertical spacing by 10%.
 
-This option is independent of the global
-[line_height](line_height.md) setting, which applies only to terminal cells.
-
 ```lua
 config.command_palette_line_height = 1.2
 ```
+
+See [line_height](line_height.md), which only applies to terminal cells.
