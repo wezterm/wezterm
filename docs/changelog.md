@@ -165,6 +165,8 @@ As features stabilize some brief notes about them will accumulate here.
   same drag gesture twice in a row no longer drops the second motion report.
   Thanks to @scy, @mliszcz and @PHPCraftdream for the reports and diagnosis!
   #2414 #5309
+* macOS: Fix window border when opacity<1 and shadow enabled.
+  Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
   an RGBA image already carries is now reused instead. Thanks to @i-am-logger! #8065
 * `ResetTerminal` (RIS) did not reset the `modifyOtherKeys` state. A program
