@@ -1608,6 +1608,38 @@ unsafe fn wm_kill_focus(
     None
 }
 
+unsafe fn wm_ncactivate(hwnd: HWND, msg: UINT, wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
+    // DWM renders the system backdrop material (win32_system_backdrop:
+    // Acrylic/Mica/Tabbed) in its "inactive" style -- a solid fallback
+    // color -- when the window deactivates.  That state change is driven
+    // by the DefWindowProc handling of WM_NCACTIVATE, so when the user
+    // asked to keep the backdrop while inactive, lie to DWM by always
+    // passing wParam=TRUE (active).  lParam=-1 tells DefWindowProc not
+    // to repaint the non-client area to reflect the (fake) state change.
+    // See https://github.com/wezterm/wezterm/issues/5895
+    let inner = rc_from_hwnd(hwnd)?;
+    let keep = {
+        let inner = inner.borrow();
+        inner.config.win32_keep_system_backdrop_when_inactive
+            && !matches!(
+                inner.config.win32_system_backdrop,
+                SystemBackdrop::Auto | SystemBackdrop::Disable
+            )
+    };
+    if keep && wparam == 0 {
+        // Note: DefWindowProcW may trigger other window messages, so the
+        // borrow above must be dropped before calling it.
+        Some(DefWindowProcW(
+            hwnd,
+            msg,
+            winapi::shared::minwindef::TRUE as WPARAM,
+            -1,
+        ))
+    } else {
+        None
+    }
+}
+
 unsafe fn wm_paint(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
@@ -2933,6 +2965,7 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
         WM_WINDOWPOSCHANGED => wm_windowposchanged(hwnd, msg, wparam, lparam),
         WM_SETFOCUS => wm_set_focus(hwnd, msg, wparam, lparam),
         WM_KILLFOCUS => wm_kill_focus(hwnd, msg, wparam, lparam),
+        WM_NCACTIVATE => wm_ncactivate(hwnd, msg, wparam, lparam),
         WM_DEADCHAR | WM_KEYDOWN | WM_KEYUP | WM_SYSCHAR | WM_CHAR | WM_IME_CHAR | WM_SYSKEYUP
         | WM_SYSKEYDOWN => key(hwnd, msg, wparam, lparam),
         WM_SIZING => {
