@@ -20,4 +20,4 @@ vertical spacing by 10%.
 config.command_palette_line_height = 1.2
 ```
 
-See [line_height](line_height.md), which only applies to terminal cells.
+See also [line_height](line_height.md), which only applies to terminal cells.
