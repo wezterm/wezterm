@@ -214,7 +214,7 @@ impl FontWeight {
     }
 
     pub fn bolder(self) -> Self {
-        Self::from_opentype_weight(self.to_opentype_weight() + 200)
+        Self::from_opentype_weight(self.to_opentype_weight() + 400)
     }
 }
 
