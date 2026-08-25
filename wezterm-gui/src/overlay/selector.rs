@@ -12,6 +12,7 @@ use std::rc::Rc;
 use termwiz::cell::{AttributeChange, CellAttributes};
 use termwiz::color::ColorAttribute;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers, MouseButtons, MouseEvent};
+use termwiz::lineedit::{LineEditBuffer, Movement};
 use termwiz::surface::{Change, Position};
 use termwiz::terminal::Terminal;
 use termwiz_funcs::truncate_right;
@@ -35,6 +36,26 @@ pub fn matcher_pattern(s: &str) -> Pattern {
         nucleo_matcher::pattern::CaseMatching::Ignore,
         nucleo_matcher::pattern::Normalization::Smart,
     )
+}
+
+/// Edits a cursor-less filter box via `LineEditBuffer`: Ctrl-w kills the
+/// trailing word, Ctrl-u clears, plain/shift keys insert; any other key returns
+/// `None`. Shared by all four filter overlays; lowercasing folds the Ctrl-letter
+/// case difference between terminal overlays and GUI modals.
+pub fn apply_filter_edit(c: char, mods: Modifiers, filter_term: &str) -> Option<String> {
+    let mut buffer = LineEditBuffer::new(filter_term, filter_term.len());
+    if mods.contains(Modifiers::CTRL) {
+        match c.to_ascii_lowercase() {
+            'w' => buffer.kill_text(Movement::BackwardWord(1), Movement::BackwardWord(1)),
+            'u' => buffer.clear(),
+            _ => return None,
+        }
+    } else if mods == Modifiers::NONE || mods == Modifiers::SHIFT {
+        buffer.insert_char(c);
+    } else {
+        return None;
+    }
+    Some(buffer.get_line().to_string())
 }
 
 struct SelectorState {
@@ -313,10 +334,12 @@ impl SelectorState {
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
-                    ..
+                    modifiers,
                 }) if self.filtering => {
-                    self.filter_term.push(c);
-                    self.update_filter();
+                    if let Some(filter_term) = apply_filter_edit(c, modifiers, &self.filter_term) {
+                        self.filter_term = filter_term;
+                        self.update_filter();
+                    }
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::UpArrow,
@@ -445,4 +468,57 @@ pub fn selector(
     state.update_filter();
     state.render(&mut term)?;
     state.run_loop(&mut term)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_filter_edit;
+    use termwiz::input::Modifiers;
+
+    #[test]
+    fn insert_unmodified_and_shifted() {
+        assert_eq!(
+            apply_filter_edit('a', Modifiers::NONE, "foo").as_deref(),
+            Some("fooa")
+        );
+        assert_eq!(
+            apply_filter_edit('A', Modifiers::SHIFT, "foo").as_deref(),
+            Some("fooA")
+        );
+    }
+
+    #[test]
+    fn ctrl_w_kills_trailing_word() {
+        assert_eq!(
+            apply_filter_edit('W', Modifiers::CTRL, "foo bar").as_deref(),
+            Some("foo ")
+        );
+    }
+
+    #[test]
+    fn ctrl_u_kills_to_start() {
+        assert_eq!(
+            apply_filter_edit('U', Modifiers::CTRL, "hello").as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn ctrl_combos_accept_lowercase_from_gui_modals() {
+        assert_eq!(
+            apply_filter_edit('w', Modifiers::CTRL, "foo bar").as_deref(),
+            Some("foo ")
+        );
+        assert_eq!(
+            apply_filter_edit('u', Modifiers::CTRL, "hello").as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn non_editing_keys_are_ignored() {
+        // Only Ctrl-w and Ctrl-u edit the filter; other Ctrl-combos are ignored.
+        assert_eq!(apply_filter_edit('A', Modifiers::CTRL, "foo"), None);
+        assert_eq!(apply_filter_edit('H', Modifiers::CTRL, "foo"), None);
+    }
 }

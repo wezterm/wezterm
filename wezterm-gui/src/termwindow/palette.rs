@@ -1,5 +1,5 @@
 use crate::commands::{CommandDef, ExpandedCommand};
-use crate::overlay::selector::{matcher_pattern, matcher_score};
+use crate::overlay::selector::{apply_filter_edit, matcher_pattern, matcher_score};
 use crate::termwindow::box_model::*;
 use crate::termwindow::modal::Modal;
 use crate::termwindow::render::corners::{
@@ -601,22 +601,20 @@ impl Modal for CommandPalette {
             (KeyCode::DownArrow, KeyModifiers::NONE) | (KeyCode::Char('n'), KeyModifiers::CTRL) => {
                 self.move_down();
             }
-            (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
-                // Type to add to the selection
-                let mut selection = self.selection.borrow_mut();
-                selection.push(c);
-                self.updated_input();
-            }
             (KeyCode::Backspace, KeyModifiers::NONE) => {
                 // Backspace to edit the selection
                 let mut selection = self.selection.borrow_mut();
                 selection.pop();
                 self.updated_input();
             }
-            (KeyCode::Char('u'), KeyModifiers::CTRL) => {
-                // CTRL-u to clear the selection
-                let mut selection = self.selection.borrow_mut();
-                selection.clear();
+            // `None` = not a filter-edit key; report it unhandled. Keep this
+            // catch-all last among the `Char` arms.
+            (KeyCode::Char(c), mods) => {
+                let edited = apply_filter_edit(c, mods, self.selection.borrow().as_str());
+                match edited {
+                    Some(new) => *self.selection.borrow_mut() = new,
+                    None => return Ok(false),
+                }
                 self.updated_input();
             }
             (KeyCode::Enter, KeyModifiers::NONE) => {
