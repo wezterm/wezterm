@@ -839,8 +839,8 @@ impl super::TermWindow {
             CursorIcon::Pointer
         } else if outside_window {
             CursorIcon::Default
-        } else if let Some(shape) = pane.get_pointer_shape() {
-            shape.parse().unwrap_or_default()
+        } else if let Some(shape) = pane.get_requested_pointer_shape() {
+            shape.as_str().parse().unwrap_or_default()
         } else if pane.is_mouse_grabbed() {
             CursorIcon::Default
         } else {

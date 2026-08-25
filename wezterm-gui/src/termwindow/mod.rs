@@ -1236,7 +1236,7 @@ impl TermWindow {
                         if let Some(pane) = self.get_active_pane_or_overlay() {
                             if pane.pane_id() == pane_id {
                                 window.set_cursor(Some(
-                                    pane.get_pointer_shape()
+                                    pane.get_requested_pointer_shape()
                                         .map(MouseCursor::Named)
                                         .unwrap_or(MouseCursor::Text),
                                 ));

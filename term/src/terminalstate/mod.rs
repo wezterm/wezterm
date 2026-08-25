@@ -42,42 +42,6 @@ lazy_static::lazy_static! {
     };
 }
 
-fn pointer_shape(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "alias" => "alias",
-        "cell" => "cell",
-        "copy" => "copy",
-        "crosshair" => "crosshair",
-        "default" => "default",
-        "e-resize" => "e-resize",
-        "ew-resize" => "ew-resize",
-        "grab" => "grab",
-        "grabbing" => "grabbing",
-        "help" => "help",
-        "move" => "move",
-        "n-resize" => "n-resize",
-        "ne-resize" => "ne-resize",
-        "nesw-resize" => "nesw-resize",
-        "no-drop" => "no-drop",
-        "not-allowed" => "not-allowed",
-        "ns-resize" => "ns-resize",
-        "nw-resize" => "nw-resize",
-        "nwse-resize" => "nwse-resize",
-        "pointer" => "pointer",
-        "progress" => "progress",
-        "s-resize" => "s-resize",
-        "se-resize" => "se-resize",
-        "sw-resize" => "sw-resize",
-        "text" => "text",
-        "vertical-text" => "vertical-text",
-        "w-resize" => "w-resize",
-        "wait" => "wait",
-        "zoom-in" => "zoom-in",
-        "zoom-out" => "zoom-out",
-        _ => return None,
-    })
-}
-
 pub(crate) struct TabStop {
     tabs: Vec<bool>,
     tab_width: usize,
@@ -687,7 +651,7 @@ impl TerminalState {
         self.progress.clone()
     }
 
-    pub fn get_pointer_shape(&self) -> Option<&'static str> {
+    pub fn get_requested_pointer_shape(&self) -> Option<PointerShape> {
         self.screen.pointer_shape_stack.last().copied().flatten()
     }
 

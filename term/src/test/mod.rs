@@ -192,30 +192,45 @@ impl TestTerm {
 #[test]
 fn pointer_shape_stack() {
     let mut term = TestTerm::new(2, 2, 0);
-    assert_eq!(term.term.get_pointer_shape(), None);
+    assert_eq!(term.term.get_requested_pointer_shape(), None);
 
     term.print("\x1b]22;pointer\x1b\\");
     term.print("\x1b]22;>wait,crosshair\x1b\\");
-    assert_eq!(term.term.get_pointer_shape(), Some("crosshair"));
+    assert_eq!(
+        term.term.get_requested_pointer_shape(),
+        Some(PointerShape::Crosshair)
+    );
 
     term.print("\x1b]22;<\x1b\\");
     term.print("\x1b]22;=text\x1b\\");
-    assert_eq!(term.term.get_pointer_shape(), Some("text"));
+    assert_eq!(
+        term.term.get_requested_pointer_shape(),
+        Some(PointerShape::Text)
+    );
     term.print("\x1b]22;<\x1b\\");
-    assert_eq!(term.term.get_pointer_shape(), Some("pointer"));
+    assert_eq!(
+        term.term.get_requested_pointer_shape(),
+        Some(PointerShape::Pointer)
+    );
 
     term.set_mode("?1049", true);
-    assert_eq!(term.term.get_pointer_shape(), None);
+    assert_eq!(term.term.get_requested_pointer_shape(), None);
     term.print("\x1b]22;wait\x1b\\");
     term.set_mode("?1049", false);
-    assert_eq!(term.term.get_pointer_shape(), Some("pointer"));
+    assert_eq!(
+        term.term.get_requested_pointer_shape(),
+        Some(PointerShape::Pointer)
+    );
     term.set_mode("?1049", true);
-    assert_eq!(term.term.get_pointer_shape(), Some("wait"));
+    assert_eq!(
+        term.term.get_requested_pointer_shape(),
+        Some(PointerShape::Wait)
+    );
 
     term.soft_reset();
-    assert_eq!(term.term.get_pointer_shape(), None);
+    assert_eq!(term.term.get_requested_pointer_shape(), None);
     term.set_mode("?1049", false);
-    assert_eq!(term.term.get_pointer_shape(), None);
+    assert_eq!(term.term.get_requested_pointer_shape(), None);
 }
 
 impl Deref for TestTerm {

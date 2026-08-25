@@ -1,6 +1,6 @@
 use crate::terminal::{Alert, Progress};
 use crate::terminalstate::{
-    default_color_map, pointer_shape, CharSet, MouseEncoding, TabStop, UnicodeVersionStackEntry,
+    default_color_map, CharSet, MouseEncoding, TabStop, UnicodeVersionStackEntry,
 };
 use crate::{ClipboardSelection, Position, TerminalState, VisibleRowIndex, DCS, ST};
 use finl_unicode::grapheme_clusters::Graphemes;
@@ -22,7 +22,7 @@ use wezterm_escape_parser::csi::{
 };
 use wezterm_escape_parser::osc::{
     ChangeColorPair, ColorOrQuery, FinalTermSemanticPrompt, ITermProprietary,
-    ITermUnicodeVersionOp, PointerShapeCommand, Selection,
+    ITermUnicodeVersionOp, PointerShapeCommand, PointerShapeName, PointerShapeQuery, Selection,
 };
 use wezterm_escape_parser::{
     Action, ControlCode, DeviceControlMode, Esc, EscCode, OperatingSystemCommand, CSI,
@@ -1098,10 +1098,10 @@ impl<'a> Performer<'a> {
             }
             OperatingSystemCommand::PointerShape(command) => match command {
                 PointerShapeCommand::Set(shape) => {
-                    let shape = if shape.is_empty() {
-                        Some(None)
-                    } else {
-                        pointer_shape(&shape).map(Some)
+                    let shape = match shape {
+                        PointerShapeName::Default => Some(None),
+                        PointerShapeName::Shape(shape) => Some(Some(shape)),
+                        PointerShapeName::Unknown(_) => None,
                     };
                     if let Some(shape) = shape {
                         if let Some(current) = self.screen.pointer_shape_stack.last_mut() {
@@ -1115,10 +1115,10 @@ impl<'a> Performer<'a> {
                 PointerShapeCommand::Push(shapes) => {
                     let mut changed = false;
                     for shape in shapes {
-                        let shape = if shape.is_empty() {
-                            Some(None)
-                        } else {
-                            pointer_shape(&shape).map(Some)
+                        let shape = match shape {
+                            PointerShapeName::Default => Some(None),
+                            PointerShapeName::Shape(shape) => Some(Some(shape)),
+                            PointerShapeName::Unknown(_) => None,
                         };
                         if let Some(shape) = shape {
                             if self.screen.pointer_shape_stack.len() == 16 {
@@ -1140,26 +1140,19 @@ impl<'a> Performer<'a> {
                 PointerShapeCommand::Query(shapes) => {
                     let response = shapes
                         .iter()
-                        .map(|shape| match shape.as_str() {
-                            "__current__" => self.get_pointer_shape().unwrap_or("0"),
-                            "__default__" => "text",
-                            "__grabbed__" => "default",
-                            shape => {
-                                if pointer_shape(shape).is_some() {
-                                    "1"
-                                } else {
-                                    "0"
-                                }
-                            }
+                        .map(|shape| match shape {
+                            PointerShapeQuery::Current => self
+                                .get_requested_pointer_shape()
+                                .map(|shape| shape.as_str())
+                                .unwrap_or("0"),
+                            PointerShapeQuery::Default => "text",
+                            PointerShapeQuery::Grabbed => "default",
+                            PointerShapeQuery::Shape(_) => "1",
+                            PointerShapeQuery::Unknown(_) => "0",
                         })
                         .collect::<Vec<_>>()
                         .join(",");
-                    write!(
-                        self.writer,
-                        "{}",
-                        OperatingSystemCommand::PointerShape(PointerShapeCommand::Set(response))
-                    )
-                    .ok();
+                    write!(self.writer, "\x1b]22;{response}\x1b\\").ok();
                     self.writer.flush().ok();
                 }
             },

@@ -1,6 +1,6 @@
 use crate::color::SrgbaTuple;
 pub use crate::hyperlink::Hyperlink;
-use crate::{bail, ensure, format_err, Result};
+use crate::{Result, bail, ensure, format_err};
 use base64::Engine;
 use bitflags::bitflags;
 use core::fmt::{Display, Error as FmtError, Formatter, Result as FmtResult};
@@ -11,6 +11,7 @@ use num_traits::FromPrimitive;
 use ordered_float::NotNan;
 #[cfg(feature = "std")]
 use std::sync::LazyLock;
+pub use wezterm_input_types::PointerShape;
 
 use crate::allocate::*;
 
@@ -55,12 +56,90 @@ pub enum OperatingSystemCommand {
     Unspecified(Vec<Vec<u8>>),
 }
 
+/// An OSC 22 operation from the
+/// [Kitty pointer shapes protocol](https://sw.kovidgoyal.net/kitty/pointer-shapes/).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PointerShapeCommand {
-    Set(String),
-    Push(Vec<String>),
+    Set(PointerShapeName),
+    Push(Vec<PointerShapeName>),
     Pop,
-    Query(Vec<String>),
+    Query(Vec<PointerShapeQuery>),
+}
+
+/// A pointer shape accepted by OSC 22 set and push operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PointerShapeName {
+    Default,
+    Shape(PointerShape),
+    Unknown(String),
+}
+
+impl From<&str> for PointerShapeName {
+    fn from(name: &str) -> Self {
+        if name.is_empty() {
+            Self::Default
+        } else {
+            name.parse()
+                .map(Self::Shape)
+                .unwrap_or_else(|()| Self::Unknown(name.to_owned()))
+        }
+    }
+}
+
+impl Display for PointerShapeName {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        match self {
+            Self::Default => Ok(()),
+            Self::Shape(shape) => shape.fmt(f),
+            Self::Unknown(name) => f.write_str(name),
+        }
+    }
+}
+
+/// A pointer shape or special value accepted by an OSC 22 query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PointerShapeQuery {
+    Current,
+    Default,
+    Grabbed,
+    Shape(PointerShape),
+    Unknown(String),
+}
+
+impl From<&str> for PointerShapeQuery {
+    fn from(name: &str) -> Self {
+        match name {
+            "__current__" => Self::Current,
+            "__default__" => Self::Default,
+            "__grabbed__" => Self::Grabbed,
+            name => name
+                .parse()
+                .map(Self::Shape)
+                .unwrap_or_else(|()| Self::Unknown(name.to_owned())),
+        }
+    }
+}
+
+impl Display for PointerShapeQuery {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        match self {
+            Self::Current => f.write_str("__current__"),
+            Self::Default => f.write_str("__default__"),
+            Self::Grabbed => f.write_str("__grabbed__"),
+            Self::Shape(shape) => shape.fmt(f),
+            Self::Unknown(name) => f.write_str(name),
+        }
+    }
+}
+
+fn write_comma_separated<T: Display>(f: &mut Formatter, values: &[T]) -> FmtResult {
+    for (idx, value) in values.iter().enumerate() {
+        if idx > 0 {
+            f.write_str(",")?;
+        }
+        value.fmt(f)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
@@ -265,20 +344,21 @@ impl OperatingSystemCommand {
     fn parse_pointer_shape(osc: &[&[u8]]) -> Result<Self> {
         ensure!(osc.len() == 2, "wrong param count");
         let value = str::from_utf8(osc[1])?;
-        let names = |value: &str| {
-            if value.is_empty() {
-                Vec::new()
-            } else {
-                value.split(',').map(str::to_owned).collect()
-            }
-        };
 
         let command = match value.as_bytes().first() {
-            Some(b'=') => PointerShapeCommand::Set(value[1..].to_owned()),
-            Some(b'>') => PointerShapeCommand::Push(names(&value[1..])),
+            Some(b'=') => PointerShapeCommand::Set(value[1..].into()),
+            Some(b'>') => PointerShapeCommand::Push(if value.len() == 1 {
+                vec![]
+            } else {
+                value[1..].split(',').map(PointerShapeName::from).collect()
+            }),
             Some(b'<') => PointerShapeCommand::Pop,
-            Some(b'?') => PointerShapeCommand::Query(names(&value[1..])),
-            _ => PointerShapeCommand::Set(value.to_owned()),
+            Some(b'?') => PointerShapeCommand::Query(if value.len() == 1 {
+                vec![]
+            } else {
+                value[1..].split(',').map(PointerShapeQuery::from).collect()
+            }),
+            _ => PointerShapeCommand::Set(value.into()),
         };
         Ok(OperatingSystemCommand::PointerShape(command))
     }
@@ -645,10 +725,16 @@ impl Display for OperatingSystemCommand {
             PointerShape(command) => {
                 write!(f, "22;")?;
                 match command {
-                    PointerShapeCommand::Set(shape) => write!(f, "{shape}")?,
-                    PointerShapeCommand::Push(shapes) => write!(f, ">{}", shapes.join(","))?,
+                    PointerShapeCommand::Set(shape) => shape.fmt(f)?,
+                    PointerShapeCommand::Push(shapes) => {
+                        f.write_str(">")?;
+                        write_comma_separated(f, shapes)?;
+                    }
                     PointerShapeCommand::Pop => write!(f, "<")?,
-                    PointerShapeCommand::Query(shapes) => write!(f, "?{}", shapes.join(","))?,
+                    PointerShapeCommand::Query(shapes) => {
+                        f.write_str("?")?;
+                        write_comma_separated(f, shapes)?;
+                    }
                 }
             }
         };
@@ -1467,21 +1553,27 @@ mod test {
     fn pointer_shape() {
         assert_eq!(
             parse(&["22", "pointer"], "\x1b]22;pointer\x1b\\"),
-            OperatingSystemCommand::PointerShape(PointerShapeCommand::Set("pointer".into()))
+            OperatingSystemCommand::PointerShape(PointerShapeCommand::Set(
+                PointerShapeName::Shape(PointerShape::Pointer)
+            ))
         );
         assert_eq!(
             parse(&["22", "=crosshair"], "\x1b]22;crosshair\x1b\\"),
-            OperatingSystemCommand::PointerShape(PointerShapeCommand::Set("crosshair".into()))
+            OperatingSystemCommand::PointerShape(PointerShapeCommand::Set(
+                PointerShapeName::Shape(PointerShape::Crosshair)
+            ))
         );
         assert_eq!(
             parse(&["22", ""], "\x1b]22;\x1b\\"),
-            OperatingSystemCommand::PointerShape(PointerShapeCommand::Set(String::new()))
+            OperatingSystemCommand::PointerShape(PointerShapeCommand::Set(
+                PointerShapeName::Default
+            ))
         );
         assert_eq!(
             parse(&["22", ">wait,crosshair"], "\x1b]22;>wait,crosshair\x1b\\"),
             OperatingSystemCommand::PointerShape(PointerShapeCommand::Push(vec![
-                "wait".into(),
-                "crosshair".into()
+                PointerShapeName::Shape(PointerShape::Wait),
+                PointerShapeName::Shape(PointerShape::Crosshair)
             ]))
         );
         assert_eq!(
@@ -1494,9 +1586,9 @@ mod test {
                 "\x1b]22;?pointer,crosshair,__current__\x1b\\"
             ),
             OperatingSystemCommand::PointerShape(PointerShapeCommand::Query(vec![
-                "pointer".into(),
-                "crosshair".into(),
-                "__current__".into()
+                PointerShapeQuery::Shape(PointerShape::Pointer),
+                PointerShapeQuery::Shape(PointerShape::Crosshair),
+                PointerShapeQuery::Current
             ]))
         );
     }

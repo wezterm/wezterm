@@ -1240,6 +1240,75 @@ impl ToString for PhysKeyCode {
     }
 }
 
+macro_rules! pointer_shapes {
+    ($($variant:ident => $name:literal),+ $(,)?) => {
+        /// A pointer shape supported by the
+        /// [Kitty OSC 22 protocol](https://sw.kovidgoyal.net/kitty/pointer-shapes/).
+        #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+        pub enum PointerShape {
+            $($variant),+
+        }
+
+        impl PointerShape {
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name),+
+                }
+            }
+        }
+
+        impl core::fmt::Display for PointerShape {
+            fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+        impl core::str::FromStr for PointerShape {
+            type Err = ();
+
+            fn from_str(name: &str) -> core::result::Result<Self, Self::Err> {
+                match name {
+                    $($name => Ok(Self::$variant)),+,
+                    _ => Err(()),
+                }
+            }
+        }
+    };
+}
+
+pointer_shapes! {
+    Alias => "alias",
+    Cell => "cell",
+    Copy => "copy",
+    Crosshair => "crosshair",
+    Default => "default",
+    EResize => "e-resize",
+    EwResize => "ew-resize",
+    Grab => "grab",
+    Grabbing => "grabbing",
+    Help => "help",
+    Move => "move",
+    NResize => "n-resize",
+    NeResize => "ne-resize",
+    NeswResize => "nesw-resize",
+    NoDrop => "no-drop",
+    NotAllowed => "not-allowed",
+    NsResize => "ns-resize",
+    NwResize => "nw-resize",
+    NwseResize => "nwse-resize",
+    Pointer => "pointer",
+    Progress => "progress",
+    SResize => "s-resize",
+    SeResize => "se-resize",
+    SwResize => "sw-resize",
+    Text => "text",
+    VerticalText => "vertical-text",
+    WResize => "w-resize",
+    Wait => "wait",
+    ZoomIn => "zoom-in",
+    ZoomOut => "zoom-out",
+}
+
 bitflags! {
     #[derive(Default)]
     pub struct MouseButtons: u8 {

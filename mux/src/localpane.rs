@@ -31,8 +31,9 @@ use url::Url;
 use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Alert, AlertHandler, Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, Progress,
-    SemanticZone, StableRowIndex, Terminal, TerminalConfiguration, TerminalSize,
+    Alert, AlertHandler, Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent,
+    PointerShape, Progress, SemanticZone, StableRowIndex, Terminal, TerminalConfiguration,
+    TerminalSize,
 };
 
 const PROC_INFO_CACHE_TTL: Duration = Duration::from_millis(300);
@@ -466,8 +467,8 @@ impl Pane for LocalPane {
         self.terminal.lock().get_progress()
     }
 
-    fn get_pointer_shape(&self) -> Option<&'static str> {
-        self.terminal.lock().get_pointer_shape()
+    fn get_requested_pointer_shape(&self) -> Option<PointerShape> {
+        self.terminal.lock().get_requested_pointer_shape()
     }
 
     fn palette(&self) -> ColorPalette {
