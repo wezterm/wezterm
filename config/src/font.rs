@@ -213,6 +213,8 @@ impl FontWeight {
         Self::from_opentype_weight(self.to_opentype_weight().saturating_sub(200))
     }
 
+    /// increase (+400) for the weight
+    /// +200 was too subtle to distinguish from normal; see issue #8049
     pub fn bolder(self) -> Self {
         Self::from_opentype_weight(self.to_opentype_weight() + 400)
     }
