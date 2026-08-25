@@ -214,7 +214,8 @@ impl FontWeight {
     }
 
     pub fn bolder(self) -> Self {
-        // +200 was too subtle to distinguish from normal; see issue #8049
+        // +200 used initially was too subtle to distinguish any difference from e.g. normal & bold
+        // See issue #8049 for examples.
         Self::from_opentype_weight(self.to_opentype_weight() + 400)
     }
 }
