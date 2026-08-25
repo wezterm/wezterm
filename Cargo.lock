@@ -4422,7 +4422,7 @@ dependencies = [
  "shared_library",
  "shell-words",
  "smol",
- "winapi",
+ "windows-sys 0.61.2",
  "winreg",
 ]
 
