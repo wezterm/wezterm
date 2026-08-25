@@ -75,6 +75,10 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* [command_palette_line_height](config/lua/config/command_palette_line_height.md)
+  option to scale the vertical spacing of rows in the command palette,
+  independently of the global [line_height](config/lua/config/line_height.md)
+  setting.
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
   and deserialization of JSON, TOML and YAML. Thanks to @expnn! #4969
 * `wezterm ssh` now supports agent forwarding. Thanks to @Riatre! #5345
