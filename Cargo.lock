@@ -983,7 +983,7 @@ dependencies = [
  "wezterm-input-types",
  "wezterm-ssh",
  "wezterm-term",
- "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
