@@ -6,6 +6,8 @@ use crate::{
     Action, CSI, DeviceControlMode, EnterDeviceControlMode, Esc, OperatingSystemCommand,
     ShortDeviceControl,
 };
+#[cfg(not(feature = "std"))]
+use alloc::vec;
 #[cfg(feature = "tmux_cc")]
 use core::borrow::BorrowMut;
 use core::cell::RefCell;
