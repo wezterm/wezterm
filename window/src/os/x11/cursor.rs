@@ -1,6 +1,6 @@
 use crate::os::x11::xcb_util::*;
 use crate::x11::XConnection;
-use crate::MouseCursor;
+use crate::CursorIcon;
 use anyhow::{ensure, Context};
 use config::ConfigHandle;
 use std::collections::{HashMap, HashSet};
@@ -35,8 +35,8 @@ impl Drop for XcbCursor {
 }
 
 pub struct CursorInfo {
-    cursors: HashMap<Option<MouseCursor>, XcbCursor>,
-    cursor: Option<MouseCursor>,
+    cursors: HashMap<Option<CursorIcon>, XcbCursor>,
+    cursor: Option<CursorIcon>,
     conn: Weak<XConnection>,
     size: Option<u32>,
     theme: Option<String>,
@@ -195,7 +195,7 @@ impl CursorInfo {
     pub fn set_cursor(
         &mut self,
         window_id: xcb::x::Window,
-        cursor: Option<MouseCursor>,
+        cursor: Option<CursorIcon>,
     ) -> anyhow::Result<()> {
         if cursor == self.cursor {
             return Ok(());
@@ -287,7 +287,7 @@ impl CursorInfo {
     fn load_themed(
         &mut self,
         conn: &Rc<XConnection>,
-        cursor: Option<MouseCursor>,
+        cursor: Option<CursorIcon>,
     ) -> Option<Cursor> {
         if cursor.is_none() {
             match self.create_blank(conn) {
@@ -303,7 +303,7 @@ impl CursorInfo {
                 }
                 Err(err) => {
                     log::error!("Failed to create blank cursor: {:#}", err);
-                    return self.load_themed(conn, Some(MouseCursor::Arrow));
+                    return self.load_themed(conn, Some(CursorIcon::Default));
                 }
             }
         }
@@ -311,13 +311,7 @@ impl CursorInfo {
         let theme = self.theme.as_deref().unwrap_or("default");
         self.pict_format_id?;
 
-        let names: &[&str] = match cursor.unwrap_or(MouseCursor::Arrow) {
-            MouseCursor::Arrow => &["top_left_arrow", "left_ptr"],
-            MouseCursor::Hand => &["hand2"],
-            MouseCursor::Text => &["xterm"],
-            MouseCursor::SizeUpDown => &["sb_v_double_arrow"],
-            MouseCursor::SizeLeftRight => &["sb_h_double_arrow"],
-        };
+        let icon = cursor.unwrap_or_default();
 
         let mut theme_list = vec![theme.to_string()];
         let mut visited = HashSet::new();
@@ -331,6 +325,8 @@ impl CursorInfo {
             visited.insert(theme.clone());
 
             for dir in &self.icon_path {
+                // Try the W3C name first, followed by common X11 aliases.
+                let names = std::iter::once(icon.name()).chain(icon.alt_names().iter().copied());
                 for name in names {
                     let candidate = dir.join(&theme).join("cursors").join(name);
                     log::trace!(
@@ -367,15 +363,21 @@ impl CursorInfo {
         None
     }
 
-    fn load_basic(&mut self, conn: &Rc<XConnection>, cursor: Option<MouseCursor>) -> Cursor {
-        let id_no = match cursor.unwrap_or(MouseCursor::Arrow) {
+    fn load_basic(&mut self, conn: &Rc<XConnection>, cursor: Option<CursorIcon>) -> Cursor {
+        let id_no = match cursor.unwrap_or_default() {
             // `/usr/include/X11/cursorfont.h`
             // <https://docs.rs/xcb-util/0.3.0/src/xcb_util/cursor.rs.html>
-            MouseCursor::Arrow => TOP_LEFT_ARROW,
-            MouseCursor::Hand => HAND1,
-            MouseCursor::Text => XTERM,
-            MouseCursor::SizeUpDown => SB_V_DOUBLE_ARROW,
-            MouseCursor::SizeLeftRight => SB_H_DOUBLE_ARROW,
+            CursorIcon::Pointer | CursorIcon::Grab | CursorIcon::Grabbing => HAND1,
+            CursorIcon::Text | CursorIcon::VerticalText => XTERM,
+            CursorIcon::NResize
+            | CursorIcon::SResize
+            | CursorIcon::NsResize
+            | CursorIcon::RowResize => SB_V_DOUBLE_ARROW,
+            CursorIcon::EResize
+            | CursorIcon::WResize
+            | CursorIcon::EwResize
+            | CursorIcon::ColResize => SB_H_DOUBLE_ARROW,
+            _ => TOP_LEFT_ARROW,
         };
         log::trace!("loading X11 basic cursor {} for {:?}", id_no, cursor);
 

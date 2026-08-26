@@ -16,6 +16,7 @@ pub mod os;
 pub mod screen;
 mod spawn;
 
+pub use cursor_icon::CursorIcon;
 pub use raw_window_handle;
 
 #[cfg(target_os = "macos")]
@@ -63,15 +64,6 @@ pub type RectF = euclid::Rect<f32, PixelUnit>;
 pub type Size = euclid::Size2D<isize, PixelUnit>;
 pub type SizeF = euclid::Size2D<f32, PixelUnit>;
 pub type ScreenRect = euclid::Rect<isize, ScreenPixelUnit>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MouseCursor {
-    Arrow,
-    Hand,
-    Text,
-    SizeUpDown,
-    SizeLeftRight,
-}
 
 /// Represents the preferred appearance of the windowing
 /// environment.
@@ -271,7 +263,7 @@ pub trait WindowOps {
     fn close(&self);
 
     /// Change the cursor
-    fn set_cursor(&self, cursor: Option<MouseCursor>);
+    fn set_cursor(&self, cursor: Option<CursorIcon>);
 
     /// Invalidate the window so that the entire client area will
     /// be repainted shortly

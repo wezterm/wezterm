@@ -25,6 +25,7 @@ async-trait.workspace = true
 anyhow.workspace = true
 bytes.workspace = true
 config.workspace = true
+cursor-icon.workspace = true
 downcast-rs.workspace = true
 thiserror.workspace = true
 bitflags.workspace = true
