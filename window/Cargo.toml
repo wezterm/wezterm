@@ -48,7 +48,7 @@ wezterm-font.workspace = true
 wezterm-input-types.workspace = true
 
 [target."cfg(windows)".dependencies]
-clipboard-win.workspace = true
+clipboard-win = { workspace = true, features = ["std"] }
 shared_library.workspace = true
 winapi = { workspace=true, features = [
     "dwmapi",
