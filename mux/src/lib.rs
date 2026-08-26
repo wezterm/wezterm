@@ -95,6 +95,10 @@ pub enum MuxNotification {
         old_workspace: String,
         new_workspace: String,
     },
+    ActiveTabChanged {
+        window_id: WindowId,
+        tab_id: TabId,
+    },
 }
 
 static LAST_SUBSCRIBER_ID: AtomicUsize = AtomicUsize::new(0);
