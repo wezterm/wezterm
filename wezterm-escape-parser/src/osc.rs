@@ -1,3 +1,4 @@
+use crate::allocate::*;
 use crate::color::SrgbaTuple;
 pub use crate::hyperlink::Hyperlink;
 use crate::{Result, bail, ensure, format_err};
@@ -6,14 +7,12 @@ use bitflags::bitflags;
 use core::fmt::{Display, Error as FmtError, Formatter, Result as FmtResult};
 use core::str;
 use core::str::FromStr;
+use cursor_icon::CursorIcon;
 use num_derive::*;
 use num_traits::FromPrimitive;
 use ordered_float::NotNan;
 #[cfg(feature = "std")]
 use std::sync::LazyLock;
-pub use wezterm_input_types::PointerShape;
-
-use crate::allocate::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColorOrQuery {
@@ -70,7 +69,7 @@ pub enum PointerShapeCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PointerShapeName {
     Default,
-    Shape(PointerShape),
+    Shape(CursorIcon),
     Unknown(String),
 }
 
@@ -78,10 +77,10 @@ impl From<&str> for PointerShapeName {
     fn from(name: &str) -> Self {
         if name.is_empty() {
             Self::Default
+        } else if let Some(shape) = parse_pointer_shape(name) {
+            Self::Shape(shape)
         } else {
-            name.parse()
-                .map(Self::Shape)
-                .unwrap_or_else(|()| Self::Unknown(name.to_owned()))
+            Self::Unknown(name.to_owned())
         }
     }
 }
@@ -102,7 +101,7 @@ pub enum PointerShapeQuery {
     Current,
     Default,
     Grabbed,
-    Shape(PointerShape),
+    Shape(CursorIcon),
     Unknown(String),
 }
 
@@ -112,11 +111,47 @@ impl From<&str> for PointerShapeQuery {
             "__current__" => Self::Current,
             "__default__" => Self::Default,
             "__grabbed__" => Self::Grabbed,
-            name => name
-                .parse()
-                .map(Self::Shape)
-                .unwrap_or_else(|()| Self::Unknown(name.to_owned())),
+            name => match parse_pointer_shape(name) {
+                Some(shape) => Self::Shape(shape),
+                None => Self::Unknown(name.to_owned()),
+            },
         }
+    }
+}
+
+fn parse_pointer_shape(name: &str) -> Option<CursorIcon> {
+    match name.parse().ok()? {
+        shape @ (CursorIcon::Alias
+        | CursorIcon::Cell
+        | CursorIcon::Copy
+        | CursorIcon::Crosshair
+        | CursorIcon::Default
+        | CursorIcon::EResize
+        | CursorIcon::EwResize
+        | CursorIcon::Grab
+        | CursorIcon::Grabbing
+        | CursorIcon::Help
+        | CursorIcon::Move
+        | CursorIcon::NResize
+        | CursorIcon::NeResize
+        | CursorIcon::NeswResize
+        | CursorIcon::NoDrop
+        | CursorIcon::NotAllowed
+        | CursorIcon::NsResize
+        | CursorIcon::NwResize
+        | CursorIcon::NwseResize
+        | CursorIcon::Pointer
+        | CursorIcon::Progress
+        | CursorIcon::SResize
+        | CursorIcon::SeResize
+        | CursorIcon::SwResize
+        | CursorIcon::Text
+        | CursorIcon::VerticalText
+        | CursorIcon::WResize
+        | CursorIcon::Wait
+        | CursorIcon::ZoomIn
+        | CursorIcon::ZoomOut) => Some(shape),
+        _ => None,
     }
 }
 
@@ -1554,13 +1589,13 @@ mod test {
         assert_eq!(
             parse(&["22", "pointer"], "\x1b]22;pointer\x1b\\"),
             OperatingSystemCommand::PointerShape(PointerShapeCommand::Set(
-                PointerShapeName::Shape(PointerShape::Pointer)
+                PointerShapeName::Shape(CursorIcon::Pointer)
             ))
         );
         assert_eq!(
             parse(&["22", "=crosshair"], "\x1b]22;crosshair\x1b\\"),
             OperatingSystemCommand::PointerShape(PointerShapeCommand::Set(
-                PointerShapeName::Shape(PointerShape::Crosshair)
+                PointerShapeName::Shape(CursorIcon::Crosshair)
             ))
         );
         assert_eq!(
@@ -1572,8 +1607,8 @@ mod test {
         assert_eq!(
             parse(&["22", ">wait,crosshair"], "\x1b]22;>wait,crosshair\x1b\\"),
             OperatingSystemCommand::PointerShape(PointerShapeCommand::Push(vec![
-                PointerShapeName::Shape(PointerShape::Wait),
-                PointerShapeName::Shape(PointerShape::Crosshair)
+                PointerShapeName::Shape(CursorIcon::Wait),
+                PointerShapeName::Shape(CursorIcon::Crosshair)
             ]))
         );
         assert_eq!(
@@ -1586,11 +1621,29 @@ mod test {
                 "\x1b]22;?pointer,crosshair,__current__\x1b\\"
             ),
             OperatingSystemCommand::PointerShape(PointerShapeCommand::Query(vec![
-                PointerShapeQuery::Shape(PointerShape::Pointer),
-                PointerShapeQuery::Shape(PointerShape::Crosshair),
+                PointerShapeQuery::Shape(CursorIcon::Pointer),
+                PointerShapeQuery::Shape(CursorIcon::Crosshair),
                 PointerShapeQuery::Current
             ]))
         );
+    }
+
+    #[test]
+    fn pointer_shape_names() {
+        assert_eq!(PointerShapeName::from(""), PointerShapeName::Default);
+        assert_eq!(
+            PointerShapeName::from("pointer"),
+            PointerShapeName::Shape(CursorIcon::Pointer)
+        );
+        assert_eq!(
+            PointerShapeName::from("context-menu"),
+            PointerShapeName::Unknown("context-menu".into())
+        );
+        assert_eq!(
+            PointerShapeQuery::from("__current__"),
+            PointerShapeQuery::Current
+        );
+        assert_eq!(PointerShapeQuery::from("wait").to_string(), "wait");
     }
 
     #[test]

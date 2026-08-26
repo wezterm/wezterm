@@ -30,7 +30,6 @@ pub mod input;
 pub use crate::input::*;
 
 pub use wezterm_cell::*;
-pub use wezterm_escape_parser::osc::PointerShape;
 pub use wezterm_surface::line::*;
 
 pub mod screen;

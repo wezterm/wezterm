@@ -71,6 +71,7 @@ pub enum Alert {
     OutputSinceFocusLost,
     /// A change to the progress bar state
     Progress(Progress),
+    /// The application changed the pointer shape via OSC 22
     PointerShapeChanged,
 }
 

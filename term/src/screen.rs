@@ -1,6 +1,7 @@
 #![allow(clippy::range_plus_one)]
 use super::*;
 use crate::config::BidiMode;
+use cursor_icon::CursorIcon;
 use log::debug;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -38,7 +39,7 @@ pub struct Screen {
     pub(crate) keyboard_stack: Vec<KeyboardEncoding>,
     /// OSC 22 pointer shapes are scoped to each primary or alternate screen.
     /// The top entry is the shape to be used, `None` uses the default shape.
-    pub(crate) pointer_shape_stack: Vec<Option<PointerShape>>,
+    pub(crate) pointer_shape_stack: Vec<Option<CursorIcon>>,
 
     /// Physical, visible height of the screen (not including scrollback)
     pub physical_rows: usize,

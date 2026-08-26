@@ -9,6 +9,7 @@ mod csi;
 mod image;
 // mod selection; FIXME: port to render layer
 use crate::color::ColorPalette;
+use cursor_icon::CursorIcon;
 use k9::assert_equal as assert_eq;
 use std::sync::{Arc, Mutex};
 use wezterm_escape_parser::csi::{Edit, EraseInDisplay, EraseInLine};
@@ -198,19 +199,19 @@ fn pointer_shape_stack() {
     term.print("\x1b]22;>wait,crosshair\x1b\\");
     assert_eq!(
         term.term.get_requested_pointer_shape(),
-        Some(PointerShape::Crosshair)
+        Some(CursorIcon::Crosshair)
     );
 
     term.print("\x1b]22;<\x1b\\");
     term.print("\x1b]22;=text\x1b\\");
     assert_eq!(
         term.term.get_requested_pointer_shape(),
-        Some(PointerShape::Text)
+        Some(CursorIcon::Text)
     );
     term.print("\x1b]22;<\x1b\\");
     assert_eq!(
         term.term.get_requested_pointer_shape(),
-        Some(PointerShape::Pointer)
+        Some(CursorIcon::Pointer)
     );
 
     term.set_mode("?1049", true);
@@ -219,12 +220,12 @@ fn pointer_shape_stack() {
     term.set_mode("?1049", false);
     assert_eq!(
         term.term.get_requested_pointer_shape(),
-        Some(PointerShape::Pointer)
+        Some(CursorIcon::Pointer)
     );
     term.set_mode("?1049", true);
     assert_eq!(
         term.term.get_requested_pointer_shape(),
-        Some(PointerShape::Wait)
+        Some(CursorIcon::Wait)
     );
 
     term.soft_reset();

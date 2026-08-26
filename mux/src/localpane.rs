@@ -10,6 +10,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use config::keyassignment::ScrollbackEraseMode;
 use config::{configuration, ExitBehavior, ExitBehaviorMessaging};
+use cursor_icon::CursorIcon;
 use fancy_regex::Regex;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty, PtySize};
@@ -31,9 +32,8 @@ use url::Url;
 use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Alert, AlertHandler, Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent,
-    PointerShape, Progress, SemanticZone, StableRowIndex, Terminal, TerminalConfiguration,
-    TerminalSize,
+    Alert, AlertHandler, Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, Progress,
+    SemanticZone, StableRowIndex, Terminal, TerminalConfiguration, TerminalSize,
 };
 
 const PROC_INFO_CACHE_TTL: Duration = Duration::from_millis(300);
@@ -467,7 +467,7 @@ impl Pane for LocalPane {
         self.terminal.lock().get_progress()
     }
 
-    fn get_requested_pointer_shape(&self) -> Option<PointerShape> {
+    fn get_requested_pointer_shape(&self) -> Option<CursorIcon> {
         self.terminal.lock().get_requested_pointer_shape()
     }
 

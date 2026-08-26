@@ -1237,8 +1237,7 @@ impl TermWindow {
                             if pane.pane_id() == pane_id {
                                 window.set_cursor(Some(
                                     pane.get_requested_pointer_shape()
-                                        .map(MouseCursor::Named)
-                                        .unwrap_or(MouseCursor::Text),
+                                        .unwrap_or(CursorIcon::Text),
                                 ));
                             }
                         }

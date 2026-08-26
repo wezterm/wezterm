@@ -1143,7 +1143,7 @@ impl<'a> Performer<'a> {
                         .map(|shape| match shape {
                             PointerShapeQuery::Current => self
                                 .get_requested_pointer_shape()
-                                .map(|shape| shape.as_str())
+                                .map(|shape| shape.name())
                                 .unwrap_or("0"),
                             PointerShapeQuery::Default => "text",
                             PointerShapeQuery::Grabbed => "default",

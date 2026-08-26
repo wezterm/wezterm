@@ -3,6 +3,7 @@ use crate::renderable::*;
 use crate::ExitBehavior;
 use async_trait::async_trait;
 use config::keyassignment::{KeyAssignment, ScrollbackEraseMode};
+use cursor_icon::CursorIcon;
 use downcast_rs::{impl_downcast, Downcast};
 use parking_lot::MappedMutexGuard;
 use rangeset::RangeSet;
@@ -17,8 +18,8 @@ use url::Url;
 use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, PointerShape, Progress,
-    SemanticZone, StableRowIndex, TerminalConfiguration, TerminalSize,
+    Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, Progress, SemanticZone,
+    StableRowIndex, TerminalConfiguration, TerminalSize,
 };
 
 static PANE_ID: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
@@ -240,7 +241,7 @@ pub trait Pane: Downcast + Send + Sync {
     fn get_progress(&self) -> Progress {
         Progress::None
     }
-    fn get_requested_pointer_shape(&self) -> Option<PointerShape> {
+    fn get_requested_pointer_shape(&self) -> Option<CursorIcon> {
         None
     }
     fn send_paste(&self, text: &str) -> anyhow::Result<()>;
