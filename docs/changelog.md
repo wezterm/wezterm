@@ -81,6 +81,10 @@ As features stabilize some brief notes about them will accumulate here.
   position images through the text grid (eg: `textual-image`, `ratatui-image`)
   now display them in the right place instead of at the cursor position, and
   the placeholder character is no longer passed through to font rendering.
+* [command_palette_line_height](config/lua/config/command_palette_line_height.md)
+  option to scale the vertical spacing of rows in the command palette,
+  independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
+  Thanks to @rafaelsteil! #8096
 * [wezterm.serde](config/lua/wezterm.serde/index.md) module for serialization
   and deserialization of JSON, TOML and YAML. Thanks to @expnn! #4969
 * `wezterm ssh` now supports agent forwarding. Thanks to @Riatre! #5345
@@ -156,8 +160,14 @@ As features stabilize some brief notes about them will accumulate here.
 * [`Search`](./config/lua/keyassignment/Search.md) &
   [`CycleMatchType`](./config/lua/keyassignment/CopyMode/CycleMatchType.md) can now use Smart-case
   search matching. Thanks to @mrdziuban! #7385
+* The line editor used by prompt overlays and the debug overlay now supports
+  `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* macOS: Fix window border when opacity<1 and shadow enabled.
+  Thanks to @Adams-Galaxy! #8038 #5158
+* perf: Terminal images were hashed three times each on the transmit path; the sha256
+  an RGBA image already carries is now reused instead. Thanks to @i-am-logger! #8065
 * `ResetTerminal` (RIS) did not reset the `modifyOtherKeys` state. A program
   that left it enabled and exited uncleanly could leave ctrl keys emitting
   escape sequences that the shell doesn't expect. RIS now also resets the
@@ -294,6 +304,14 @@ As features stabilize some brief notes about them will accumulate here.
   whose pty reported no pixel dimensions (e.g. in `tmux -CC` domain).
   Such images are now refused instead of taking down the pane. Thanks to @zakrad! #6344
 * Fix render loop freeze when closing workspaces. Thanks to @JafarAbdi! #7444
+* Wayland: the titlebar is now correctly hidden when `window_decorations`
+  does not include `TITLE`. Thanks to @jchantrell! #7601
+* macOS: the window can no longer be dragged by its top row when it has no
+  decorations. Thanks to @draconivis! #7967
+* `tmux -CC` sessions: fix keyboard input stalling (was a typo when running `send-keys`)
+  Thanks to @bew! #8001
+* IME: committed text is now handled correctly in prompt overlays such as
+  `PromptInputLine` and the debug overlay. Thanks to @dyxushuai! #7556
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
@@ -341,6 +359,7 @@ As features stabilize some brief notes about them will accumulate here.
   [Sparky (Gogh)](colorschemes/s/index.md#sparky-gogh),
   [Sugarplum](colorschemes/s/index.md#sugarplum),
   [Vesper](colorschemes/v/index.md#vesper)
+* flatpak: runtime bumped from 23.08 to 25.08. #7767
 
 ### 20240203-110809-5046fc22
 
