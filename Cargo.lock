@@ -7251,7 +7251,7 @@ dependencies = [
 name = "wezterm-open-url"
 version = "0.1.0"
 dependencies = [
- "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
