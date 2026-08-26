@@ -5993,7 +5993,7 @@ dependencies = [
  "wezterm-escape-parser",
  "wezterm-input-types",
  "wezterm-surface",
- "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

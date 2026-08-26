@@ -7,7 +7,7 @@ use std::os::unix::io::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
-use winapi::um::consoleapi::GetConsoleMode;
+use windows_sys::Win32::System::Console::GetConsoleMode;
 
 /// Adds the is_tty method to types that might represent a terminal
 pub trait IsTty {
