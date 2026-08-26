@@ -5642,7 +5642,7 @@ dependencies = [
  "smol",
  "wezterm-dynamic",
  "wezterm-open-url",
- "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
