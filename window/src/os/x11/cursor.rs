@@ -14,12 +14,60 @@ use xcb::x::Cursor;
 use xcb::Xid;
 
 // X11 classic Cursor glyphs
+pub const BOTTOM_LEFT_CORNER: u16 = 12;
+pub const BOTTOM_RIGHT_CORNER: u16 = 14;
+pub const BOTTOM_SIDE: u16 = 16;
+pub const CIRCLE: u16 = 24;
+pub const CROSSHAIR: u16 = 34;
+pub const FLEUR: u16 = 52;
 pub const HAND1: u16 = 58;
+pub const HAND2: u16 = 60;
+pub const LEFT_SIDE: u16 = 70;
+pub const PLUS: u16 = 90;
+pub const QUESTION_ARROW: u16 = 92;
+pub const RIGHT_SIDE: u16 = 96;
 pub const SB_H_DOUBLE_ARROW: u16 = 108;
 pub const SB_V_DOUBLE_ARROW: u16 = 116;
+pub const SIZING: u16 = 120;
 pub const TOP_LEFT_ARROW: u16 = 132;
 pub const TOP_LEFT_CORNER: u16 = 134;
+pub const TOP_RIGHT_CORNER: u16 = 136;
+pub const TOP_SIDE: u16 = 138;
+pub const WATCH: u16 = 150;
 pub const XTERM: u16 = 152;
+
+fn basic_cursor_glyph(cursor: CursorIcon) -> u16 {
+    match cursor {
+        CursorIcon::Cell => PLUS,
+        CursorIcon::Crosshair => CROSSHAIR,
+        CursorIcon::Help | CursorIcon::ContextMenu | CursorIcon::DndAsk => QUESTION_ARROW,
+        CursorIcon::Pointer => HAND2,
+        CursorIcon::Progress | CursorIcon::Wait => WATCH,
+        CursorIcon::Text | CursorIcon::VerticalText => XTERM,
+        CursorIcon::Move | CursorIcon::AllScroll | CursorIcon::AllResize => FLEUR,
+        CursorIcon::NoDrop | CursorIcon::NotAllowed => CIRCLE,
+        CursorIcon::Grab | CursorIcon::Grabbing => HAND1,
+        CursorIcon::EResize => RIGHT_SIDE,
+        CursorIcon::NResize => TOP_SIDE,
+        CursorIcon::NeResize | CursorIcon::NeswResize => TOP_RIGHT_CORNER,
+        CursorIcon::NwResize | CursorIcon::NwseResize => TOP_LEFT_CORNER,
+        CursorIcon::SResize => BOTTOM_SIDE,
+        CursorIcon::SeResize => BOTTOM_RIGHT_CORNER,
+        CursorIcon::SwResize => BOTTOM_LEFT_CORNER,
+        CursorIcon::WResize => LEFT_SIDE,
+        CursorIcon::EwResize | CursorIcon::ColResize => SB_H_DOUBLE_ARROW,
+        CursorIcon::NsResize | CursorIcon::RowResize => SB_V_DOUBLE_ARROW,
+        CursorIcon::ZoomIn | CursorIcon::ZoomOut => SIZING,
+        _ => TOP_LEFT_ARROW,
+    }
+}
+
+#[test]
+fn cursor_icons_use_x11_cursor_glyphs() {
+    assert_eq!(basic_cursor_glyph(CursorIcon::Pointer), HAND2);
+    assert_eq!(basic_cursor_glyph(CursorIcon::NeResize), TOP_RIGHT_CORNER);
+    assert_eq!(basic_cursor_glyph(CursorIcon::Text), XTERM);
+}
 
 pub struct XcbCursor {
     pub id: Cursor,
@@ -364,21 +412,9 @@ impl CursorInfo {
     }
 
     fn load_basic(&mut self, conn: &Rc<XConnection>, cursor: Option<CursorIcon>) -> Cursor {
-        let id_no = match cursor.unwrap_or_default() {
-            // `/usr/include/X11/cursorfont.h`
-            // <https://docs.rs/xcb-util/0.3.0/src/xcb_util/cursor.rs.html>
-            CursorIcon::Pointer | CursorIcon::Grab | CursorIcon::Grabbing => HAND1,
-            CursorIcon::Text | CursorIcon::VerticalText => XTERM,
-            CursorIcon::NResize
-            | CursorIcon::SResize
-            | CursorIcon::NsResize
-            | CursorIcon::RowResize => SB_V_DOUBLE_ARROW,
-            CursorIcon::EResize
-            | CursorIcon::WResize
-            | CursorIcon::EwResize
-            | CursorIcon::ColResize => SB_H_DOUBLE_ARROW,
-            _ => TOP_LEFT_ARROW,
-        };
+        // `/usr/include/X11/cursorfont.h`
+        // <https://docs.rs/xcb-util/0.3.0/src/xcb_util/cursor.rs.html>
+        let id_no = basic_cursor_glyph(cursor.unwrap_or_default());
         log::trace!("loading X11 basic cursor {} for {:?}", id_no, cursor);
 
         let cursor_id: Cursor = conn.generate_id();

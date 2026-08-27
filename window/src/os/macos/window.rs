@@ -983,14 +983,18 @@ fn screen_point_to_cartesian(point: ScreenPoint) -> NSPoint {
     }
 }
 
-fn mouse_cursor_selector(cursor: CursorIcon) -> Sel {
+// Official selectors: https://developer.apple.com/documentation/appkit/nscursor#overview
+// All selectors: https://github.com/mstg/OSX-Runtime-Headers/blob/9e1686ba1c48e0ca17f6baf7cfb209d4f7cfa4f2/AppKit/NSCursor.h
+fn mouse_icon_selector(cursor: CursorIcon) -> Sel {
     match cursor {
         CursorIcon::Alias => sel!(dragLinkCursor),
         CursorIcon::Cell | CursorIcon::Crosshair => sel!(crosshairCursor),
         CursorIcon::Copy => sel!(dragCopyCursor),
         CursorIcon::EResize => sel!(resizeRightCursor),
         CursorIcon::EwResize | CursorIcon::ColResize => sel!(resizeLeftRightCursor),
-        CursorIcon::Grab | CursorIcon::Move | CursorIcon::AllScroll => sel!(openHandCursor),
+        CursorIcon::Grab | CursorIcon::Move | CursorIcon::AllScroll | CursorIcon::AllResize => {
+            sel!(openHandCursor)
+        }
         CursorIcon::Grabbing => sel!(closedHandCursor),
         CursorIcon::Help | CursorIcon::ContextMenu => sel!(contextualMenuCursor),
         CursorIcon::NResize => sel!(resizeUpCursor),
@@ -1017,14 +1021,14 @@ fn mouse_cursor_selector(cursor: CursorIcon) -> Sel {
 #[test]
 fn cursor_icons_use_macos_cursors() {
     assert_eq!(
-        mouse_cursor_selector(CursorIcon::Pointer),
+        mouse_icon_selector(CursorIcon::Pointer),
         sel!(pointingHandCursor)
     );
     assert_eq!(
-        mouse_cursor_selector(CursorIcon::NsResize),
+        mouse_icon_selector(CursorIcon::NsResize),
         sel!(resizeUpDownCursor)
     );
-    assert_eq!(mouse_cursor_selector(CursorIcon::Text), sel!(IBeamCursor));
+    assert_eq!(mouse_icon_selector(CursorIcon::Text), sel!(IBeamCursor));
 }
 
 impl WindowInner {
@@ -1276,9 +1280,10 @@ impl WindowInner {
                 // Unconditionally apply the requested cursor, as there are
                 // cases where macOS can decide to change the cursor to something
                 // that we don't know about.
-                let selector = mouse_cursor_selector(cursor);
-                let responds: BOOL = msg_send![ns_cursor_cls, respondsToSelector: selector];
-                let selector = if from_yes_no(responds) {
+                let selector = mouse_icon_selector(cursor);
+                let cursor_is_supported =
+                    from_yes_no(msg_send![ns_cursor_cls, respondsToSelector: selector]);
+                let selector = if cursor_is_supported {
                     selector
                 } else {
                     sel!(arrowCursor)
