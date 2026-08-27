@@ -7614,6 +7614,7 @@ dependencies = [
  "config",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
+ "cursor-icon",
  "dirs-next",
  "downcast-rs",
  "euclid",
