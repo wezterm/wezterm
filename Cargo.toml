@@ -62,7 +62,7 @@ chrono = {version="0.4", default-features=false, features=["clock", "unstable-lo
 clap = {version="4.0", features=["derive"]}
 clap_complete = "4.4"
 clap_complete_fig = "4.0"
-clipboard-win = "2.2"
+clipboard-win = "5.4.1"
 cocoa = "=0.25.0"
 codec = { path = "codec" }
 color-funcs = { path = "lua-api-crates/color-funcs" }
