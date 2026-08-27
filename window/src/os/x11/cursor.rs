@@ -13,6 +13,8 @@ use std::rc::{Rc, Weak};
 use xcb::x::Cursor;
 use xcb::Xid;
 
+// `/usr/include/X11/cursorfont.h`
+// <https://docs.rs/xcb-util/0.3.0/src/xcb_util/cursor.rs.html>
 // X11 classic Cursor glyphs
 pub const BOTTOM_LEFT_CORNER: u16 = 12;
 pub const BOTTOM_RIGHT_CORNER: u16 = 14;
@@ -412,8 +414,6 @@ impl CursorInfo {
     }
 
     fn load_basic(&mut self, conn: &Rc<XConnection>, cursor: Option<CursorIcon>) -> Cursor {
-        // `/usr/include/X11/cursorfont.h`
-        // <https://docs.rs/xcb-util/0.3.0/src/xcb_util/cursor.rs.html>
         let id_no = basic_cursor_glyph(cursor.unwrap_or_default());
         log::trace!("loading X11 basic cursor {} for {:?}", id_no, cursor);
 
