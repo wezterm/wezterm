@@ -262,7 +262,7 @@ pub trait WindowOps {
     /// Schedule the window to be closed
     fn close(&self);
 
-    /// Change the cursor
+    /// Change the cursor, `None` hides the cursor
     fn set_cursor(&self, cursor: Option<CursorIcon>);
 
     /// Invalidate the window so that the entire client area will
