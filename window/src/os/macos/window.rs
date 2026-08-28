@@ -2716,7 +2716,6 @@ impl WindowView {
                 let mut inner = myself.inner.borrow_mut();
                 inner.key_is_down.replace(key_is_down);
                 inner.ime_state = ImeDisposition::None;
-                inner.ime_text.clear();
             }
 
             unsafe {
