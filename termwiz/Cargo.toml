@@ -1,5 +1,4 @@
 [package]
-authors = ["Wez Furlong"]
 name = "termwiz"
 version = "0.24.0"
 edition = "2018"

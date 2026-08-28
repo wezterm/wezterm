@@ -1,7 +1,6 @@
 [package]
 name = "cairo-sys-rs"
 license = "MIT"
-authors = ["The gtk-rs Project Developers"]
 homepage = "https://gtk-rs.org/"
 description = "FFI bindings to libcairo"
 version = "0.18.0"
