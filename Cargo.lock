@@ -7060,7 +7060,7 @@ dependencies = [
  "wezterm-color-types",
  "wezterm-dynamic",
  "wezterm-input-types",
- "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
