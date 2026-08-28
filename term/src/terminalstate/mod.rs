@@ -264,6 +264,9 @@ pub struct TerminalState {
     /// If true, writing a character inserts a new cell
     insert: bool,
 
+    /// When set, received chars auto-wrap to the next line when the cursor reaches the right border.
+    /// Otherwise received chars continuously replace the last char on the right.
+    /// note: This is set by default, because it's more useful this way.
     /// https://vt100.net/docs/vt510-rm/DECAWM.html
     dec_auto_wrap: bool,
 
@@ -752,38 +755,62 @@ impl TerminalState {
         self.mouse_tracking || self.button_event_mouse || self.any_event_mouse
     }
 
+    /// Returns true if the alternate screen (secondary screen buffer) is currently active.
+    /// This is useful for the hosting GUI application to decide how best
+    /// to handle operations like scrollback that only apply to the primary screen.
     pub fn is_alt_screen_active(&self) -> bool {
         self.screen.is_alt_screen_active()
     }
 
+    /// Returns true if the associated application has enabled basic mouse
+    /// tracking mode (DEC mode 1000).
+    /// This is useful for the hosting GUI application to decide how best
+    /// to dispatch mouse events to the terminal.
     pub fn mouse_tracking_enabled(&self) -> bool {
         self.mouse_tracking
     }
 
+    /// Returns true if the associated application has enabled button-event mouse
+    /// tracking mode (DEC mode 1002), which reports motion events while a button is held.
+    /// This is useful for the hosting GUI application to decide how best
+    /// to dispatch mouse events to the terminal.
     pub fn button_event_mouse_enabled(&self) -> bool {
         self.button_event_mouse
     }
 
+    /// Returns true if the associated application has enabled any-event mouse
+    /// tracking mode (DEC mode 1003), which reports all motion events regardless of button state.
+    /// This is useful for the hosting GUI application to decide how best
+    /// to dispatch mouse events to the terminal.
     pub fn any_event_mouse_enabled(&self) -> bool {
         self.any_event_mouse
     }
 
+    /// Returns the current mouse reporting encoding selected by the associated application.
     pub fn get_mouse_encoding(&self) -> MouseEncoding {
         self.mouse_encoding
     }
 
+    /// Returns true if the associated application has enabled focus tracking mode
+    /// (DEC mode 1004), which causes focus-in and focus-out events to be reported.
     pub fn focus_tracking_enabled(&self) -> bool {
         self.focus_tracking
     }
 
+    /// Returns true if the associated application has enabled application cursor keys mode
+    /// (DEC mode 1), which causes cursor keys to send application sequences instead of ANSI ones.
     pub fn application_cursor_keys_enabled(&self) -> bool {
         self.application_cursor_keys
     }
 
+    /// Returns true if the associated application has enabled the special encoding of the numeric
+    /// keypad portion of the keyboard.
     pub fn application_keypad_enabled(&self) -> bool {
         self.application_keypad
     }
 
+    /// Returns true if DECAWM auto-wrap mode (DEC mode 7) is enabled, which causes
+    /// the cursor to wrap to the next line when it reaches the right border.
     pub fn dec_auto_wrap_enabled(&self) -> bool {
         self.dec_auto_wrap
     }
