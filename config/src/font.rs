@@ -201,6 +201,12 @@ impl Default for FontWeight {
 }
 
 impl FontWeight {
+    /// Amount by which `lighter()` / `bolder()` shift the weight when
+    /// synthesizing dim / bold variants. Chosen large enough that bold
+    /// is clearly distinct from regular by default.
+    /// See issue #8049 for examples.
+    const WEIGHT_STEP: u16 = 300;
+
     pub const fn from_opentype_weight(w: u16) -> Self {
         Self(w)
     }
@@ -210,15 +216,11 @@ impl FontWeight {
     }
 
     pub fn lighter(self) -> Self {
-        // -200 used initially was too subtle to distinguish any difference from e.g. normal & bold
-        // See issue #8049 for examples.
-        Self::from_opentype_weight(self.to_opentype_weight().saturating_sub(300))
+        Self::from_opentype_weight(self.to_opentype_weight().saturating_sub(Self::WEIGHT_STEP))
     }
 
     pub fn bolder(self) -> Self {
-        // +200 used initially was too subtle to distinguish any difference from e.g. normal & bold
-        // See issue #8049 for examples.
-        Self::from_opentype_weight(self.to_opentype_weight() + 300)
+        Self::from_opentype_weight(self.to_opentype_weight() + Self::WEIGHT_STEP)
     }
 }
 
