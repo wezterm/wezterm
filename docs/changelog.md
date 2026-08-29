@@ -22,6 +22,9 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* Semantic zones (and thus `ScrollToPrompt`, copy-mode move-by-zone,
+  selection-by-zone, and the `pane:get_semantic_zones()` Lua API) now work
+  for panes served by a remote mux domain. #2880
 * DECRQCRA is now disabled by default to prevent silent screen scraping.
   Set `enable_checksum_rectangular_area = true` to re-enable it.
   Thanks to @jquast! #7701

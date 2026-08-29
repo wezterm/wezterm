@@ -812,6 +812,26 @@ impl SessionHandler {
                 .detach();
             }
 
+            Pdu::GetSemanticZones(GetSemanticZones { pane_id }) => {
+                spawn_into_main_thread(async move {
+                    catch(
+                        move || {
+                            let mux = Mux::get();
+                            let pane = mux
+                                .get_pane(pane_id)
+                                .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
+                            let zones = pane.get_semantic_zones()?;
+                            Ok(Pdu::GetSemanticZonesResponse(GetSemanticZonesResponse {
+                                pane_id,
+                                zones,
+                            }))
+                        },
+                        send_response,
+                    )
+                })
+                .detach();
+            }
+
             Pdu::GetImageCell(GetImageCell {
                 pane_id,
                 line_idx,
@@ -1000,6 +1020,7 @@ impl SessionHandler {
             | Pdu::GetPaneDirectionResponse { .. }
             | Pdu::SearchScrollbackResponse { .. }
             | Pdu::GetLinesResponse { .. }
+            | Pdu::GetSemanticZonesResponse { .. }
             | Pdu::GetCodecVersionResponse { .. }
             | Pdu::WindowWorkspaceChanged { .. }
             | Pdu::GetTlsCredsResponse { .. }

@@ -27,8 +27,8 @@ use url::Url;
 use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Alert, Clipboard, KeyCode, KeyModifiers, Line, MouseEvent, Progress, StableRowIndex,
-    TerminalConfiguration, TerminalSize,
+    Alert, Clipboard, KeyCode, KeyModifiers, Line, MouseEvent, Progress, SemanticZone,
+    StableRowIndex, TerminalConfiguration, TerminalSize,
 };
 
 pub struct ClientPane {
@@ -305,6 +305,20 @@ impl Pane for ClientPane {
 
     fn get_current_seqno(&self) -> SequenceNo {
         self.renderable.lock().get_current_seqno()
+    }
+
+    fn get_semantic_zones(&self) -> anyhow::Result<Vec<SemanticZone>> {
+        let client = Arc::clone(&self.client);
+        let remote_pane_id = self.remote_pane_id;
+        promise::spawn::block_on(async move {
+            let resp = client
+                .client
+                .get_semantic_zones(GetSemanticZones {
+                    pane_id: remote_pane_id,
+                })
+                .await?;
+            Ok(resp.zones)
+        })
     }
 
     fn get_changed_since(
