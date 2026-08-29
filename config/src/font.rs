@@ -219,7 +219,10 @@ impl FontWeight {
     }
 
     pub fn lighter(self) -> Self {
-        Self::from_opentype_weight(self.to_opentype_weight().saturating_sub(Self::WEIGHT_STEP_LIGHTER))
+        Self::from_opentype_weight(
+            self.to_opentype_weight()
+                .saturating_sub(Self::WEIGHT_STEP_LIGHTER),
+        )
     }
 
     pub fn bolder(self) -> Self {
