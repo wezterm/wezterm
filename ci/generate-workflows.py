@@ -403,7 +403,7 @@ rustup default {toolchain}
         if cache:
             steps += [
                 SccacheStep(name="Compile with sccache"),
-                # Cache vendored dependecies
+                # Cache vendored dependencies
                 CacheStep(
                     name="Cache Rust Dependencies",
                     path="vendor\n.cargo/config",
@@ -412,7 +412,7 @@ rustup default {toolchain}
                 ),
                 # Vendor dependencies
                 RunStep(
-                    name="Vendor dependecies",
+                    name="Vendor dependencies",
                     condition="steps.cache-cargo-vendor.outputs.cache-hit != 'true'",
                     run="cargo vendor --locked --versioned-dirs >> .cargo/config",
                 ),
