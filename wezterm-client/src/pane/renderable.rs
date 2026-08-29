@@ -53,6 +53,53 @@ impl LineEntry {
     }
 }
 
+/// Collect the stable row indices that comprise the logical line ending at
+/// `end_row`, walking backwards through the cache following `was_wrapped`
+/// flags.
+///
+/// Only rows that are settled `Line` entries are collected: if any
+/// constituent line is still being fetched or is stale, the walk stops so
+/// that the scan is deferred until the whole logical line is available.
+/// Scanning a partially-fetched logical line would clobber the
+/// LineAndFetching/Stale cache state and could discard fetched content.
+/// <https://github.com/wezterm/wezterm/issues/3987>
+fn collect_logical_line_rows(
+    lines: &LruCache<StableRowIndex, LineEntry>,
+    end_row: StableRowIndex,
+) -> Vec<StableRowIndex> {
+    // Bound the scan to avoid pathological cases where a really long
+    // logical line (eg: 1.5MB of json) would be un-wrapped, scanned,
+    // and re-wrapped on every update. Mirrors MAX_LOGICAL_LINE_LEN in
+    // mux/src/pane.rs.
+    const MAX_LOGICAL_LINE_LEN: usize = 1024;
+
+    let mut rows = vec![end_row];
+    let mut row = end_row;
+    let mut total_len = 0usize;
+    loop {
+        let prev = row - 1;
+        match lines.peek(&prev) {
+            Some(LineEntry::Line(line)) => {
+                if !line.last_cell_was_wrapped() {
+                    break;
+                }
+                total_len += line.len();
+                if total_len > MAX_LOGICAL_LINE_LEN {
+                    break;
+                }
+                rows.push(prev);
+                row = prev;
+            }
+            Some(LineEntry::LineAndFetching(..))
+            | Some(LineEntry::Stale(_))
+            | Some(LineEntry::Fetching(_))
+            | None => break,
+        }
+    }
+    rows.reverse();
+    rows
+}
+
 pub struct RenderableInner {
     pub client: Arc<ClientInner>,
     remote_pane_id: PaneId,
@@ -448,11 +495,15 @@ impl RenderableInner {
     fn put_line(
         &mut self,
         stable_row: StableRowIndex,
-        mut line: Line,
+        line: Line,
         config: &ConfigHandle,
         fetch_start: Option<Instant>,
     ) {
-        line.scan_and_create_hyperlinks(&config.hyperlink_rules);
+        // A line whose last cell was not wrapped completes a logical line.
+        // We defer implicit-hyperlink scanning until the logical line is
+        // complete so that URLs spanning wrapped lines are linked correctly.
+        // <https://github.com/wezterm/wezterm/issues/3987>
+        let completes_logical_line = !line.last_cell_was_wrapped();
 
         let entry = if let Some(fetch_start) = fetch_start {
             // If we're completing a fetch, only replace entries that were
@@ -470,6 +521,7 @@ impl RenderableInner {
                         line.current_seqno(),
                         self.seqno
                     );
+                    let mut line = line;
                     line.update_last_change_seqno(self.seqno);
                     LineEntry::Line(line)
                 }
@@ -490,6 +542,56 @@ impl RenderableInner {
             LineEntry::Line(line)
         };
         self.lines.put(stable_row, entry);
+
+        if completes_logical_line {
+            self.scan_logical_line(stable_row, config);
+        }
+    }
+
+    /// Scan a logical line for implicit hyperlinks.
+    ///
+    /// `end_row` is the last physical line of a logical line (its last cell
+    /// was not wrapped). We walk backwards through the cache to find the
+    /// start of the logical line, scan it as a whole, and write the scanned
+    /// physical lines back to the cache. Scanning per logical line (rather
+    /// than per physical line) ensures that URLs spanning wrapped lines are
+    /// linked correctly.
+    /// <https://github.com/wezterm/wezterm/issues/3987>
+    fn scan_logical_line(&mut self, end_row: StableRowIndex, config: &ConfigHandle) {
+        let rows = collect_logical_line_rows(&self.lines, end_row);
+
+        // Pop the lines out of the cache so we can scan them as a logical
+        // line. The backward walk above only collects rows that are settled
+        // Line entries, so we don't expect to encounter anything else here.
+        let mut lines = vec![];
+        for r in &rows {
+            match self.lines.pop(r) {
+                Some(LineEntry::Line(l)) => {
+                    lines.push(l);
+                }
+                // Defensive: the walk above only collects Line entries, so
+                // this should not happen. Put back what we already popped
+                // and bail.
+                Some(LineEntry::LineAndFetching(..))
+                | Some(LineEntry::Stale(_))
+                | Some(LineEntry::Fetching(_))
+                | None => {
+                    for (r, line) in rows.iter().zip(lines) {
+                        self.lines.put(*r, LineEntry::Line(line));
+                    }
+                    return;
+                }
+            }
+        }
+
+        // Scan the logical line as a whole
+        let mut line_refs: Vec<&mut Line> = lines.iter_mut().collect();
+        Line::apply_hyperlink_rules(&config.hyperlink_rules, &mut line_refs);
+
+        // Write the scanned lines back to the cache
+        for (r, line) in rows.into_iter().zip(lines) {
+            self.lines.put(r, LineEntry::Line(line));
+        }
     }
 
     fn schedule_fetch_lines(&mut self, to_fetch: RangeSet<StableRowIndex>, now: Instant) {
@@ -856,5 +958,65 @@ impl RenderableState {
 
     pub fn get_dimensions(&self) -> RenderableDimensions {
         self.inner.borrow().dimensions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::num::NonZeroUsize;
+
+    fn make_cache() -> LruCache<StableRowIndex, LineEntry> {
+        LruCache::new(NonZeroUsize::new(100).unwrap())
+    }
+
+    #[test]
+    fn collect_logical_line_rows_single_line() {
+        let mut cache = make_cache();
+        cache.put(5, LineEntry::Line(Line::from("hello")));
+        let rows = collect_logical_line_rows(&cache, 5);
+        assert_eq!(rows, vec![5]);
+    }
+
+    #[test]
+    fn collect_logical_line_rows_wrapped() {
+        let mut cache = make_cache();
+        let mut line0: Line = "http://example.com/very/long/".into();
+        line0.set_last_cell_was_wrapped(true, SEQ_ZERO);
+        cache.put(0, LineEntry::Line(line0));
+        cache.put(1, LineEntry::Line(Line::from("path")));
+        let rows = collect_logical_line_rows(&cache, 1);
+        assert_eq!(rows, vec![0, 1]);
+    }
+
+    #[test]
+    fn collect_logical_line_rows_stops_at_unwrapped() {
+        let mut cache = make_cache();
+        cache.put(0, LineEntry::Line(Line::from("first")));
+        cache.put(1, LineEntry::Line(Line::from("second")));
+        // Row 0 is not wrapped, so the logical line ending at 1 is just [1].
+        let rows = collect_logical_line_rows(&cache, 1);
+        assert_eq!(rows, vec![1]);
+    }
+
+    #[test]
+    fn collect_logical_line_rows_stops_at_unsettled() {
+        let mut cache = make_cache();
+        let mut line0: Line = "http://example.com/very/long/".into();
+        line0.set_last_cell_was_wrapped(true, SEQ_ZERO);
+        cache.put(0, LineEntry::LineAndFetching(line0, Instant::now()));
+        cache.put(1, LineEntry::Line(Line::from("path")));
+        // Row 0 is LineAndFetching (not settled), so the walk stops.
+        let rows = collect_logical_line_rows(&cache, 1);
+        assert_eq!(rows, vec![1]);
+    }
+
+    #[test]
+    fn collect_logical_line_rows_stops_at_missing() {
+        let mut cache = make_cache();
+        cache.put(1, LineEntry::Line(Line::from("path")));
+        // Row 0 is missing, so the walk stops.
+        let rows = collect_logical_line_rows(&cache, 1);
+        assert_eq!(rows, vec![1]);
     }
 }
