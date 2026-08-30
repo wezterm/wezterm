@@ -7069,7 +7069,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cairo-rs",
- "cocoa",
  "config",
  "core-foundation 0.10.0",
  "core-text",
@@ -7089,7 +7088,8 @@ dependencies = [
  "log",
  "memmap2 0.9.11",
  "metrics",
- "objc",
+ "objc2",
+ "objc2-foundation",
  "ordered-float 4.6.0",
  "rangeset",
  "termwiz",

@@ -3,7 +3,6 @@
 
 use crate::locator::{FontDataSource, FontLocator, FontOrigin};
 use crate::parser::ParsedFont;
-use cocoa::base::id;
 use config::{FontAttributes, FontStretch, FontStyle, FontWeight};
 use core_foundation::array::CFArray;
 use core_foundation::base::{CFRange, TCFType};
@@ -11,7 +10,8 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::{CFString, CFStringRef};
 use core_text::font::*;
 use core_text::font_descriptor::*;
-use objc::*;
+use objc2::rc::Retained;
+use objc2_foundation::{NSString, NSUserDefaults};
 use rangeset::RangeSet;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -252,14 +252,15 @@ fn build_fallback_list_impl() -> anyhow::Result<Vec<ParsedFont>> {
     let menlo =
         new_from_name("Menlo", 0.0).map_err(|_| anyhow::anyhow!("failed to get Menlo font"))?;
 
-    let user_defaults: id = unsafe { msg_send![class!(NSUserDefaults), standardUserDefaults] };
+    let user_defaults = NSUserDefaults::standardUserDefaults();
 
-    let apple_lang = "AppleLanguages"
-        .parse::<CFString>()
-        .map_err(|_| anyhow::anyhow!("failed to parse lang name en as CFString"))?;
-
-    let langs: CFArray<CFString> =
-        unsafe { msg_send![user_defaults, stringArrayForKey:apple_lang] };
+    let key = NSString::from_str("AppleLanguages");
+    let langs: CFArray<CFString> = match user_defaults.stringArrayForKey(&key) {
+        Some(langs) => unsafe {
+            CFArray::wrap_under_get_rule(Retained::as_ptr(&langs) as *const _)
+        },
+        None => CFArray::from_CFTypes(&[]),
+    };
 
     let cascade = cascade_list_for_languages(&menlo, &langs);
     let mut fonts = vec![];
