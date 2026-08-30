@@ -68,6 +68,9 @@ The default key assignments in copy mode are as follows:
 |                                | <kbd>Ctrl</kbd> + <kbd>B</kbd> |
 | Move up half a screen          | <kbd>Ctrl</kbd> + <kbd>U</kbd> {{since('20230320-124340-559cb7b0', inline=True)}}|
 | Move down one screen           | <kbd>PageDown</kbd> |
+
+Numeric prefixes may be used with `j` and `k` to move multiple rows at once;
+for example, `10j` moves down 10 rows and `10k` moves up 10 rows.
 |                                | <kbd>Ctrl</kbd> + <kbd>F</kbd>   |
 | Move down half a screen        | <kbd>Ctrl</kbd> + <kbd>D</kbd> {{since('20230320-124340-559cb7b0', inline=True)}}|
 | Move to other end of the selection| <kbd>o</kbd> |

@@ -2,8 +2,8 @@
 #[cfg(feature = "tmux_cc")]
 use crate::tmux_cc::Event;
 use crate::{
-    Action, CSI, DeviceControlMode, EnterDeviceControlMode, Esc, OperatingSystemCommand,
-    ShortDeviceControl,
+    Action, DeviceControlMode, EnterDeviceControlMode, Esc, OperatingSystemCommand,
+    ShortDeviceControl, CSI,
 };
 #[cfg(feature = "tmux_cc")]
 use core::borrow::BorrowMut;

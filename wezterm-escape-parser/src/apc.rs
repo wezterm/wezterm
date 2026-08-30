@@ -321,7 +321,7 @@ fn read_shared_memory_data(
 mod win {
     use winapi::um::handleapi::CloseHandle;
     use winapi::um::memoryapi::{
-        FILE_MAP_ALL_ACCESS, MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, VirtualQuery,
+        MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, VirtualQuery, FILE_MAP_ALL_ACCESS,
     };
     use winapi::um::winnt::{HANDLE, MEMORY_BASIC_INFORMATION};
 

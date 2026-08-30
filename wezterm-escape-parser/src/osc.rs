@@ -1,6 +1,6 @@
 use crate::color::SrgbaTuple;
 pub use crate::hyperlink::Hyperlink;
-use crate::{Result, bail, ensure, format_err};
+use crate::{bail, ensure, format_err, Result};
 use base64::Engine;
 use bitflags::bitflags;
 use core::fmt::{Display, Error as FmtError, Formatter, Result as FmtResult};

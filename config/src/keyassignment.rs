@@ -696,8 +696,12 @@ pub enum CopyModeAssignment {
     MoveToSelectionOtherEnd,
     MoveToSelectionOtherEndHoriz,
     MoveBackwardWord,
+    MoveBackwardWordEnd,
+    MoveBackwardBigWord,
     MoveForwardWord,
+    MoveForwardBigWord,
     MoveForwardWordEnd,
+    MoveForwardBigWordEnd,
     MoveRight,
     MoveLeft,
     MoveUp,
@@ -722,6 +726,9 @@ pub enum CopyModeAssignment {
     JumpBackward { prev_char: bool },
     JumpAgain,
     JumpReverse,
+    BeginVimPrefixG,
+    BeginTextObjectYank,
+    BeginTextObjectSelection,
 }
 
 pub type KeyTable = HashMap<(KeyCode, Modifiers), KeyTableEntry>;

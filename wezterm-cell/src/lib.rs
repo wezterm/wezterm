@@ -609,7 +609,11 @@ impl TeenyString {
             " "
         } else if s.len() == 1 {
             let b = s.as_bytes()[0];
-            if b < 0x20 || b == 0x7f { " " } else { s }
+            if b < 0x20 || b == 0x7f {
+                " "
+            } else {
+                s
+            }
         } else {
             s
         };
@@ -654,7 +658,11 @@ impl TeenyString {
 
     pub fn width(&self) -> usize {
         if Self::is_marker_bit_set(self.0) {
-            if Self::is_double_width(self.0) { 2 } else { 1 }
+            if Self::is_double_width(self.0) {
+                2
+            } else {
+                1
+            }
         } else {
             let heap = self.0 as *const u64 as *const TeenyStringHeap;
             unsafe { (*heap).width }

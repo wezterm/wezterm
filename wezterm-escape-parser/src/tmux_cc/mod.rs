@@ -1,8 +1,8 @@
 use crate::error::Context;
-use crate::{Result, bail, format_err};
+use crate::{bail, format_err, Result};
 use parser::Rule;
-use pest::Parser as _;
 use pest::iterators::{Pair, Pairs};
+use pest::Parser as _;
 
 pub type TmuxWindowId = u64;
 pub type TmuxPaneId = u64;

@@ -57,6 +57,40 @@ struct Jump {
     target: char,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum VimWordStyle {
+    Normal,
+    Big,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum PendingTextObjectOperator {
+    Yank,
+    Visual,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum PendingKey {
+    PrefixG,
+    TextObjectAwaitInner(PendingTextObjectOperator),
+    TextObjectAwaitWord(PendingTextObjectOperator),
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum WordSegmentKind {
+    Whitespace,
+    Keyword,
+    Punctuation,
+    BigWord,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct WordSegment {
+    start: usize,
+    end: usize,
+    kind: WordSegmentKind,
+}
+
 struct CopyRenderable {
     cursor: StableCursorPosition,
     delegate: Arc<dyn Pane>,
@@ -83,12 +117,71 @@ struct CopyRenderable {
     /// Used to debounce queries while the user is typing
     typing_cookie: usize,
     searching: Option<Searching>,
+    pending_count: Option<usize>,
     pending_jump: Option<PendingJump>,
     last_jump: Option<Jump>,
+    pending_key: Option<PendingKey>,
+    /// Content-space selection range (no gutter offset) used for copying text.
+    /// Kept in sync with the gutter-offset range stored in TermWindow.
+    content_selection: Option<SelectionRange>,
 }
 
 struct Searching {
     remain: StableRowIndex,
+}
+
+fn push_count_digit(pending_count: &mut Option<usize>, digit: usize) {
+    let count = pending_count.unwrap_or(0);
+    *pending_count = Some(count.saturating_mul(10).saturating_add(digit));
+}
+
+fn take_count(pending_count: &mut Option<usize>) -> usize {
+    pending_count.take().unwrap_or(1)
+}
+
+fn key_down_consumes_count(
+    editing_search: bool,
+    pending_count: &mut Option<usize>,
+    key: KeyCode,
+    mods: KeyModifiers,
+) -> bool {
+    if editing_search {
+        return false;
+    }
+
+    match (key, mods) {
+        (KeyCode::Char(c @ '1'..='9'), KeyModifiers::NONE) => {
+            push_count_digit(pending_count, (c as u8 - b'0') as usize);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn assignment_uses_count(
+    pending_count: &mut Option<usize>,
+    assignment: &CopyModeAssignment,
+) -> Option<usize> {
+    match assignment {
+        CopyModeAssignment::MoveToStartOfLine if pending_count.is_some() => {
+            push_count_digit(pending_count, 0);
+            Some(0)
+        }
+        CopyModeAssignment::MoveUp | CopyModeAssignment::MoveDown => Some(take_count(pending_count)),
+        _ => None,
+    }
+}
+
+fn should_clear_pending_count_for_assignment(
+    has_pending_count: bool,
+    assignment: &CopyModeAssignment,
+) -> bool {
+    !matches!(
+        assignment,
+        CopyModeAssignment::MoveUp
+            | CopyModeAssignment::MoveDown
+            | CopyModeAssignment::MoveToStartOfLine if has_pending_count
+    )
 }
 
 #[derive(Debug)]
@@ -160,8 +253,11 @@ impl CopyOverlay {
             selection_mode: SelectionMode::Cell,
             typing_cookie: 0,
             searching: None,
+            pending_count: None,
             pending_jump: None,
             last_jump: None,
+            pending_key: None,
+            content_selection: None,
         };
 
         let search_row = render.compute_search_row();
@@ -420,6 +516,7 @@ impl CopyRenderable {
     }
 
     fn clear_selection(&mut self) {
+        self.content_selection = None;
         let pane_id = self.delegate.pane_id();
         self.window
             .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
@@ -434,11 +531,10 @@ impl CopyRenderable {
         let result = self.results[n].clone();
         self.cursor.y = result.end_y;
         self.cursor.x = result.end_x.saturating_sub(1);
-
-        let start = SelectionCoordinate::x_y(result.start_x, result.start_y);
-        let end = SelectionCoordinate::x_y(result.end_x.saturating_sub(1), result.end_y);
-        self.start.replace(start);
-        self.adjust_selection(start, SelectionRange { start, end });
+        self.start = None;
+        self.clear_selection();
+        self.adjust_viewport_for_cursor_position();
+        self.window.invalidate();
     }
 
     fn clamp_cursor_to_scrollback(&mut self) {
@@ -508,10 +604,24 @@ impl CopyRenderable {
         }
     }
 
-    fn adjust_selection(&self, start: SelectionCoordinate, range: SelectionRange) {
+    fn adjust_selection(&mut self, start: SelectionCoordinate, range: SelectionRange) {
+        // Save content-space range for use when copying text.
+        self.content_selection = Some(range);
+
         let pane_id = self.delegate.pane_id();
         let window = self.window.clone();
         let mode = self.selection_mode;
+        let gutter_width = line_number_gutter_width(self.delegate.get_dimensions().viewport_rows);
+        let offset_coord = |c: SelectionCoordinate| SelectionCoordinate {
+            x: c.x.saturating_add(gutter_width),
+            y: c.y,
+        };
+        let offset_range = |r: SelectionRange| SelectionRange {
+            start: offset_coord(r.start),
+            end: offset_coord(r.end),
+        };
+        let start = offset_coord(start);
+        let range = offset_range(range);
         self.window
             .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
                 let mut selection = term_window.selection(pane_id);
@@ -731,15 +841,16 @@ impl CopyRenderable {
         self.select_to_cursor_pos();
     }
 
-    fn move_up_single_row(&mut self) {
-        self.cursor.y = self.cursor.y.saturating_sub(1);
+    fn move_up_rows(&mut self, rows: usize) {
+        self.cursor.y = self.cursor.y.saturating_sub(rows as StableRowIndex);
         self.select_to_cursor_pos();
     }
 
-    fn move_down_single_row(&mut self) {
-        self.cursor.y += 1;
+    fn move_down_rows(&mut self, rows: usize) {
+        self.cursor.y += rows as StableRowIndex;
         self.select_to_cursor_pos();
     }
+
     fn move_to_start_of_line(&mut self) {
         self.cursor.x = 0;
         self.select_to_cursor_pos();
@@ -824,135 +935,247 @@ impl CopyRenderable {
         }
     }
 
-    fn move_backward_one_word(&mut self) {
-        let y = if self.cursor.x == 0 && self.cursor.y > 0 {
-            self.cursor.x = usize::max_value();
-            self.cursor.y.saturating_sub(1)
-        } else {
-            self.cursor.y
-        };
+    fn move_backward_one_word(&mut self, style: VimWordStyle) {
+        let dims = self.delegate.get_dimensions();
+        let mut y = self.cursor.y;
+        let mut x = self.cursor.x;
 
-        let (top, lines) = self.delegate.get_lines(y..y + 1);
-        if let Some(line) = lines.get(0) {
+        loop {
+            let (top, lines) = self.delegate.get_lines(y..y + 1);
+            let Some(line) = lines.get(0) else {
+                break;
+            };
             self.cursor.y = top;
-            if self.cursor.x == usize::max_value() {
-                self.cursor.x = line.len().saturating_sub(1);
+            let width = line.len();
+            let s = line.columns_as_str(0..width.saturating_add(1));
+            let cursor = if top == self.cursor.y && y == self.cursor.y {
+                x.min(width)
+            } else {
+                width
+            };
+
+            if let Some(target) = move_backward_word_start_in_str(&s, cursor, style) {
+                self.cursor.x = target;
+                self.select_to_cursor_pos();
+                return;
             }
-            let s = line.columns_as_str(0..self.cursor.x.saturating_add(1));
 
-            // "hello there you"
-            //              |_
-            //        |    _
-            //  |    _
-            //        |     _
-            //  |     _
-
-            let mut last_was_whitespace = false;
-
-            for (idx, word) in s.split_word_bounds().rev().enumerate() {
-                let width = unicode_column_width(word, None);
-
-                if is_whitespace_word(word) {
-                    self.cursor.x = self.cursor.x.saturating_sub(width);
-                    last_was_whitespace = true;
-                    continue;
-                }
-                last_was_whitespace = false;
-
-                if idx == 0 && width == 1 {
-                    // We were at the start of the initial word
-                    self.cursor.x = self.cursor.x.saturating_sub(width);
-                    continue;
-                }
-
-                self.cursor.x = self.cursor.x.saturating_sub(width.saturating_sub(1));
+            if top <= dims.scrollback_top {
                 break;
             }
 
-            if last_was_whitespace && self.cursor.y > 0 {
-                // The line begins with whitespace
-                self.cursor.x = usize::max_value();
-                self.cursor.y -= 1;
-                return self.move_backward_one_word();
-            }
+            y = top - 1;
+            x = usize::MAX;
         }
+
         self.select_to_cursor_pos();
     }
 
-    fn move_forward_one_word(&mut self) {
-        let y = self.cursor.y;
-        let (top, lines) = self.delegate.get_lines(y..y + 1);
-        if let Some(line) = lines.get(0) {
+    fn move_forward_one_word(&mut self, style: VimWordStyle) {
+        let dims = self.delegate.get_dimensions();
+        let max_row = dims.scrollback_top + dims.scrollback_rows as isize;
+        let mut y = self.cursor.y;
+        let mut x = self.cursor.x;
+
+        loop {
+            let (top, lines) = self.delegate.get_lines(y..y + 1);
+            let Some(line) = lines.get(0) else {
+                break;
+            };
             self.cursor.y = top;
             let width = line.len();
-            let s = line.columns_as_str(self.cursor.x..width + 1);
-            let mut words = s.split_word_bounds();
+            let s = line.columns_as_str(0..width.saturating_add(1));
+            let cursor = x.min(width);
 
-            if let Some(word) = words.next() {
-                self.cursor.x += unicode_column_width(word, None);
-                if !is_whitespace_word(word) {
-                    if let Some(word) = words.next() {
-                        if is_whitespace_word(word) {
-                            self.cursor.x += unicode_column_width(word, None);
-                        }
-                    }
-                }
+            if let Some(target) = move_forward_word_start_in_str(&s, cursor, style) {
+                self.cursor.x = target;
+                self.select_to_cursor_pos();
+                return;
             }
 
-            if self.cursor.x >= width {
-                let dims = self.delegate.get_dimensions();
-                let max_row = dims.scrollback_top + dims.scrollback_rows as isize;
-                if self.cursor.y + 1 < max_row {
-                    self.cursor.y += 1;
-                    return self.move_to_start_of_line_content();
-                }
+            if top + 1 >= max_row {
+                break;
             }
+
+            y = top + 1;
+            x = 0;
         }
+
         self.select_to_cursor_pos();
     }
 
-    fn move_to_end_of_word(&mut self) {
-        let y = self.cursor.y;
-        let (top, lines) = self.delegate.get_lines(y..y + 1);
-        if let Some(line) = lines.get(0) {
+    fn move_to_end_of_word(&mut self, style: VimWordStyle) {
+        let dims = self.delegate.get_dimensions();
+        let max_row = dims.scrollback_top + dims.scrollback_rows as isize;
+        let mut y = self.cursor.y;
+        let mut x = self.cursor.x;
+
+        loop {
+            let (top, lines) = self.delegate.get_lines(y..y + 1);
+            let Some(line) = lines.get(0) else {
+                break;
+            };
             self.cursor.y = top;
             let width = line.len();
-            let s = line.columns_as_str(self.cursor.x..width + 1);
-            let mut words = s.split_word_bounds();
+            let s = line.columns_as_str(0..width.saturating_add(1));
+            let cursor = x.min(width.saturating_sub(1));
 
-            if self.cursor.x >= width - 1 {
-                let dims = self.delegate.get_dimensions();
-                let max_row = dims.scrollback_top + dims.scrollback_rows as isize;
-                if self.cursor.y + 1 < max_row {
-                    self.cursor.y += 1;
-                    self.cursor.x = 0;
-                    return self.move_to_end_of_word();
-                }
+            if let Some(target) = move_forward_word_end_in_str(&s, cursor, style) {
+                self.cursor.x = target;
+                self.select_to_cursor_pos();
+                return;
             }
 
-            if let Some(word) = words.next() {
-                let mut word_end = self.cursor.x + unicode_column_width(word, None);
-                if !is_whitespace_word(word) {
-                    if self.cursor.x == word_end - 1 {
-                        while let Some(next_word) = words.next() {
-                            word_end += unicode_column_width(next_word, None);
-                            if !is_whitespace_word(next_word) {
-                                break;
-                            }
-                        }
-                    }
-                }
-                while let Some(next_word) = words.next() {
-                    if !is_whitespace_word(next_word) {
-                        word_end += unicode_column_width(next_word, None);
+            if top + 1 >= max_row {
+                break;
+            }
+
+            y = top + 1;
+            x = 0;
+        }
+
+        self.select_to_cursor_pos();
+    }
+
+    fn move_to_backward_word_end(&mut self, style: VimWordStyle) {
+        let dims = self.delegate.get_dimensions();
+        let mut y = self.cursor.y;
+        let mut x = self.cursor.x;
+
+        loop {
+            let (top, lines) = self.delegate.get_lines(y..y + 1);
+            let Some(line) = lines.get(0) else {
+                break;
+            };
+            self.cursor.y = top;
+            let width = line.len();
+            let s = line.columns_as_str(0..width.saturating_add(1));
+            let cursor = x.min(width);
+
+            if let Some(target) = move_backward_word_end_in_str(&s, cursor, style) {
+                self.cursor.x = target;
+                self.select_to_cursor_pos();
+                return;
+            }
+
+            if top <= dims.scrollback_top {
+                break;
+            }
+
+            y = top - 1;
+            x = usize::MAX;
+        }
+
+        self.select_to_cursor_pos();
+    }
+
+    fn inner_word_range(&self) -> SelectionRange {
+        let (top, lines) = self.delegate.get_lines(self.cursor.y..self.cursor.y + 1);
+        let Some(line) = lines.get(0) else {
+            let coord = SelectionCoordinate::x_y(self.cursor.x, self.cursor.y);
+            return SelectionRange::start(coord);
+        };
+
+        let width = line.len();
+        let s = line.columns_as_str(0..width.saturating_add(1));
+        let cursor = self.cursor.x.min(width.saturating_sub(1));
+
+        if let Some((start, end)) = inner_word_range_in_str(&s, cursor, VimWordStyle::Normal) {
+            SelectionRange {
+                start: SelectionCoordinate::x_y(start, top),
+                end: SelectionCoordinate::x_y(end, top),
+            }
+        } else {
+            let coord = SelectionCoordinate::x_y(self.cursor.x, self.cursor.y);
+            SelectionRange::start(coord)
+        }
+    }
+
+    fn select_inner_word(&mut self) {
+        let range = self.inner_word_range();
+        self.selection_mode = SelectionMode::Cell;
+        self.start.replace(range.start);
+        self.cursor.x = match range.end.x {
+            SelectionX::Cell(x) => x,
+            SelectionX::BeforeZero => 0,
+        };
+        self.cursor.y = range.end.y;
+        self.adjust_selection(range.start, range);
+    }
+
+    fn text_for_selection_range(&self, range: SelectionRange) -> String {
+        let mut s = String::new();
+        let sel = range.normalize();
+        let first_row = sel.rows().start;
+        let last_row = sel.rows().end;
+        let mut last_was_wrapped = false;
+
+        for line in self.delegate.get_logical_lines(sel.rows()) {
+            if !s.is_empty() && !last_was_wrapped {
+                s.push('\n');
+            }
+            let last_idx = line.physical_lines.len().saturating_sub(1);
+            for (idx, phys) in line.physical_lines.iter().enumerate() {
+                let this_row = line.first_row + idx as StableRowIndex;
+                if this_row >= first_row && this_row < last_row {
+                    let last_phys_idx = phys.len().saturating_sub(1);
+                    let cols = sel.cols_for_row(this_row, false);
+                    let last_col_idx = cols.end.saturating_sub(1).min(last_phys_idx);
+                    let col_span = phys.columns_as_str(cols);
+                    if idx == last_idx {
+                        s.push_str(col_span.trim_end());
                     } else {
-                        break;
+                        s.push_str(&col_span);
                     }
+
+                    last_was_wrapped = last_col_idx == last_phys_idx
+                        && phys
+                            .get_cell(last_col_idx)
+                            .map(|c| c.attrs().wrapped())
+                            .unwrap_or(false);
                 }
-                self.cursor.x = word_end - 1;
             }
         }
-        self.select_to_cursor_pos();
+
+        s
+    }
+
+    fn copy_text_and_close(&self, text: String) {
+        let window = self.window.clone();
+        window.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+            term_window.copy_to_clipboard(
+                ClipboardCopyDestination::ClipboardAndPrimarySelection,
+                text.clone(),
+            );
+        })));
+        self.set_viewport(None);
+        self.close();
+    }
+
+    fn copy_selection_and_close(&self) {
+        // Use content_selection (content-space, no gutter offset) for accurate text extraction.
+        // The gutter-offset range in TermWindow is only for visual highlighting.
+        if let Some(range) = self.content_selection {
+            let text = self.text_for_selection_range(range);
+            self.copy_text_and_close(text);
+        } else {
+            self.set_viewport(None);
+            self.close();
+        }
+    }
+
+    fn copy_inner_word_and_close(&mut self) {
+        let text = self.text_for_selection_range(self.inner_word_range());
+        self.copy_text_and_close(text);
+    }
+
+    fn copy_line_and_close(&mut self) {
+        let coord = SelectionCoordinate::x_y(self.cursor.x, self.cursor.y);
+        let range = SelectionRange::line_around(coord, &*self.delegate);
+        self.start.replace(range.start);
+        self.selection_mode = SelectionMode::Line;
+        self.adjust_selection(range.start, range);
+        self.copy_selection_and_close();
     }
 
     fn move_by_zone(&mut self, mut delta: isize, zone_type: Option<SemanticType>) {
@@ -1100,6 +1323,100 @@ impl CopyRenderable {
         self.start.take();
         self.clear_selection();
     }
+
+    fn begin_prefix_g(&mut self) {
+        self.pending_key.replace(PendingKey::PrefixG);
+    }
+
+    fn begin_text_object_selection(&mut self) {
+        self.pending_key.replace(PendingKey::TextObjectAwaitInner(
+            PendingTextObjectOperator::Visual,
+        ));
+        self.set_selection_mode(&Some(SelectionMode::Cell));
+    }
+
+    fn begin_text_object_yank(&mut self) {
+        if self.start.is_some() {
+            self.copy_selection_and_close();
+            return;
+        }
+        self.pending_key.replace(PendingKey::TextObjectAwaitInner(
+            PendingTextObjectOperator::Yank,
+        ));
+    }
+
+    fn clear_pending_key(&mut self) {
+        self.pending_key.take();
+    }
+
+    fn has_pending_count(&self) -> bool {
+        self.pending_count.is_some()
+    }
+
+    fn clear_pending_count(&mut self) {
+        self.pending_count.take();
+    }
+
+    fn key_down_consumes_count(&mut self, key: KeyCode, mods: KeyModifiers) -> bool {
+        key_down_consumes_count(self.editing_search, &mut self.pending_count, key, mods)
+    }
+
+    fn assignment_uses_count(&mut self, assignment: &CopyModeAssignment) -> Option<usize> {
+        assignment_uses_count(&mut self.pending_count, assignment)
+    }
+
+    fn should_clear_pending_count_for_assignment(&self, assignment: &CopyModeAssignment) -> bool {
+        should_clear_pending_count_for_assignment(self.has_pending_count(), assignment)
+    }
+
+    fn resolve_pending_assignment(&mut self, assignment: &CopyModeAssignment) -> bool {
+        match self.pending_key {
+            Some(PendingKey::PrefixG) => {
+                self.pending_key.take();
+                match assignment {
+                    CopyModeAssignment::BeginVimPrefixG => {
+                        self.move_to_top();
+                        true
+                    }
+                    CopyModeAssignment::MoveForwardWordEnd => {
+                        self.move_to_backward_word_end(VimWordStyle::Normal);
+                        true
+                    }
+                    CopyModeAssignment::MoveForwardBigWordEnd => {
+                        self.move_to_backward_word_end(VimWordStyle::Big);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            Some(PendingKey::TextObjectAwaitWord(operator)) => {
+                self.pending_key.take();
+                match assignment {
+                    CopyModeAssignment::MoveForwardWord => {
+                        match operator {
+                            PendingTextObjectOperator::Yank => self.copy_inner_word_and_close(),
+                            PendingTextObjectOperator::Visual => self.select_inner_word(),
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            Some(PendingKey::TextObjectAwaitInner(operator)) => {
+                self.pending_key.take();
+                match assignment {
+                    CopyModeAssignment::BeginTextObjectYank
+                        if operator == PendingTextObjectOperator::Yank =>
+                    {
+                        self.copy_line_and_close();
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            None => false,
+        }
+    }
 }
 
 impl Pane for CopyOverlay {
@@ -1161,6 +1478,32 @@ impl Pane for CopyOverlay {
                 }
             }
             return Ok(());
+        }
+
+        if render.key_down_consumes_count(key, mods) {
+            return Ok(());
+        }
+
+        if let Some(pending) = render.pending_key {
+            if let PendingKey::TextObjectAwaitInner(operator) = pending {
+                match (key, mods) {
+                    (KeyCode::Char('i'), KeyModifiers::NONE) => {
+                        render
+                            .pending_key
+                            .replace(PendingKey::TextObjectAwaitWord(operator));
+                        return Ok(());
+                    }
+                    _ => render.clear_pending_key(),
+                }
+            } else if matches!(pending, PendingKey::PrefixG) {
+                match (key, mods) {
+                    (KeyCode::Char('e'), KeyModifiers::NONE)
+                    | (KeyCode::Char('E'), KeyModifiers::NONE)
+                    | (KeyCode::Char('E'), KeyModifiers::SHIFT)
+                    | (KeyCode::Char('g'), KeyModifiers::NONE) => {}
+                    _ => render.clear_pending_key(),
+                }
+            }
         }
 
         if render.editing_search {
@@ -1237,6 +1580,10 @@ impl Pane for CopyOverlay {
             }
         }
 
+        if render.has_pending_count() {
+            render.clear_pending_count();
+        }
+
         Ok(())
     }
 
@@ -1250,6 +1597,15 @@ impl Pane for CopyOverlay {
         }
         match assignment {
             KeyAssignment::CopyMode(assignment) => {
+                if render.resolve_pending_assignment(assignment) {
+                    return PerformAssignmentResult::Handled;
+                }
+                if render.pending_key.is_some() {
+                    render.clear_pending_key();
+                }
+                if render.should_clear_pending_count_for_assignment(assignment) {
+                    render.clear_pending_count();
+                }
                 match assignment {
                     MoveToViewportBottom => render.move_to_viewport_bottom(),
                     MoveToViewportTop => render.move_to_viewport_top(),
@@ -1258,17 +1614,28 @@ impl Pane for CopyOverlay {
                     MoveToScrollbackBottom => render.move_to_bottom(),
                     MoveToStartOfLineContent => render.move_to_start_of_line_content(),
                     MoveToEndOfLineContent => render.move_to_end_of_line_content(),
+                    MoveToStartOfLine if render.assignment_uses_count(assignment) == Some(0) => {}
                     MoveToStartOfLine => render.move_to_start_of_line(),
                     MoveToStartOfNextLine => render.move_to_start_of_next_line(),
                     MoveToSelectionOtherEnd => render.move_to_selection_other_end(),
                     MoveToSelectionOtherEndHoriz => render.move_to_selection_other_end_horiz(),
-                    MoveBackwardWord => render.move_backward_one_word(),
-                    MoveForwardWord => render.move_forward_one_word(),
-                    MoveForwardWordEnd => render.move_to_end_of_word(),
+                    MoveBackwardWord => render.move_backward_one_word(VimWordStyle::Normal),
+                    MoveBackwardWordEnd => render.move_to_backward_word_end(VimWordStyle::Normal),
+                    MoveBackwardBigWord => render.move_backward_one_word(VimWordStyle::Big),
+                    MoveForwardWord => render.move_forward_one_word(VimWordStyle::Normal),
+                    MoveForwardBigWord => render.move_forward_one_word(VimWordStyle::Big),
+                    MoveForwardWordEnd => render.move_to_end_of_word(VimWordStyle::Normal),
+                    MoveForwardBigWordEnd => render.move_to_end_of_word(VimWordStyle::Big),
                     MoveRight => render.move_right_single_cell(),
                     MoveLeft => render.move_left_single_cell(),
-                    MoveUp => render.move_up_single_row(),
-                    MoveDown => render.move_down_single_row(),
+                    MoveUp => {
+                        let count = render.assignment_uses_count(assignment).unwrap_or(1);
+                        render.move_up_rows(count);
+                    }
+                    MoveDown => {
+                        let count = render.assignment_uses_count(assignment).unwrap_or(1);
+                        render.move_down_rows(count);
+                    }
                     MoveByPage(n) => render.move_by_page(**n),
                     PageUp => render.move_by_page(-1.0),
                     PageDown => render.move_by_page(1.0),
@@ -1291,6 +1658,9 @@ impl Pane for CopyOverlay {
                     JumpBackward { prev_char } => render.jump(false, *prev_char),
                     JumpAgain => render.jump_again(false),
                     JumpReverse => render.jump_again(true),
+                    BeginVimPrefixG => render.begin_prefix_g(),
+                    BeginTextObjectYank => render.begin_text_object_yank(),
+                    BeginTextObjectSelection => render.begin_text_object_selection(),
                 }
                 PerformAssignmentResult::Handled
             }
@@ -1356,7 +1726,11 @@ impl Pane for CopyOverlay {
                 visibility: termwiz::surface::CursorVisibility::Visible,
             }
         } else {
-            renderer.cursor
+            let dims = self.delegate.get_dimensions();
+            let gutter_width = line_number_gutter_width(dims.viewport_rows);
+            let mut cursor = renderer.cursor;
+            cursor.x += gutter_width;
+            cursor
         }
     }
 
@@ -1373,7 +1747,37 @@ impl Pane for CopyOverlay {
     }
 
     fn get_logical_lines(&self, lines: Range<StableRowIndex>) -> Vec<LogicalLine> {
-        self.delegate.get_logical_lines(lines)
+        let renderer = self.render.lock();
+        let gutter_width =
+            line_number_gutter_width(self.delegate.get_dimensions().viewport_rows);
+        let search_row = renderer.compute_search_row();
+        let cursor_y = renderer.cursor.y;
+        drop(renderer);
+
+        let mut logical_lines = self.delegate.get_logical_lines(lines);
+        for ll in &mut logical_lines {
+            for (idx, phys) in ll.physical_lines.iter_mut().enumerate() {
+                let stable_y = ll.first_row + idx as StableRowIndex;
+                if stable_y == search_row {
+                    continue;
+                }
+                let cols = phys.len().max(gutter_width);
+                for _ in 0..gutter_width {
+                    phys.insert_cell(0, Cell::blank(), cols, SEQ_ZERO);
+                }
+                let rel: isize = stable_y - cursor_y;
+                let label = line_number_label(rel, gutter_width);
+                let num_attr = if rel == 0 {
+                    CellAttributes::default().set_reverse(true).clone()
+                } else {
+                    CellAttributes::default()
+                        .set_foreground(AnsiColor::Silver)
+                        .clone()
+                };
+                phys.overlay_text_with_attribute(0, &label, num_attr, SEQ_ZERO);
+            }
+        }
+        logical_lines
     }
 
     fn for_each_logical_line_in_stable_range_mut(
@@ -1397,11 +1801,16 @@ impl Pane for CopyOverlay {
         let dims = self.get_dimensions();
         let search_row = renderer.compute_search_row();
 
+        let cursor_y = renderer.cursor.y;
+        let gutter_width = line_number_gutter_width(dims.viewport_rows);
+
         struct OverlayLines<'a> {
             with_lines: &'a mut dyn WithPaneLines,
             dims: RenderableDimensions,
             search_row: StableRowIndex,
             renderer: &'a mut CopyRenderable,
+            cursor_y: StableRowIndex,
+            gutter_width: usize,
         }
 
         self.delegate.with_lines_mut(
@@ -1411,6 +1820,8 @@ impl Pane for CopyOverlay {
                 dims,
                 search_row,
                 renderer: &mut *renderer,
+                cursor_y,
+                gutter_width,
             },
         );
 
@@ -1462,12 +1873,15 @@ impl Pane for CopyOverlay {
                         line.clear_appdata();
                     } else if let Some(matches) = self.renderer.by_line.get(&stable_idx) {
                         for m in matches {
-                            // highlight
+                            let is_active = Some(m.result_index) == self.renderer.result_pos;
+                            if !is_active && !self.renderer.editing_search {
+                                continue;
+                            }
                             for cell_idx in m.range.clone() {
                                 if let Some(cell) =
                                     line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
                                 {
-                                    if Some(m.result_index) == self.renderer.result_pos {
+                                    if is_active {
                                         cell.attrs_mut()
                                             .set_background(
                                                 colors
@@ -1485,12 +1899,12 @@ impl Pane for CopyOverlay {
                                             .set_background(
                                                 colors
                                                     .copy_mode_inactive_highlight_bg
-                                                    .unwrap_or(AnsiColor::Fuchsia.into()),
+                                                    .unwrap_or(AnsiColor::Purple.into()),
                                             )
                                             .set_foreground(
                                                 colors
                                                     .copy_mode_inactive_highlight_fg
-                                                    .unwrap_or(AnsiColor::Black.into()),
+                                                    .unwrap_or(AnsiColor::White.into()),
                                             )
                                             .set_reverse(false);
                                     }
@@ -1499,6 +1913,33 @@ impl Pane for CopyOverlay {
                         }
                         line.clear_appdata();
                     }
+
+                    if stable_idx != self.search_row {
+                        // Shift existing content right to make room for the gutter
+                        for _ in 0..self.gutter_width {
+                            line.insert_cell(
+                                0,
+                                Cell::blank(),
+                                self.dims.cols,
+                                SEQ_ZERO,
+                            );
+                        }
+                        // Render the relative line number into the gutter
+                        let rel: isize = stable_idx - self.cursor_y;
+                        let label = line_number_label(rel, self.gutter_width);
+                        let num_attr = if rel == 0 {
+                            CellAttributes::default().set_reverse(true).clone()
+                        } else {
+                            CellAttributes::default()
+                                .set_foreground(AnsiColor::Silver)
+                                .clone()
+                        };
+                        line.overlay_text_with_attribute(0, &label, num_attr, SEQ_ZERO);
+                        // Force a new shape_hash so the line_quad_cache doesn't serve
+                        // the pre-gutter cached render
+                        line.clear_appdata();
+                    }
+
                     overlay_lines.push(line);
                 }
 
@@ -1555,11 +1996,14 @@ impl Pane for CopyOverlay {
                 renderer.last_bar_pos = Some(search_row);
             } else if let Some(matches) = renderer.by_line.get(&stable_idx) {
                 for m in matches {
-                    // highlight
+                    let is_active = Some(m.result_index) == renderer.result_pos;
+                    if !is_active && !renderer.editing_search {
+                        continue;
+                    }
                     for cell_idx in m.range.clone() {
                         if let Some(cell) = line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
                         {
-                            if Some(m.result_index) == renderer.result_pos {
+                            if is_active {
                                 cell.attrs_mut()
                                     .set_background(
                                         colors
@@ -1577,12 +2021,12 @@ impl Pane for CopyOverlay {
                                     .set_background(
                                         colors
                                             .copy_mode_inactive_highlight_bg
-                                            .unwrap_or(AnsiColor::Fuchsia.into()),
+                                            .unwrap_or(AnsiColor::Purple.into()),
                                     )
                                     .set_foreground(
                                         colors
                                             .copy_mode_inactive_highlight_fg
-                                            .unwrap_or(AnsiColor::Black.into()),
+                                            .unwrap_or(AnsiColor::White.into()),
                                     )
                                     .set_reverse(false);
                             }
@@ -1598,6 +2042,15 @@ impl Pane for CopyOverlay {
     fn get_dimensions(&self) -> RenderableDimensions {
         self.delegate.get_dimensions()
     }
+}
+
+fn line_number_gutter_width(viewport_rows: usize) -> usize {
+    format!("{}", viewport_rows).len() + 1
+}
+
+fn line_number_label(rel: isize, gutter_width: usize) -> String {
+    let num_digits = gutter_width - 1;
+    format!("{:>width$} ", rel.abs(), width = num_digits)
 }
 
 pub struct SearchOverlayPatternWriter {
@@ -1620,12 +2073,170 @@ impl std::io::Write for SearchOverlayPatternWriter {
     }
 }
 
-fn is_whitespace_word(word: &str) -> bool {
-    if let Some(c) = word.chars().next() {
-        c.is_whitespace()
-    } else {
-        false
+fn small_word_kind(s: &str) -> WordSegmentKind {
+    match s.chars().next() {
+        Some(c) if c.is_whitespace() => WordSegmentKind::Whitespace,
+        Some(c) if c.is_alphanumeric() || c == '_' => WordSegmentKind::Keyword,
+        Some(_) => WordSegmentKind::Punctuation,
+        None => WordSegmentKind::Whitespace,
     }
+}
+
+fn word_segments_in_str(s: &str, style: VimWordStyle) -> Vec<WordSegment> {
+    let mut segments: Vec<WordSegment> = Vec::new();
+    let mut pos = 0;
+
+    for grapheme in s.graphemes(true) {
+        let width = unicode_column_width(grapheme, None);
+        if width == 0 {
+            continue;
+        }
+
+        let kind = match style {
+            VimWordStyle::Big => {
+                if grapheme
+                    .chars()
+                    .next()
+                    .map(|c| c.is_whitespace())
+                    .unwrap_or(false)
+                {
+                    WordSegmentKind::Whitespace
+                } else {
+                    WordSegmentKind::BigWord
+                }
+            }
+            VimWordStyle::Normal => small_word_kind(grapheme),
+        };
+
+        let end = pos + width;
+        if let Some(last) = segments.last_mut() {
+            if last.kind == kind {
+                last.end = end;
+            } else {
+                segments.push(WordSegment {
+                    start: pos,
+                    end,
+                    kind,
+                });
+            }
+        } else {
+            segments.push(WordSegment {
+                start: pos,
+                end,
+                kind,
+            });
+        }
+        pos = end;
+    }
+
+    segments
+}
+
+fn segment_containing(segments: &[WordSegment], cursor: usize) -> Option<usize> {
+    segments
+        .iter()
+        .position(|seg| cursor >= seg.start && cursor < seg.end)
+}
+
+fn move_forward_word_start_in_str(s: &str, cursor: usize, style: VimWordStyle) -> Option<usize> {
+    let segments = word_segments_in_str(s, style);
+    if let Some(idx) = segment_containing(&segments, cursor) {
+        return segments
+            .iter()
+            .skip(idx + 1)
+            .find(|seg| seg.kind != WordSegmentKind::Whitespace)
+            .map(|seg| seg.start);
+    }
+
+    segments
+        .iter()
+        .find(|seg| seg.start > cursor && seg.kind != WordSegmentKind::Whitespace)
+        .map(|seg| seg.start)
+}
+
+fn move_backward_word_start_in_str(s: &str, cursor: usize, style: VimWordStyle) -> Option<usize> {
+    let segments = word_segments_in_str(s, style);
+    let idx = segment_containing(&segments, cursor).or_else(|| {
+        segments
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, seg)| seg.end <= cursor)
+            .map(|(idx, _)| idx)
+    })?;
+
+    let current = segments[idx];
+    if current.kind != WordSegmentKind::Whitespace && cursor > current.start {
+        return Some(current.start);
+    }
+
+    segments[..idx]
+        .iter()
+        .rev()
+        .find(|seg| seg.kind != WordSegmentKind::Whitespace)
+        .map(|seg| seg.start)
+}
+
+fn inner_word_range_in_str(
+    s: &str,
+    cursor: usize,
+    style: VimWordStyle,
+) -> Option<(usize, usize)> {
+    let segments = word_segments_in_str(s, style);
+    let idx = segment_containing(&segments, cursor).or_else(|| {
+        segments
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, seg)| seg.end <= cursor)
+            .map(|(idx, _)| idx)
+    })?;
+
+    let current = segments[idx];
+    if current.kind == WordSegmentKind::Whitespace {
+        return None;
+    }
+
+    Some((current.start, current.end.saturating_sub(1)))
+}
+
+fn move_forward_word_end_in_str(s: &str, cursor: usize, style: VimWordStyle) -> Option<usize> {
+    let segments = word_segments_in_str(s, style);
+    if let Some(idx) = segment_containing(&segments, cursor) {
+        let current = segments[idx];
+
+        if current.kind != WordSegmentKind::Whitespace && cursor < current.end.saturating_sub(1) {
+            return Some(current.end - 1);
+        }
+
+        return segments
+            .iter()
+            .skip(idx + 1)
+            .find(|seg| seg.kind != WordSegmentKind::Whitespace)
+            .map(|seg| seg.end - 1);
+    }
+
+    segments
+        .iter()
+        .find(|seg| seg.start > cursor && seg.kind != WordSegmentKind::Whitespace)
+        .map(|seg| seg.end - 1)
+}
+
+fn move_backward_word_end_in_str(s: &str, cursor: usize, style: VimWordStyle) -> Option<usize> {
+    let segments = word_segments_in_str(s, style);
+    if let Some(idx) = segment_containing(&segments, cursor) {
+        return segments[..idx]
+            .iter()
+            .rev()
+            .find(|seg| seg.kind != WordSegmentKind::Whitespace)
+            .map(|seg| seg.end - 1);
+    }
+
+    segments
+        .iter()
+        .rev()
+        .find(|seg| seg.end <= cursor && seg.kind != WordSegmentKind::Whitespace)
+        .map(|seg| seg.end - 1)
 }
 
 pub fn search_key_table() -> KeyTable {
@@ -1644,10 +2255,15 @@ pub fn search_key_table() -> KeyTable {
         (
             WKeyCode::Char('\r'),
             Modifiers::NONE,
-            KeyAssignment::CopyMode(CopyModeAssignment::PriorMatch),
+            KeyAssignment::CopyMode(CopyModeAssignment::AcceptPattern),
         ),
         (
             WKeyCode::Char('p'),
+            Modifiers::CTRL,
+            KeyAssignment::CopyMode(CopyModeAssignment::PriorMatch),
+        ),
+        (
+            WKeyCode::Char('\x10'),
             Modifiers::CTRL,
             KeyAssignment::CopyMode(CopyModeAssignment::PriorMatch),
         ),
@@ -1663,6 +2279,11 @@ pub fn search_key_table() -> KeyTable {
         ),
         (
             WKeyCode::Char('n'),
+            Modifiers::CTRL,
+            KeyAssignment::CopyMode(CopyModeAssignment::NextMatch),
+        ),
+        (
+            WKeyCode::Char('\x0e'),
             Modifiers::CTRL,
             KeyAssignment::CopyMode(CopyModeAssignment::NextMatch),
         ),
@@ -1778,9 +2399,29 @@ pub fn copy_key_table() -> KeyTable {
             KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardWord),
         ),
         (
+            WKeyCode::Char('W'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardBigWord),
+        ),
+        (
+            WKeyCode::Char('w'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardBigWord),
+        ),
+        (
             WKeyCode::Char('e'),
             Modifiers::NONE,
             KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardWordEnd),
+        ),
+        (
+            WKeyCode::Char('E'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardBigWordEnd),
+        ),
+        (
+            WKeyCode::Char('e'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardBigWordEnd),
         ),
         (
             WKeyCode::LeftArrow,
@@ -1801,6 +2442,16 @@ pub fn copy_key_table() -> KeyTable {
             WKeyCode::Char('b'),
             Modifiers::NONE,
             KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardWord),
+        ),
+        (
+            WKeyCode::Char('B'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardBigWord),
+        ),
+        (
+            WKeyCode::Char('b'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardBigWord),
         ),
         (
             WKeyCode::Char('0'),
@@ -1847,9 +2498,7 @@ pub fn copy_key_table() -> KeyTable {
         (
             WKeyCode::Char('v'),
             Modifiers::NONE,
-            KeyAssignment::CopyMode(CopyModeAssignment::SetSelectionMode(Some(
-                SelectionMode::Cell,
-            ))),
+            KeyAssignment::CopyMode(CopyModeAssignment::BeginTextObjectSelection),
         ),
         (
             WKeyCode::Char('V'),
@@ -1885,7 +2534,7 @@ pub fn copy_key_table() -> KeyTable {
         (
             WKeyCode::Char('g'),
             Modifiers::NONE,
-            KeyAssignment::CopyMode(CopyModeAssignment::MoveToScrollbackTop),
+            KeyAssignment::CopyMode(CopyModeAssignment::BeginVimPrefixG),
         ),
         (
             WKeyCode::Char('H'),
@@ -1965,10 +2614,7 @@ pub fn copy_key_table() -> KeyTable {
         (
             WKeyCode::Char('y'),
             Modifiers::NONE,
-            KeyAssignment::Multiple(vec![
-                KeyAssignment::CopyTo(ClipboardCopyDestination::ClipboardAndPrimarySelection),
-                scroll_to_bottom_and_close(),
-            ]),
+            KeyAssignment::CopyMode(CopyModeAssignment::BeginTextObjectYank),
         ),
         (
             WKeyCode::Char(';'),
@@ -2020,8 +2666,29 @@ pub fn copy_key_table() -> KeyTable {
             Modifiers::NONE,
             KeyAssignment::CopyMode(CopyModeAssignment::MoveToEndOfLineContent),
         ),
+        (
+            WKeyCode::Char('/'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::EditPattern),
+        ),
+        (
+            WKeyCode::Char('n'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::NextMatch),
+        ),
+        (
+            WKeyCode::Char('N'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::PriorMatch),
+        ),
+        (
+            WKeyCode::Char('N'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::PriorMatch),
+        ),
     ] {
         table.insert((key, mods), KeyTableEntry { action });
     }
     table
 }
+

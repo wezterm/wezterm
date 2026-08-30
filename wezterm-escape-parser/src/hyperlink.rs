@@ -1,4 +1,4 @@
-use crate::{Result, ensure, format_err};
+use crate::{ensure, format_err, Result};
 use core::hash::{Hash, Hasher};
 #[cfg(feature = "use_serde")]
 use serde::{Deserialize, Serialize};
