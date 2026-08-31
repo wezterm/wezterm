@@ -573,6 +573,8 @@ impl LauncherState {
                 }) => {
                     break;
                 }
+                // Handle any other `Char` input as a filter edit action or report as unhandled.
+                // Keep this catch-all last among the `Char` arms.
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
                     modifiers,

@@ -38,22 +38,25 @@ pub fn matcher_pattern(s: &str) -> Pattern {
     )
 }
 
-/// Edits a cursor-less filter box via `LineEditBuffer`: Ctrl-w kills the
-/// trailing word, Ctrl-u clears, plain/shift keys insert; any other key returns
-/// `None`. Shared by all four filter overlays; lowercasing folds the Ctrl-letter
-/// case difference between terminal overlays and GUI modals.
+/// Apply an edit action for given key input to the given `filter_term`.
+/// The cursor is assumed to be at the end.
+/// Returns the edited `filter_term` or None if the action wasn't handled.
 pub fn apply_filter_edit(c: char, mods: Modifiers, filter_term: &str) -> Option<String> {
     let mut buffer = LineEditBuffer::new(filter_term, filter_term.len());
-    if mods.contains(Modifiers::CTRL) {
-        match c.to_ascii_lowercase() {
-            'w' => buffer.kill_text(Movement::BackwardWord(1), Movement::BackwardWord(1)),
-            'u' => buffer.clear(),
-            _ => return None,
+    match (mods, c.to_ascii_lowercase()) {
+        (Modifiers::CTRL, 'w') => {
+            buffer.kill_text(Movement::BackwardWord(1), Movement::BackwardWord(1))
         }
-    } else if mods == Modifiers::NONE || mods == Modifiers::SHIFT {
-        buffer.insert_char(c);
-    } else {
-        return None;
+        (Modifiers::CTRL, 'u') => {
+            // Buffer is cursor-less, so 'cursor' is always at the end and deleting to BOL is
+            // equivalent to clearing the whole buffer.
+            buffer.clear()
+        }
+        (Modifiers::NONE | Modifiers::SHIFT, _) => {
+            // Insert char as-is
+            buffer.insert_char(c);
+        }
+        _ => return None, // Unhandled
     }
     Some(buffer.get_line().to_string())
 }
@@ -332,6 +335,8 @@ impl SelectorState {
                     self.trigger_event(None);
                     break;
                 }
+                // Handle any other `Char` input as a filter edit action or report as unhandled.
+                // Keep this catch-all last among the `Char` arms.
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
                     modifiers,
