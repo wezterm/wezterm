@@ -2580,6 +2580,30 @@ impl TermWindow {
         self.move_tab(tab)
     }
 
+    /// Pop up the right-click Copy/Paste context menu for `pane`.
+    fn show_context_menu(&mut self, pane: &Arc<dyn Pane>) {
+        use config::keyassignment::{ClipboardCopyDestination, ClipboardPasteSource};
+
+        let window = match self.window.as_ref() {
+            Some(window) => window.clone(),
+            None => return,
+        };
+
+        let has_selection = !self.selection_text(pane).is_empty();
+
+        let items = vec![
+            ContextMenuItem::new("Copy", KeyAssignment::CopyTo(ClipboardCopyDestination::Clipboard))
+                .enabled(has_selection),
+            ContextMenuItem::new(
+                "Paste",
+                KeyAssignment::PasteFrom(ClipboardPasteSource::Clipboard),
+            )
+            .enabled_when_clipboard_has_text(),
+        ];
+
+        window.show_context_menu(items);
+    }
+
     pub fn perform_key_assignment(
         &mut self,
         pane: &Arc<dyn Pane>,
@@ -2824,6 +2848,9 @@ impl TermWindow {
             }
             ClearSelection => {
                 self.clear_selection(pane);
+            }
+            ShowContextMenu => {
+                self.show_context_menu(pane);
             }
             StartWindowDrag => {
                 self.window_drag_position = self.current_mouse_event.clone();

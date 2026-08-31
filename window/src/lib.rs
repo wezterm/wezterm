@@ -210,6 +210,59 @@ pub enum WindowEvent {
     AdviseModifiersLedStatus(Modifiers, KeyboardLedStatus),
 }
 
+/// A single entry in a context menu requested via
+/// [`WindowOps::show_context_menu`]. When the user activates an item, the
+/// backend dispatches [`WindowEvent::PerformKeyAssignment`] with its `action`.
+#[derive(Clone, Debug)]
+pub struct ContextMenuItem {
+    /// The text shown for this item. Ignored for separators.
+    pub label: String,
+    /// The action to perform when the item is activated. `None` indicates a
+    /// separator (a non-interactive divider between groups of items).
+    pub action: Option<config::keyassignment::KeyAssignment>,
+    /// Whether the item is selectable. Disabled items are typically shown
+    /// greyed out. Ignored for separators.
+    pub enabled: bool,
+    /// When true, the backend additionally disables the item unless the
+    /// system clipboard holds text at the time the menu is shown.
+    pub enabled_when_clipboard_has_text: bool,
+}
+
+impl ContextMenuItem {
+    /// Create a normal, enabled menu item bound to `action`.
+    pub fn new<S: Into<String>>(label: S, action: config::keyassignment::KeyAssignment) -> Self {
+        Self {
+            label: label.into(),
+            action: Some(action),
+            enabled: true,
+            enabled_when_clipboard_has_text: false,
+        }
+    }
+
+    /// Create a non-interactive separator.
+    pub fn separator() -> Self {
+        Self {
+            label: String::new(),
+            action: None,
+            enabled: false,
+            enabled_when_clipboard_has_text: false,
+        }
+    }
+
+    /// Builder-style helper to set the enabled state.
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Builder-style helper: disable the item unless the system clipboard
+    /// holds text at the time the menu is shown.
+    pub fn enabled_when_clipboard_has_text(mut self) -> Self {
+        self.enabled_when_clipboard_has_text = true;
+        self
+    }
+}
+
 pub struct WindowEventSender {
     handler: Box<dyn FnMut(WindowEvent, &Window)>,
     window: Option<Window>,
@@ -310,6 +363,14 @@ pub trait WindowOps {
 
     /// Set some text in the clipboard
     fn set_clipboard(&self, clipboard: Clipboard, text: String);
+
+    /// Pop up a context menu at the current mouse position, built from the
+    /// supplied `items`. When the user picks an item, the backend dispatches
+    /// [`WindowEvent::PerformKeyAssignment`] with that item's action.
+    ///
+    /// The default implementation is a no-op; backends that support a native
+    /// context menu (or a self-drawn fallback) override this.
+    fn show_context_menu(&self, _items: Vec<ContextMenuItem>) {}
 
     /// Set window level. Depending on the environment and user preferences
     fn set_window_level(&self, _level: WindowLevel) {}
