@@ -209,6 +209,9 @@ impl TmuxDomainState {
 
         let child = TmuxChild {
             active_lock: active_lock.clone(),
+            domain_id: self.domain_id,
+            pane_id: pane.pane_id,
+            cmd_queue: self.cmd_queue.clone(),
         };
 
         let terminal = wezterm_term::Terminal::new(
@@ -374,6 +377,9 @@ impl TmuxDomainState {
             if window.session_id != current_session {
                 continue;
             }
+            if self.check_window_attached(window.window_id) {
+                continue;
+            }
 
             let size = TerminalSize {
                 rows: window.window_height as usize,
@@ -493,6 +499,13 @@ impl TmuxDomainState {
 
             mux.add_tab_to_window(&tab, **gui_window_id)?;
             gui_window_id.notify();
+
+            {
+                let mut pending = self.pending_windows.lock();
+                if let Some(mut promise) = pending.pop_front() {
+                    promise.ok(window.window_id);
+                }
+            }
 
             let gui_tabs = self.gui_tabs.lock();
             let local_tab = match gui_tabs.get(&window.window_id) {
@@ -822,8 +835,14 @@ impl TmuxCommand for ListAllWindows {
 
             let history_limit = fields
                 .next()
-                .ok_or_else(|| anyhow!("missing history_limit"))?
-                .parse::<isize>()?;
+                .and_then(|s| {
+                    if s.is_empty() {
+                        None
+                    } else {
+                        s.parse::<isize>().ok()
+                    }
+                })
+                .unwrap_or(2000);
 
             let window_active = window_active == 1;
 
@@ -1063,9 +1082,9 @@ impl TmuxCommand for ListCommands {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            let error = format!("list-command in domain={domain_id} failed: {result:#?}");
-            log::error!("{error}");
-            anyhow::bail!("{error}");
+            log::warn!(
+                "list-commands in domain={domain_id} failed ({result:#?}); continuing attach"
+            );
         }
         let mux = Mux::get();
         let domain = match mux.get_domain(domain_id) {
@@ -1077,14 +1096,16 @@ impl TmuxCommand for ListCommands {
             None => anyhow::bail!("Tmux domain lost"),
         };
 
-        let mut support_commands = tmux_domain.inner.support_commands.lock();
+        if !result.error {
+            let mut support_commands = tmux_domain.inner.support_commands.lock();
 
-        for line in result.output.split('\n') {
-            if line.is_empty() {
-                continue;
+            for line in result.output.split('\n') {
+                if line.is_empty() {
+                    continue;
+                }
+                let v: Vec<&str> = line.split(' ').collect();
+                support_commands.insert(v[0].to_string(), line.to_string());
             }
-            let v: Vec<&str> = line.split(' ').collect();
-            support_commands.insert(v[0].to_string(), line.to_string());
         }
 
         let mut cmd_queue = tmux_domain.inner.cmd_queue.as_ref().lock();
@@ -1118,6 +1139,26 @@ impl TmuxCommand for SplitPane {
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
             let error = format!("split-window in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct KillPane {
+    pub pane_id: TmuxPaneId,
+}
+
+impl TmuxCommand for KillPane {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        format!("kill-pane -t %{}\n", self.pane_id)
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        if result.error {
+            let error = format!("kill-pane in domain={domain_id} failed: {result:#?}");
             log::error!("{error}");
             anyhow::bail!("{error}");
         }

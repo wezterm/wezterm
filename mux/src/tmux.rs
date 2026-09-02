@@ -75,6 +75,7 @@ pub(crate) struct TmuxDomainState {
     pub support_commands: Mutex<HashMap<String, String>>,
     pub attach_state: Mutex<AttachState>,
     pending_splits: Mutex<VecDeque<promise::Promise<TmuxPaneId>>>,
+    pub pending_windows: Mutex<VecDeque<promise::Promise<TmuxWindowId>>>,
     pub backlog: Mutex<HashMap<TmuxPaneId, Vec<u8>>>,
 }
 
@@ -349,6 +350,7 @@ impl TmuxDomain {
             support_commands: Mutex::new(HashMap::default()),
             attach_state: Mutex::new(AttachState::Init),
             pending_splits: Mutex::new(VecDeque::default()),
+            pending_windows: Mutex::new(VecDeque::default()),
             backlog: Mutex::new(HashMap::default()),
         });
 
@@ -369,11 +371,23 @@ impl Domain for TmuxDomain {
         _command_dir: Option<String>,
         _window: WindowId,
     ) -> anyhow::Result<Arc<Tab>> {
+        let mut promise = promise::Promise::new();
+        let future = promise
+            .get_future()
+            .ok_or_else(|| anyhow::anyhow!("failed to create new-window waiter"))?;
+        self.inner.pending_windows.lock().push_back(promise);
         self.inner.create_tmux_window();
-        // This is intention, we would not return a Tab, since we don't have now!
-        // We use create_tmux_window to create back end tmux window, then the
-        // Tmux WindowAdd event will triage us to do the rest things.
-        anyhow::bail!("Intention: we use tmux command to do so");
+        let window_id = future.await?;
+        let tab_id = {
+            let gui_tabs = self.inner.gui_tabs.lock();
+            gui_tabs
+                .get(&window_id)
+                .map(|t| t.tab_id)
+                .ok_or_else(|| anyhow::anyhow!("tmux window {window_id} was not attached"))?
+        };
+        Mux::get()
+            .get_tab(tab_id)
+            .ok_or_else(|| anyhow::anyhow!("missing tab after new-window"))
     }
 
     async fn split_pane(
