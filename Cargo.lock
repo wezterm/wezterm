@@ -7046,6 +7046,7 @@ dependencies = [
  "image",
  "k9",
  "log",
+ "memmap2 0.9.11",
  "nix",
  "num-derive",
  "num-traits",

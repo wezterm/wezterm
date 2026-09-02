@@ -30,6 +30,11 @@ wezterm-color-types.workspace = true
 wezterm-dynamic.workspace = true
 wezterm-input-types = {workspace = true, default-features=false}
 
+# Only the unix arm of read_shared_memory_data maps through memmap2; the
+# windows arm uses winapi below.
+[target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
+memmap2 = {workspace=true, optional=true}
+
 [target."cfg(windows)".dependencies.winapi]
 workspace = true
 optional = true
@@ -49,7 +54,7 @@ features = [
 
 [features]
 std = ["vtparse/std", "thiserror/std", "wezterm-input-types/std", "hex/std", "wezterm-dynamic/std"]
-kitty-shm = ["dep:nix", "dep:winapi"]
+kitty-shm = ["dep:nix", "dep:winapi", "dep:memmap2"]
 use_serde = ["dep:serde", "wezterm-color-types/use_serde", "wezterm-blob-leases/serde", "bitflags/serde", "wezterm-input-types/serde"]
 use_image = ["image", "dep:image"]
 image = ["sha2", "wezterm-blob-leases"]

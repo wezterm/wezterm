@@ -262,6 +262,12 @@ impl KittyImageData {
     }
 }
 
+/// Read the data a `t=s` transmission left in a POSIX shared memory object.
+///
+/// A shared memory object is not a stream on every platform: on Darwin it can
+/// only be mapped, and answers `read(2)` with `ENXIO` and `lseek(2)` with
+/// `ESPIPE`. Mapping it works everywhere, and is what the Windows
+/// implementation below does as well.
 #[cfg(all(feature = "kitty-shm", unix, not(target_os = "android")))]
 fn read_shared_memory_data(
     name: &str,
@@ -270,34 +276,22 @@ fn read_shared_memory_data(
 ) -> std::result::Result<std::vec::Vec<u8>, std::io::Error> {
     use nix::sys::mman::{shm_open, shm_unlink};
     use std::fs::File;
-    use std::io::{Read, Seek};
 
     let fd = shm_open(
         name,
         nix::fcntl::OFlag::O_RDONLY,
         nix::sys::stat::Mode::empty(),
     )
-    .map_err(|_| {
-        let err = std::io::Error::last_os_error();
+    .map_err(|err| {
         std::io::Error::new(
             std::io::ErrorKind::Other,
             format!("shm_open {} failed: {:#}", name, err),
         )
     })?;
-    let mut f = File::from(fd);
-    if let Some(offset) = data_offset {
-        f.seek(std::io::SeekFrom::Start(offset.into()))?;
-    }
-    let data = if let Some(len) = data_size {
-        let mut res = vec![0u8; len as usize];
-        f.read_exact(&mut res)?;
-        res
-    } else {
-        let mut res = vec![];
-        f.read_to_end(&mut res)?;
-        res
-    };
 
+    // The protocol asks the terminal to unlink the object once it has read it.
+    // Unlinking as soon as it is open keeps the descriptor alive for the read
+    // and narrows the window in which an error path leaves the object behind.
     if let Err(err) = shm_unlink(name) {
         log::warn!(
             "Unable to unlink kitty image protocol shm file {}: {:#}",
@@ -305,7 +299,54 @@ fn read_shared_memory_data(
             err
         );
     }
-    Ok(data)
+
+    // An empty object holds no image, and mapping one fails with EINVAL, so it
+    // is refused here where the error can name the object. Returning the empty
+    // read instead would report success for a transmission that carried nothing.
+    let file = File::from(fd);
+    if file.metadata()?.len() == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("shm object {} is empty", name),
+        ));
+    }
+
+    // The mapping covers the whole object and `data_offset` indexes into it,
+    // because mmap only accepts a page aligned offset while the protocol places
+    // no such limit on `O`.
+    //
+    // SAFETY: a mapping is unsound if the object is written or truncated while
+    // it is mapped, and nothing here can prevent that. The unlink above is no
+    // help: it takes away the name, not a descriptor already open on it, and
+    // the client that staged the data holds one. What this rests on is `t=s`
+    // meaning the client has finished writing and handed the object over. The
+    // mapping lives only for the copy below.
+    let map = unsafe { memmap2::Mmap::map(&file) }.map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("mmap {} failed: {:#}", name, err),
+        )
+    })?;
+
+    // The size an object reports can exceed what the client staged in it, as
+    // Darwin rounds it up to a page. `data_size` is what narrows it back down.
+    let offset = data_offset.unwrap_or(0) as usize;
+    if offset >= map.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!(
+                "offset {} bigger than or equal to shm region size {}",
+                offset,
+                map.len()
+            ),
+        ));
+    }
+    let mut size = map.len() - offset;
+    if let Some(val) = data_size {
+        size = size.min(val as usize);
+    }
+
+    Ok(map[offset..offset + size].to_vec())
 }
 
 #[cfg(all(feature = "kitty-shm", unix, target_os = "android"))]
@@ -1265,5 +1306,221 @@ mod test {
                 },
             }
         );
+    }
+}
+
+/// The shared memory transport, against a real POSIX object.
+///
+/// A shared memory object can only be mapped on some platforms, so these go
+/// through `load_data` rather than asserting on the parse, and cover the offset
+/// and size a `t=s` transmission may carry.
+#[cfg(all(test, feature = "kitty-shm", unix, not(target_os = "android")))]
+mod shm_test {
+    use super::*;
+    use k9::assert_equal as assert_eq;
+    use nix::fcntl::OFlag;
+    use nix::sys::mman::{MapFlags, ProtFlags, mmap, munmap, shm_open, shm_unlink};
+    use nix::sys::stat::Mode;
+    use nix::unistd::ftruncate;
+    use std::num::NonZeroUsize;
+
+    /// Stage `data` in a shared memory object of that name, as a client sending
+    /// `t=s` does.
+    ///
+    /// The name must fit macOS' `PSHMNAMLEN` of 31 bytes including the leading
+    /// slash. A longer one fails `shm_open` with `ENAMETOOLONG`, which is not
+    /// the failure these tests are looking for.
+    fn stage(name: &str, data: &[u8]) -> String {
+        assert!(
+            name.len() <= 31,
+            "{} is longer than macOS accepts for a shm name",
+            name
+        );
+
+        // macOS refuses to resize an object that already has a size, so an
+        // object left behind by an earlier run has to go first.
+        let _ = shm_unlink(name);
+
+        let fd = shm_open(
+            name,
+            OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_RDWR,
+            Mode::S_IRUSR | Mode::S_IWUSR,
+        )
+        .unwrap();
+        ftruncate(&fd, data.len() as _).unwrap();
+
+        let len = NonZeroUsize::new(data.len()).unwrap();
+        // SAFETY: the object was created above and sized to `len`, so a mapping
+        // of that length is backed for its whole extent.
+        let ptr = unsafe {
+            mmap(
+                None,
+                len,
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                MapFlags::MAP_SHARED,
+                &fd,
+                0,
+            )
+        }
+        .unwrap();
+        // SAFETY: `ptr` maps `len` writable bytes and `data` is `len` long, so
+        // the copy stays inside both, and the two cannot overlap because the
+        // mapping was just created.
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.as_ptr() as *mut u8, len.get());
+            munmap(ptr, len.get()).unwrap();
+        }
+
+        name.to_string()
+    }
+
+    /// Whether an object of this name still exists.
+    ///
+    /// Only `ENOENT` counts as gone. Taking every error for absence would let a
+    /// permission or name length problem pass as a successful unlink.
+    fn present(name: &str) -> bool {
+        match shm_open(name, OFlag::O_RDONLY, Mode::empty()) {
+            Ok(_) => true,
+            Err(nix::errno::Errno::ENOENT) => false,
+            Err(err) => panic!("asking whether {} is still there answered {}", name, err),
+        }
+    }
+
+    fn pattern(len: usize) -> Vec<u8> {
+        (0..=255u8).cycle().take(len).collect()
+    }
+
+    /// With neither `O` nor `S`, the whole object comes back.
+    #[test]
+    fn shm_reads_the_whole_object() {
+        let data = pattern(4096);
+        let name = stage("/wtshm-whole", &data);
+
+        let got = KittyImageData::SharedMem {
+            name: name.clone(),
+            data_offset: None,
+            data_size: None,
+        }
+        .load_data()
+        .unwrap();
+
+        // An object can report more than was staged in it, as Darwin rounds the
+        // size up to a page; the data sits at the front.
+        assert!(got.len() >= data.len());
+        assert_eq!(&got[..data.len()], &data[..]);
+        assert!(!present(&name), "the object is unlinked once it is read");
+    }
+
+    /// `O` and `S` select a range within the object. `O` is applied to the
+    /// mapped bytes rather than to mmap, which only accepts a page aligned
+    /// offset.
+    #[test]
+    fn shm_reads_the_slice_it_is_asked_for() {
+        let data = pattern(4096);
+        let name = stage("/wtshm-slice", &data);
+
+        let got = KittyImageData::SharedMem {
+            name: name.clone(),
+            data_offset: Some(10),
+            data_size: Some(80),
+        }
+        .load_data()
+        .unwrap();
+
+        assert_eq!(got, data[10..90].to_vec());
+        assert!(!present(&name), "the object is unlinked once it is read");
+    }
+
+    /// `S=0` asks for no bytes, which is not an error.
+    #[test]
+    fn shm_reads_nothing_when_asked_for_nothing() {
+        let name = stage("/wtshm-none", &pattern(64));
+
+        let got = KittyImageData::SharedMem {
+            name: name.clone(),
+            data_offset: None,
+            data_size: Some(0),
+        }
+        .load_data()
+        .unwrap();
+
+        assert_eq!(got, Vec::<u8>::new());
+        assert!(!present(&name), "the object is unlinked once it is read");
+    }
+
+    /// An `O` beyond the object is refused rather than read, and the object is
+    /// still unlinked so a rejected transmission leaves nothing behind.
+    #[test]
+    fn shm_refuses_an_offset_past_the_end() {
+        let name = stage("/wtshm-oob", &pattern(64));
+
+        let err = KittyImageData::SharedMem {
+            name: name.clone(),
+            data_offset: Some(1 << 20),
+            data_size: Some(4),
+        }
+        .load_data()
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("offset"),
+            "an offset past the end says so: {}",
+            err
+        );
+        assert!(!present(&name), "a refused read still unlinks the object");
+    }
+
+    /// A name that does not exist names itself in the error, so a client that
+    /// sent the wrong name, or one too long for the platform, can tell.
+    #[test]
+    fn shm_reports_an_object_that_is_not_there() {
+        let _ = shm_unlink("/wtshm-absent");
+
+        let err = KittyImageData::SharedMem {
+            name: "/wtshm-absent".to_string(),
+            data_offset: None,
+            data_size: None,
+        }
+        .load_data()
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("/wtshm-absent"),
+            "the error names the object: {}",
+            err
+        );
+    }
+
+    /// An object with nothing in it carries no image, and a client that asked
+    /// for bytes is told so rather than handed an empty read that reports
+    /// success.
+    #[test]
+    fn shm_refuses_an_empty_object() {
+        // Staged by hand rather than through `stage`, which maps the object and
+        // so cannot size one at zero.
+        let name = "/wtshm-empty".to_string();
+        let _ = shm_unlink(name.as_str());
+        let fd = shm_open(
+            name.as_str(),
+            OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_RDWR,
+            Mode::S_IRUSR | Mode::S_IWUSR,
+        )
+        .unwrap();
+        drop(fd);
+
+        let err = KittyImageData::SharedMem {
+            name: name.clone(),
+            data_offset: None,
+            data_size: Some(80),
+        }
+        .load_data()
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("empty"),
+            "an empty object says so: {}",
+            err
+        );
+        assert!(!present(&name), "a refused read still unlinks the object");
     }
 }
