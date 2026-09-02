@@ -923,10 +923,11 @@ impl XWindowInner {
                         but we don't: tell it to clear it"
             );
             // We don't have a selection but X thinks we do; disown it!
+            // See the note about CURRENT_TIME in the assert branch below.
             conn.send_request_no_reply(&xcb::x::SetSelectionOwner {
                 owner: xcb::x::Window::none(),
                 selection,
-                time: self.copy_and_paste.time,
+                time: xcb::x::CURRENT_TIME,
             })?;
         } else if we_own_it {
             log::trace!(
@@ -934,10 +935,19 @@ impl XWindowInner {
                  {current_owner:?}, tell X we now own it"
             );
             // We have the selection but X doesn't think we do; assert it!
+            //
+            // We deliberately use CURRENT_TIME rather than
+            // self.copy_and_paste.time here. That field only advances on key
+            // and button events delivered to *this* window, so for a window
+            // that hasn't been interacted with recently it lags behind the
+            // selection's lastTimeChanged. The X server silently ignores
+            // SetSelectionOwner whose time predates lastTimeChanged, which
+            // made OSC 52 a no-op whenever another window had copied more
+            // recently. CURRENT_TIME is always accepted.
             conn.send_request_no_reply(&xcb::x::SetSelectionOwner {
                 owner: self.window_id,
                 selection,
-                time: self.copy_and_paste.time,
+                time: xcb::x::CURRENT_TIME,
             })?;
         } else {
             log::trace!(

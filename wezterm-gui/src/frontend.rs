@@ -184,7 +184,24 @@ impl GuiFrontEnd {
                             selection,
                             clipboard
                         );
-                        if let Some(window) = fe.known_windows.borrow().keys().next() {
+                        // Route the assignment to the window that actually
+                        // contains the pane that emitted OSC 52. known_windows
+                        // is a BTreeMap keyed by the window handle, so simply
+                        // taking the first key always landed the clipboard on
+                        // the oldest window, no matter which pane asked for it.
+                        let target = {
+                            let windows = fe.known_windows.borrow();
+                            Mux::get()
+                                .resolve_pane_id(pane_id)
+                                .and_then(|(_, mux_window_id, _)| {
+                                    windows
+                                        .iter()
+                                        .find(|(_, id)| **id == mux_window_id)
+                                        .map(|(window, _)| window.clone())
+                                })
+                                .or_else(|| windows.keys().next().cloned())
+                        };
+                        if let Some(window) = target {
                             window.set_clipboard(
                                 match selection {
                                     ClipboardSelection::Clipboard => Clipboard::Clipboard,
