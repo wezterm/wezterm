@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::io::{Result as IoResult, Write};
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use termwiz::escape::csi::{Sgr, CSI};
@@ -129,6 +130,8 @@ pub struct LocalPane {
     writer: Mutex<Box<dyn Write + Send>>,
     domain_id: DomainId,
     tmux_domain: Mutex<Option<Arc<TmuxDomainState>>>,
+    tmux_exit_requested: AtomicBool,
+    tmux_force_exit_requested: AtomicBool,
     proc_list: Mutex<Option<CachedProcInfo>>,
     #[cfg(unix)]
     leader: Arc<Mutex<Option<CachedLeaderInfo>>>,
@@ -398,10 +401,42 @@ impl Pane for LocalPane {
 
     fn key_down(&self, key: KeyCode, mods: KeyModifiers) -> Result<(), Error> {
         Mux::get().record_input_for_current_identity();
-        if self.tmux_domain.lock().is_some() {
+        let tmux_domain = self.tmux_domain.lock().clone();
+        if let Some(tmux) = tmux_domain {
             log::trace!("key: {:?}", key);
-            if key == KeyCode::Char('q') {
-                self.terminal.lock().send_paste("detach\n")?;
+            match key {
+                KeyCode::Escape => {
+                    self.tmux_exit_requested.store(true, Ordering::SeqCst);
+                    tmux.detach_client()?;
+                }
+                KeyCode::Char('X') | KeyCode::Char('x') => {
+                    self.tmux_force_exit_requested.store(true, Ordering::SeqCst);
+                    self.tmux_domain.lock().take();
+                    tmux.force_quit();
+                    #[cfg(unix)]
+                    {
+                        let foreground = self
+                            .divine_process_list(CachePolicy::FetchImmediate)
+                            .map(|processes| processes.foreground.pid);
+                        if let Some(foreground) = foreground {
+                            // This is the emergency path: kill only the
+                            // youngest foreground control client.  Its parent
+                            // gateway shell and tmux server remain alive.
+                            unsafe {
+                                libc::kill(foreground as i32, libc::SIGKILL);
+                            }
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    self.writer.lock().write_all(&[3])?;
+                }
+                KeyCode::Char('L') | KeyCode::Char('l') => {
+                    tmux.toggle_protocol_logging();
+                }
+                KeyCode::Char('C') | KeyCode::Char('c') => {
+                    tmux.request_command_prompt();
+                }
+                _ => {}
             }
             return Ok(());
         } else {
@@ -412,6 +447,14 @@ impl Pane for LocalPane {
     fn key_up(&self, key: KeyCode, mods: KeyModifiers) -> Result<(), Error> {
         Mux::get().record_input_for_current_identity();
         self.terminal.lock().key_up(key, mods)
+    }
+
+    fn take_tmux_exit_requested(&self) -> bool {
+        self.tmux_exit_requested.swap(false, Ordering::SeqCst)
+    }
+
+    fn take_tmux_force_exit_requested(&self) -> bool {
+        self.tmux_force_exit_requested.swap(false, Ordering::SeqCst)
     }
 
     fn resize(&self, size: TerminalSize) -> Result<(), Error> {
@@ -846,6 +889,7 @@ impl Pane for LocalPane {
 struct LocalPaneDCSHandler {
     pane_id: PaneId,
     tmux_domain: Option<Arc<TmuxDomainState>>,
+    tmux_raw_line: Vec<u8>,
 }
 
 pub(crate) fn emit_output_for_pane(pane_id: PaneId, message: &str) {
@@ -891,7 +935,15 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
                             }
                             emit_output_for_pane(
                                 pane_id,
-                                "\r\n[This pane is running tmux control mode. Press q to detach]",
+                                concat!(
+                                    "\r\n** tmux mode started **\r\n\r\n",
+                                    "Command Menu\r\n",
+                                    "----------------------------\r\n",
+                                    "esc    Detach cleanly.\r\n",
+                                    "  X    Force-quit tmux mode.\r\n",
+                                    "  L    Toggle logging.\r\n",
+                                    "  C    Run tmux command.\r\n",
+                                ),
                             );
                         }
                     })
@@ -920,7 +972,14 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
                 }
             }
             DeviceControlMode::Data(c) => {
-                if configuration().log_unknown_escape_sequences {
+                if let Some(tmux) = self.tmux_domain.as_ref() {
+                    self.tmux_raw_line.push(c);
+                    if c == b'\n' {
+                        let line = String::from_utf8_lossy(&self.tmux_raw_line);
+                        tmux.log_protocol_line("<", &line);
+                        self.tmux_raw_line.clear();
+                    }
+                } else if configuration().log_unknown_escape_sequences {
                     log::warn!(
                         "unhandled DeviceControlMode::Data {:x} {}",
                         c,
@@ -1028,6 +1087,7 @@ impl LocalPane {
         terminal.set_device_control_handler(Box::new(LocalPaneDCSHandler {
             pane_id,
             tmux_domain: None,
+            tmux_raw_line: vec![],
         }));
         terminal.set_notification_handler(Box::new(LocalPaneNotifHandler { pane_id }));
 
@@ -1044,6 +1104,8 @@ impl LocalPane {
             writer: Mutex::new(writer),
             domain_id,
             tmux_domain: Mutex::new(None),
+            tmux_exit_requested: AtomicBool::new(false),
+            tmux_force_exit_requested: AtomicBool::new(false),
             proc_list: Mutex::new(None),
             #[cfg(unix)]
             leader: Arc::new(Mutex::new(None)),
@@ -1165,6 +1227,12 @@ impl LocalPane {
 
 impl Drop for LocalPane {
     fn drop(&mut self) {
+        if self.pty.lock().is::<crate::tmux_pty::TmuxPty>() {
+            // A tmux pane is a local mirror of a remote process. Dropping a
+            // transient mirror during window synchronization must not kill
+            // the remote pane; explicit Pane::kill still does so.
+            return;
+        }
         // Avoid lingering zombies if we can, but don't block forever.
         // <https://github.com/wezterm/wezterm/issues/558>
         if let ProcessState::Running { signaller, .. } = &mut *self.process.lock() {

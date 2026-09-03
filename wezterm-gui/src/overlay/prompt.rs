@@ -41,6 +41,16 @@ impl LineEditorHost for PromptHost {
     }
 }
 
+pub fn show_tmux_command_prompt(mut term: TermWizTerminal) -> anyhow::Result<Option<String>> {
+    term.no_grab_mouse_in_raw_mode();
+    term.render(&[Change::Text("Run tmux command\r\n".to_string())])?;
+
+    let mut host = PromptHost::new();
+    let mut editor = LineEditor::new(&mut term);
+    editor.set_prompt("tmux> ");
+    Ok(editor.read_line(&mut host)?)
+}
+
 pub fn show_line_prompt_overlay(
     mut term: TermWizTerminal,
     args: PromptInputLine,

@@ -53,6 +53,12 @@ struct ParseState {
     get_tcap: Option<GetTcapBuilder>,
     #[cfg(feature = "tmux_cc")]
     tmux_state: Option<RefCell<crate::tmux_cc::Parser>>,
+    #[cfg(feature = "tmux_cc")]
+    tmux_exiting: bool,
+    #[cfg(feature = "tmux_cc")]
+    tmux_force_exit: bool,
+    #[cfg(feature = "tmux_cc")]
+    tmux_st_escape_pending: bool,
 }
 
 /// The `Parser` struct holds the state machine that is used to decode
@@ -89,13 +95,116 @@ impl Parser {
         return tmux_parser.advance_bytes(bytes);
     }
 
+    #[cfg(feature = "tmux_cc")]
+    pub fn expect_tmux_exit(&mut self) {
+        let mut state = self.state.borrow_mut();
+        if state.tmux_state.is_some() {
+            state.tmux_exiting = true;
+        }
+    }
+
+    #[cfg(feature = "tmux_cc")]
+    pub fn force_tmux_exit(&mut self) {
+        let mut state = self.state.borrow_mut();
+        if state.tmux_state.is_some() {
+            state.tmux_force_exit = true;
+        }
+    }
+
     pub fn parse<F: FnMut(Action)>(&mut self, bytes: &[u8], mut callback: F) {
         #[cfg(feature = "tmux_cc")]
         let is_tmux_mode: bool = self.state.borrow().tmux_state.is_some();
         #[cfg(feature = "tmux_cc")]
         if is_tmux_mode {
+            if self.state.borrow().tmux_force_exit {
+                let mut parser_state = self.state.borrow_mut();
+                parser_state.tmux_state = None;
+                parser_state.tmux_exiting = false;
+                parser_state.tmux_force_exit = false;
+                parser_state.tmux_st_escape_pending = false;
+                let mut perform = Performer {
+                    callback: &mut callback,
+                    state: &mut parser_state,
+                };
+                self.state_machine.parse(b"\x1b\\", &mut perform);
+                self.state_machine.parse(bytes, &mut perform);
+                return;
+            }
+            if self.state.borrow().tmux_exiting {
+                if self.state.borrow().tmux_st_escape_pending && bytes.first() == Some(&b'\\') {
+                    let mut parser_state = self.state.borrow_mut();
+                    parser_state.tmux_state = None;
+                    parser_state.tmux_exiting = false;
+                    parser_state.tmux_force_exit = false;
+                    parser_state.tmux_st_escape_pending = false;
+                    let mut perform = Performer {
+                        callback: &mut callback,
+                        state: &mut parser_state,
+                    };
+                    self.state_machine.parse(b"\x1b\\", &mut perform);
+                    self.state_machine.parse(&bytes[1..], &mut perform);
+                    return;
+                }
+                if self.state.borrow().tmux_st_escape_pending {
+                    self.state.borrow_mut().tmux_st_escape_pending = false;
+                    callback(Action::DeviceControl(DeviceControlMode::Data(b'\x1b')));
+                    let _ = self.advance_tmux_bytes(b"\x1b");
+                }
+                let st_offset = bytes
+                    .windows(2)
+                    .position(|pair| pair == b"\x1b\\")
+                    .or_else(|| bytes.iter().position(|&byte| byte == 0x9c));
+                if let Some(st_offset) = st_offset {
+                    let protocol = &bytes[..st_offset];
+                    for &byte in protocol {
+                        callback(Action::DeviceControl(DeviceControlMode::Data(byte)));
+                    }
+                    if let Ok(tmux_events) = self.advance_tmux_bytes(protocol) {
+                        if !tmux_events.is_empty() {
+                            callback(Action::DeviceControl(DeviceControlMode::TmuxEvents(
+                                Box::new(tmux_events),
+                            )));
+                        }
+                    }
+                    let mut parser_state = self.state.borrow_mut();
+                    parser_state.tmux_state = None;
+                    parser_state.tmux_exiting = false;
+                    parser_state.tmux_force_exit = false;
+                    parser_state.tmux_st_escape_pending = false;
+                    let mut perform = Performer {
+                        callback: &mut callback,
+                        state: &mut parser_state,
+                    };
+                    self.state_machine.parse(&bytes[st_offset..], &mut perform);
+                    return;
+                }
+                if bytes.last() == Some(&b'\x1b') {
+                    let protocol = &bytes[..bytes.len() - 1];
+                    for &byte in protocol {
+                        callback(Action::DeviceControl(DeviceControlMode::Data(byte)));
+                    }
+                    if let Ok(tmux_events) = self.advance_tmux_bytes(protocol) {
+                        if !tmux_events.is_empty() {
+                            callback(Action::DeviceControl(DeviceControlMode::TmuxEvents(
+                                Box::new(tmux_events),
+                            )));
+                        }
+                    }
+                    self.state.borrow_mut().tmux_st_escape_pending = true;
+                    return;
+                }
+            }
+            for &byte in bytes {
+                callback(Action::DeviceControl(DeviceControlMode::Data(byte)));
+            }
             match self.advance_tmux_bytes(bytes) {
                 Ok(tmux_events) => {
+                    if tmux_events
+                        .iter()
+                        .any(|event| matches!(event, Event::Exit { .. }))
+                    {
+                        self.state.borrow_mut().tmux_exiting = true;
+                    }
                     callback(Action::DeviceControl(DeviceControlMode::TmuxEvents(
                         Box::new(tmux_events),
                     )));
@@ -105,6 +214,9 @@ impl Parser {
                     let unparsed_str = err_buf.to_string().to_owned();
                     let mut parser_state = self.state.borrow_mut();
                     parser_state.tmux_state = None;
+                    parser_state.tmux_exiting = false;
+                    parser_state.tmux_force_exit = false;
+                    parser_state.tmux_st_escape_pending = false;
                     let mut perform = Performer {
                         callback: &mut callback,
                         state: &mut parser_state,
@@ -255,8 +367,11 @@ impl<'a, F: FnMut(Action)> VTActor for Performer<'a, F> {
             #[cfg(feature = "tmux_cc")]
             if byte == b'p' && params == [1000] {
                 // into tmux_cc mode
-                self.state.borrow_mut().tmux_state =
-                    Some(RefCell::new(crate::tmux_cc::Parser::new()));
+                let mut state = self.state.borrow_mut();
+                state.tmux_state = Some(RefCell::new(crate::tmux_cc::Parser::new()));
+                state.tmux_exiting = false;
+                state.tmux_force_exit = false;
+                state.tmux_st_escape_pending = false;
             }
             (self.callback)(Action::DeviceControl(DeviceControlMode::Enter(Box::new(
                 EnterDeviceControlMode {
@@ -279,10 +394,16 @@ impl<'a, F: FnMut(Action)> VTActor for Performer<'a, F> {
         } else {
             #[cfg(feature = "tmux_cc")]
             if let Some(tmux_state) = &self.state.tmux_state {
+                // Preserve the exact control stream for terminal-emulator
+                // protocol logging while continuing to emit parsed events.
+                (self.callback)(Action::DeviceControl(DeviceControlMode::Data(data)));
                 let mut tmux_parser = tmux_state.borrow_mut();
                 match tmux_parser.advance_byte(data) {
                     Ok(optional_events) => {
                         if let Some(tmux_event) = optional_events {
+                            if matches!(&tmux_event, Event::Exit { .. }) {
+                                self.state.tmux_exiting = true;
+                            }
                             (self.callback)(Action::DeviceControl(DeviceControlMode::TmuxEvents(
                                 Box::new(vec![tmux_event]),
                             )));
@@ -291,6 +412,9 @@ impl<'a, F: FnMut(Action)> VTActor for Performer<'a, F> {
                     Err(_) => {
                         drop(tmux_parser);
                         self.state.tmux_state = None; // drop tmux state
+                        self.state.tmux_exiting = false;
+                        self.state.tmux_force_exit = false;
+                        self.state.tmux_st_escape_pending = false;
                     }
                 }
                 return;
@@ -364,6 +488,80 @@ mod test {
             write!(res, "{}", s).unwrap();
         }
         String::from_utf8(res).unwrap()
+    }
+
+    #[cfg(feature = "tmux_cc")]
+    #[test]
+    fn tmux_control_preserves_raw_protocol_data() {
+        let mut parser = Parser::new();
+        let mut raw = Vec::new();
+        let mut saw_sessions_changed = false;
+        let mut saw_exit = false;
+        let mut text = String::new();
+        let mut collect = |action| match action {
+            Action::DeviceControl(DeviceControlMode::Data(byte)) => raw.push(byte),
+            Action::DeviceControl(DeviceControlMode::TmuxEvents(events)) => {
+                saw_sessions_changed |= events
+                    .iter()
+                    .any(|event| matches!(event, crate::tmux_cc::Event::SessionsChanged));
+            }
+            Action::DeviceControl(DeviceControlMode::Exit) => saw_exit = true,
+            Action::Print(character) => text.push(character),
+            _ => {}
+        };
+
+        parser.parse(b"\x1bP1000p%sessions-", &mut collect);
+        parser.parse(b"changed\n", &mut collect);
+        parser.expect_tmux_exit();
+        parser.parse(b"%exit\n\x1b\\shell", &mut collect);
+
+        assert_eq!(
+            String::from_utf8(raw).unwrap(),
+            "%sessions-changed\n%exit\n"
+        );
+        assert!(saw_sessions_changed);
+        assert!(saw_exit);
+        assert_eq!(text, "shell");
+    }
+
+    #[cfg(feature = "tmux_cc")]
+    #[test]
+    fn tmux_control_accepts_st_without_exit_event() {
+        let mut parser = Parser::new();
+        let mut saw_exit = false;
+        parser.parse(b"\x1bP1000p%sessions-changed\n", |_| {});
+        parser.expect_tmux_exit();
+        parser.parse(b"\x1b", |_| {});
+        parser.parse(b"\\", |action| {
+            if matches!(action, Action::DeviceControl(DeviceControlMode::Exit)) {
+                saw_exit = true;
+            }
+        });
+        assert!(saw_exit);
+    }
+
+    #[cfg(feature = "tmux_cc")]
+    #[test]
+    fn tmux_control_force_exit_resumes_terminal_parser() {
+        let mut parser = Parser::new();
+        parser.parse(b"\x1bP1000p%sessions-changed\n", |_| {});
+        parser.force_tmux_exit();
+        let mut actions = vec![];
+        parser.parse(b"shell", |action| actions.push(action));
+        assert!(matches!(
+            actions.first(),
+            Some(Action::DeviceControl(DeviceControlMode::Exit))
+        ));
+        assert_eq!(
+            actions
+                .into_iter()
+                .filter_map(|action| match action {
+                    Action::Print(character) => Some(character),
+                    _ => None,
+                })
+                .collect::<String>(),
+            "shell"
+        );
     }
 
     // <https://github.com/markbt/streampager/issues/57>
