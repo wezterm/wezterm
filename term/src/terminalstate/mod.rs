@@ -318,6 +318,10 @@ pub struct TerminalState {
     /// Button events enabled
     button_event_mouse: bool,
     current_mouse_buttons: Vec<MouseButton>,
+    /// The most recent mouse position that the application has been told
+    /// about; used to decide whether a Move event represents actual pointer
+    /// motion. Updated both when a motion event is reported and when a button
+    /// is pressed, since a press also communicates the position.
     last_mouse_move: Option<MouseEvent>,
     cursor_visible: bool,
 
