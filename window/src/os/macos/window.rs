@@ -8,8 +8,8 @@ use crate::connection::ConnectionOps;
 use crate::os::macos::menu::{MenuItem, RepresentedItem};
 use crate::parameters::{Border, Parameters, TitleBar};
 use crate::{
-    Clipboard, Connection, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent, Modifiers,
-    MouseButtons, MouseCursor, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
+    Clipboard, Connection, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent,
+    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
     RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, ScreenPoint, Size, ULength,
     WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
 };
@@ -780,7 +780,7 @@ impl WindowOps for Window {
         });
     }
 
-    fn set_cursor(&self, cursor: Option<MouseCursor>) {
+    fn set_cursor(&self, cursor: Option<CursorIcon>) {
         Connection::with_window_inner(self.id, move |inner| {
             let _ = inner.set_cursor(cursor);
             Ok(())
@@ -981,6 +981,54 @@ fn screen_point_to_cartesian(point: ScreenPoint) -> NSPoint {
             frame.size.height - (point.y as f64 / scale),
         )
     }
+}
+
+// Official selectors: https://developer.apple.com/documentation/appkit/nscursor#overview
+// All selectors: https://github.com/mstg/OSX-Runtime-Headers/blob/9e1686ba1c48e0ca17f6baf7cfb209d4f7cfa4f2/AppKit/NSCursor.h
+fn mouse_icon_selector(cursor: CursorIcon) -> Sel {
+    match cursor {
+        CursorIcon::Alias => sel!(dragLinkCursor),
+        CursorIcon::Cell | CursorIcon::Crosshair => sel!(crosshairCursor),
+        CursorIcon::Copy => sel!(dragCopyCursor),
+        CursorIcon::EResize => sel!(resizeRightCursor),
+        CursorIcon::EwResize | CursorIcon::ColResize => sel!(resizeLeftRightCursor),
+        CursorIcon::Grab | CursorIcon::Move | CursorIcon::AllScroll | CursorIcon::AllResize => {
+            sel!(openHandCursor)
+        }
+        CursorIcon::Grabbing => sel!(closedHandCursor),
+        CursorIcon::Help | CursorIcon::ContextMenu => sel!(contextualMenuCursor),
+        CursorIcon::NResize => sel!(resizeUpCursor),
+        CursorIcon::NeResize | CursorIcon::NeswResize | CursorIcon::SwResize => {
+            sel!(_windowResizeNorthEastSouthWestCursor)
+        }
+        CursorIcon::NoDrop | CursorIcon::NotAllowed => sel!(operationNotAllowedCursor),
+        CursorIcon::NsResize | CursorIcon::RowResize => sel!(resizeUpDownCursor),
+        CursorIcon::NwResize | CursorIcon::NwseResize | CursorIcon::SeResize => {
+            sel!(_windowResizeNorthWestSouthEastCursor)
+        }
+        CursorIcon::Pointer => sel!(pointingHandCursor),
+        CursorIcon::Progress | CursorIcon::Wait => sel!(busyButClickableCursor),
+        CursorIcon::SResize => sel!(resizeDownCursor),
+        CursorIcon::Text => sel!(IBeamCursor),
+        CursorIcon::VerticalText => sel!(IBeamCursorForVerticalLayout),
+        CursorIcon::WResize => sel!(resizeLeftCursor),
+        CursorIcon::ZoomIn => sel!(zoomInCursor),
+        CursorIcon::ZoomOut => sel!(zoomOutCursor),
+        _ => sel!(arrowCursor),
+    }
+}
+
+#[test]
+fn cursor_icons_use_macos_cursors() {
+    assert_eq!(
+        mouse_icon_selector(CursorIcon::Pointer),
+        sel!(pointingHandCursor)
+    );
+    assert_eq!(
+        mouse_icon_selector(CursorIcon::NsResize),
+        sel!(resizeUpDownCursor)
+    );
+    assert_eq!(mouse_icon_selector(CursorIcon::Text), sel!(IBeamCursor));
 }
 
 impl WindowInner {
@@ -1225,20 +1273,22 @@ impl WindowInner {
         }
     }
 
-    fn set_cursor(&mut self, cursor: Option<MouseCursor>) {
+    fn set_cursor(&mut self, cursor: Option<CursorIcon>) {
         unsafe {
             let ns_cursor_cls = class!(NSCursor);
             if let Some(cursor) = cursor {
                 // Unconditionally apply the requested cursor, as there are
                 // cases where macOS can decide to change the cursor to something
                 // that we don't know about.
-                let instance: id = match cursor {
-                    MouseCursor::Arrow => msg_send![ns_cursor_cls, arrowCursor],
-                    MouseCursor::Text => msg_send![ns_cursor_cls, IBeamCursor],
-                    MouseCursor::Hand => msg_send![ns_cursor_cls, pointingHandCursor],
-                    MouseCursor::SizeUpDown => msg_send![ns_cursor_cls, resizeUpDownCursor],
-                    MouseCursor::SizeLeftRight => msg_send![ns_cursor_cls, resizeLeftRightCursor],
+                let selector = mouse_icon_selector(cursor);
+                let cursor_is_supported =
+                    from_yes_no(msg_send![ns_cursor_cls, respondsToSelector: selector]);
+                let selector = if cursor_is_supported {
+                    selector
+                } else {
+                    sel!(arrowCursor)
                 };
+                let instance: id = msg_send![ns_cursor_cls, performSelector: selector];
                 let () = msg_send![ns_cursor_cls, setHiddenUntilMouseMoves: NO];
                 let () = msg_send![instance, set];
             } else {

@@ -817,11 +817,11 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "clipboard-win"
-version = "2.2.0"
+version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3a093d6fed558e5fe24c3dfc85a68bb68f1c824f440d3ba5aca189e2998786b"
+checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
 dependencies = [
- "winapi",
+ "error-code",
 ]
 
 [[package]]
@@ -1647,6 +1647,12 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "error-code"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
 name = "euclid"
@@ -6002,7 +6008,7 @@ dependencies = [
  "wezterm-escape-parser",
  "wezterm-input-types",
  "wezterm-surface",
- "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7608,6 +7614,7 @@ dependencies = [
  "config",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
+ "cursor-icon",
  "dirs-next",
  "downcast-rs",
  "euclid",
