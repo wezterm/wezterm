@@ -1,5 +1,7 @@
-#![cfg_attr(not(feature = "std"), no_std)]
 //! Model a cell in the terminal display
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
 use crate::color::{ColorAttribute, PaletteIndex};
 #[cfg(feature = "use_image")]
 use crate::image::ImageCell;
