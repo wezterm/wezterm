@@ -1312,11 +1312,13 @@ impl TermWindow {
                 MuxNotification::TabTitleChanged { .. } => {
                     self.update_title_post_status();
                 }
+                MuxNotification::ActiveWorkspaceChanged { old_workspace, .. } => {
+                    self.emit_workspace_changed_event(old_workspace);
+                }
                 MuxNotification::PaneAdded(_)
                 | MuxNotification::WorkspaceRenamed { .. }
                 | MuxNotification::PaneRemoved(_)
                 | MuxNotification::WindowWorkspaceChanged(_)
-                | MuxNotification::ActiveWorkspaceChanged(_)
                 | MuxNotification::Empty
                 | MuxNotification::WindowCreated(_) => {}
             },
@@ -1521,10 +1523,18 @@ impl TermWindow {
             | MuxNotification::AssignClipboard { .. }
             | MuxNotification::SaveToDownloads { .. }
             | MuxNotification::WindowCreated(_)
-            | MuxNotification::ActiveWorkspaceChanged(_)
             | MuxNotification::WorkspaceRenamed { .. }
             | MuxNotification::Empty
             | MuxNotification::WindowWorkspaceChanged(_) => return true,
+            MuxNotification::ActiveWorkspaceChanged { ref client_id, .. } => {
+                // Other clients of this mux (`wezterm cli`) have their own
+                // active workspace; only our own switch is worth waking the
+                // window up for. Falls through to dispatch when it is ours.
+                match crate::frontend::try_front_end() {
+                    Some(fe) if *client_id == *fe.client_id() => {}
+                    _ => return true,
+                }
+            }
             MuxNotification::Alert {
                 alert: Alert::PaletteChanged { .. },
                 ..
@@ -1907,6 +1917,54 @@ impl TermWindow {
         };
 
         return window_id == self.mux_window_id;
+    }
+
+    /// Advise the config that the active workspace changed.
+    ///
+    /// The name now in front is reachable from the handler as
+    /// `window:active_workspace()`, so what is passed here is the name that
+    /// was in front before, which is otherwise impossible to recover once the
+    /// switch has happened.
+    ///
+    /// This fires per gui window, in the same way as `window-config-reloaded`,
+    /// and it fires before the windows have been reconciled against the new
+    /// workspace, so the window handed to the callback may be one that is about
+    /// to be repurposed or closed.
+    fn emit_workspace_changed_event(&mut self, old_workspace: Option<String>) {
+        // Not mux.active_workspace(): that resolves through the mux identity,
+        // which is temporarily reassigned while dispatching for other clients.
+        let workspace = match crate::frontend::try_front_end() {
+            Some(fe) => Mux::get().active_workspace_for_client(fe.client_id()),
+            None => return,
+        };
+        let window = GuiWin::new(self);
+        let pane = match self.get_active_pane_or_overlay() {
+            Some(pane) => MuxPane(pane.pane_id()),
+            None => return,
+        };
+
+        async fn do_event(
+            lua: Option<Rc<mlua::Lua>>,
+            workspace: String,
+            old_workspace: Option<String>,
+            window: GuiWin,
+            pane: MuxPane,
+        ) -> anyhow::Result<()> {
+            if let Some(lua) = lua {
+                let args = lua.pack_multi((window, pane, workspace, old_workspace))?;
+                if let Err(err) =
+                    config::lua::emit_event(&lua, ("workspace-changed".to_string(), args)).await
+                {
+                    log::error!("while processing workspace-changed event: {:#}", err);
+                }
+            }
+            Ok(())
+        }
+
+        promise::spawn::spawn(config::with_lua_config_on_main_thread(move |lua| {
+            do_event(lua, workspace, old_workspace, window, pane)
+        }))
+        .detach();
     }
 
     fn emit_user_var_event(&mut self, pane_id: PaneId, name: String, value: String) {

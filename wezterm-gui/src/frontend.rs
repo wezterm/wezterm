@@ -66,7 +66,7 @@ impl GuiFrontEnd {
                     }
                 }
                 MuxNotification::WindowWorkspaceChanged(_)
-                | MuxNotification::ActiveWorkspaceChanged(_)
+                | MuxNotification::ActiveWorkspaceChanged { .. }
                 | MuxNotification::WindowCreated(_)
                 | MuxNotification::WindowRemoved(_) => {
                     promise::spawn::spawn_into_main_thread(async move {
@@ -470,6 +470,14 @@ impl GuiFrontEnd {
 
     pub fn is_switching_workspace(&self) -> bool {
         *self.switching_workspaces.borrow()
+    }
+
+    /// The identity this gui uses with the mux. Other clients of the same mux
+    /// (`wezterm cli`, for instance) have their own identity and their own
+    /// active workspace, so notifications have to be matched against this
+    /// before they are treated as ours.
+    pub fn client_id(&self) -> &Arc<ClientId> {
+        &self.client_id
     }
 
     pub fn gui_window_for_mux_window(&self, mux_window_id: MuxWindowId) -> Option<GuiWin> {

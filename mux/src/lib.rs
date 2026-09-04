@@ -62,7 +62,12 @@ pub enum MuxNotification {
     WindowRemoved(WindowId),
     WindowInvalidated(WindowId),
     WindowWorkspaceChanged(WindowId),
-    ActiveWorkspaceChanged(Arc<ClientId>),
+    ActiveWorkspaceChanged {
+        client_id: Arc<ClientId>,
+        /// The workspace that was active before the change. `None` when the
+        /// client had no active workspace yet.
+        old_workspace: Option<String>,
+    },
     Alert {
         pane_id: PaneId,
         alert: wezterm_term::Alert,
@@ -637,8 +642,17 @@ impl Mux {
     pub fn set_active_workspace_for_client(&self, ident: &Arc<ClientId>, workspace: &str) {
         let mut clients = self.clients.write();
         if let Some(info) = clients.get_mut(&ident) {
-            info.active_workspace.replace(workspace.to_string());
-            self.notify(MuxNotification::ActiveWorkspaceChanged(ident.clone()));
+            let old_workspace = info.active_workspace.replace(workspace.to_string());
+            if old_workspace.as_deref() == Some(workspace) {
+                // Re-asserting the workspace that is already active is not a
+                // change; notifying would make subscribers reconcile, and would
+                // make the workspace-changed event fire, for nothing.
+                return;
+            }
+            self.notify(MuxNotification::ActiveWorkspaceChanged {
+                client_id: ident.clone(),
+                old_workspace,
+            });
         }
     }
 
@@ -666,10 +680,11 @@ impl Mux {
         self.recompute_pane_count();
         for client in self.clients.write().values_mut() {
             if client.active_workspace.as_deref() == Some(old_workspace) {
-                client.active_workspace.replace(new_workspace.to_string());
-                self.notify(MuxNotification::ActiveWorkspaceChanged(
-                    client.client_id.clone(),
-                ));
+                let old_workspace = client.active_workspace.replace(new_workspace.to_string());
+                self.notify(MuxNotification::ActiveWorkspaceChanged {
+                    client_id: client.client_id.clone(),
+                    old_workspace,
+                });
             }
         }
     }
