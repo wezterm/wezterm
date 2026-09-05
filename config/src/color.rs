@@ -136,6 +136,9 @@ pub struct Palette {
     pub cursor_fg: Option<RgbaColor>,
     pub cursor_bg: Option<RgbaColor>,
     pub cursor_border: Option<RgbaColor>,
+    /// The color of the copy mode cursor
+    pub copy_mode_cursor_fg: Option<RgbaColor>,
+    pub copy_mode_cursor_bg: Option<RgbaColor>,
     /// The color of selected text
     pub selection_fg: Option<RgbaColor>,
     pub selection_bg: Option<RgbaColor>,
@@ -196,6 +199,8 @@ impl Palette {
             cursor_fg: overlay!(cursor_fg),
             cursor_bg: overlay!(cursor_bg),
             cursor_border: overlay!(cursor_border),
+            copy_mode_cursor_fg: overlay!(copy_mode_cursor_fg),
+            copy_mode_cursor_bg: overlay!(copy_mode_cursor_bg),
             selection_fg: overlay!(selection_fg),
             selection_bg: overlay!(selection_bg),
             ansi: overlay!(ansi),
@@ -246,6 +251,8 @@ impl From<ColorPalette> for Palette {
         apply_color!(cursor_fg);
         apply_color!(cursor_bg);
         apply_color!(cursor_border);
+        apply_color!(copy_mode_cursor_fg);
+        apply_color!(copy_mode_cursor_bg);
         apply_color!(selection_fg);
         apply_color!(selection_bg);
         apply_color!(scrollbar_thumb);
@@ -286,6 +293,8 @@ impl From<Palette> for ColorPalette {
         apply_color!(cursor_fg);
         apply_color!(cursor_bg);
         apply_color!(cursor_border);
+        apply_color!(copy_mode_cursor_fg);
+        apply_color!(copy_mode_cursor_bg);
         apply_color!(selection_fg);
         apply_color!(selection_bg);
         apply_color!(scrollbar_thumb);
