@@ -1316,7 +1316,7 @@ impl TermWindow {
                 | MuxNotification::WorkspaceRenamed { .. }
                 | MuxNotification::PaneRemoved(_)
                 | MuxNotification::WindowWorkspaceChanged(_)
-                | MuxNotification::ActiveWorkspaceChanged(_)
+                | MuxNotification::ActiveWorkspaceChanged { .. }
                 | MuxNotification::Empty
                 | MuxNotification::WindowCreated(_) => {}
             },
@@ -1521,7 +1521,7 @@ impl TermWindow {
             | MuxNotification::AssignClipboard { .. }
             | MuxNotification::SaveToDownloads { .. }
             | MuxNotification::WindowCreated(_)
-            | MuxNotification::ActiveWorkspaceChanged(_)
+            | MuxNotification::ActiveWorkspaceChanged { .. }
             | MuxNotification::WorkspaceRenamed { .. }
             | MuxNotification::Empty
             | MuxNotification::WindowWorkspaceChanged(_) => return true,
