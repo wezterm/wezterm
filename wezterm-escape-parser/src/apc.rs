@@ -423,9 +423,19 @@ mod win {
         if let Some(val) = data_size {
             size = size.min(val as usize);
         }
-        let buf_slice =
-            unsafe { std::slice::from_raw_parts(shm.buf.Value.cast::<u8>().add(offset), size) };
-        let data = buf_slice.to_vec();
+
+        // Shared memory can technically be edited by any process, so we copy the data out.
+        let mut data = Vec::with_capacity(size);
+        if size > 0 {
+            let src = unsafe { shm.buf.Value.cast::<u8>().add(offset) };
+
+            // SAFETY: We have allocated a vector with enough capacity to hold `size` bytes,
+            // and we are copying from a valid memory region (`src`) into that vector.
+            unsafe {
+                src.copy_to_nonoverlapping(data.as_mut_ptr(), size);
+                data.set_len(size);
+            }
+        }
 
         Ok(data)
     }
