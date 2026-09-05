@@ -36,6 +36,11 @@ case "$TERM" in
   ;;
 esac
 
+if [ -n "$NVIM" ] ; then
+  # Disable inside Neovim terminal to avoid issues #5007 and #5986
+  return 0
+fi
+
 # This function wraps bash-preexec.sh so that it can be included verbatim
 # in this file, even though it uses `return` to short-circuit in some cases.
 __wezterm_install_bash_prexec() {
