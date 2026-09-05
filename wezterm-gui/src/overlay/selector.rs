@@ -37,6 +37,49 @@ pub fn matcher_pattern(s: &str) -> Pattern {
     )
 }
 
+struct MatchResult {
+    row_idx: usize,
+    score: u32,
+    priority: u32,
+}
+
+/// Score and sort `entries` against `filter` using fuzzy matching boosted by
+/// [`InputSelectorEntry::priority`].  Returns results ordered by effective score
+/// (descending), with insertion order as tie-breaker.
+fn priority_filtered_entries(
+    entries: &[InputSelectorEntry],
+    filter: &str,
+    score_per_priority: u32,
+) -> Vec<MatchResult> {
+    let pattern = matcher_pattern(filter);
+
+    let mut scores: Vec<MatchResult> = entries
+        .par_iter()
+        .enumerate()
+        .filter_map(|(row_idx, entry)| {
+            let score = matcher_score(&pattern, &entry.label)?;
+            Some(MatchResult {
+                row_idx,
+                score,
+                priority: entry.priority,
+            })
+        })
+        .collect();
+
+    let effective = |r: &MatchResult| {
+        r.score
+            .saturating_add(r.priority.saturating_mul(score_per_priority))
+    };
+
+    scores.sort_by(|a, b| {
+        effective(b)
+            .cmp(&effective(a))
+            .then(a.row_idx.cmp(&b.row_idx))
+    });
+
+    scores
+}
+
 struct SelectorState {
     active_idx: usize,
     max_items: usize,
@@ -57,31 +100,28 @@ impl SelectorState {
     fn update_filter(&mut self) {
         if self.filter_term.is_empty() {
             self.filtered_entries = self.args.choices.clone();
+            self.filtered_entries
+                .sort_by(|a, b| b.priority.cmp(&a.priority));
             return;
         }
 
-        self.filtered_entries.clear();
+        let scores = priority_filtered_entries(
+            &self.args.choices,
+            &self.filter_term,
+            self.args.score_per_priority,
+        );
 
-        struct MatchResult {
-            row_idx: usize,
-            score: u32,
+        for r in &scores {
+            log::trace!(
+                "inputselector filter={:?} priority={} score={} label={:?}",
+                self.filter_term,
+                r.priority,
+                r.score,
+                self.args.choices[r.row_idx].label
+            );
         }
 
-        let pattern = matcher_pattern(&self.filter_term);
-
-        let mut scores: Vec<MatchResult> = self
-            .args
-            .choices
-            .par_iter()
-            .enumerate()
-            .filter_map(|(row_idx, entry)| {
-                let score = matcher_score(&pattern, &entry.label)?;
-                Some(MatchResult { row_idx, score })
-            })
-            .collect();
-
-        scores.sort_by(|a, b| a.score.cmp(&b.score).reverse());
-
+        self.filtered_entries.clear();
         for result in scores {
             self.filtered_entries
                 .push(self.args.choices[result.row_idx].clone());
@@ -445,4 +485,76 @@ pub fn selector(
     state.update_filter();
     state.render(&mut term)?;
     state.run_loop(&mut term)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::priority_filtered_entries;
+    use config::keyassignment::InputSelectorEntry;
+
+    fn entry(label: &str, priority: u32) -> InputSelectorEntry {
+        InputSelectorEntry {
+            label: label.to_string(),
+            id: None,
+            priority,
+        }
+    }
+
+    fn filtered_order(
+        entries: &[InputSelectorEntry],
+        filter: &str,
+        score_per_priority: u32,
+    ) -> Vec<String> {
+        priority_filtered_entries(entries, filter, score_per_priority)
+            .into_iter()
+            .map(|r| entries[r.row_idx].label.clone())
+            .collect()
+    }
+
+    #[test]
+    fn strong_match_overcomes_higher_priority() {
+        let entries = vec![entry("foo-bar", 1), entry("bar-baz-quux-unrelated", 3)];
+        let order = filtered_order(&entries, "foo", 20);
+        assert_eq!(order[0], "foo-bar");
+    }
+
+    #[test]
+    fn same_priority_sorts_by_score() {
+        let entries = vec![entry("weak-zzz", 0), entry("strong-aaa", 0)];
+        let order = filtered_order(&entries, "strong", 20);
+        assert_eq!(order[0], "strong-aaa");
+    }
+
+    #[test]
+    fn ansi_escape_labels_with_priority() {
+        let decorated = "\x1b[0;36mwidget (primary)\x1b[0m";
+        let plain = "other-widget";
+
+        let entries = vec![entry(decorated, 2), entry(plain, 0)];
+        let order = filtered_order(&entries, "widget", 20);
+
+        assert_eq!(
+            order.len(),
+            2,
+            "both entries should match 'widget' regardless of ANSI escape sequences"
+        );
+        assert_eq!(
+            order.first().map(String::as_str),
+            Some(decorated),
+            "higher-priority entry should rank first even with ANSI escape sequences in label"
+        );
+    }
+
+    #[test]
+    fn higher_priority_wins_with_similar_scores() {
+        let entries = vec![entry("alpha-project", 1), entry("bravo-project", 2)];
+
+        let order = filtered_order(&entries, "project", 20);
+
+        assert_eq!(
+            order.first().map(String::as_str),
+            Some("bravo-project"),
+            "priority 2 should beat priority 1 when fuzzy scores are similar"
+        );
+    }
 }
