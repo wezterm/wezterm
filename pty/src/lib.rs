@@ -145,6 +145,10 @@ pub trait Child: std::fmt::Debug + ChildKiller + Downcast + Send {
     /// Only available on Windows.
     #[cfg(windows)]
     fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle>;
+    /// Returns a handle to the main thread of the child process, if applicable.
+    /// Only available on Windows.
+    #[cfg(windows)]
+    fn main_thread_handle(&self) -> Option<std::os::windows::io::BorrowedHandle<'_>>;
 }
 impl_downcast!(Child);
 
@@ -289,6 +293,14 @@ impl Child for std::process::Child {
     #[cfg(windows)]
     fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
         Some(std::os::windows::io::AsRawHandle::as_raw_handle(self))
+    }
+
+    #[cfg(windows)]
+    fn main_thread_handle(&self) -> Option<std::os::windows::io::BorrowedHandle<'_>> {
+        // TODO: once `windows_process_extensions_main_thread_handle` is stabilized
+        // we should return the main thread handle here instead of None.
+        // Some(std::os::windows::process::ChildExt::main_thread_handle(self))
+        None
     }
 }
 
