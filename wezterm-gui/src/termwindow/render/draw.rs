@@ -142,9 +142,34 @@ impl crate::TermWindow {
             }
         }
 
+        // Apply glow effect if enabled
+        let config = self.config.clone();
+        let mut schedule_animation = false;
+        if config.experimental_glow.enabled {
+            // Ensure glow renderer is initialized
+            webgpu.ensure_glow_renderer(&self.dimensions, &config.experimental_glow)?;
+            
+            // Apply glow post-processing
+            if let Some(ref glow_renderer) = webgpu.glow_renderer.borrow().as_ref() {
+                glow_renderer.render_glow(&mut encoder, &webgpu.device, &view, &config.experimental_glow, milliseconds)?;
+                
+                // Mark that we need to schedule animation after releasing the webgpu borrow
+                schedule_animation = config.experimental_glow.animation_enabled;
+            }
+        }
+
         // submit will accept anything that implements IntoIter
         webgpu.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+        
+        // Schedule continuous redraws for animation (after releasing webgpu borrow)
+        if schedule_animation {
+            use std::time::{Duration, Instant};
+            let now = Instant::now();
+            // Schedule next frame in ~16ms for 60fps animation
+            let next_frame = now + Duration::from_millis(16);
+            self.update_next_frame_time(Some(next_frame));
+        }
 
         Ok(())
     }

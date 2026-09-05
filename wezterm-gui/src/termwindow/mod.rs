@@ -84,6 +84,7 @@ pub mod resize;
 mod selection;
 pub mod spawn;
 pub mod webgpu;
+pub mod glow;
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
 
@@ -1089,13 +1090,13 @@ impl TermWindow {
     }
 
     fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
-        self.webgpu.as_mut().unwrap().resize(self.dimensions);
+        self.webgpu.as_ref().unwrap().resize(self.dimensions);
         match self.do_paint_webgpu_impl() {
             Ok(ok) => Ok(ok),
             Err(err) => {
                 match err.downcast_ref::<wgpu::SurfaceError>() {
                     Some(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        self.webgpu.as_mut().unwrap().resize(self.dimensions);
+                        self.webgpu.as_ref().unwrap().resize(self.dimensions);
                         return self.do_paint_webgpu_impl();
                     }
                     _ => {}
