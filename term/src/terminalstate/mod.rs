@@ -2231,9 +2231,11 @@ impl TerminalState {
                     && self.left_and_right_margins.contains(&x)
                 {
                     let margin = self.left_and_right_margins.end;
+                    let blank_attr = self.pen.clone_sgr_only();
                     let screen = self.screen_mut();
                     for _ in 0..n as usize {
                         screen.insert_cell(x, y, margin, seqno);
+                        screen.erase_cell(x, y, margin, seqno, blank_attr.clone());
                     }
                 }
             }
