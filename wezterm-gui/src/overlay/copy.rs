@@ -278,9 +278,12 @@ impl CopyRenderable {
 
         let window = self.window.clone();
         let pane_id = self.delegate.pane_id();
+        let debounce_ms = config::configuration().search_debounce_ms;
 
         promise::spawn::spawn(async move {
-            smol::Timer::after(Duration::from_millis(350)).await;
+            if debounce_ms > 0 {
+                smol::Timer::after(Duration::from_millis(debounce_ms)).await;
+            }
             window.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
                 let state = term_window.pane_state(pane_id);
                 if let Some(overlay) = state.overlay.as_ref() {
