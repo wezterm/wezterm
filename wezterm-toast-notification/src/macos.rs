@@ -1,4 +1,5 @@
 #![cfg(target_os = "macos")]
+
 use crate::ToastNotification;
 use block2::{Block, RcBlock};
 use objc2::rc::Retained;

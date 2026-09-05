@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+
 use crate::color::LinearRgba;
 use crate::customglyph::{BlockKey, Poly};
 use crate::glyphcache::CachedGlyph;
