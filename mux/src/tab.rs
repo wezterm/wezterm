@@ -316,7 +316,7 @@ where
 
 /// Computes the minimum (x, y) size based on the panes in this portion
 /// of the tree.
-fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
+fn compute_min_size(tree: &Tree) -> (usize, usize) {
     match tree {
         Tree::Node { data: None, .. } | Tree::Empty => (1, 1),
         Tree::Node {
@@ -324,8 +324,8 @@ fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
             right,
             data: Some(data),
         } => {
-            let (left_x, left_y) = compute_min_size(&mut *left);
-            let (right_x, right_y) = compute_min_size(&mut *right);
+            let (left_x, left_y) = compute_min_size(left);
+            let (right_x, right_y) = compute_min_size(right);
             match data.direction {
                 SplitDirection::Vertical => (left_x.max(right_x), left_y + right_y + 1),
                 SplitDirection::Horizontal => (left_x + right_x + 1, left_y.max(right_y)),
@@ -337,6 +337,17 @@ fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
 
 fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &TerminalSize) {
     let (min_x, _) = compute_min_size(tree);
+    // A child cannot give up columns that its own splits need. These minimums
+    // depend only on the shape of the tree, which does not change while sizes
+    // are redistributed, so compute them once rather than on every pass.
+    let (first_min_x, second_min_x) = match tree {
+        Tree::Node {
+            left,
+            right,
+            data: Some(_),
+        } => (compute_min_size(left).0, compute_min_size(right).0),
+        _ => (1, 1),
+    };
     while x_adjust != 0 {
         match tree {
             Tree::Empty | Tree::Leaf(_) => return,
@@ -384,19 +395,28 @@ fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &Termina
                     }
                     SplitDirection::Horizontal => {
                         // x_adjust is negative
-                        if data.first.cols > 1 {
+                        let before = x_adjust;
+                        if data.first.cols > first_min_x {
                             adjust_x_size(&mut *left, -1, cell_dimensions);
                             data.first.cols -= 1;
                             data.first.pixel_width =
                                 data.first.cols.saturating_mul(cell_dimensions.pixel_width);
                             x_adjust += 1;
                         }
-                        if x_adjust < 0 && data.second.cols > 1 {
+                        if x_adjust < 0 && data.second.cols > second_min_x {
                             adjust_x_size(&mut *right, -1, cell_dimensions);
                             data.second.cols -= 1;
                             data.second.pixel_width =
                                 data.second.cols.saturating_mul(cell_dimensions.pixel_width);
                             x_adjust += 1;
+                        }
+                        if x_adjust == before {
+                            // Neither child can give up a column without
+                            // dropping below what its own splits require, so
+                            // the remaining adjustment is unsatisfiable.
+                            // Give up instead of spinning in the enclosing
+                            // `while x_adjust != 0` loop forever.
+                            return;
                         }
                     }
                 }
@@ -407,6 +427,17 @@ fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &Termina
 
 fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &TerminalSize) {
     let (_, min_y) = compute_min_size(tree);
+    // A child cannot give up rows that its own splits need. These minimums
+    // depend only on the shape of the tree, which does not change while sizes
+    // are redistributed, so compute them once rather than on every pass.
+    let (first_min_y, second_min_y) = match tree {
+        Tree::Node {
+            left,
+            right,
+            data: Some(_),
+        } => (compute_min_size(left).1, compute_min_size(right).1),
+        _ => (1, 1),
+    };
     while y_adjust != 0 {
         match tree {
             Tree::Empty | Tree::Leaf(_) => return,
@@ -455,14 +486,15 @@ fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &Termina
                     }
                     SplitDirection::Vertical => {
                         // y_adjust is negative
-                        if data.first.rows > 1 {
+                        let before = y_adjust;
+                        if data.first.rows > first_min_y {
                             adjust_y_size(&mut *left, -1, cell_dimensions);
                             data.first.rows -= 1;
                             data.first.pixel_height =
                                 data.first.rows.saturating_mul(cell_dimensions.pixel_height);
                             y_adjust += 1;
                         }
-                        if y_adjust < 0 && data.second.rows > 1 {
+                        if y_adjust < 0 && data.second.rows > second_min_y {
                             adjust_y_size(&mut *right, -1, cell_dimensions);
                             data.second.rows -= 1;
                             data.second.pixel_height = data
@@ -470,6 +502,14 @@ fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &Termina
                                 .rows
                                 .saturating_mul(cell_dimensions.pixel_height);
                             y_adjust += 1;
+                        }
+                        if y_adjust == before {
+                            // Neither child can give up a row without
+                            // dropping below what its own splits require, so
+                            // the remaining adjustment is unsatisfiable.
+                            // Give up instead of spinning in the enclosing
+                            // `while y_adjust != 0` loop forever.
+                            return;
                         }
                     }
                 }
@@ -1191,6 +1231,14 @@ impl TabInner {
             .pixel_height
             .checked_div(pane_size.rows)
             .unwrap_or(1);
+        // Holding the first child at its current size is only safe while the
+        // second child still has room for its own splits. Once the space runs
+        // out the first child has to yield, or the subtraction below floors the
+        // second child at zero and its panes vanish.
+        let (first_min, second_min) = match cursor.subtree() {
+            Tree::Node { left, right, .. } => (compute_min_size(left), compute_min_size(right)),
+            _ => ((1, 1), (1, 1)),
+        };
         if let Ok(Some(node)) = cursor.node_mut() {
             // Adjust the size of the node; we preserve the size of the first
             // child and adjust the second, so if we are split down the middle
@@ -1200,12 +1248,22 @@ impl TabInner {
                 node.first.rows = pane_size.rows;
                 node.second.rows = pane_size.rows;
 
-                node.second.cols = pane_size.cols.saturating_sub(1 + node.first.cols);
+                let first_max = pane_size.cols.saturating_sub(1 + second_min.0);
+                node.first.cols = node.first.cols.min(first_max).max(first_min.0);
+                node.second.cols = pane_size
+                    .cols
+                    .saturating_sub(1 + node.first.cols)
+                    .max(second_min.0);
             } else {
                 node.first.cols = pane_size.cols;
                 node.second.cols = pane_size.cols;
 
-                node.second.rows = pane_size.rows.saturating_sub(1 + node.first.rows);
+                let first_max = pane_size.rows.saturating_sub(1 + second_min.1);
+                node.first.rows = node.first.rows.min(first_max).max(first_min.1);
+                node.second.rows = pane_size
+                    .rows
+                    .saturating_sub(1 + node.first.rows)
+                    .max(second_min.1);
             }
             node.first.pixel_width = node.first.cols * cell_width;
             node.first.pixel_height = node.first.rows * cell_height;
@@ -1293,41 +1351,57 @@ impl TabInner {
 
     fn adjust_node_at_cursor(&mut self, cursor: &mut Cursor, delta: isize) {
         let cell_dimensions = self.cell_dimensions();
+        // Neither side can be dragged smaller than its own splits require, so
+        // bound the divider by each subtree's minimum rather than reserving a
+        // single cell for the immediate child.
+        let (first_min, second_min) = match cursor.subtree() {
+            Tree::Node { left, right, .. } => (compute_min_size(left), compute_min_size(right)),
+            _ => ((1, 1), (1, 1)),
+        };
         if let Ok(Some(node)) = cursor.node_mut() {
             match node.direction {
                 SplitDirection::Horizontal => {
                     let width = node.width();
+                    let lowest = first_min.0 as isize;
+                    let highest = (width as isize) - 1 - (second_min.0 as isize);
 
-                    let mut cols = node.first.cols as isize;
-                    cols = cols
-                        .saturating_add(delta)
-                        .max(1)
-                        .min((width as isize).saturating_sub(2));
-                    node.first.cols = cols as usize;
-                    node.first.pixel_width =
-                        node.first.cols.saturating_mul(cell_dimensions.pixel_width);
+                    // When the node is already too narrow to satisfy both
+                    // subtrees there is no valid divider position, and moving it
+                    // could only make the overlap worse. Leave it alone.
+                    if highest >= lowest {
+                        let cols = (node.first.cols as isize)
+                            .saturating_add(delta)
+                            .max(lowest)
+                            .min(highest);
+                        node.first.cols = cols as usize;
+                        node.first.pixel_width =
+                            node.first.cols.saturating_mul(cell_dimensions.pixel_width);
 
-                    node.second.cols = width.saturating_sub(node.first.cols.saturating_add(1));
-                    node.second.pixel_width =
-                        node.second.cols.saturating_mul(cell_dimensions.pixel_width);
+                        node.second.cols = width.saturating_sub(node.first.cols.saturating_add(1));
+                        node.second.pixel_width =
+                            node.second.cols.saturating_mul(cell_dimensions.pixel_width);
+                    }
                 }
                 SplitDirection::Vertical => {
                     let height = node.height();
+                    let lowest = first_min.1 as isize;
+                    let highest = (height as isize) - 1 - (second_min.1 as isize);
 
-                    let mut rows = node.first.rows as isize;
-                    rows = rows
-                        .saturating_add(delta)
-                        .max(1)
-                        .min((height as isize).saturating_sub(2));
-                    node.first.rows = rows as usize;
-                    node.first.pixel_height =
-                        node.first.rows.saturating_mul(cell_dimensions.pixel_height);
+                    if highest >= lowest {
+                        let rows = (node.first.rows as isize)
+                            .saturating_add(delta)
+                            .max(lowest)
+                            .min(highest);
+                        node.first.rows = rows as usize;
+                        node.first.pixel_height =
+                            node.first.rows.saturating_mul(cell_dimensions.pixel_height);
 
-                    node.second.rows = height.saturating_sub(node.first.rows.saturating_add(1));
-                    node.second.pixel_height = node
-                        .second
-                        .rows
-                        .saturating_mul(cell_dimensions.pixel_height);
+                        node.second.rows = height.saturating_sub(node.first.rows.saturating_add(1));
+                        node.second.pixel_height = node
+                            .second
+                            .rows
+                            .saturating_mul(cell_dimensions.pixel_height);
+                    }
                 }
             }
         }
@@ -2524,5 +2598,322 @@ mod test {
     #[test]
     fn tab_is_send_and_sync() {
         assert!(is_send_and_sync::<Tab>());
+    }
+
+    /// Runs `f` on a worker thread and fails the test if it doesn't finish in
+    /// time, returning its value otherwise.
+    ///
+    /// The bug these tests cover is a non-termination bug: a tight userspace
+    /// loop that issues no syscalls and mutates nothing. Calling the function
+    /// directly would wedge the whole test run rather than reporting a failure.
+    fn run_with_timeout<T: Send + 'static>(
+        secs: u64,
+        what: &str,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+            Ok(value) => value,
+            Err(_) => panic!("{} failed to terminate within {}s", what, secs),
+        }
+    }
+
+    fn cell_dims() -> TerminalSize {
+        TerminalSize {
+            rows: 1,
+            cols: 1,
+            pixel_width: 8,
+            pixel_height: 18,
+            dpi: 96,
+        }
+    }
+
+    /// A split node whose two children are both already down at the one-cell
+    /// minimum along the split axis, so neither can give anything up.
+    fn node_at_minimum(direction: SplitDirection) -> Tree {
+        let at_min = TerminalSize {
+            rows: 1,
+            cols: 1,
+            pixel_width: 8,
+            pixel_height: 18,
+            dpi: 96,
+        };
+        Tree::Node {
+            left: Box::new(Tree::Empty),
+            right: Box::new(Tree::Empty),
+            data: Some(SplitDirectionAndSize {
+                direction,
+                first: at_min,
+                second: at_min,
+            }),
+        }
+    }
+
+    fn split_data(tree: Tree) -> SplitDirectionAndSize {
+        match tree {
+            Tree::Node {
+                data: Some(data), ..
+            } => data,
+            _ => unreachable!("expected a split node"),
+        }
+    }
+
+    #[test]
+    fn adjust_y_size_gives_up_when_both_children_are_at_minimum_height() {
+        let mut tree = node_at_minimum(SplitDirection::Vertical);
+        let dims = cell_dims();
+
+        let tree = run_with_timeout(5, "adjust_y_size(-1) at minimum height", move || {
+            adjust_y_size(&mut tree, -1, &dims);
+            tree
+        });
+
+        let data = split_data(tree);
+        assert_eq!(data.first.rows, 1, "first child shrank below the minimum");
+        assert_eq!(data.second.rows, 1, "second child shrank below the minimum");
+    }
+
+    /// A tree that is already inconsistent, which is the shape a real hang was
+    /// caught in: the outer node records 2 rows for a first child whose own
+    /// splits need 3. Trees reach this state in the wild because the
+    /// interactive divider-drag path clamps to 1 without consulting subtree
+    /// minimums.
+    ///
+    /// Nothing here can legitimately shrink, so this exercises the termination
+    /// guard directly -- without it `y_adjust` never changes and the loop
+    /// spins. Correct behaviour is to return without making the existing
+    /// inconsistency any worse.
+    #[test]
+    fn adjust_y_size_terminates_without_worsening_an_inconsistent_tree() {
+        let at_min = TerminalSize {
+            rows: 1,
+            cols: 1,
+            pixel_width: 8,
+            pixel_height: 18,
+            dpi: 96,
+        };
+        let inner = node_at_minimum(SplitDirection::Vertical);
+        let mut tree = Tree::Node {
+            left: Box::new(inner),
+            right: Box::new(Tree::Empty),
+            data: Some(SplitDirectionAndSize {
+                direction: SplitDirection::Vertical,
+                first: TerminalSize { rows: 2, ..at_min },
+                second: at_min,
+            }),
+        };
+        let dims = cell_dims();
+
+        let tree = run_with_timeout(5, "adjust_y_size(-2) with collapsed subtree", move || {
+            adjust_y_size(&mut tree, -2, &dims);
+            tree
+        });
+
+        let data = split_data(tree);
+        assert_eq!(
+            data.first.rows, 2,
+            "shrank a child that was already below its subtree minimum"
+        );
+        assert_eq!(data.second.rows, 1, "second child shrank below the minimum");
+    }
+
+    #[test]
+    fn adjust_x_size_gives_up_when_both_children_are_at_minimum_width() {
+        let mut tree = node_at_minimum(SplitDirection::Horizontal);
+        let dims = cell_dims();
+
+        let tree = run_with_timeout(5, "adjust_x_size(-1) at minimum width", move || {
+            adjust_x_size(&mut tree, -1, &dims);
+            tree
+        });
+
+        let data = split_data(tree);
+        assert_eq!(data.first.cols, 1, "first child shrank below the minimum");
+        assert_eq!(data.second.cols, 1, "second child shrank below the minimum");
+    }
+
+    /// An outer split whose first child is itself a fully collapsed split.
+    /// The child's subtree structurally needs 3 cells along the split axis
+    /// (two leaves plus a divider), while the outer node records only a single
+    /// number for it -- so the outer node can be told to shrink it further than
+    /// its own contents allow.
+    fn nested_at_minimum(direction: SplitDirection, first: usize) -> Tree {
+        let at_min = TerminalSize {
+            rows: 1,
+            cols: 1,
+            pixel_width: 8,
+            pixel_height: 18,
+            dpi: 96,
+        };
+        let first = match direction {
+            SplitDirection::Vertical => TerminalSize {
+                rows: first,
+                ..at_min
+            },
+            SplitDirection::Horizontal => TerminalSize {
+                cols: first,
+                ..at_min
+            },
+        };
+        Tree::Node {
+            left: Box::new(node_at_minimum(direction)),
+            right: Box::new(Tree::Empty),
+            data: Some(SplitDirectionAndSize {
+                direction,
+                first,
+                second: at_min,
+            }),
+        }
+    }
+
+    #[test]
+    fn adjust_y_size_leaves_a_child_alone_when_its_subtree_is_already_minimal() {
+        let mut tree = nested_at_minimum(SplitDirection::Vertical, 3);
+        let dims = cell_dims();
+
+        let tree = run_with_timeout(5, "adjust_y_size(-1) on a minimal subtree", move || {
+            adjust_y_size(&mut tree, -1, &dims);
+            tree
+        });
+
+        let data = split_data(tree);
+        assert_eq!(
+            data.first.rows, 3,
+            "shrank a child below its subtree minimum of 3 rows"
+        );
+    }
+
+    #[test]
+    fn adjust_y_size_shrinks_a_child_only_down_to_its_subtree_minimum() {
+        let mut tree = nested_at_minimum(SplitDirection::Vertical, 5);
+        let dims = cell_dims();
+
+        let tree = run_with_timeout(5, "adjust_y_size(-3) past available slack", move || {
+            adjust_y_size(&mut tree, -3, &dims);
+            tree
+        });
+
+        let data = split_data(tree);
+        assert_eq!(
+            data.first.rows, 3,
+            "shrank a child below its subtree minimum of 3 rows"
+        );
+    }
+
+    #[test]
+    fn adjust_x_size_shrinks_a_child_only_down_to_its_subtree_minimum() {
+        let mut tree = nested_at_minimum(SplitDirection::Horizontal, 5);
+        let dims = cell_dims();
+
+        let tree = run_with_timeout(5, "adjust_x_size(-3) past available slack", move || {
+            adjust_x_size(&mut tree, -3, &dims);
+            tree
+        });
+
+        let data = split_data(tree);
+        assert_eq!(
+            data.first.cols, 3,
+            "shrank a child below its subtree minimum of 3 cols"
+        );
+    }
+
+    /// Dragging a divider must respect what the subtree on either side needs,
+    /// not just leave a single cell for the immediate child. Squeezing a nested
+    /// split down to one row leaves its own children nothing, and the shortfall
+    /// surfaces as a pane sized zero once the sizes cascade down.
+    #[test]
+    fn dragging_a_divider_cannot_collapse_a_nested_split() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+
+        // Split the tab in two vertically, then split the top half again, so
+        // the root's first child is itself a split and structurally needs three
+        // rows: two leaves plus the divider between them.
+        let outer = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Vertical,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Vertical,
+                ..Default::default()
+            },
+            FakePane::new(2, outer.second),
+        )
+        .unwrap();
+
+        let inner = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Vertical,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Vertical,
+                ..Default::default()
+            },
+            FakePane::new(3, inner.second),
+        )
+        .unwrap();
+
+        assert_eq!(tab.iter_panes().len(), 3);
+
+        // Drag the outermost divider as far up as it will go.
+        tab.resize_split_by(0, -100);
+
+        let panes = tab.iter_panes();
+        for pane in &panes {
+            assert!(
+                pane.height >= 1 && pane.width >= 1,
+                "pane {} collapsed to {}x{}",
+                pane.index,
+                pane.width,
+                pane.height
+            );
+        }
+        // Stopping the divider short is only half the job: if it is allowed
+        // past the subtree minimum the contents no longer fit in the region
+        // they were given, and panes end up drawn on top of each other.
+        for (i, a) in panes.iter().enumerate() {
+            for b in &panes[i + 1..] {
+                let rows_overlap = a.top < b.top + b.height && b.top < a.top + a.height;
+                let cols_overlap = a.left < b.left + b.width && b.left < a.left + a.width;
+                assert!(
+                    !(rows_overlap && cols_overlap),
+                    "panes {} (top={} left={} {}x{}) and {} (top={} left={} {}x{}) overlap",
+                    a.index,
+                    a.top,
+                    a.left,
+                    a.width,
+                    a.height,
+                    b.index,
+                    b.top,
+                    b.left,
+                    b.width,
+                    b.height
+                );
+            }
+        }
     }
 }
