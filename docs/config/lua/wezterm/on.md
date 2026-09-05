@@ -20,6 +20,7 @@ is emitted, each of the registered callbacks is called in the order that
 they were registered.
 
 The callback will receive the following parameters:
+
 - a [`window` object](../window/index.md) that represents the active gui window.
 - a [`pane` object](../pane/index.md) that represents the active pane.
 
