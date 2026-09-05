@@ -424,6 +424,7 @@ mod win {
             size = size.min(val as usize);
         }
 
+        // Shared memory can technically be edited by any process, so we copy the data out.
         let mut data = Vec::with_capacity(size);
         if size > 0 {
             let src = unsafe { shm.buf.Value.cast::<u8>().add(offset) };
