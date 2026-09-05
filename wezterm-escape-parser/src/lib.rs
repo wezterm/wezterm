@@ -1,12 +1,14 @@
+//! This module provides the ability to parse escape sequences and attach
+//! semantic meaning to them.  It can also encode the semantic values as
+//! escape sequences.  It provides encoding and decoding functionality
+//! only; it does not provide terminal emulation facilities itself.
+
 // suppress inscrutable useless_attribute clippy that shows up when
 // using derive(FromPrimitive)
 #![allow(clippy::useless_attribute)]
 #![allow(clippy::upper_case_acronyms)]
 #![cfg_attr(not(feature = "std"), no_std)]
-//! This module provides the ability to parse escape sequences and attach
-//! semantic meaning to them.  It can also encode the semantic values as
-//! escape sequences.  It provides encoding and decoding functionality
-//! only; it does not provide terminal emulation facilities itself.
+
 #[cfg(feature = "tmux_cc")]
 use crate::tmux_cc::Event;
 use core::fmt::{Display, Formatter, Result as FmtResult, Write as FmtWrite};

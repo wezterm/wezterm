@@ -1,4 +1,5 @@
 #![allow(clippy::many_single_char_names)]
+
 #[cfg(feature = "tmux_cc")]
 use crate::tmux_cc::Event;
 use crate::{
