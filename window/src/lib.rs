@@ -210,6 +210,148 @@ pub enum WindowEvent {
     AdviseModifiersLedStatus(Modifiers, KeyboardLedStatus),
 }
 
+/// A single entry in a context menu requested via WindowOps::show_context_menu.
+/// When the user activates an item, the backend dispatches a
+/// WindowEvent::PerformKeyAssignment carrying its action.
+#[derive(Clone, Debug)]
+pub struct ContextMenuItem {
+    /// The text shown for this item.
+    pub label: String,
+    /// The action to perform when the item is activated.
+    pub action: config::keyassignment::KeyAssignment,
+    /// Whether the item is selectable. Disabled items are shown greyed out.
+    pub enabled: bool,
+}
+
+impl ContextMenuItem {
+    /// Create an enabled menu item bound to the given action.
+    pub fn new<S: Into<String>>(label: S, action: config::keyassignment::KeyAssignment) -> Self {
+        Self {
+            label: label.into(),
+            action,
+            enabled: true,
+        }
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+}
+
+/// A ContextMenuItem with a command id assigned. Ids start at 1 because some
+/// native APIs return 0 to mean nothing was selected (e.g. Win32
+/// TrackPopupMenu with TPM_RETURNCMD).
+#[derive(Clone, Debug)]
+pub struct ResolvedMenuItem {
+    pub command_id: usize,
+    pub label: String,
+    pub enabled: bool,
+    pub action: config::keyassignment::KeyAssignment,
+}
+
+/// Assign 1-based command ids to menu items so a backend can render them and map
+/// a chosen id back to its action.
+pub fn resolve_context_menu(items: Vec<ContextMenuItem>) -> Vec<ResolvedMenuItem> {
+    items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| ResolvedMenuItem {
+            command_id: index + 1,
+            label: item.label,
+            enabled: item.enabled,
+            action: item.action,
+        })
+        .collect()
+}
+
+/// Recover the action bound to command_id, as returned by a native menu.
+/// Returns None for an unknown id or a disabled entry, so a backend that
+/// forwards a raw click cannot fire a greyed-out item.
+pub fn menu_action_for_command_id(
+    entries: &[ResolvedMenuItem],
+    command_id: usize,
+) -> Option<config::keyassignment::KeyAssignment> {
+    entries
+        .iter()
+        .find(|item| item.command_id == command_id && item.enabled)
+        .map(|item| item.action.clone())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use config::keyassignment::{ClipboardCopyDestination, ClipboardPasteSource, KeyAssignment};
+
+    #[test]
+    fn assigns_one_based_command_ids() {
+        let items = vec![
+            ContextMenuItem::new(
+                "Copy",
+                KeyAssignment::CopyTo(ClipboardCopyDestination::Clipboard),
+            )
+            .enabled(false),
+            ContextMenuItem::new(
+                "Paste",
+                KeyAssignment::PasteFrom(ClipboardPasteSource::Clipboard),
+            ),
+        ];
+
+        let resolved = resolve_context_menu(items);
+        assert_eq!(resolved.len(), 2);
+
+        assert_eq!(resolved[0].command_id, 1);
+        assert_eq!(resolved[0].label, "Copy");
+        assert!(!resolved[0].enabled);
+
+        assert_eq!(resolved[1].command_id, 2);
+        assert_eq!(resolved[1].label, "Paste");
+        assert!(resolved[1].enabled);
+    }
+
+    #[test]
+    fn command_id_round_trips_to_action() {
+        let items = vec![
+            ContextMenuItem::new(
+                "Copy",
+                KeyAssignment::CopyTo(ClipboardCopyDestination::Clipboard),
+            ),
+            ContextMenuItem::new(
+                "Paste",
+                KeyAssignment::PasteFrom(ClipboardPasteSource::Clipboard),
+            ),
+        ];
+
+        let resolved = resolve_context_menu(items);
+
+        assert!(matches!(
+            menu_action_for_command_id(&resolved, 1),
+            Some(KeyAssignment::CopyTo(ClipboardCopyDestination::Clipboard))
+        ));
+        assert!(matches!(
+            menu_action_for_command_id(&resolved, 2),
+            Some(KeyAssignment::PasteFrom(ClipboardPasteSource::Clipboard))
+        ));
+        // 0 is "no selection"; there is no id 3.
+        assert!(menu_action_for_command_id(&resolved, 0).is_none());
+        assert!(menu_action_for_command_id(&resolved, 3).is_none());
+    }
+
+    #[test]
+    fn disabled_items_do_not_resolve_to_an_action() {
+        let items = vec![ContextMenuItem::new(
+            "Copy",
+            KeyAssignment::CopyTo(ClipboardCopyDestination::Clipboard),
+        )
+        .enabled(false)];
+
+        let resolved = resolve_context_menu(items);
+
+        // The id exists in the menu, but a disabled entry must never fire.
+        assert!(menu_action_for_command_id(&resolved, 1).is_none());
+    }
+}
+
 pub struct WindowEventSender {
     handler: Box<dyn FnMut(WindowEvent, &Window)>,
     window: Option<Window>,
@@ -310,6 +452,16 @@ pub trait WindowOps {
 
     /// Set some text in the clipboard
     fn set_clipboard(&self, clipboard: Clipboard, text: String);
+
+    /// Pop up a context menu at the current mouse position, built from the
+    /// supplied items. When the user picks an item, the backend dispatches a
+    /// WindowEvent::PerformKeyAssignment with that item's action.
+    ///
+    /// The default implementation only logs a warning; backends that support
+    /// a context menu override this.
+    fn show_context_menu(&self, _items: Vec<ContextMenuItem>) {
+        log::warn!("show_context_menu is not implemented by this window backend");
+    }
 
     /// Set window level. Depending on the environment and user preferences
     fn set_window_level(&self, _level: WindowLevel) {}
