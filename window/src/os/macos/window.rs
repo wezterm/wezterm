@@ -2446,10 +2446,16 @@ impl WindowView {
             // Devices with precise deltas report number of pixels scrolled.
             // At this layer we don't know how many pixels comprise a cell
             // in the terminal widget, and our abstraction doesn't allow being
-            // told what that amount should be, so we come up with a hard
-            // coded factor based on the likely default font size and dpi
-            // to make the scroll speed feel a bit better.
-            15.0
+            // told what that amount should be, so we let the user decide the
+            // factor to make the scroll speed feel right.
+            if let Some(myself) = Self::get_this(this) {
+                let cfg_ref = myself.inner.borrow(); // immutable
+                                                     // Be defensive: avoid zero/negative scale
+                let s = cfg_ref.config.precise_scroll_scale.max(0.1);
+                s
+            } else {
+                15.0 // fallback default if we can't get the config
+            }
         } else {
             // Whereas imprecise deltas report the number of lines scrolled,
             // so we want to report those lines here wholesale.
