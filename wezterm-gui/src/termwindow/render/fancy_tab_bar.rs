@@ -462,13 +462,71 @@ impl crate::TermWindow {
         let computed = self.fancy_tab_bar.as_ref().ok_or_else(|| {
             anyhow::anyhow!("paint_fancy_tab_bar called but fancy_tab_bar is None")
         })?;
+        // Hit-testing and future layout must be based on the real,
+        // un-dragged positions, so this is computed before any
+        // drag-preview translation below.
         let ui_items = computed.ui_items();
 
         let gl_state = self.render_state.as_ref().unwrap();
-        self.render_element(&computed, gl_state, None)?;
+
+        if let Some(floating) = self.dragged_tab_preview(computed) {
+            self.render_element(&floating, gl_state, None)?;
+        } else {
+            self.render_element(&computed, gl_state, None)?;
+        }
 
         Ok(ui_items)
     }
+
+    /// If a tab is currently being dragged, returns a copy of the tab bar
+    /// with just that tab's element translated so that it visually follows
+    /// the mouse cursor, rendered above its neighbors. Without this, moving
+    /// a tab past its neighbor is invisible until something else happens to
+    /// repaint the window.
+    fn dragged_tab_preview(&self, computed: &ComputedElement) -> Option<ComputedElement> {
+        let (drag_item, drag_event) = self.dragging.as_ref()?;
+        let tab_idx = match &drag_item.item_type {
+            UIItemType::TabBar(TabBarItem::Tab { tab_idx, .. }) => *tab_idx,
+            _ => return None,
+        };
+        let offset = self.dragging_tab_start_offset?;
+        let target_x = (drag_event.coords.x - offset).max(0) as f32;
+
+        let mut floating = computed.clone();
+        if translate_dragged_tab(&mut floating, tab_idx, target_x) {
+            Some(floating)
+        } else {
+            None
+        }
+    }
+}
+
+/// Recursively finds the tab bar element for `target_tab_idx` and shifts it
+/// so its left edge sits at `target_x`, drawing it above its siblings.
+fn translate_dragged_tab(
+    computed: &mut ComputedElement,
+    target_tab_idx: usize,
+    target_x: f32,
+) -> bool {
+    let is_target = matches!(
+        &computed.item_type,
+        Some(UIItemType::TabBar(TabBarItem::Tab { tab_idx, .. })) if *tab_idx == target_tab_idx
+    );
+    if is_target {
+        let delta_x = target_x - computed.bounds.min_x();
+        computed.translate(euclid::Vector2D::new(delta_x, 0.0));
+        computed.zindex = i8::MAX;
+        return true;
+    }
+
+    if let ComputedElementContent::Children(kids) = &mut computed.content {
+        for kid in kids {
+            if translate_dragged_tab(kid, target_tab_idx, target_x) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn make_x_button(

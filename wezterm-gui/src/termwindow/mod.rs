@@ -443,6 +443,10 @@ pub struct TermWindow {
 
     ui_items: Vec<UIItem>,
     dragging: Option<(UIItem, MouseEvent)>,
+    /// Pixel offset from the dragged tab's left edge to the mouse cursor,
+    /// captured at the start of a tab-bar drag so the floating preview
+    /// tracks the cursor without snapping.
+    dragging_tab_start_offset: Option<isize>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
@@ -787,6 +791,7 @@ impl TermWindow {
             semantic_zones: HashMap::new(),
             ui_items: vec![],
             dragging: None,
+            dragging_tab_start_offset: None,
             last_ui_item: None,
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
