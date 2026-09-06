@@ -3,7 +3,7 @@ use crate::bitmaps::*;
 use crate::connection::ConnectionOps;
 use crate::os::{xkeysyms, Connection, Window};
 use crate::{
-    Appearance, Clipboard, DeadKeyStatus, Dimensions, MouseButtons, MouseCursor, MouseEvent,
+    Appearance, Clipboard, CursorIcon, DeadKeyStatus, Dimensions, MouseButtons, MouseEvent,
     MouseEventKind, MousePress, Point, Rect, RequestedWindowGeometry, ResizeIncrement,
     ResolvedGeometry, ScreenPoint, ScreenRect, WindowDecorations, WindowEvent, WindowEventSender,
     WindowOps, WindowState,
@@ -235,7 +235,7 @@ impl XWindowInner {
         Ok(())
     }
 
-    fn set_cursor(&mut self, cursor: Option<MouseCursor>) -> anyhow::Result<()> {
+    fn set_cursor(&mut self, cursor: Option<CursorIcon>) -> anyhow::Result<()> {
         self.cursors.set_cursor(self.window_id, cursor)
     }
 
@@ -2028,7 +2028,7 @@ impl WindowOps for XWindow {
         });
     }
 
-    fn set_cursor(&self, cursor: Option<MouseCursor>) {
+    fn set_cursor(&self, cursor: Option<CursorIcon>) {
         XConnection::with_window_inner(self.0, move |inner| {
             let _ = inner.set_cursor(cursor);
             Ok(())

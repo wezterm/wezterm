@@ -1,5 +1,7 @@
 use crate::color::RgbColor;
 use crate::{Sixel, SixelData};
+#[cfg(not(feature = "std"))]
+use alloc::vec;
 
 const MAX_PARAMS: usize = 5;
 const MAX_SIXEL_SIZE: usize = 100_000_000;
