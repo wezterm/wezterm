@@ -22,6 +22,45 @@ pub(crate) trait TmuxCommand: Send + Debug {
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()>;
 }
 
+#[derive(Debug)]
+pub(crate) struct RawTmuxCommand {
+    command: String,
+}
+
+impl RawTmuxCommand {
+    pub fn new(command: String) -> Self {
+        Self { command }
+    }
+}
+
+impl TmuxCommand for RawTmuxCommand {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        format!("{}\n", self.command.trim_end_matches(['\r', '\n']))
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        let mux = Mux::get();
+        let domain = mux
+            .get_domain(domain_id)
+            .ok_or_else(|| anyhow!("tmux domain {domain_id} was removed"))?;
+        let tmux_domain = domain
+            .downcast_ref::<TmuxDomain>()
+            .ok_or_else(|| anyhow!("domain {domain_id} is not a tmux domain"))?;
+        let status = if result.error { "error" } else { "result" };
+        let output = result.output.trim_end_matches(['\r', '\n']);
+        let message = if output.is_empty() {
+            format!("\r\ntmux command {status}: {}\r\n", self.command)
+        } else {
+            format!(
+                "\r\ntmux command {status}: {}\r\n{}\r\n",
+                self.command, output
+            )
+        };
+        crate::localpane::emit_output_for_pane(tmux_domain.inner.pane_id, &message);
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PaneItem {
     session_id: TmuxSessionId,
@@ -209,6 +248,9 @@ impl TmuxDomainState {
 
         let child = TmuxChild {
             active_lock: active_lock.clone(),
+            domain_id: self.domain_id,
+            pane_id: pane.pane_id,
+            cmd_queue: self.cmd_queue.clone(),
         };
 
         let terminal = wezterm_term::Terminal::new(
@@ -369,9 +411,13 @@ impl TmuxDomainState {
                 anyhow::bail!("No tmux gui created");
             }
         };
+        let mut added_windows = vec![];
 
         for window in windows.iter() {
             if window.session_id != current_session {
+                continue;
+            }
+            if self.check_window_attached(window.window_id) {
                 continue;
             }
 
@@ -491,8 +537,27 @@ impl TmuxDomainState {
                 }
             }
 
+            if new_window {
+                *self.activating_window.lock() = Some(window.window_id);
+            }
             mux.add_tab_to_window(&tab, **gui_window_id)?;
             gui_window_id.notify();
+            added_windows.push(window.window_id);
+            if new_window || *self.active_window.lock() == Some(window.window_id) {
+                if let Some(mut mux_window) = mux.get_window_mut(**gui_window_id) {
+                    if let Some(idx) = mux_window.get_tab_idx_for_id(tab.tab_id()) {
+                        mux_window.remember_and_set_active_tab_idx(idx);
+                    }
+                }
+            }
+            if new_window {
+                self.cmd_queue.lock().push_back(Box::new(SelectWindow {
+                    window_id: window.window_id,
+                }));
+                if let Some(pane) = tab.get_active_pane() {
+                    mux.notify(MuxNotification::PaneFocused(pane.pane_id()));
+                }
+            }
 
             let gui_tabs = self.gui_tabs.lock();
             let local_tab = match gui_tabs.get(&window.window_id) {
@@ -544,6 +609,13 @@ impl TmuxDomainState {
 
         TmuxDomainState::schedule_send_next_command(self.domain_id);
 
+        for window_id in added_windows {
+            let mut pending = self.pending_windows.lock();
+            if let Some(mut promise) = pending.pop_front() {
+                promise.ok(window_id);
+            }
+        }
+
         Ok(())
     }
 
@@ -568,18 +640,33 @@ impl TmuxDomainState {
 
                 match n {
                     MuxNotification::PaneFocused(pane_id) => {
-                        let tmux_pane_id = match tmux_domain
+                        let tmux_pane = match tmux_domain
                             .inner
                             .remote_panes
                             .lock()
                             .iter()
                             .find(|(_, p)| p.lock().local_pane_id == pane_id)
                         {
-                            Some((_, p)) => Some(p.lock().pane_id),
+                            Some((_, p)) => {
+                                let p = p.lock();
+                                Some((p.pane_id, p.window_id))
+                            }
                             None => None,
                         };
 
-                        if let Some(pane_id) = tmux_pane_id {
+                        if let Some((pane_id, window_id)) = tmux_pane {
+                            if let Some(activating_window) =
+                                *tmux_domain.inner.activating_window.lock()
+                            {
+                                if activating_window != window_id {
+                                    return;
+                                }
+                            }
+                            if let Some(active_window) = *tmux_domain.inner.active_window.lock() {
+                                if active_window != window_id {
+                                    return;
+                                }
+                            }
                             tmux_domain
                                 .inner
                                 .cmd_queue
@@ -604,6 +691,18 @@ impl TmuxDomainState {
                                 None => None,
                             };
                             if let Some(window_id) = tmux_window_id {
+                                if let Some(activating_window) =
+                                    *tmux_domain.inner.activating_window.lock()
+                                {
+                                    if activating_window != window_id {
+                                        return;
+                                    }
+                                }
+                                let mut active_window = tmux_domain.inner.active_window.lock();
+                                if *active_window == Some(window_id) {
+                                    return;
+                                }
+                                *active_window = Some(window_id);
                                 tmux_domain.inner.cmd_queue.lock().push_back(Box::new(
                                     SelectWindow {
                                         window_id: window_id,
@@ -749,7 +848,8 @@ impl TmuxCommand for ListAllPanes {
         let mux = Mux::get();
         if let Some(domain) = mux.get_domain(domain_id) {
             if let Some(tmux_domain) = domain.downcast_ref::<TmuxDomain>() {
-                if !self.prune {
+                let activating = *tmux_domain.inner.activating_window.lock();
+                if !self.prune || activating == Some(self.window_id) {
                     return tmux_domain.inner.sync_pane_state(&items);
                 } else {
                     return tmux_domain
@@ -822,8 +922,14 @@ impl TmuxCommand for ListAllWindows {
 
             let history_limit = fields
                 .next()
-                .ok_or_else(|| anyhow!("missing history_limit"))?
-                .parse::<isize>()?;
+                .and_then(|s| {
+                    if s.is_empty() {
+                        None
+                    } else {
+                        s.parse::<isize>().ok()
+                    }
+                })
+                .unwrap_or(2000);
 
             let window_active = window_active == 1;
 
@@ -1063,9 +1169,9 @@ impl TmuxCommand for ListCommands {
 
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
-            let error = format!("list-command in domain={domain_id} failed: {result:#?}");
-            log::error!("{error}");
-            anyhow::bail!("{error}");
+            log::warn!(
+                "list-commands in domain={domain_id} failed ({result:#?}); continuing attach"
+            );
         }
         let mux = Mux::get();
         let domain = match mux.get_domain(domain_id) {
@@ -1077,14 +1183,16 @@ impl TmuxCommand for ListCommands {
             None => anyhow::bail!("Tmux domain lost"),
         };
 
-        let mut support_commands = tmux_domain.inner.support_commands.lock();
+        if !result.error {
+            let mut support_commands = tmux_domain.inner.support_commands.lock();
 
-        for line in result.output.split('\n') {
-            if line.is_empty() {
-                continue;
+            for line in result.output.split('\n') {
+                if line.is_empty() {
+                    continue;
+                }
+                let v: Vec<&str> = line.split(' ').collect();
+                support_commands.insert(v[0].to_string(), line.to_string());
             }
-            let v: Vec<&str> = line.split(' ').collect();
-            support_commands.insert(v[0].to_string(), line.to_string());
         }
 
         let mut cmd_queue = tmux_domain.inner.cmd_queue.as_ref().lock();
@@ -1118,6 +1226,26 @@ impl TmuxCommand for SplitPane {
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
             let error = format!("split-window in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct KillPane {
+    pub pane_id: TmuxPaneId,
+}
+
+impl TmuxCommand for KillPane {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        format!("kill-pane -t %{}\n", self.pane_id)
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        if result.error {
+            let error = format!("kill-pane in domain={domain_id} failed: {result:#?}");
             log::error!("{error}");
             anyhow::bail!("{error}");
         }
@@ -1194,5 +1322,16 @@ impl TmuxCommand for AttachDone {
         // Do nothing, just change the state.
         *tmux_domain.inner.attach_state.lock() = AttachState::Done;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RawTmuxCommand, TmuxCommand};
+
+    #[test]
+    fn raw_tmux_command_has_one_line_terminator() {
+        let command = RawTmuxCommand::new("new-window\r\n".to_string());
+        assert_eq!(command.get_command(0), "new-window\n");
     }
 }

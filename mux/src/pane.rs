@@ -253,6 +253,12 @@ pub trait Pane: Downcast + Send + Sync {
     fn set_zoomed(&self, _zoomed: bool) {}
     fn key_down(&self, key: KeyCode, mods: KeyModifiers) -> anyhow::Result<()>;
     fn key_up(&self, key: KeyCode, mods: KeyModifiers) -> anyhow::Result<()>;
+    fn take_tmux_exit_requested(&self) -> bool {
+        false
+    }
+    fn take_tmux_force_exit_requested(&self) -> bool {
+        false
+    }
     fn perform_assignment(&self, _assignment: &KeyAssignment) -> PerformAssignmentResult {
         PerformAssignmentResult::Unhandled
     }
