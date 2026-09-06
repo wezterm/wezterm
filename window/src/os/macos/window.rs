@@ -2606,7 +2606,7 @@ impl WindowView {
             raw_code: virtual_key as _,
             leds,
             modifiers,
-            repeat_count: 1,
+            repeat_count: 1 + is_a_repeat as u16,
             key_is_down,
             handled: raw_key_handled.clone(),
         };
@@ -2648,7 +2648,7 @@ impl WindowView {
                             key: KeyCode::composed(&translated),
                             modifiers: Modifiers::NONE,
                             leds: KeyboardLedStatus::empty(),
-                            repeat_count: 1,
+                            repeat_count: 1 + is_a_repeat as u16,
                             key_is_down,
                             raw: None,
                         };
@@ -2870,7 +2870,7 @@ impl WindowView {
                 key,
                 modifiers,
                 leds,
-                repeat_count: 1,
+                repeat_count: 1 + is_a_repeat as u16,
                 key_is_down,
                 raw: Some(raw_key_event),
             }
