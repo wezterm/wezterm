@@ -590,7 +590,7 @@ impl TmuxDomainState {
                     }
                     MuxNotification::WindowInvalidated(window_id) => {
                         if let Some(window) = mux.get_window(window_id) {
-                            let Some(tab) = window.get_active() else {
+                            let Some(tab) = window.get_active_tab() else {
                                 return;
                             };
                             let tmux_window_id = match tmux_domain
