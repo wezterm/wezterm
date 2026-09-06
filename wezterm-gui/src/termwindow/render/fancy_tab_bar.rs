@@ -167,7 +167,7 @@ impl crate::TermWindow {
                     text: new_tab_hover.fg_color.to_linear().into(),
                 })),
                 TabBarItem::Tab { active, .. } if active => element
-                    .vertical_align(VerticalAlign::Bottom)
+                    .vertical_align(if is_bottom { VerticalAlign::Top } else { VerticalAlign::Bottom })
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(if is_bottom {
                         BoxDimension {
@@ -238,7 +238,7 @@ impl crate::TermWindow {
                             .into(),
                     }),
                 TabBarItem::Tab { .. } => element
-                    .vertical_align(VerticalAlign::Bottom)
+                    .vertical_align(if is_bottom { VerticalAlign::Top } else { VerticalAlign::Bottom })
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(if is_bottom {
                         BoxDimension {
@@ -451,9 +451,10 @@ impl crate::TermWindow {
             Dimension::Cells(0.5)
         };
 
+        let is_bottom = self.config.tab_bar_at_bottom;
         children.push(
             Element::new(&font, ElementContent::Children(left_eles))
-                .vertical_align(VerticalAlign::Bottom)
+                .vertical_align(if is_bottom { VerticalAlign::Top } else { VerticalAlign::Bottom })
                 .colors(bar_colors.clone())
                 .padding(BoxDimension {
                     left: left_padding,
