@@ -328,6 +328,19 @@ impl WindowsConsoleRenderer {
                     );
                     buffer.set_cursor(0, 0, out)?;
                 }
+                Change::ClearLine(color) => {
+                    let attr = CellAttributes::default()
+                        .set_background(color.clone())
+                        .clone();
+
+                    buffer.fill(
+                        ' ',
+                        to_attr_word(&self.capabilities, &attr),
+                        0,
+                        buffer.cursor_y,
+                        cols,
+                    );
+                }
                 Change::ClearToEndOfLine(color) => {
                     let attr = CellAttributes::default()
                         .set_background(color.clone())
