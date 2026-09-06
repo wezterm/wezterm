@@ -6,7 +6,7 @@ use termwiz::cell::CellAttributes;
 use termwiz::color::ColorSpec as TWColorSpec;
 pub use termwiz::color::{AnsiColor, ColorAttribute, RgbColor, SrgbaTuple};
 use wezterm_dynamic::{FromDynamic, ToDynamic};
-use wezterm_term::color::ColorPalette;
+use wezterm_term::color::{ColorPalette, Palette256};
 
 #[derive(Debug, Copy, Clone, FromDynamic, ToDynamic)]
 pub struct HsbTransform {
@@ -91,6 +91,114 @@ impl TryFrom<String> for RgbaColor {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct Lab {
+    pub l: f32,
+    pub a: f32,
+    pub b: f32,
+}
+
+impl Lab {
+    pub fn from_srgba(rgb: SrgbaTuple) -> Self {
+        let r = if rgb.0 > 0.04045 {
+            ((rgb.0 + 0.055) / 1.055).powf(2.4)
+        } else {
+            rgb.0 / 12.92
+        };
+        let g = if rgb.1 > 0.04045 {
+            ((rgb.1 + 0.055) / 1.055).powf(2.4)
+        } else {
+            rgb.1 / 12.92
+        };
+        let b = if rgb.2 > 0.04045 {
+            ((rgb.2 + 0.055) / 1.055).powf(2.4)
+        } else {
+            rgb.2 / 12.92
+        };
+
+        let x = (r * 0.4124564 + g * 0.3575761 + b * 0.1804375) / 0.95047;
+        let y = r * 0.2126729 + g * 0.7151522 + b * 0.0721750;
+        let z = (r * 0.0193339 + g * 0.1191920 + b * 0.9503041) / 1.08883;
+
+        let x = if x > 0.008856 {
+            x.cbrt()
+        } else {
+            7.787 * x + 16.0 / 116.0
+        };
+        let y = if y > 0.008856 {
+            y.cbrt()
+        } else {
+            7.787 * y + 16.0 / 116.0
+        };
+        let z = if z > 0.008856 {
+            z.cbrt()
+        } else {
+            7.787 * z + 16.0 / 116.0
+        };
+
+        Self {
+            l: 116.0 * y - 16.0,
+            a: 500.0 * (x - y),
+            b: 200.0 * (y - z),
+        }
+    }
+
+    pub fn to_srgba(self) -> SrgbaTuple {
+        let y = (self.l + 16.0) / 116.0;
+        let x = self.a / 500.0 + y;
+        let z = y - self.b / 200.0;
+
+        let x3 = x * x * x;
+        let y3 = y * y * y;
+        let z3 = z * z * z;
+        let xf = (if x3 > 0.008856 {
+            x3
+        } else {
+            (x - 16.0 / 116.0) / 7.787
+        }) * 0.95047;
+        let yf = if y3 > 0.008856 {
+            y3
+        } else {
+            (y - 16.0 / 116.0) / 7.787
+        };
+        let zf = (if z3 > 0.008856 {
+            z3
+        } else {
+            (z - 16.0 / 116.0) / 7.787
+        }) * 1.08883;
+
+        let r = xf * 3.2404542 - yf * 1.5371385 - zf * 0.4985314;
+        let g = -xf * 0.9692660 + yf * 1.8760108 + zf * 0.0415560;
+        let b = xf * 0.0556434 - yf * 0.2040259 + zf * 1.0572252;
+
+        let r = if r > 0.0031308 {
+            1.055 * r.powf(1.0 / 2.4) - 0.055
+        } else {
+            12.92 * r
+        };
+        let g = if g > 0.0031308 {
+            1.055 * g.powf(1.0 / 2.4) - 0.055
+        } else {
+            12.92 * g
+        };
+        let b = if b > 0.0031308 {
+            1.055 * b.powf(1.0 / 2.4) - 0.055
+        } else {
+            12.92 * b
+        };
+
+        SrgbaTuple(r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0), 1.0)
+    }
+
+    pub fn lerp(t: f32, a: Lab, b: Lab) -> Lab {
+        Lab {
+            l: a.l + t * (b.l - a.l),
+            a: a.a + t * (b.a - a.a),
+            b: a.b + t * (b.b - a.b),
+        }
+    }
+}
+
 #[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq)]
 pub enum ColorSpec {
     AnsiColor(AnsiColor),
@@ -148,6 +256,13 @@ pub struct Palette {
     /// palette
     #[dynamic(default)]
     pub indexed: HashMap<u8, RgbaColor>,
+    /// Whether to generate the extended 256 palette from your base16 colors.
+    /// This will not replace manually defined colors.
+    /// <https://gist.github.com/jake-stewart/0a8ea46159a7da2c808e5be2177e1783>
+    pub generate_indexed: Option<bool>,
+    /// Whether to invert generated light theme colors (see `generate_indexed`).
+    /// This helps give the 256-color palette more semantic meaning.
+    pub harmonious_palette: Option<bool>,
     /// Configure the colors and styling of the tab bar
     pub tab_bar: Option<TabBarColors>,
     /// The color of the "thumb" of the scrollbar; the segment that
@@ -213,6 +328,8 @@ impl Palette {
                 }
                 map
             },
+            generate_indexed: overlay!(generate_indexed),
+            harmonious_palette: overlay!(harmonious_palette),
             scrollbar_thumb: overlay!(scrollbar_thumb),
             split: overlay!(split),
             visual_bell: overlay!(visual_bell),
@@ -312,8 +429,66 @@ impl From<Palette> for ColorPalette {
             }
             p.colors.0[idx as usize] = col.into();
         }
+        if cfg.generate_indexed.unwrap_or(false) {
+            p.colors = generate_indexed_colors(
+                p.colors, &cfg.indexed, p.background, p.foreground,
+                cfg.harmonious_palette.unwrap_or(false),
+            );
+        }
         p
     }
+}
+
+pub fn generate_indexed_colors(
+    mut palette: Palette256,
+    indexed: &HashMap<u8, RgbaColor>,
+    bg: SrgbaTuple,
+    fg: SrgbaTuple,
+    harmonious: bool,
+) -> Palette256 {
+    let bg_lab = Lab::from_srgba(bg);
+    let fg_lab = Lab::from_srgba(fg);
+
+    let is_light_theme = fg_lab.l < bg_lab.l;
+    let invert = is_light_theme && !harmonious;
+
+    let base8_lab: [Lab; 8] = {
+        let mut base8: [Lab; 8] = std::array::from_fn(|i| Lab::from_srgba(palette.0[i]));
+        base8[0] = if invert { fg_lab } else { bg_lab };
+        base8[7] = if invert { bg_lab } else { fg_lab };
+        base8
+    };
+
+    let mut idx = 16usize;
+    for ri in 0..6 {
+        let tr = ri as f32 / 5.0;
+        let c0 = Lab::lerp(tr, base8_lab[0], base8_lab[1]);
+        let c1 = Lab::lerp(tr, base8_lab[2], base8_lab[3]);
+        let c2 = Lab::lerp(tr, base8_lab[4], base8_lab[5]);
+        let c3 = Lab::lerp(tr, base8_lab[6], base8_lab[7]);
+        for gi in 0..6 {
+            let tg = gi as f32 / 5.0;
+            let c4 = Lab::lerp(tg, c0, c1);
+            let c5 = Lab::lerp(tg, c2, c3);
+            for bi in 0..6 {
+                if !indexed.contains_key(&(idx as u8)) {
+                    let c6 = Lab::lerp(bi as f32 / 5.0, c4, c5);
+                    palette.0[idx] = c6.to_srgba();
+                }
+                idx += 1;
+            }
+        }
+    }
+
+    for i in 0..24 {
+        let t = (i + 1) as f32 / 25.0;
+        if !indexed.contains_key(&(idx as u8)) {
+            palette.0[idx] = Lab::lerp(t, base8_lab[0], base8_lab[7]).to_srgba();
+        }
+        idx += 1;
+    }
+
+    palette
 }
 
 /// Specify the text styling for a tab in the tab bar
