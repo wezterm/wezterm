@@ -7,6 +7,9 @@ links = "harfbuzz"
 build = "build.rs"
 publish = false
 
+[package.metadata.cargo-shear]
+ignored = ["freetype"]
+
 [dependencies]
 freetype.workspace = true
 
