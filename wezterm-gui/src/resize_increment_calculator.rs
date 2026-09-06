@@ -10,6 +10,7 @@ pub struct ResizeIncrementCalculator {
     pub padding_bottom: usize,
     pub border: Border,
     pub tab_bar_height: usize,
+    pub tab_bar_width: usize,
 }
 
 impl Into<ResizeIncrement> for ResizeIncrementCalculator {
@@ -19,7 +20,8 @@ impl Into<ResizeIncrement> for ResizeIncrementCalculator {
             y: self.y,
             base_width: (self.padding_left
                 + self.padding_right
-                + (self.border.left + self.border.right).get()) as u16,
+                + (self.border.left + self.border.right).get()
+                + self.tab_bar_width) as u16,
             base_height: (self.padding_top
                 + self.padding_bottom
                 + (self.border.top + self.border.bottom).get()
