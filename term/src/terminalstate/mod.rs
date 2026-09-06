@@ -42,18 +42,25 @@ lazy_static::lazy_static! {
     };
 }
 
+/// Tracks the horizontal tab stops for a terminal screen.
+/// Tab stops are stored as a boolean vector, one entry per column.
 pub(crate) struct TabStop {
     tabs: Vec<bool>,
     tab_width: usize,
 }
 
+/// A character set selectable through the DEC SCS escape sequences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CharSet {
+pub enum CharSet {
+    /// The US ASCII character set (`B`).
     Ascii,
+    /// The United Kingdom character set (`A`).
     Uk,
+    /// DEC Special Graphics / line drawing (`0`).
     DecLineDrawing,
 }
 
+/// The mouse reporting encoding negotiated through DEC private mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseEncoding {
     X10,
@@ -284,6 +291,9 @@ pub struct TerminalState {
 
     /// The scroll region
     top_and_bottom_margins: Range<VisibleRowIndex>,
+    /// The inner horizontal region between DECSLRM left/right margins.
+    /// `start` is the left margin column, `end` is one past the right margin column.
+    /// Only effective when `left_and_right_margin_mode` is enabled.
     left_and_right_margins: Range<usize>,
     left_and_right_margin_mode: bool,
 
@@ -810,7 +820,7 @@ impl TerminalState {
     }
 
     /// Returns true if DECAWM auto-wrap mode (DEC mode 7) is enabled, which causes
-    /// the cursor to wrap to the next line when it reaches the right border.
+    /// cursor to wrap to next line when it reaches right border.
     pub fn dec_auto_wrap_enabled(&self) -> bool {
         self.dec_auto_wrap
     }
@@ -820,57 +830,48 @@ impl TerminalState {
         self.top_and_bottom_margins.clone()
     }
 
-    /// The DECSLRM margins. These are only in force when
-    /// [`Self::left_and_right_margin_mode_enabled`] is also true; the range
-    /// keeps its full-width value while the mode is off.
-    pub fn get_left_and_right_margins(&self) -> Range<usize> {
-        self.left_and_right_margins.clone()
-    }
-
+    /// Returns true if DEC left/right margin mode (DECLRMM) is enabled.
+    /// Use [`Self::get_left_and_right_margins`] to get those margin values.
     pub fn left_and_right_margin_mode_enabled(&self) -> bool {
         self.left_and_right_margin_mode
     }
 
+    /// The inner horizontal region between the DECSLRM margins.
+    /// `start` is the left margin column, `end` is one past the right margin column.
+    /// Only effective when [`Self::left_and_right_margin_mode_enabled`] is true.
+    pub fn get_left_and_right_margins(&self) -> Range<usize> {
+        self.left_and_right_margins.clone()
+    }
+
+    /// Returns true if DEC origin mode (DECOM) is enabled.
     pub fn dec_origin_mode_enabled(&self) -> bool {
         self.dec_origin_mode
     }
 
+    /// Returns true if insert mode (IRM) is enabled.
     pub fn insert_mode_enabled(&self) -> bool {
         self.insert
     }
 
+    /// Returns true if shift-out is enabled: G1 charset is active for display.
+    /// Reset by shift-in, which restores G0 charset.
     pub fn shift_out_enabled(&self) -> bool {
         self.shift_out
     }
 
-    /// The SCS final byte designating G0: `b'B'` ASCII, `b'A'` UK, `b'0'` DEC
-    /// line drawing. Emit as `ESC ( <byte>`.
-    ///
-    /// Returns the designator rather than `CharSet` because `CharSet` is
-    /// `pub(crate)`: a getter returning it would widen an existing item, and
-    /// this crate already carries one such widening. The byte is what a caller
-    /// reconstructing terminal state needs anyway, so nothing is lost.
-    pub fn g0_charset_designator(&self) -> u8 {
-        match self.g0_charset {
-            CharSet::Ascii => b'B',
-            CharSet::Uk => b'A',
-            CharSet::DecLineDrawing => b'0',
-        }
+    /// The Character Set Selection (SCS) charset designated for G0.
+    pub fn g0_charset(&self) -> CharSet {
+        self.g0_charset
     }
 
-    /// The SCS final byte designating G1. See
-    /// [`Self::g0_charset_designator`]; emit as `ESC ) <byte>`.
-    pub fn g1_charset_designator(&self) -> u8 {
-        match self.g1_charset {
-            CharSet::Ascii => b'B',
-            CharSet::Uk => b'A',
-            CharSet::DecLineDrawing => b'0',
-        }
+    /// The Character Set Selection (SCS) charset designated for G1.
+    pub fn g1_charset(&self) -> CharSet {
+        self.g1_charset
     }
 
-    /// Tab stops by column: `true` where a stop is set. Length tracks the screen
-    /// width, so index is column.
-    pub fn tab_stops(&self) -> Vec<bool> {
+    /// Tab stops by column: `true` where a stop is set.
+    /// Length tracks the screen width, so index is the column.
+    pub fn tab_stops_by_column(&self) -> Vec<bool> {
         self.tabs.tabs.clone()
     }
 
