@@ -186,12 +186,22 @@ mod windows {
         /// Publish path as the path for class_name.
         pub fn new(path: &Path, class_name: &str) -> anyhow::Result<Self> {
             let (mutex_name, map_name) = Self::compute_names(class_name);
+            // Publish the full path rather than just the file name.
+            // Unix domain socket connect() on Windows resolves relative
+            // paths against the cwd of the *connecting* process, so a
+            // published bare file name like `gui-sock-1234` is only
+            // connectable when the client happens to have its cwd set
+            // to the runtime dir. Publishing the absolute path makes
+            // `wezterm cli` work from any shell/cwd.
             let path = path
-                .file_name()
-                .ok_or_else(|| anyhow::anyhow!("path has no file_name!?"))?
                 .to_str()
                 .ok_or_else(|| anyhow::anyhow!("path is not UTF8!"))?
                 .to_string();
+            anyhow::ensure!(
+                path.len() < MAX_NAME,
+                "socket path {} is too long to publish",
+                path
+            );
 
             let mutex = NamedMutex::new(&mutex_name)?;
             mutex.with_lock(|| {
@@ -231,6 +241,16 @@ mod windows {
                     .context("reading path from shared memory")?;
 
                 let path: PathBuf = path.into();
+
+                // Compatibility: older GUI instances published just the
+                // socket file name rather than the full path. Anchor such
+                // relative names to the runtime dir so that connecting
+                // works regardless of our current directory.
+                let path = if path.is_absolute() {
+                    path
+                } else {
+                    config::RUNTIME_DIR.join(path)
+                };
 
                 Ok(path)
             })
