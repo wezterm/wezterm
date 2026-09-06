@@ -10,5 +10,4 @@ publish = false
 anyhow.workspace = true
 config.workspace = true
 filenamegen.workspace = true
-luahelper.workspace = true
 smol.workspace = true

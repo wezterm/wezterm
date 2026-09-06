@@ -39,9 +39,6 @@ ssh2 = {workspace=true, features=["openssl-on-win32"], optional = true}
 thiserror.workspace = true
 wezterm-uds.workspace = true
 
-# Not used directly, but is used to centralize the openssl vendor feature selection
-async_ossl.workspace = true
-
 [target.'cfg(unix)'.dependencies]
 passfd.workspace = true
 

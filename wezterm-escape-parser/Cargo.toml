@@ -44,7 +44,6 @@ tmux_cc = ["dep:pest", "dep:pest_derive"]
 docs = ["use_serde", "image", "tmux_cc", "kitty-shm"]
 
 [dev-dependencies]
-criterion.workspace = true
 env_logger.workspace = true
 k9.workspace = true
 

@@ -49,7 +49,6 @@ emojis.workspace = true
 env-bootstrap.workspace = true
 euclid.workspace = true
 fastrand.workspace = true
-filedescriptor.workspace = true
 finl_unicode.workspace = true
 frecency.workspace = true
 futures.workspace = true
@@ -71,27 +70,21 @@ parking_lot.workspace = true
 portable-pty = { workspace=true, features = ["serde_support"]}
 promise.workspace = true
 rangeset.workspace = true
-ratelim.workspace = true
 rayon.workspace = true
-regex.workspace = true
 serde = {workspace=true, features = ["rc", "derive"]}
 serde_json.workspace = true
 shlex.workspace = true
 smol.workspace = true
 tabout.workspace = true
-tempfile.workspace = true
-terminfo.workspace = true
 termwiz-funcs.workspace = true
 termwiz.workspace = true
 textwrap.workspace = true
-thiserror.workspace = true
 tiny-skia.workspace = true
 umask.workspace = true
 unicode-normalization.workspace = true
 unicode-segmentation.workspace = true
 url-funcs.workspace = true
 url.workspace = true
-walkdir.workspace = true
 wezterm-bidi.workspace = true
 wezterm-blob-leases = { workspace=true, features=["simple_tempdir"] }
 wezterm-client.workspace = true
@@ -100,7 +93,6 @@ wezterm-font.workspace = true
 wezterm-gui-subcommands.workspace = true
 wezterm-mux-server-impl.workspace = true
 wezterm-open-url.workspace = true
-wezterm-ssh.workspace = true
 wezterm-term.workspace = true
 wezterm-toast-notification.workspace = true
 wgpu.workspace = true
@@ -108,7 +100,6 @@ window-funcs.workspace = true
 window.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-shared_library.workspace = true
 winapi = { workspace=true, features = [
     "winuser",
     "consoleapi",

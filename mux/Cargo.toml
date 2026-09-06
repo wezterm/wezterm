@@ -10,9 +10,7 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-base64.workspace = true
 bintree.workspace = true
-bitflags.workspace = true
 chrono.workspace = true
 config.workspace = true
 crossbeam.workspace = true
@@ -36,10 +34,8 @@ procinfo.workspace = true
 promise.workspace = true
 rangeset.workspace = true
 serde = {workspace=true, features = ["rc", "derive"]}
-serial2.workspace = true
 shell-words.workspace = true
 smol.workspace = true
-terminfo.workspace = true
 termwiz-funcs.workspace = true
 termwiz.workspace = true
 textwrap.workspace = true
@@ -50,7 +46,6 @@ wezterm-ssh.workspace = true
 wezterm-term = { workspace=true, features=["use_serde"] }
 
 [target."cfg(windows)".dependencies]
-ntapi.workspace = true
 windows-sys = { workspace = true, features = ["Win32_Networking_WinSock"] }
 
 [dev-dependencies]

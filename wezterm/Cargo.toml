@@ -33,7 +33,6 @@ tabout.workspace = true
 tempfile.workspace = true
 termwiz-funcs.workspace = true
 termwiz.workspace = true
-textwrap.workspace  =true
 umask.workspace = true
 url.workspace = true
 wezterm-client.workspace = true
@@ -56,6 +55,6 @@ features = [
 ]
 workspace = true
 
-[target.'cfg(windows)'.build-dependencies]
+[target."cfg(windows)".build-dependencies]
 cc.workspace = true
 embed-resource.workspace = true
