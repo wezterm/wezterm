@@ -569,11 +569,7 @@ impl Keyboard {
             .ok_or_else(|| anyhow!("Failed to load system default keymap"))?;
 
         let state = xkb::State::new(&keymap);
-        let locale = query_lc_ctype()?;
-
-        let table =
-            xkb::compose::Table::new_from_locale(&context, locale, xkb::compose::COMPILE_NO_FLAGS)
-                .map_err(|_| anyhow!("Failed to acquire compose table from locale"))?;
+        let table = new_compose_table(&context)?;
         let compose_state = xkb::compose::State::new(&table, xkb::compose::STATE_NO_FLAGS);
 
         let phys_code_map = build_physkeycode_map(&keymap);
@@ -607,11 +603,7 @@ impl Keyboard {
         .ok_or_else(|| anyhow!("Failed to parse keymap state from file"))?;
 
         let state = xkb::State::new(&keymap);
-        let locale = query_lc_ctype()?;
-
-        let table =
-            xkb::compose::Table::new_from_locale(&context, locale, xkb::compose::COMPILE_NO_FLAGS)
-                .map_err(|_| anyhow!("Failed to acquire compose table from locale"))?;
+        let table = new_compose_table(&context)?;
         let compose_state = xkb::compose::State::new(&table, xkb::compose::STATE_NO_FLAGS);
 
         let phys_code_map = build_physkeycode_map(&keymap);
@@ -652,11 +644,7 @@ impl Keyboard {
 
         let state = xkb::x11::state_new_from_device(&keymap, connection, device_id);
 
-        let locale = query_lc_ctype()?;
-
-        let table =
-            xkb::compose::Table::new_from_locale(&context, locale, xkb::compose::COMPILE_NO_FLAGS)
-                .map_err(|_| anyhow!("Failed to acquire compose table from locale"))?;
+        let table = new_compose_table(&context)?;
         let compose_state = xkb::compose::State::new(&table, xkb::compose::STATE_NO_FLAGS);
 
         {
@@ -820,9 +808,45 @@ impl Keyboard {
     }
 }
 
+fn new_compose_table(context: &xkb::Context) -> anyhow::Result<xkb::compose::Table> {
+    let locale = query_lc_ctype()?;
+    xkb::compose::Table::new_from_locale(context, locale, xkb::compose::COMPILE_NO_FLAGS)
+        .or_else(|_| new_compose_table_from_file(context, locale))
+        .map_err(|_| anyhow!("Failed to acquire compose table for locale {locale:?}"))
+}
+
+fn new_compose_table_from_file(
+    context: &xkb::Context,
+    locale: &OsStr,
+) -> Result<xkb::compose::Table, ()> {
+    let locale_dir = std::path::Path::new("/usr/share/X11/locale");
+    for (candidate, candidate_locale) in [
+        (locale_dir.join(locale).join("Compose"), locale),
+        (locale_dir.join("C/Compose"), OsStr::new("C")),
+    ] {
+        let Ok(bytes) = std::fs::read(candidate) else {
+            continue;
+        };
+        if let Ok(table) = xkb::compose::Table::new_from_buffer(
+            context,
+            bytes,
+            candidate_locale,
+            xkb::compose::FORMAT_TEXT_V1,
+            xkb::compose::COMPILE_NO_FLAGS,
+        ) {
+            return Ok(table);
+        }
+    }
+    Err(())
+}
+
 fn query_lc_ctype() -> anyhow::Result<&'static OsStr> {
-    let ptr = unsafe { libc::setlocale(libc::LC_CTYPE, std::ptr::null()) };
-    ensure!(!ptr.is_null(), "failed to query locale");
+    // Rust does not initialize the C runtime locale from the environment.
+    let ptr = unsafe { libc::setlocale(libc::LC_CTYPE, b"\0".as_ptr().cast()) };
+    ensure!(
+        !ptr.is_null(),
+        "failed to initialize locale from the environment"
+    );
     let cstr = unsafe { CStr::from_ptr(ptr) };
     Ok(OsStr::from_bytes(cstr.to_bytes()))
 }
