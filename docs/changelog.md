@@ -77,6 +77,8 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* [workspace-changed](config/lua/gui-events/workspace-changed.md) event,
+  emitted when the active workspace changes, carrying both the new and the previous workspace name.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
