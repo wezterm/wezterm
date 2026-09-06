@@ -60,6 +60,18 @@ fn test_hts() {
 }
 
 #[test]
+fn test_hts_past_right_edge() {
+    // CUP is allowed to park the cursor one column past the right edge,
+    // so HTS can be asked to set a tab stop on a column that does not
+    // exist. That has to be ignored rather than panicking.
+    let mut term = TestTerm::new(3, 8, 0);
+    term.cup(8, 0);
+    let seqno = term.current_seqno();
+    term.print("\x1bH");
+    term.assert_cursor_pos(8, 0, None, Some(seqno));
+}
+
+#[test]
 fn test_ri() {
     let mut term = TestTerm::new(4, 2, 0);
     term.print("a\r\nb\r\nc\r\nd.");
