@@ -88,6 +88,11 @@ impl crate::TermWindow {
             .to_linear()
             .into(),
         };
+        let tab_vertical_alignment = if self.config.tab_bar_at_bottom {
+            VerticalAlign::Top
+        } else {
+            VerticalAlign::Bottom
+        };
 
         let item_to_elem = |item: &TabEntry| -> Element {
             let element = Element::with_line(&font, &item.title, palette);
@@ -167,7 +172,7 @@ impl crate::TermWindow {
                     text: new_tab_hover.fg_color.to_linear().into(),
                 })),
                 TabBarItem::Tab { active, .. } if active => element
-                    .vertical_align(if is_bottom { VerticalAlign::Top } else { VerticalAlign::Bottom })
+                    .vertical_align(tab_vertical_alignment)
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(if is_bottom {
                         BoxDimension {
@@ -238,7 +243,7 @@ impl crate::TermWindow {
                             .into(),
                     }),
                 TabBarItem::Tab { .. } => element
-                    .vertical_align(if is_bottom { VerticalAlign::Top } else { VerticalAlign::Bottom })
+                    .vertical_align(tab_vertical_alignment)
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(if is_bottom {
                         BoxDimension {
@@ -451,10 +456,9 @@ impl crate::TermWindow {
             Dimension::Cells(0.5)
         };
 
-        let is_bottom = self.config.tab_bar_at_bottom;
         children.push(
             Element::new(&font, ElementContent::Children(left_eles))
-                .vertical_align(if is_bottom { VerticalAlign::Top } else { VerticalAlign::Bottom })
+                .vertical_align(tab_vertical_alignment)
                 .colors(bar_colors.clone())
                 .padding(BoxDimension {
                     left: left_padding,
@@ -477,7 +481,7 @@ impl crate::TermWindow {
             .item_type(UIItemType::TabBar(TabBarItem::None))
             .min_width(Some(Dimension::Pixels(self.dimensions.pixel_width as f32)))
             .min_height(Some(Dimension::Pixels(tab_bar_height)))
-            .vertical_align(VerticalAlign::Bottom)
+            .vertical_align(tab_vertical_alignment)
             .colors(bar_colors);
 
         let border = self.get_os_border();
