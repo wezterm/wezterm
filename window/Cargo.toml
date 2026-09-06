@@ -20,7 +20,6 @@ wayland = ["wayland-client", "smithay-client-toolkit", "wayland-egl", "wayland-p
 [dependencies]
 async-channel.workspace = true
 async-io.workspace = true
-async-task.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 bytes.workspace = true

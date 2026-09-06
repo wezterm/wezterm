@@ -25,11 +25,10 @@ umask.workspace = true
 wezterm-blob-leases = {workspace=true, features=["simple_tempdir"]}
 wezterm-mux-server-impl.workspace = true
 wezterm-gui-subcommands.workspace = true
-wezterm-term.workspace = true
 
 [target."cfg(windows)".dependencies]
 winapi = { workspace=true, features = [ "winuser" ]}
 
-[target.'cfg(windows)'.build-dependencies]
+[target."cfg(windows)".build-dependencies]
 embed-resource.workspace = true
 cc.workspace = true
