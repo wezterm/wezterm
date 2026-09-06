@@ -6,7 +6,7 @@ use crate::termwindow::render::corners::*;
 use crate::termwindow::render::window_buttons::window_button_element;
 use crate::termwindow::{UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
-use config::{Dimension, DimensionContext, TabBarColors};
+use config::{Dimension, DimensionContext, TabBarColors, TabBarWidth};
 use std::rc::Rc;
 use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
@@ -303,9 +303,27 @@ impl crate::TermWindow {
                 _ => 0.,
             })
             .sum();
-        let max_tab_width = ((self.dimensions.pixel_width as f32 / num_tabs)
-            - (1.5 * metrics.cell_size.width as f32))
-            .max(0.);
+        let max_tab_width = match self.config.tab_bar_width {
+            TabBarWidth::Stretch => {
+                // Subtract the new-tab button's footprint up front so the
+                // remaining space divides evenly across real tabs and no
+                // dead zone is left at the right edge of the bar
+                let new_tab_button_width = 2.0 * metrics.cell_size.width as f32;
+                let tabs_available_pixel_width =
+                    (self.dimensions.pixel_width as f32 - new_tab_button_width).max(0.);
+                let tab_count = (num_tabs - 1.0).max(1.0);
+                (tabs_available_pixel_width / tab_count).max(0.)
+            }
+            TabBarWidth::Content => {
+                // Reserve room at the right edge of the bar for the new-tab
+                // button and any update-right-status content (date / git
+                // branch / pwd / etc) so left-floated tabs don't push them
+                // off-screen
+                ((self.dimensions.pixel_width as f32 / num_tabs)
+                    - (1.5 * metrics.cell_size.width as f32))
+                    .max(0.)
+            }
+        };
 
         // Reserve space for the native titlebar buttons
         if self
@@ -341,6 +359,10 @@ impl crate::TermWindow {
                 TabBarItem::Tab { tab_idx, active } => {
                     let mut elem = item_to_elem(item);
                     elem.max_width = Some(Dimension::Pixels(max_tab_width));
+                    if self.config.tab_bar_width == TabBarWidth::Stretch {
+                        // Stretch the tab to fill the full slot budgeted to it
+                        elem.min_width = Some(Dimension::Pixels(max_tab_width));
+                    }
                     elem.content = match elem.content {
                         ElementContent::Text(_) => unreachable!(),
                         ElementContent::Poly { .. } => unreachable!(),
