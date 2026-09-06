@@ -11,5 +11,4 @@ async-executor.workspace = true
 async-io.workspace = true
 async-task.workspace = true
 flume.workspace = true
-lazy_static.workspace = true
 thiserror.workspace =true

@@ -7,7 +7,7 @@ use anyhow::Context;
 use futures_lite::future::FutureExt;
 use futures_util::stream::StreamExt;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 use zbus::proxy;
 use zvariant::OwnedValue;
@@ -55,15 +55,13 @@ struct State {
     last_update: Instant,
 }
 
-lazy_static::lazy_static! {
-  static ref STATE: Mutex<State> = Mutex::new(
-          State {
-              appearance: CachedAppearance::Unknown,
-              subscribe_running: false,
-              last_update: Instant::now(),
-          }
-   );
-}
+static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
+    Mutex::new(State {
+        appearance: CachedAppearance::Unknown,
+        subscribe_running: false,
+        last_update: Instant::now(),
+    })
+});
 
 pub async fn read_setting(namespace: &str, key: &str) -> anyhow::Result<OwnedValue> {
     let connection = zbus::ConnectionBuilder::session()?.build().await?;

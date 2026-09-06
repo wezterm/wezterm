@@ -16,7 +16,6 @@ config.workspace = true
 dns-lookup.workspace = true
 futures.workspace = true
 hostname.workspace = true
-lazy_static.workspace = true
 libc.workspace = true
 log.workspace = true
 mux.workspace = true

@@ -422,9 +422,7 @@ impl ConnectionUI {
     }
 }
 
-lazy_static::lazy_static! {
-    static ref ERROR_WINDOW: Mutex<Option<ConnectionUI>> = Mutex::new(None);
-}
+static ERROR_WINDOW: Mutex<Option<ConnectionUI>> = Mutex::new(None);
 
 fn get_error_window() -> ConnectionUI {
     let mut err = ERROR_WINDOW.lock().unwrap();

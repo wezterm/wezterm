@@ -10,7 +10,6 @@ publish = false
 anyhow.workspace = true
 config.workspace = true
 finl_unicode.workspace = true
-lazy_static.workspace = true
 luahelper.workspace = true
 terminfo.workspace = true
 termwiz = { workspace=true, features=["use_serde"] }

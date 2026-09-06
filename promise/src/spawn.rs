@@ -3,7 +3,7 @@ use async_executor::Executor;
 use flume::{bounded, unbounded, Receiver, TryRecvError};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::task::{Poll, Waker};
 
 pub use async_task::{Runnable, Task};
@@ -14,11 +14,11 @@ fn no_scheduler_configured(_: Runnable) {
     panic!("no scheduler has been configured");
 }
 
-lazy_static::lazy_static! {
-    static ref ON_MAIN_THREAD: Mutex<ScheduleFunc> = Mutex::new(Box::new(no_scheduler_configured));
-    static ref ON_MAIN_THREAD_LOW_PRI: Mutex<ScheduleFunc> = Mutex::new(Box::new(no_scheduler_configured));
-    static ref SCOPED_EXECUTOR: Mutex<Option<Arc<Executor<'static>>>> = Mutex::new(None);
-}
+static ON_MAIN_THREAD: LazyLock<Mutex<ScheduleFunc>> =
+    LazyLock::new(|| Mutex::new(Box::new(no_scheduler_configured)));
+static ON_MAIN_THREAD_LOW_PRI: LazyLock<Mutex<ScheduleFunc>> =
+    LazyLock::new(|| Mutex::new(Box::new(no_scheduler_configured)));
+static SCOPED_EXECUTOR: Mutex<Option<Arc<Executor<'static>>>> = Mutex::new(None);
 
 static SCHEDULER_CONFIGURED: AtomicBool = AtomicBool::new(false);
 

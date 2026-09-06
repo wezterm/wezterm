@@ -2,7 +2,7 @@ use config::{ConfigHandle, SshMultiplexing};
 use mux::domain::{Domain, LocalDomain};
 use mux::ssh::RemoteSshDomain;
 use mux::Mux;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use wezterm_client::domain::{ClientDomain, ClientDomainConfig};
 
 pub mod dispatch;
@@ -108,6 +108,5 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
     Ok(())
 }
 
-lazy_static::lazy_static! {
-    pub static ref PKI: pki::Pki = pki::Pki::init().expect("failed to initialize PKI");
-}
+pub static PKI: LazyLock<pki::Pki> =
+    LazyLock::new(|| pki::Pki::init().expect("failed to initialize PKI"));

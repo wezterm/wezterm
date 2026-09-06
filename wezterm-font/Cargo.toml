@@ -24,7 +24,6 @@ finl_unicode.workspace = true
 freetype.workspace = true
 harfbuzz.workspace = true
 image.workspace = true
-lazy_static.workspace = true
 lfucache.workspace = true
 log.workspace = true
 memmap2.workspace = true

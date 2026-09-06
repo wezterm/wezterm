@@ -16,7 +16,6 @@ config.workspace = true
 dirs-next.workspace = true
 env_logger = "0.10" # Note: we rely on filter::Builder which is gone in 0.11
 filesystem.workspace = true
-lazy_static.workspace = true
 libc.workspace = true
 log.workspace = true
 logging.workspace = true

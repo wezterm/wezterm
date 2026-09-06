@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use wezterm_input_types::PhysKeyCode;
 use winapi::shared::minwindef::WPARAM;
 use winapi::um::winuser::*;
@@ -201,9 +202,7 @@ fn build_map() -> HashMap<WPARAM, PhysKeyCode> {
     .collect()
 }
 
-lazy_static::lazy_static! {
-    static ref MAP: HashMap<WPARAM, PhysKeyCode> = build_map();
-}
+static MAP: LazyLock<HashMap<WPARAM, PhysKeyCode>> = LazyLock::new(build_map);
 
 pub fn vkey_to_phys(vkey: WPARAM) -> Option<PhysKeyCode> {
     MAP.get(&vkey).copied()

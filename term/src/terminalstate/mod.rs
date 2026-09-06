@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 use std::num::NonZeroUsize;
 use std::sync::mpsc::{channel, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use terminfo::{Database, Value};
 use termwiz::input::KeyboardEncoding;
 use url::Url;
@@ -36,12 +36,10 @@ mod sixel;
 use crate::terminalstate::image::*;
 use crate::terminalstate::kitty::*;
 
-lazy_static::lazy_static! {
-    static ref DB: Database = {
-        let data = include_bytes!("../../../termwiz/data/wezterm");
-        Database::from_buffer(&data[..]).unwrap()
-    };
-}
+static DB: LazyLock<Database> = LazyLock::new(|| {
+    let data = include_bytes!("../../../termwiz/data/wezterm");
+    Database::from_buffer(&data[..]).unwrap()
+});
 
 pub(crate) struct TabStop {
     tabs: Vec<bool>,

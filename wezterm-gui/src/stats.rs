@@ -6,14 +6,12 @@ use metrics::{Counter, Gauge, Key, KeyName, Metadata, Recorder, SharedString, Un
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use tabout::{tabulate_output, Alignment, Column};
 
 static ENABLE_STAT_PRINT: AtomicBool = AtomicBool::new(true);
-lazy_static::lazy_static! {
-    static ref INNER: Arc<Mutex<Inner>> = make_inner();
-}
+static INNER: LazyLock<Arc<Mutex<Inner>>> = LazyLock::new(make_inner);
 
 struct ThroughputInner {
     hist: Histogram<u64>,

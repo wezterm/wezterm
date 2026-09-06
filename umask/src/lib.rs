@@ -4,9 +4,7 @@ use libc::{mode_t, umask};
 use std::sync::Mutex;
 
 #[cfg(unix)]
-lazy_static::lazy_static! {
-static ref SAVED_UMASK: Mutex<Option<libc::mode_t>> = Mutex::new(None);
-}
+static SAVED_UMASK: Mutex<Option<libc::mode_t>> = Mutex::new(None);
 
 /// Unfortunately, novice unix users can sometimes be running
 /// with an overly permissive umask so we take care to install

@@ -3,6 +3,7 @@ use config::lua::mlua::{self, IntoLua, Lua};
 use finl_unicode::grapheme_clusters::Graphemes;
 use luahelper::impl_lua_conversion_dynamic;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use termwiz::caps::{Capabilities, ColorLevel, ProbeHints};
 use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange, CellAttributes};
 use termwiz::color::{AnsiColor, ColorAttribute, ColorSpec, SrgbaTuple};
@@ -243,23 +244,21 @@ fn permute_any_or_no_mods<'lua>(
     permute_mods(lua, item, true)
 }
 
-lazy_static::lazy_static! {
-    static ref CAPS: Capabilities = {
-        let data = include_bytes!("../../../termwiz/data/xterm-256color");
-        let db = terminfo::Database::from_buffer(&data[..]).unwrap();
-        Capabilities::new_with_hints(
-            ProbeHints::new_from_env()
-                .term(Some("xterm-256color".into()))
-                .terminfo_db(Some(db))
-                .color_level(Some(ColorLevel::TrueColor))
-                .colorterm(None)
-                .colorterm_bce(None)
-                .term_program(Some("WezTerm".into()))
-                .term_program_version(Some(config::wezterm_version().into())),
-        )
-        .expect("cannot fail to make internal Capabilities")
-    };
-}
+static CAPS: LazyLock<Capabilities> = LazyLock::new(|| {
+    let data = include_bytes!("../../../termwiz/data/xterm-256color");
+    let db = terminfo::Database::from_buffer(&data[..]).unwrap();
+    Capabilities::new_with_hints(
+        ProbeHints::new_from_env()
+            .term(Some("xterm-256color".into()))
+            .terminfo_db(Some(db))
+            .color_level(Some(ColorLevel::TrueColor))
+            .colorterm(None)
+            .colorterm_bce(None)
+            .term_program(Some("WezTerm".into()))
+            .term_program_version(Some(config::wezterm_version().into())),
+    )
+    .expect("cannot fail to make internal Capabilities")
+});
 
 pub fn new_wezterm_terminfo_renderer() -> TerminfoRenderer {
     TerminfoRenderer::new(CAPS.clone())

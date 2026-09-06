@@ -12,7 +12,6 @@ color-funcs.workspace = true
 config.workspace = true
 env_logger.workspace = true
 futures.workspace = true
-lazy_static.workspace = true
 libflate.workspace = true
 log.workspace = true
 reqwest.workspace = true

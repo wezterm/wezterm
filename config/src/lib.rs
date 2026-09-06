@@ -1,7 +1,6 @@
 //! Configuration for the gui portion of the terminal
 
 use anyhow::{anyhow, bail, Context, Error};
-use lazy_static::lazy_static;
 use mlua::Lua;
 use ordered_float::NotNan;
 use smol::channel::{Receiver, Sender};
@@ -15,7 +14,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, UnknownFieldAction, Value};
 use wezterm_term::UnicodeVersion;
@@ -65,21 +64,19 @@ pub use wsl::*;
 
 type ErrorCallback = fn(&str);
 
-lazy_static! {
-    pub static ref HOME_DIR: PathBuf = dirs_next::home_dir().expect("can't find HOME dir");
-    pub static ref CONFIG_DIRS: Vec<PathBuf> = config_dirs();
-    pub static ref RUNTIME_DIR: PathBuf = compute_runtime_dir().unwrap();
-    pub static ref DATA_DIR: PathBuf = compute_data_dir().unwrap();
-    pub static ref CACHE_DIR: PathBuf = compute_cache_dir().unwrap();
-    static ref CONFIG: Configuration = Configuration::new();
-    static ref CONFIG_FILE_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
-    static ref CONFIG_SKIP: AtomicBool = AtomicBool::new(false);
-    static ref CONFIG_OVERRIDES: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
-    static ref SHOW_ERROR: Mutex<Option<ErrorCallback>> =
-        Mutex::new(Some(|e| log::error!("{}", e)));
-    static ref LUA_PIPE: LuaPipe = LuaPipe::new();
-    pub static ref COLOR_SCHEMES: HashMap<String, Palette> = build_default_schemes();
-}
+pub static HOME_DIR: LazyLock<PathBuf> =
+    LazyLock::new(|| dirs_next::home_dir().expect("can't find HOME dir"));
+pub static CONFIG_DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(config_dirs);
+pub static RUNTIME_DIR: LazyLock<PathBuf> = LazyLock::new(|| compute_runtime_dir().unwrap());
+pub static DATA_DIR: LazyLock<PathBuf> = LazyLock::new(|| compute_data_dir().unwrap());
+pub static CACHE_DIR: LazyLock<PathBuf> = LazyLock::new(|| compute_cache_dir().unwrap());
+static CONFIG: LazyLock<Configuration> = LazyLock::new(Configuration::new);
+static CONFIG_FILE_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+static CONFIG_SKIP: AtomicBool = AtomicBool::new(false);
+static CONFIG_OVERRIDES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+static SHOW_ERROR: Mutex<Option<ErrorCallback>> = Mutex::new(Some(|e| log::error!("{}", e)));
+static LUA_PIPE: LazyLock<LuaPipe> = LazyLock::new(LuaPipe::new);
+pub static COLOR_SCHEMES: LazyLock<HashMap<String, Palette>> = LazyLock::new(build_default_schemes);
 
 thread_local! {
     static LUA_CONFIG: RefCell<Option<LuaConfigState>> = RefCell::new(None);

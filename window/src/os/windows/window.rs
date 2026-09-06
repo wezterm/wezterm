@@ -10,7 +10,6 @@ use crate::{
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use config::{ConfigHandle, ImePreeditRendering, SystemBackdrop};
-use lazy_static::lazy_static;
 use promise::Future;
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -28,7 +27,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use wezterm_color_types::LinearRgba;
 use wezterm_font::FontConfiguration;
 use wezterm_input_types::KeyboardLedStatus;
@@ -71,33 +70,31 @@ extern "system" {
     pub fn ImmSetCandidateWindow(himc: HIMC, lpCandidate: LPCANDIDATEFORM) -> BOOL;
 }
 
-lazy_static! {
-    static ref IS_WIN10: bool = {
-        let osver = OSVERSIONINFOW {
-            dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as _,
-            ..Default::default()
-        };
-
-        if unsafe { GetVersionExW(&osver as *const _ as _) } == winapi::shared::minwindef::TRUE {
-            osver.dwBuildNumber < 22000
-        } else {
-            true
-        }
+static IS_WIN10: LazyLock<bool> = LazyLock::new(|| {
+    let osver = OSVERSIONINFOW {
+        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as _,
+        ..Default::default()
     };
-    static ref IS_WIN11_22H2: bool = {
-        let osver = OSVERSIONINFOW {
-            dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as _,
-            ..Default::default()
-        };
 
-        if unsafe { GetVersionExW(&osver as *const _ as _) } == winapi::shared::minwindef::TRUE {
-            osver.dwBuildNumber >= 22621
-        } else {
-            true
-        }
+    if unsafe { GetVersionExW(&osver as *const _ as _) } == winapi::shared::minwindef::TRUE {
+        osver.dwBuildNumber < 22000
+    } else {
+        true
+    }
+});
+static IS_WIN11_22H2: LazyLock<bool> = LazyLock::new(|| {
+    let osver = OSVERSIONINFOW {
+        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as _,
+        ..Default::default()
     };
-    static ref TITLE_FONT: Mutex<Option<parameters::FontAndSize>> = Mutex::new(None);
-}
+
+    if unsafe { GetVersionExW(&osver as *const _ as _) } == winapi::shared::minwindef::TRUE {
+        osver.dwBuildNumber >= 22621
+    } else {
+        true
+    }
+});
+static TITLE_FONT: Mutex<Option<parameters::FontAndSize>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub(crate) struct HWindow(HWND);
@@ -1916,10 +1913,10 @@ unsafe fn mouse_leave(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) 
     Some(0)
 }
 
-lazy_static! {
-    static ref WHEEL_SCROLL_LINES: i16 = read_scroll_speed("WheelScrollLines").unwrap_or(3);
-    static ref WHEEL_SCROLL_CHARS: i16 = read_scroll_speed("WheelScrollChars").unwrap_or(3);
-}
+static WHEEL_SCROLL_LINES: LazyLock<i16> =
+    LazyLock::new(|| read_scroll_speed("WheelScrollLines").unwrap_or(3));
+static WHEEL_SCROLL_CHARS: LazyLock<i16> =
+    LazyLock::new(|| read_scroll_speed("WheelScrollChars").unwrap_or(3));
 
 fn read_scroll_speed(name: &str) -> io::Result<i16> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);

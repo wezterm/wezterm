@@ -3,15 +3,17 @@ use chrono::serde::ts_seconds;
 use chrono::{DateTime, Utc};
 use serde::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::SystemTime;
 
 static CLIENT_ID: AtomicUsize = AtomicUsize::new(0);
-lazy_static::lazy_static! {
-    static ref EPOCH: u64 = SystemTime::now()
-                                .duration_since(SystemTime::UNIX_EPOCH)
-                                .unwrap().as_secs();
-}
+
+static EPOCH: LazyLock<u64> = LazyLock::new(|| {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+});
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClientId {

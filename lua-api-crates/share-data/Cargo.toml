@@ -9,7 +9,6 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 config.workspace = true
-lazy_static.workspace = true
 luahelper.workspace = true
 ordered-float.workspace = true
 wezterm-dynamic.workspace = true

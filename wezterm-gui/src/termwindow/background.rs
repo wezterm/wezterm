@@ -11,15 +11,14 @@ use config::{
     GradientOrientation,
 };
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::SystemTime;
 use termwiz::image::{ImageData, ImageDataType};
 use wezterm_term::StableRowIndex;
 
-lazy_static::lazy_static! {
-    static ref IMAGE_CACHE: Mutex<HashMap<String, CachedImage>> = Mutex::new(HashMap::new());
-    static ref GRADIENT_CACHE: Mutex<Vec<CachedGradient>> = Mutex::new(vec![]);
-}
+static IMAGE_CACHE: LazyLock<Mutex<HashMap<String, CachedImage>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static GRADIENT_CACHE: Mutex<Vec<CachedGradient>> = Mutex::new(Vec::new());
 
 struct CachedGradient {
     g: Gradient,
