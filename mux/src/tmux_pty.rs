@@ -1,4 +1,6 @@
-use crate::tmux::{RefTmuxRemotePane, TmuxCmdQueue, TmuxDomainState};
+use crate::tmux::{
+    classify_handshake_sequence, HandshakeMatch, RefTmuxRemotePane, TmuxCmdQueue, TmuxDomainState,
+};
 use crate::tmux_commands::{Resize, SendKeys};
 use crate::DomainId;
 use filedescriptor::FileDescriptor;
@@ -6,6 +8,122 @@ use parking_lot::{Condvar, Mutex};
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty};
 use std::io::{Read, Write};
 use std::sync::Arc;
+use termwiz::tmux_cc::TmuxPaneId;
+
+fn queue_send_keys(
+    domain_id: DomainId,
+    master_pane: &RefTmuxRemotePane,
+    cmd_queue: &Arc<Mutex<TmuxCmdQueue>>,
+    buf: &[u8],
+) -> std::io::Result<usize> {
+    let pane_id = {
+        let pane_lock = master_pane.lock();
+        pane_lock.pane_id
+    };
+
+    if maybe_queue_tmux_report(domain_id, pane_id, cmd_queue, buf) {
+        return Ok(buf.len());
+    }
+
+    log::trace!("pane:{}, content:{:?}", &pane_id, buf);
+    let mut queue = cmd_queue.lock();
+    queue.push_back(Box::new(SendKeys {
+        pane: pane_id,
+        keys: buf.to_vec(),
+    }));
+    TmuxDomainState::schedule_send_next_command(domain_id);
+    Ok(0)
+}
+
+fn maybe_queue_tmux_report(
+    domain_id: DomainId,
+    pane_id: TmuxPaneId,
+    cmd_queue: &Arc<Mutex<TmuxCmdQueue>>,
+    buf: &[u8],
+) -> bool {
+    match classify_handshake_sequence(buf) {
+        HandshakeMatch::Complete(len) if len == buf.len() && is_handshake_response(buf) => {
+            log::trace!(
+                "queuing tmux control report for pane {} with payload {:?}",
+                pane_id,
+                buf
+            );
+            let mut queue = cmd_queue.lock();
+            queue.push_back(Box::new(crate::tmux_commands::SendPaneReport {
+                pane: pane_id,
+                report: buf.to_vec(),
+            }));
+            TmuxDomainState::schedule_send_next_command(domain_id);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn is_handshake_response(buf: &[u8]) -> bool {
+    if buf.len() < 2 || buf[0] != 0x1b {
+        return false;
+    }
+    match buf[1] {
+        b']' => osc_is_response(buf),
+        b'[' => csi_is_response(buf),
+        _ => false,
+    }
+}
+
+fn osc_is_response(buf: &[u8]) -> bool {
+    let body = match extract_osc_body(buf) {
+        Some(body) => body,
+        None => return false,
+    };
+
+    let is_color_query = body.starts_with(b"10;") || body.starts_with(b"11;") || body.starts_with(b"12;");
+    if !is_color_query {
+        return false;
+    }
+
+    let after_semicolon = match body.iter().position(|&b| b == b';') {
+        Some(idx) if idx + 1 < body.len() => &body[idx + 1..],
+        _ => return false,
+    };
+
+    match after_semicolon.first() {
+        Some(b'?') | None => false,
+        _ => true,
+    }
+}
+
+fn extract_osc_body(buf: &[u8]) -> Option<&[u8]> {
+    if buf.len() < 3 || buf[0] != 0x1b || buf[1] != b']' {
+        return None;
+    }
+    let mut idx = 2;
+    while idx < buf.len() {
+        match buf[idx] {
+            0x07 => return Some(&buf[2..idx]),
+            0x1b if idx + 1 < buf.len() && buf[idx + 1] == b'\\' => return Some(&buf[2..idx]),
+            _ => idx += 1,
+        }
+    }
+    None
+}
+
+fn csi_is_response(buf: &[u8]) -> bool {
+    if buf.len() < 3 || buf[0] != 0x1b || buf[1] != b'[' {
+        return false;
+    }
+    let data = &buf[2..];
+    if data.is_empty() {
+        return false;
+    }
+    let final_byte = *data.last().unwrap();
+    let params = &data[..data.len() - 1];
+
+    match final_byte {
+        b'c' | b't' => params.contains(&b';'),
+        _ => false,
+    }
+}
 
 /// A local tmux pane(tab) based on a tmux pty
 #[derive(Debug)]
@@ -24,18 +142,7 @@ struct TmuxPtyWriter {
 
 impl Write for TmuxPtyWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let pane_id = {
-            let pane_lock = self.master_pane.lock();
-            pane_lock.pane_id
-        };
-        log::trace!("pane:{}, content:{:?}", &pane_id, buf);
-        let mut cmd_queue = self.cmd_queue.lock();
-        cmd_queue.push_back(Box::new(SendKeys {
-            pane: pane_id,
-            keys: buf.to_vec(),
-        }));
-        TmuxDomainState::schedule_send_next_command(self.domain_id);
-        Ok(0)
+        queue_send_keys(self.domain_id, &self.master_pane, &self.cmd_queue, buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -45,18 +152,7 @@ impl Write for TmuxPtyWriter {
 
 impl Write for TmuxPty {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let pane_id = {
-            let pane_lock = self.master_pane.lock();
-            pane_lock.pane_id
-        };
-        log::trace!("pane:{}, content:{:?}", &pane_id, buf);
-        let mut cmd_queue = self.cmd_queue.lock();
-        cmd_queue.push_back(Box::new(SendKeys {
-            pane: pane_id,
-            keys: buf.to_vec(),
-        }));
-        TmuxDomainState::schedule_send_next_command(self.domain_id);
-        Ok(0)
+        queue_send_keys(self.domain_id, &self.master_pane, &self.cmd_queue, buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
