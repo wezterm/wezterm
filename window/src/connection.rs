@@ -76,6 +76,12 @@ pub trait ConnectionOps {
     /// Perform the system beep/notification sound
     fn beep(&self) {}
 
+    /// Request user attention via the OS (e.g. macOS dock bounce).
+    /// Implementations should arrange for the application's dock/taskbar
+    /// icon to attract the user's attention. No-ops on platforms without
+    /// such a mechanism.
+    fn request_attention(&self) {}
+
     /// Returns information about the screens
     fn screens(&self) -> anyhow::Result<Screens> {
         anyhow::bail!("Unable to query screen information");
