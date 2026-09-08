@@ -139,6 +139,7 @@ impl PerPane {
             working_dir: working_dir.map(Into::into),
             input_serial: force_with_input_serial,
             seqno: self.seqno,
+            user_vars: pane.copy_user_vars(),
         })
     }
 }
