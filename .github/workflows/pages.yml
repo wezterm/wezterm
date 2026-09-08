@@ -53,7 +53,7 @@ jobs:
           source $HOME/.cargo/env
           CARDS=true ./ci/build-docs.sh
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: gh_pages
 
