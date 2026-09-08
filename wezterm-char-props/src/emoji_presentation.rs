@@ -2,11 +2,10 @@
 //
 //   ucd-generate property-bool . --include Emoji_Presentation --trie-set
 //
-// Unicode version: 16.0.0.
+// Unicode version: 17.0.0.
 //
 // ucd-generate 0.3.1 is available on crates.io.
 
-#[allow(unused)]
 pub const BY_NAME: &'static [(&'static str, &'static ::ucd_trie::TrieSet)] =
     &[("Emoji_Presentation", EMOJI_PRESENTATION)];
 
@@ -105,12 +104,12 @@ pub const EMOJI_PRESENTATION: &'static ::ucd_trie::TrieSet = &::ucd_trie::TrieSe
         0x1000600000,
         0xF800000000000000,
         0xFFFF,
-        0x1FF01800F0E7103F,
+        0x1FF01800F1E7103F,
         0x10FFF00000000,
         0xF7FFFFFFFFFFF000,
         0xFFFFFFFFFFFFFFBF,
         0x1FFF000000000000,
-        0xFFFFFFFFFFFF83FF,
-        0x1FF03FF9FFFC07F,
+        0xFFFFFFFFFFFFC7FF,
+        0x1FF87FF9FFFE17F,
     ],
 };
