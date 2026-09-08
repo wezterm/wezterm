@@ -1063,6 +1063,75 @@ impl CopyRenderable {
         }
     }
 
+    fn jump_to_matching_bracket(&mut self) {
+        let y = self.cursor.y;
+        let (_top, lines) = self.delegate.get_lines(y..y + 1);
+        let line = match lines.get(0) {
+            Some(line) => line,
+            None => return,
+        };
+
+        let cell = match line.get_cell(self.cursor.x) {
+            Some(cell) => cell,
+            None => return,
+        };
+
+        let cursor_bracket = cell.str();
+        let (direction, matching_bracket) = match cursor_bracket {
+            "{" => (1, "}"),
+            "(" => (1, ")"),
+            "[" => (1, "]"),
+            "}" => (-1, "{"),
+            ")" => (-1, "("),
+            "]" => (-1, "["),
+            _ => return,
+        };
+        let mut balance = direction;
+        let dims = self.delegate.get_dimensions();
+
+        let range_to_process = if direction == -1 {
+            dims.scrollback_top..y + 1
+        } else {
+            y..dims.scrollback_top + dims.scrollback_rows as isize
+        };
+
+        let (_top, mut lines_to_process) = self.delegate.get_lines(range_to_process);
+        if direction == -1 {
+            lines_to_process.reverse();
+        }
+        for (line_idx, line) in lines_to_process.iter().enumerate() {
+            let mut candidates: Vec<(usize, isize)> = line
+                .visible_cells()
+                .filter_map(|cell| {
+                    let cell_str = cell.str();
+                    if cell_str == cursor_bracket {
+                        Some((cell.cell_index(), direction))
+                    } else if cell_str == matching_bracket {
+                        Some((cell.cell_index(), -direction))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if direction == -1 {
+                candidates.reverse();
+            }
+
+            for (cell_idx, bracket_direction) in candidates {
+                if line_idx != 0 || direction * (cell_idx as isize - self.cursor.x as isize) > 0 {
+                    balance += bracket_direction;
+                }
+                if balance == 0 {
+                    self.cursor.y += direction * line_idx as isize;
+                    self.cursor.x = cell_idx;
+                    self.select_to_cursor_pos();
+                    return;
+                }
+            }
+        }
+    }
+
     fn jump(&mut self, forward: bool, prev_char: bool) {
         self.pending_jump
             .replace(PendingJump { forward, prev_char });
@@ -1291,6 +1360,7 @@ impl Pane for CopyOverlay {
                     JumpBackward { prev_char } => render.jump(false, *prev_char),
                     JumpAgain => render.jump_again(false),
                     JumpReverse => render.jump_again(true),
+                    JumpToMatchingBracket => render.jump_to_matching_bracket(),
                 }
                 PerformAssignmentResult::Handled
             }
@@ -2009,6 +2079,16 @@ pub fn copy_key_table() -> KeyTable {
             WKeyCode::Char('t'),
             Modifiers::NONE,
             KeyAssignment::CopyMode(CopyModeAssignment::JumpForward { prev_char: true }),
+        ),
+        (
+            WKeyCode::Char('%'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::JumpToMatchingBracket),
+        ),
+        (
+            WKeyCode::Char('%'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::JumpToMatchingBracket),
         ),
         (
             WKeyCode::Home,
