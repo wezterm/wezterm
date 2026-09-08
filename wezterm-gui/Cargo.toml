@@ -56,6 +56,7 @@ futures.workspace = true
 hdrhistogram.workspace = true
 http_req.workspace = true
 image.workspace = true
+image-webp.workspace = true
 lazy_static.workspace = true
 lfucache.workspace = true
 libc.workspace = true
