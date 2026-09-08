@@ -164,6 +164,11 @@ impl Child for SerialChild {
     fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
         None
     }
+
+    #[cfg(windows)]
+    fn main_thread_handle(&self) -> Option<std::os::windows::io::BorrowedHandle<'_>> {
+        None
+    }
 }
 
 impl ChildKiller for SerialChild {
