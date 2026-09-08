@@ -70,9 +70,12 @@ impl LocalProcessInfo {
         let mut names = HashSet::new();
 
         fn flatten(item: &LocalProcessInfo, names: &mut HashSet<String>) {
-            if let Some(exe) = item.executable.file_name() {
-                names.insert(exe.to_string_lossy().into_owned());
-            }
+            match item.executable.file_name() {
+                Some(exe) if !exe.is_empty() => names.insert(exe.to_string_lossy().into_owned()),
+                // Handle no permission to read executable path program, like 'sudo'
+                _ => names.insert(item.name.clone()),
+            };
+
             for proc in item.children.values() {
                 flatten(proc, names);
             }
