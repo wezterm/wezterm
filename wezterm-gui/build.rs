@@ -11,7 +11,10 @@ fn main() {
             .ok()
             .and_then(|cwd| cwd.parent().map(|p| p.to_path_buf()))
             .unwrap();
-        let exe_output_dir = repo_dir.join("target").join(profile);
+        let exe_output_dir = std::env::var_os("CARGO_TARGET_DIR")
+            .and_then(|s| Some(std::path::PathBuf::from(s)))
+            .unwrap_or(repo_dir.join("target"))
+            .join(profile);
         let windows_dir = repo_dir.join("assets").join("windows");
 
         let conhost_dir = windows_dir.join("conhost");
