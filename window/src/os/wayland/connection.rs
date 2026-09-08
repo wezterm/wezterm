@@ -162,6 +162,19 @@ impl ConnectionOps for WaylandConnection {
         "Wayland".to_string()
     }
 
+    fn default_dpi(&self) -> f64 {
+        // Use the effective dpi of the screen that new windows are most
+        // likely to appear on, so that the initial window size can be
+        // computed with a realistic dpi. Getting this right avoids
+        // visibly re-resizing the window once the compositor reports
+        // the true scale factor of the output; if we guessed the wrong
+        // output, the configure/scale events will correct it later.
+        match self.screens() {
+            Ok(screens) => screens.active.effective_dpi.unwrap_or(crate::DEFAULT_DPI),
+            Err(_) => crate::DEFAULT_DPI,
+        }
+    }
+
     fn terminate_message_loop(&self) {
         log::trace!("Terminating Message Loop");
         *self.should_terminate.borrow_mut() = true;
