@@ -620,6 +620,22 @@ impl Window {
             window.setContentView_(*view);
             window.setDelegate_(*view);
 
+            // Observe app-level screen-parameter changes (resolution changes,
+            // display connect/disconnect). These fire regardless of window
+            // focus and, unlike windowDidChangeScreen:, also cover an in-place
+            // resolution change of the current display. See
+            // did_change_screen_parameters.
+            {
+                let center: id = msg_send![class!(NSNotificationCenter), defaultCenter];
+                let name: id = NSString::alloc(nil)
+                    .init_str("NSApplicationDidChangeScreenParametersNotification");
+                let () = msg_send![center,
+                    addObserver: *view
+                    selector: sel!(applicationDidChangeScreenParameters:)
+                    name: name
+                    object: nil];
+            }
+
             view.setWantsLayer(YES);
             let () = msg_send![
                 *view,
@@ -2963,6 +2979,40 @@ impl WindowView {
         }
     }
 
+    // Re-apply a non-native (simple) fullscreen window's frame to the current
+    // screen when the display configuration changes: an in-place resolution
+    // change, or a display connect/disconnect. The frame is set once at
+    // fullscreen entry (see toggle_simple_fullscreen) and never updated
+    // afterwards, so it goes stale when the screen geometry changes, leaving
+    // dead space / clipping.
+    //
+    // NSApplicationDidChangeScreenParametersNotification fires regardless of
+    // window focus (unlike windowDidChangeScreen:, it also covers an in-place
+    // resolution change of the current display). We re-apply the frame
+    // immediately here rather than deferring to the next draw_rect paint --
+    // otherwise an unfocused window keeps a stale frame until it is refocused.
+    extern "C" fn did_change_screen_parameters(view: &mut Object, _sel: Sel, _notification: id) {
+        if let Some(this) = Self::get_this(view) {
+            // Read the flag and drop the borrow before touching the window:
+            // setFrame may synchronously call back into the delegate
+            // (did_resize), which would re-borrow inner and panic.
+            let is_simple_fs = {
+                let mut inner = this.inner.borrow_mut();
+                inner.screen_changed = true;
+                inner.fullscreen.is_some()
+            };
+            if is_simple_fs {
+                unsafe {
+                    let window: id = msg_send![view, window];
+                    let screen_rect = NSScreen::frame(NSScreen::mainScreen(nil));
+                    NSWindow::setFrame_display_(window, screen_rect, YES);
+                    // Force a repaint so content re-renders even while unfocused.
+                    let () = msg_send![view, setNeedsDisplay: YES];
+                }
+            }
+        }
+    }
+
     extern "C" fn will_start_live_resize(this: &mut Object, _sel: Sel, _notification: id) {
         if let Some(this) = Self::get_this(this) {
             let mut inner = this.inner.borrow_mut();
@@ -3120,6 +3170,7 @@ impl WindowView {
             let mut inner = this.inner.borrow_mut();
 
             if inner.screen_changed {
+                let is_simple_fs = inner.fullscreen.is_some();
                 // If the screen resolution changed (which can also
                 // happen if the window was dragged to another monitor
                 // with different dpi), then we treat this as a resize
@@ -3127,6 +3178,20 @@ impl WindowView {
                 // and a repaint.
                 inner.screen_changed = false;
                 drop(inner);
+                if is_simple_fs {
+                    // Backstop for the windowDidChangeScreen: path (monitor
+                    // move): non-native fullscreen frames don't track
+                    // screen-geometry changes, so re-apply the current screen
+                    // frame. (The app-level notification handles the
+                    // focus-independent resolution-change case immediately.)
+                    // Done after dropping the RefCell borrow to avoid re-entrant
+                    // borrows if setFrame calls back into the delegate.
+                    unsafe {
+                        let window: id = msg_send![view, window];
+                        let screen_rect = NSScreen::frame(NSScreen::mainScreen(nil));
+                        NSWindow::setFrame_display_(window, screen_rect, YES);
+                    }
+                }
                 Self::did_resize(view, sel, nil);
                 return;
             }
@@ -3345,6 +3410,10 @@ impl WindowView {
             cls.add_method(
                 sel!(windowDidChangeScreen:),
                 Self::did_change_screen as extern "C" fn(&mut Object, Sel, id),
+            );
+            cls.add_method(
+                sel!(applicationDidChangeScreenParameters:),
+                Self::did_change_screen_parameters as extern "C" fn(&mut Object, Sel, id),
             );
 
             cls.add_method(
