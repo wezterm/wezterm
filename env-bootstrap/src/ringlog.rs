@@ -11,12 +11,10 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use termwiz::istty::IsTty;
 
-lazy_static::lazy_static! {
-    static ref RINGS: Mutex<Rings> = Mutex::new(Rings::new());
-}
+static RINGS: LazyLock<Mutex<Rings>> = LazyLock::new(|| Mutex::new(Rings::new()));
 
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct Entry {

@@ -7,9 +7,7 @@ use config::ConfigSubscription;
 use std::rc::Rc;
 use std::sync::Mutex;
 
-lazy_static::lazy_static! {
-    static ref CONFIG_SUBSCRIPTION: Mutex<Option<ConfigSubscription>> = Mutex::new(None);
-}
+static CONFIG_SUBSCRIPTION: Mutex<Option<ConfigSubscription>> = Mutex::new(None);
 
 /// We contrive to call this from the main thread in response to the
 /// config being reloaded.

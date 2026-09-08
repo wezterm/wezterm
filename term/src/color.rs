@@ -2,8 +2,8 @@
 
 #[cfg(feature = "use_serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt;
 use std::result::Result;
+use std::{fmt, sync::LazyLock};
 pub use wezterm_cell::color::{AnsiColor, ColorAttribute, RgbColor, SrgbaTuple};
 
 #[derive(Clone, PartialEq)]
@@ -87,9 +87,7 @@ impl ColorPalette {
     }
 }
 
-lazy_static::lazy_static! {
-    static ref DEFAULT_PALETTE: ColorPalette = ColorPalette::compute_default();
-}
+static DEFAULT_PALETTE: LazyLock<ColorPalette> = LazyLock::new(ColorPalette::compute_default);
 
 impl Default for ColorPalette {
     /// Construct a default color palette

@@ -64,9 +64,7 @@ pub fn get_nightly_release_info() -> anyhow::Result<Release> {
     get_github_release_info("https://api.github.com/repos/wezterm/wezterm/releases/tags/nightly")
 }
 
-lazy_static::lazy_static! {
-    static ref UPDATER_WINDOW: Mutex<Option<ConnectionUI>> = Mutex::new(None);
-}
+static UPDATER_WINDOW: Mutex<Option<ConnectionUI>> = Mutex::new(None);
 
 pub fn load_last_release_info_and_set_banner() {
     if !configuration().check_for_updates {

@@ -31,7 +31,6 @@ thiserror.workspace = true
 bitflags.workspace = true
 euclid.workspace = true
 guillotiere.workspace = true
-lazy_static.workspace = true
 libloading.workspace = true
 line_drawing.workspace = true
 log.workspace = true

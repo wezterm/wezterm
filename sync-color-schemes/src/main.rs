@@ -5,6 +5,7 @@ use serde::Deserialize;
 use sqlite_cache::Cache;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::LazyLock;
 use std::time::Duration;
 use tar::Archive;
 use tempfile::NamedTempFile;
@@ -15,9 +16,7 @@ mod iterm2;
 mod scheme;
 mod sexy;
 
-lazy_static::lazy_static! {
-    static ref CACHE: Cache = make_cache();
-}
+static CACHE: LazyLock<Cache> = LazyLock::new(make_cache);
 
 fn apply_nightly_version(metadata: &mut ColorSchemeMetaData) {
     metadata

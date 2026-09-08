@@ -22,9 +22,7 @@ static LUA_REGISTRY_USER_CALLBACK_COUNT: &str = "wezterm-user-callback-count";
 
 pub type SetupFunc = fn(&Lua) -> anyhow::Result<()>;
 
-lazy_static::lazy_static! {
-    static ref SETUP_FUNCS: Mutex<Vec<SetupFunc>> = Mutex::new(vec![]);
-}
+static SETUP_FUNCS: Mutex<Vec<SetupFunc>> = Mutex::new(Vec::new());
 
 pub fn add_context_setup_func(func: SetupFunc) {
     SETUP_FUNCS.lock().unwrap().push(func);

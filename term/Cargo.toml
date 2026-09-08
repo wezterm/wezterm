@@ -22,7 +22,6 @@ finl_unicode.workspace = true
 hex.workspace = true
 humansize.workspace = true
 image.workspace = true
-lazy_static.workspace = true
 log.workspace = true
 lru.workspace = true
 miniz_oxide.workspace = true

@@ -371,9 +371,7 @@ fn read_from_pane_pty(
     dead.store(true, Ordering::Relaxed);
 }
 
-lazy_static::lazy_static! {
-    static ref MUX: Mutex<Option<Arc<Mux>>> = Mutex::new(None);
-}
+static MUX: Mutex<Option<Arc<Mux>>> = Mutex::new(None);
 
 pub struct MuxWindowBuilder {
     window_id: WindowId,

@@ -48,9 +48,7 @@ pub fn alloc_font_id() -> LoadedFontId {
     FONT_ID.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed)
 }
 
-lazy_static::lazy_static! {
-    static ref LAST_WARNING: Mutex<Option<(Instant, usize)>> = Mutex::new(None);
-}
+static LAST_WARNING: Mutex<Option<(Instant, usize)>> = Mutex::new(None);
 
 pub struct LoadedFont {
     rasterizers: RefCell<HashMap<FallbackIdx, Box<dyn FontRasterizer>>>,

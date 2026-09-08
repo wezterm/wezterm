@@ -12,7 +12,6 @@ config.workspace = true
 csscolorparser = {workspace=true, features=["lab"]}
 deltae.workspace = true
 image.workspace = true
-lazy_static.workspace = true
 log.workspace = true
 lru.workspace = true
 luahelper.workspace = true

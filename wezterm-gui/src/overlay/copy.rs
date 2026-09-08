@@ -17,7 +17,7 @@ use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use rangeset::RangeSet;
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use termwiz::cell::{Cell, CellAttributes};
 use termwiz::color::AnsiColor;
@@ -32,9 +32,8 @@ use wezterm_term::{
 };
 use window::{KeyCode as WKeyCode, Modifiers, WindowOps};
 
-lazy_static::lazy_static! {
-    static ref SAVED_PATTERN: Mutex<HashMap<TabId, Pattern>> = Mutex::new(HashMap::new());
-}
+static SAVED_PATTERN: LazyLock<Mutex<HashMap<TabId, Pattern>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const SEARCH_CHUNK_SIZE: StableRowIndex = 1000;
 

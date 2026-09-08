@@ -6,7 +6,7 @@ use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 #[derive(Debug, Clone)]
 struct Object {
@@ -235,9 +235,11 @@ fn lua_value_to_gvalue_impl(value: LuaValue, visited: &mut HashSet<usize>) -> ml
     })
 }
 
-lazy_static::lazy_static! {
-    static ref GLOBALS: Value = Value::Object(Object{inner:Arc::new(Mutex::new(BTreeMap::new()))});
-}
+static GLOBALS: LazyLock<Value> = LazyLock::new(|| {
+    Value::Object(Object {
+        inner: Arc::new(Mutex::new(BTreeMap::new())),
+    })
+});
 
 fn gvalue_to_lua<'lua>(lua: &'lua Lua, value: &Value) -> mlua::Result<LuaValue<'lua>> {
     match value {

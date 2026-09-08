@@ -59,7 +59,7 @@ use std::collections::{HashMap, LinkedList};
 use std::ops::Add;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use termwiz::hyperlink::Hyperlink;
 use termwiz::surface::SequenceNo;
@@ -89,10 +89,9 @@ use prevcursor::PrevCursorPos;
 
 const ATLAS_SIZE: usize = 128;
 
-lazy_static::lazy_static! {
-    static ref WINDOW_CLASS: Mutex<String> = Mutex::new(wezterm_gui_subcommands::DEFAULT_WINDOW_CLASS.to_owned());
-    static ref POSITION: Mutex<Option<GuiPosition>> = Mutex::new(None);
-}
+static WINDOW_CLASS: LazyLock<Mutex<String>> =
+    LazyLock::new(|| Mutex::new(wezterm_gui_subcommands::DEFAULT_WINDOW_CLASS.to_owned()));
+static POSITION: Mutex<Option<GuiPosition>> = Mutex::new(None);
 
 pub const ICON_DATA: &'static [u8] = include_bytes!("../../../assets/icon/terminal.png");
 

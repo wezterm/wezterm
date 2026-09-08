@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use termwiz::cell::{Cell, CellAttributes, Underline};
 use termwiz::color::AnsiColor;
@@ -636,9 +636,8 @@ impl RenderableInner {
     }
 }
 
-lazy_static::lazy_static! {
-    static ref IMAGE_LRU: Mutex<LruCache<[u8;32], Arc<ImageData>>> = Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap()));
-}
+static IMAGE_LRU: LazyLock<Mutex<LruCache<[u8; 32], Arc<ImageData>>>> =
+    LazyLock::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
 
 pub(crate) async fn hydrate_lines(
     client: Arc<ClientInner>,

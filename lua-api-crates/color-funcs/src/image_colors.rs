@@ -20,7 +20,7 @@ use lru::LruCache;
 use luahelper::impl_lua_conversion_dynamic;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::SystemTime;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 
@@ -128,9 +128,8 @@ struct CachedAnalysis {
     colors: Vec<ColorWrap>,
 }
 
-lazy_static::lazy_static! {
-    static ref IMG_COLOR_CACHE: Mutex<LruCache<(String, ExtractColorParams), CachedAnalysis>> = Mutex::new(LruCache::new(NonZeroUsize::new(16).unwrap()));
-}
+static IMG_COLOR_CACHE: LazyLock<Mutex<LruCache<(String, ExtractColorParams), CachedAnalysis>>> =
+    LazyLock::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(16).unwrap())));
 
 fn color_diff_lab(a: &LabValue, b: &LabValue) -> f32 {
     *deltae::DeltaE::new(a, b, deltae::DEMethod::DE2000).value()

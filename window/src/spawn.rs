@@ -4,7 +4,7 @@ use crate::os::windows::event::EventHandle;
 use core_foundation::runloop::*;
 use promise::spawn::{Runnable, SpawnFunc};
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 #[cfg(all(unix, not(target_os = "macos")))]
 use {
@@ -12,9 +12,8 @@ use {
     std::os::unix::io::AsRawFd,
 };
 
-lazy_static::lazy_static! {
-    pub(crate) static ref SPAWN_QUEUE: Arc<SpawnQueue> = Arc::new(SpawnQueue::new().expect("failed to create SpawnQueue"));
-}
+pub(crate) static SPAWN_QUEUE: LazyLock<Arc<SpawnQueue>> =
+    LazyLock::new(|| Arc::new(SpawnQueue::new().expect("failed to create SpawnQueue")));
 
 struct InstrumentedSpawnFunc {
     func: SpawnFunc,

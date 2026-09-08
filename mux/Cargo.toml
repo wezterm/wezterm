@@ -21,7 +21,6 @@ fancy-regex.workspace = true
 filedescriptor.workspace = true
 finl_unicode.workspace = true
 hostname.workspace = true
-lazy_static.workspace = true
 libc.workspace = true
 log.workspace = true
 luahelper.workspace = true
