@@ -860,6 +860,30 @@ impl WaylandWindowInner {
         }
 
         if let Some(ref window_config) = pending.window_configure {
+            // Compositors that do not implement the xdg-decoration protocol
+            // (mutter, most notably) answer with Client mode no matter which
+            // mode we requested. When that happens we have to draw the frame
+            // ourselves; without it the window has no titlebar to drag it by
+            // and no borders to resize it by.
+            let want_frame = matches!(window_config.decoration_mode, DecorationMode::Client)
+                && self
+                    .config
+                    .window_decorations
+                    .contains(WindowDecorations::TITLE);
+            let hide_frame = !want_frame;
+            if self.window_frame.is_hidden() != hide_frame {
+                self.window_frame.set_hidden(hide_frame);
+                // Make sure the sizing logic below runs even when the
+                // compositor didn't suggest a new size, so that the frame is
+                // sized and the window geometry follows its new location.
+                if pending.configure.is_none() {
+                    pending.configure.replace((
+                        self.pixels_to_surface(self.dimensions.pixel_width as i32) as u32,
+                        self.pixels_to_surface(self.dimensions.pixel_height as i32) as u32,
+                    ));
+                }
+                pending.refresh_decorations = true;
+            }
             self.window_frame.update_state(window_config.state);
             self.window_frame
                 .update_wm_capabilities(window_config.capabilities);
