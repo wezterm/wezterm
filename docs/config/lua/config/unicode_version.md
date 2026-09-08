@@ -17,7 +17,7 @@ For example, there were a number of unicode code points that had their width
 changed between Unicode version 8 and version 9. This wouldn't be an issue
 if all software was simultaneously aware of the change, but the reality is
 that there is a lot of older software out there, and that even if your local
-system is fully up to date, you might connect to a remote system vis SSH
+system is fully up to date, you might connect to a remote system via SSH
 that is running applications that use a different version of unicode than
 your local system.
 
