@@ -405,6 +405,15 @@ impl WindowOps for WaylandWindow {
         });
     }
 
+    fn request_drag_move(&self) {
+        WaylandConnection::with_window_inner(self.0, |inner| {
+            if let Err(err) = inner.request_drag_move() {
+                log::warn!("request_drag_move failed: {err:#}");
+            }
+            Ok(())
+        });
+    }
+
     fn set_cursor(&self, cursor: Option<CursorIcon>) {
         WaylandConnection::with_window_inner(self.0, move |inner| {
             inner.set_cursor(cursor);
@@ -1294,6 +1303,33 @@ impl WaylandWindowInner {
             FrameAction::Move => self.window.as_ref().unwrap().move_(seat, serial),
             _ => log::warn!("unhandled FrameAction: {:?}", action),
         }
+    }
+
+    /// Ask the compositor to start an interactive move of the window.
+    /// Wayland clients cannot position themselves, so this is the only way to
+    /// drag a window by an area we draw ourselves, such as the tab bar.
+    fn request_drag_move(&self) -> anyhow::Result<()> {
+        let window = self
+            .window
+            .as_ref()
+            .ok_or_else(|| anyhow!("window is not initialized"))?;
+
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let wayland_state = conn.wayland_state.borrow();
+        let pointer = wayland_state
+            .pointer
+            .as_ref()
+            .ok_or_else(|| anyhow!("no pointer is available"))?;
+        let pointer_data = pointer
+            .pointer()
+            .data::<PointerUserData>()
+            .ok_or_else(|| anyhow!("pointer has no PointerUserData"))?;
+
+        // The most recent pointer serial is the press that began the drag;
+        // motion events don't carry one, so this stays valid for its duration.
+        let serial = *wayland_state.last_serial.borrow();
+        window.move_(pointer_data.pdata.seat(), serial);
+        Ok(())
     }
 
     fn maximize(&mut self) {
