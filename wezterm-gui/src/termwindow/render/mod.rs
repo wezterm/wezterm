@@ -102,10 +102,6 @@ pub struct LineToEleShapeCacheKey {
 pub struct LineToElementShapeItem {
     pub expires: Option<Instant>,
     pub shaped: Rc<Vec<LineToElementShape>>,
-    // Only set if the line contains any hyperlinks, so
-    // that we can invalidate when it changes
-    pub current_highlight: Option<Arc<Hyperlink>>,
-    pub invalidate_on_hover_change: bool,
 }
 
 pub struct LineToElementShape {

@@ -113,28 +113,50 @@ impl crate::TermWindow {
         let cursor_range_pixels = params.left_pixel_x + cursor_range.start as f32 * cell_width
             ..params.left_pixel_x + cursor_range.end as f32 * cell_width;
 
+        let current_highlight = self.current_highlight.as_ref();
+        let mut line_contains_any_hyperlink = false;
+        let mut line_contains_current_highlight = false;
+
+        // The line-to-element shape cache is keyed by rendered shape.  Identical
+        // text on different lines can therefore share a cache key even when the
+        // lines have different hyperlink attributes, for example when OSC 8
+        // hyperlinks are involved.  Check the current line before consulting the
+        // cache so that we don't reuse a shaped result whose hover underline
+        // state was computed for a different Hyperlink Arc.
+        for cell_idx in 0..num_cols {
+            let Some(cell) = params.line.get_cell(cell_idx) else {
+                continue;
+            };
+
+            let Some(hyperlink) = cell.attrs().hyperlink() else {
+                continue;
+            };
+
+            line_contains_any_hyperlink = true;
+
+            let Some(current_highlight) = current_highlight else {
+                break;
+            };
+
+            if same_hyperlink(Some(hyperlink), Some(current_highlight)) {
+                line_contains_current_highlight = true;
+                break;
+            }
+        }
+
         let mut shaped = None;
-        let mut invalidate_on_hover_change = false;
+        let invalidate_on_hover_change = line_contains_any_hyperlink;
 
-        if let Some(shape_key) = &params.shape_key {
-            let mut cache = self.line_to_ele_shape_cache.borrow_mut();
-            if let Some(entry) = cache.get(shape_key) {
-                let expired = entry.expires.map(|i| Instant::now() >= i).unwrap_or(false);
-                let hover_changed = if entry.invalidate_on_hover_change {
-                    !same_hyperlink(
-                        entry.current_highlight.as_ref(),
-                        self.current_highlight.as_ref(),
-                    )
-                } else {
-                    false
-                };
-
-                if !expired && !hover_changed {
-                    self.update_next_frame_time(entry.expires);
-                    shaped.replace(Rc::clone(&entry.shaped));
+        if !line_contains_current_highlight {
+            if let Some(shape_key) = &params.shape_key {
+                let mut cache = self.line_to_ele_shape_cache.borrow_mut();
+                if let Some(entry) = cache.get(shape_key) {
+                    let expired = entry.expires.map(|i| Instant::now() >= i).unwrap_or(false);
+                    if !expired {
+                        self.update_next_frame_time(entry.expires);
+                        shaped.replace(Rc::clone(&entry.shaped));
+                    }
                 }
-
-                invalidate_on_hover_change = entry.invalidate_on_hover_change;
             }
         }
 
@@ -150,8 +172,7 @@ impl crate::TermWindow {
                 shape_key: &params.shape_key,
             };
 
-            let (shaped, invalidate_on_hover) = self.build_line_element_shape(params)?;
-            invalidate_on_hover_change = invalidate_on_hover;
+            let shaped = self.build_line_element_shape(params)?;
             shaped
         };
 
@@ -723,7 +744,7 @@ impl crate::TermWindow {
     fn build_line_element_shape(
         &self,
         params: LineToElementParams,
-    ) -> anyhow::Result<(Rc<Vec<LineToElementShape>>, bool)> {
+    ) -> anyhow::Result<Rc<Vec<LineToElementShape>>> {
         let (bidi_enabled, bidi_direction) = params.line.bidi_info();
         let bidi_hint = if bidi_enabled {
             Some(bidi_direction)
@@ -747,7 +768,7 @@ impl crate::TermWindow {
         let mut last_style = None;
         let mut x_pos = 0.;
         let mut expires = None;
-        let mut invalidate_on_hover_change = false;
+        let mut line_contains_current_highlight = false;
 
         for cluster in &cell_clusters {
             if !matches!(last_style.as_ref(), Some(ClusterStyleCache{attrs,..}) if *attrs == &cluster.attrs)
@@ -757,8 +778,8 @@ impl crate::TermWindow {
                 let hyperlink = attrs.hyperlink();
                 let is_highlited_hyperlink =
                     same_hyperlink(hyperlink, self.current_highlight.as_ref());
-                if hyperlink.is_some() {
-                    invalidate_on_hover_change = true;
+                if is_highlited_hyperlink {
+                    line_contains_current_highlight = true;
                 }
                 // underline and strikethrough
                 let underline_tex_rect = gl_state
@@ -886,22 +907,29 @@ impl crate::TermWindow {
 
         let shaped = Rc::new(shaped);
 
-        if let Some(shape_key) = params.shape_key {
-            self.line_to_ele_shape_cache.borrow_mut().put(
-                shape_key.clone(),
-                LineToElementShapeItem {
-                    expires,
-                    shaped: Rc::clone(&shaped),
-                    invalidate_on_hover_change,
-                    current_highlight: if invalidate_on_hover_change {
-                        self.current_highlight.clone()
-                    } else {
-                        None
+        // Hyperlink hover highlighting can force an underline based on
+        // the Hyperlink Arc for this specific line. The shape_key is
+        // based on the rendered shape and can be shared by identical
+        // text on another line with a different Hyperlink Arc.
+        //
+        // Do not cache shaped results for lines that contain the
+        // currently-highlighted hyperlink; otherwise hover underline
+        // state can be incorrectly reused across different hyperlink
+        // instances. Non-highlighted hyperlink lines are safe to cache;
+        // if they become highlighted later, render_screen_line will
+        // detect that before lookup and bypass the cache.
+        if !line_contains_current_highlight {
+            if let Some(shape_key) = params.shape_key {
+                self.line_to_ele_shape_cache.borrow_mut().put(
+                    shape_key.clone(),
+                    LineToElementShapeItem {
+                        expires,
+                        shaped: Rc::clone(&shaped),
                     },
-                },
-            );
+                );
+            }
         }
 
-        Ok((shaped, invalidate_on_hover_change))
+        Ok(shaped)
     }
 }
