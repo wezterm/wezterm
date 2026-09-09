@@ -2819,6 +2819,7 @@ impl TermWindow {
                     }
                 }
             }
+            SelectAll => self.select_all(pane),
             SelectTextAtMouseCursor(mode) => self.select_text_at_mouse_cursor(*mode, pane),
             ExtendSelectionToMouseCursor(mode) => {
                 self.extend_selection_at_mouse_cursor(*mode, pane)

@@ -1745,6 +1745,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             icon: None,
         },
         DisableDefaultAssignment => return None,
+        SelectAll => CommandDef {
+            brief: "Select all text in the current pane".into(),
+            doc: "Selects all text in the current pane, including scrollback, without entering Copy Mode or Search Mode".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &[],
+            icon: Some("md_select_all"),
+        },
         SelectTextAtMouseCursor(mode) => CommandDef {
             brief: format!(
                 "Selects text at the mouse cursor \
