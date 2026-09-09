@@ -1,5 +1,6 @@
 use crate::quad::TripleLayerQuadAllocator;
 use crate::termwindow::render::RenderScreenLineParams;
+use crate::termwindow::UIItemType;
 use crate::utilsprites::RenderMetrics;
 use config::ConfigHandle;
 use mux::renderable::RenderableDimensions;
@@ -22,6 +23,28 @@ impl crate::TermWindow {
             }
 
             self.ui_items.append(&mut self.paint_fancy_tab_bar()?);
+
+            // Register resize handle for vertical tab bar
+            if self.config.tab_bar_vertical {
+                let tab_bar_width = self.tab_bar_pixel_width();
+                let handle_width = crate::termwindow::RESIZE_HANDLE_WIDTH;
+                let on_right = self.config.tab_bar_vertical_position
+                    == config::VerticalTabBarPosition::Right;
+                let handle_x = if on_right {
+                    let bar_x = self.dimensions.pixel_width - tab_bar_width as usize;
+                    bar_x.saturating_sub(handle_width / 2)
+                } else {
+                    (tab_bar_width as usize).saturating_sub(handle_width / 2)
+                };
+                self.ui_items.push(crate::termwindow::UIItem {
+                    x: handle_x,
+                    y: 0,
+                    width: handle_width,
+                    height: self.dimensions.pixel_height,
+                    item_type: UIItemType::VerticalTabBarResize,
+                });
+            }
+
             return Ok(());
         }
 
@@ -111,6 +134,10 @@ impl crate::TermWindow {
         fontconfig: &wezterm_font::FontConfiguration,
         render_metrics: &RenderMetrics,
     ) -> anyhow::Result<f32> {
+        // When vertical, tab bar doesn't consume vertical space
+        if config.tab_bar_vertical {
+            return Ok(0.);
+        }
         if config.use_fancy_tab_bar {
             let font = fontconfig.title_font()?;
             Ok((font.metrics().cell_height.get() as f32 * 1.75).ceil())
@@ -122,4 +149,33 @@ impl crate::TermWindow {
     pub fn tab_bar_pixel_height(&self) -> anyhow::Result<f32> {
         Self::tab_bar_pixel_height_impl(&self.config, &self.fonts, &self.render_metrics)
     }
+
+    /// Returns the pixel width consumed by the vertical tab bar, or 0 if not vertical.
+    pub fn tab_bar_pixel_width(&self) -> f32 {
+        if self.config.tab_bar_vertical && self.show_tab_bar {
+            self.vertical_tab_bar_width_override
+                .unwrap_or(self.config.tab_bar_vertical_width as f32)
+        } else {
+            0.
+        }
+    }
+
+    /// Returns the left-side pixel offset for content caused by the vertical tab bar.
+    /// Returns tab_bar_pixel_width when position is Left, 0 when Right.
+    pub fn tab_bar_left_offset(&self) -> f32 {
+        if self.config.tab_bar_vertical_position == config::VerticalTabBarPosition::Left {
+            self.tab_bar_pixel_width()
+        } else {
+            0.
+        }
+    }
+
+    pub fn tab_bar_pixel_width_impl(config: &ConfigHandle, show_tab_bar: bool) -> f32 {
+        if config.tab_bar_vertical && show_tab_bar {
+            config.tab_bar_vertical_width as f32
+        } else {
+            0.
+        }
+    }
+
 }

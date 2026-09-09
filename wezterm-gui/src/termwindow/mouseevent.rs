@@ -43,7 +43,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::VerticalTabBarResize => {}
         }
     }
 
@@ -54,7 +55,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::VerticalTabBarResize => {}
         }
     }
 
@@ -85,10 +87,11 @@ impl super::TermWindow {
             .max(0)
             / self.render_metrics.cell_size.height) as i64;
 
+        let vertical_tab_bar_width = self.tab_bar_left_offset();
         let x = (event
             .coords
             .x
-            .sub((padding_left + border.left.get() as f32) as isize)
+            .sub((padding_left + border.left.get() as f32 + vertical_tab_bar_width) as isize)
             .max(0) as f32)
             / self.render_metrics.cell_size.width as f32;
         let x = if !pane.is_mouse_grabbed() {
@@ -112,7 +115,7 @@ impl super::TermWindow {
         let mut x_pixel_offset = event
             .coords
             .x
-            .sub((padding_left + border.left.get() as f32) as isize);
+            .sub((padding_left + border.left.get() as f32 + vertical_tab_bar_width) as isize);
         if x > 0 {
             x_pixel_offset = x_pixel_offset.max(0) % self.render_metrics.cell_size.width;
         }
@@ -348,6 +351,9 @@ impl super::TermWindow {
             UIItemType::ScrollThumb => {
                 self.drag_scroll_thumb(item, start_event, event, context);
             }
+            UIItemType::VerticalTabBarResize => {
+                self.drag_vertical_tab_bar_resize(item, start_event, event, context);
+            }
             _ => {
                 log::error!("drag not implemented for {:?}", item);
             }
@@ -382,6 +388,9 @@ impl super::TermWindow {
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
             }
+            UIItemType::VerticalTabBarResize => {
+                self.mouse_event_vertical_tab_bar_resize(item, event, context);
+            }
         }
     }
 
@@ -399,6 +408,54 @@ impl super::TermWindow {
             _ => {}
         }
         context.set_cursor(Some(CursorIcon::Default));
+    }
+
+    fn mouse_event_vertical_tab_bar_resize(
+        &mut self,
+        item: UIItem,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::SizeLeftRight));
+        if event.kind == WMEK::Press(MousePress::Left) {
+            self.dragging.replace((item, event));
+        }
+    }
+
+    fn drag_vertical_tab_bar_resize(
+        &mut self,
+        mut item: UIItem,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        let on_right = self.config.tab_bar_vertical_position
+            == config::VerticalTabBarPosition::Right;
+        let max_width = self.dimensions.pixel_width as f32 * super::MAX_VERTICAL_TAB_BAR_WIDTH_RATIO;
+        let new_width = if on_right {
+            (self.dimensions.pixel_width as f32 - event.coords.x as f32)
+                .max(super::MIN_VERTICAL_TAB_BAR_WIDTH)
+                .min(max_width)
+        } else {
+            (event.coords.x as f32)
+                .max(super::MIN_VERTICAL_TAB_BAR_WIDTH)
+                .min(max_width)
+        };
+        self.vertical_tab_bar_width_override = Some(new_width);
+        self.invalidate_fancy_tab_bar();
+
+        // Update the hit area to follow the new separator position
+        let handle_width = super::RESIZE_HANDLE_WIDTH;
+        if on_right {
+            let bar_x = self.dimensions.pixel_width - new_width as usize;
+            item.x = bar_x.saturating_sub(handle_width / 2);
+        } else {
+            item.x = (new_width as usize).saturating_sub(handle_width / 2);
+        }
+
+        self.dragging.replace((item, start_event));
+        context.invalidate();
+        context.set_cursor(Some(MouseCursor::SizeLeftRight));
     }
 
     fn do_new_tab_button_click(&mut self, button: MousePress) {
