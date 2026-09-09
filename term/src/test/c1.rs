@@ -61,6 +61,8 @@ fn test_hts() {
 
 #[test]
 fn test_hts_past_right_edge() {
+    // HTS (Horizontal Tab Set, the C1 control written as ESC H) sets a tab
+    // stop at the cursor column.
     // CUP is allowed to park the cursor one column past the right edge,
     // so HTS can be asked to set a tab stop on a column that does not
     // exist. That has to be ignored rather than panicking.

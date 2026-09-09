@@ -74,10 +74,6 @@ impl TabStop {
     }
 
     fn set_tab_stop(&mut self, col: usize) {
-        // The cursor is allowed to sit one column past the right edge,
-        // so col can legitimately be out of range; there is no column
-        // there to hold a tab stop, so ignore it, just as we do when
-        // clearing a tab stop at the active position.
         if let Some(t) = self.tabs.get_mut(col) {
             *t = true;
         }
