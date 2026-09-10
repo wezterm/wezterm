@@ -2,10 +2,13 @@ use config::lua::get_or_create_module;
 use config::lua::mlua::{self, IntoLua, Lua};
 use finl_unicode::grapheme_clusters::Graphemes;
 use luahelper::impl_lua_conversion_dynamic;
+use std::fmt::Write;
 use std::str::FromStr;
 use termwiz::caps::{Capabilities, ColorLevel, ProbeHints};
 use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange, CellAttributes};
 use termwiz::color::{AnsiColor, ColorAttribute, ColorSpec, SrgbaTuple};
+use termwiz::escape::csi::{Sgr, CSI};
+use termwiz::escape::osc::OperatingSystemCommand;
 use termwiz::render::terminfo::TerminfoRenderer;
 use termwiz::surface::change::Change;
 use termwiz::surface::Line;
@@ -115,36 +118,224 @@ impl From<FormatItem> for Change {
     }
 }
 
-struct FormatTarget {
-    target: Vec<u8>,
-}
-
-impl std::io::Write for FormatTarget {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        std::io::Write::write(&mut self.target, buf)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl termwiz::render::RenderTty for FormatTarget {
-    fn get_size_in_cells(&mut self) -> termwiz::Result<(usize, usize)> {
-        Ok((80, 24))
+fn format_color_spec(color: ColorAttribute) -> ColorSpec {
+    match color {
+        ColorAttribute::Default => ColorSpec::Default,
+        ColorAttribute::PaletteIndex(idx) => ColorSpec::PaletteIndex(idx),
+        ColorAttribute::TrueColorWithDefaultFallback(color)
+        | ColorAttribute::TrueColorWithPaletteFallback(color, _) => ColorSpec::TrueColor(color),
     }
 }
 
 pub fn format_as_escapes(items: Vec<FormatItem>) -> anyhow::Result<String> {
-    let mut changes: Vec<Change> = items.into_iter().map(Into::into).collect();
-    changes.push(Change::AllAttributes(CellAttributes::default()).into());
-    let mut renderer = new_wezterm_terminfo_renderer();
-    let mut target = FormatTarget { target: vec![] };
-    renderer.render_to(&changes, &mut target)?;
-    Ok(String::from_utf8(target.target)?)
+    let mut result = String::new();
+    let mut attrs = CellAttributes::default();
+    let mut reset_attributes = false;
+
+    // The receiving context may have nondefault attributes, such as italic tab
+    // hover text. Preserve explicit changes instead of diffing against defaults.
+    for item in items {
+        let change = match item {
+            FormatItem::Text(text) => {
+                result.push_str(&text);
+                continue;
+            }
+            FormatItem::ResetAttributes => {
+                write!(result, "{}", CSI::Sgr(Sgr::Reset))?;
+                if attrs.hyperlink().is_some() {
+                    write!(result, "{}", OperatingSystemCommand::SetHyperlink(None))?;
+                }
+                attrs = CellAttributes::default();
+                reset_attributes = true;
+                continue;
+            }
+            FormatItem::Attribute(change) => change,
+            FormatItem::Foreground(color) => AttributeChange::Foreground(color.to_attr()),
+            FormatItem::Background(color) => AttributeChange::Background(color.to_attr()),
+        };
+        attrs.apply_change(&change);
+        let sgr = match change {
+            AttributeChange::Intensity(value) => Sgr::Intensity(value),
+            AttributeChange::Underline(value) => Sgr::Underline(value),
+            AttributeChange::Italic(value) => Sgr::Italic(value),
+            AttributeChange::Blink(value) => Sgr::Blink(value),
+            AttributeChange::Reverse(value) => Sgr::Inverse(value),
+            AttributeChange::StrikeThrough(value) => Sgr::StrikeThrough(value),
+            AttributeChange::Invisible(value) => Sgr::Invisible(value),
+            AttributeChange::Foreground(color) => Sgr::Foreground(format_color_spec(color)),
+            AttributeChange::Background(color) => Sgr::Background(format_color_spec(color)),
+            AttributeChange::Hyperlink(link) => {
+                write!(
+                    result,
+                    "{}",
+                    OperatingSystemCommand::SetHyperlink(link.map(|link| (*link).clone()))
+                )?;
+                continue;
+            }
+        };
+        reset_attributes |= !matches!(sgr, Sgr::Foreground(_) | Sgr::Background(_));
+        write!(result, "{}", CSI::Sgr(sgr))?;
+    }
+
+    // Plain and color-only fragments can be nested inside styled text without
+    // resetting the surrounding graphical attributes. Text remains opaque.
+    if reset_attributes {
+        write!(result, "{}", CSI::Sgr(Sgr::Reset))?;
+    } else {
+        if attrs.foreground() != ColorAttribute::Default {
+            write!(result, "{}", CSI::Sgr(Sgr::Foreground(ColorSpec::Default)))?;
+        }
+        if attrs.background() != ColorAttribute::Default {
+            write!(result, "{}", CSI::Sgr(Sgr::Background(ColorSpec::Default)))?;
+        }
+    }
+    if attrs.hyperlink().is_some() {
+        write!(result, "{}", OperatingSystemCommand::SetHyperlink(None))?;
+    }
+    Ok(result)
 }
 
 fn format<'lua>(_: &'lua Lua, items: Vec<FormatItem>) -> mlua::Result<String> {
     format_as_escapes(items).map_err(mlua::Error::external)
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+    use std::sync::Arc;
+    use termwiz::cell::{Blink, Intensity, Underline};
+    use termwiz::escape::parser::Parser;
+    use termwiz::escape::Action;
+    use termwiz::hyperlink::Hyperlink;
+
+    #[test]
+    fn explicit_graphical_attributes_are_not_elided_or_reset_before_text() {
+        for (attribute, escape) in [
+            (AttributeChange::Italic(false), "\x1b[23m"),
+            (AttributeChange::Italic(true), "\x1b[3m"),
+            (AttributeChange::Intensity(Intensity::Normal), "\x1b[22m"),
+            (AttributeChange::Intensity(Intensity::Bold), "\x1b[1m"),
+            (AttributeChange::Intensity(Intensity::Half), "\x1b[2m"),
+            (AttributeChange::Underline(Underline::None), "\x1b[24m"),
+            (AttributeChange::Underline(Underline::Curly), "\x1b[4:3m"),
+            (AttributeChange::Blink(Blink::None), "\x1b[25m"),
+            (AttributeChange::Blink(Blink::Rapid), "\x1b[6m"),
+            (AttributeChange::Reverse(false), "\x1b[27m"),
+            (AttributeChange::StrikeThrough(false), "\x1b[29m"),
+            (AttributeChange::Invisible(false), "\x1b[28m"),
+        ] {
+            // An explicit off value matters even when the formatter has not
+            // seen a matching on value: the receiver can inherit that style.
+            assert_eq!(
+                format_as_escapes(vec![
+                    FormatItem::Attribute(attribute),
+                    FormatItem::Text("x".into())
+                ])
+                .unwrap(),
+                format!("{escape}x\x1b[0m")
+            );
+        }
+    }
+
+    #[test]
+    fn colors_and_raw_defaults_preserve_order() {
+        let rgb = SrgbaTuple::from((0x12, 0x34, 0x56));
+        for (color, expected) in [
+            (ColorAttribute::Default, ColorSpec::Default),
+            (
+                ColorAttribute::PaletteIndex(200),
+                ColorSpec::PaletteIndex(200),
+            ),
+            (
+                ColorAttribute::TrueColorWithDefaultFallback(rgb),
+                ColorSpec::TrueColor(rgb),
+            ),
+            (
+                ColorAttribute::TrueColorWithPaletteFallback(rgb, 4),
+                ColorSpec::TrueColor(rgb),
+            ),
+        ] {
+            let text = format_as_escapes(vec![
+                FormatItem::Text("\x1b[31m\x1b[44m".into()),
+                FormatItem::Attribute(AttributeChange::Foreground(color)),
+                FormatItem::Attribute(AttributeChange::Background(color)),
+                FormatItem::Text("x".into()),
+            ])
+            .unwrap();
+            let actions = Parser::new().parse_as_vec(text.as_bytes());
+            assert_eq!(actions[2], Action::CSI(CSI::Sgr(Sgr::Foreground(expected))));
+            assert_eq!(actions[3], Action::CSI(CSI::Sgr(Sgr::Background(expected))));
+            assert_eq!(actions[4], Action::Print('x'));
+            assert!(!actions.contains(&Action::CSI(CSI::Sgr(Sgr::Reset))));
+        }
+    }
+
+    #[test]
+    fn plain_and_empty_formats_are_unchanged() {
+        assert_eq!(format_as_escapes(vec![]).unwrap(), "");
+        let raw = "\x1b[58:2::255:0:0mraw\ntext";
+        assert_eq!(
+            format_as_escapes(vec![FormatItem::Text(raw.into())]).unwrap(),
+            raw
+        );
+    }
+
+    #[test]
+    fn hyperlinks_survive_attribute_changes_and_close_at_reset_or_end() {
+        let link = Hyperlink::new("https://wezterm.org");
+        for reset in [
+            None,
+            Some(FormatItem::ResetAttributes),
+            Some(FormatItem::Attribute(AttributeChange::Hyperlink(None))),
+        ] {
+            let closes_before_y = reset.is_some();
+            let mut items = vec![
+                FormatItem::Attribute(AttributeChange::Hyperlink(Some(Arc::new(link.clone())))),
+                FormatItem::Attribute(AttributeChange::Italic(false)),
+                FormatItem::Text("x".into()),
+            ];
+            if let Some(reset) = reset {
+                items.push(reset);
+            }
+            items.push(FormatItem::Text("y".into()));
+            let text = format_as_escapes(items).unwrap();
+            let actions: Vec<_> = Parser::new()
+                .parse_as_vec(text.as_bytes())
+                .into_iter()
+                .filter(|action| !matches!(action, Action::Esc(_)))
+                .collect();
+            let links: Vec<_> = actions
+                .iter()
+                .filter_map(|action| match action {
+                    Action::OperatingSystemCommand(osc) => match &**osc {
+                        OperatingSystemCommand::SetHyperlink(link) => Some(link.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(links, vec![Some(link.clone()), None]);
+            assert_eq!(actions[1], Action::CSI(CSI::Sgr(Sgr::Italic(false))));
+            assert_eq!(actions[2], Action::Print('x'));
+            let close = actions.iter().position(|action| matches!(action,
+                Action::OperatingSystemCommand(osc) if matches!(&**osc, OperatingSystemCommand::SetHyperlink(None))
+            )).unwrap();
+            let y = actions
+                .iter()
+                .position(|action| *action == Action::Print('y'))
+                .unwrap();
+            assert_eq!(close < y, closes_before_y);
+        }
+        // A hyperlink-only fragment should not reset outer graphical styles.
+        let text = format_as_escapes(vec![
+            FormatItem::Attribute(AttributeChange::Hyperlink(Some(Arc::new(link)))),
+            FormatItem::Text("x".into()),
+        ])
+        .unwrap();
+        assert!(!Parser::new()
+            .parse_as_vec(text.as_bytes())
+            .contains(&Action::CSI(CSI::Sgr(Sgr::Reset))));
+    }
 }
 
 pub fn pad_right(mut result: String, width: usize) -> String {
