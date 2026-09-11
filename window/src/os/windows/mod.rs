@@ -1,5 +1,5 @@
-pub mod connection;
 mod accessibility;
+pub mod connection;
 pub mod event;
 mod extra_constants;
 mod keycodes;

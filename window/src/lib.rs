@@ -204,9 +204,12 @@ pub enum WindowEvent {
     // Called when text is dropped into the window
     DroppedString(String),
 
-  // 窗格标识随输入传递，防止异步请求误写入刚切换的窗格。
-  #[cfg(windows)]
-  AccessibilityInput { pane_id: usize, text: String },
+    // 窗格标识随输入传递，防止异步请求误写入刚切换的窗格。
+    #[cfg(windows)]
+    AccessibilityInput {
+        pane_id: usize,
+        text: String,
+    },
 
     /// Called by menubar dispatching stuff on some systems
     PerformKeyAssignment(config::keyassignment::KeyAssignment),
@@ -309,8 +312,8 @@ pub trait WindowOps {
     /// the platform specific input method editor
     fn set_text_cursor_position(&self, _cursor: Rect) {}
 
-  #[cfg(windows)]
-  fn set_accessibility_input_target(&self, _pane_id: usize, _cursor: Rect) {}
+    #[cfg(windows)]
+    fn set_accessibility_input_target(&self, _pane_id: Option<usize>, _cursor: Rect) {}
 
     /// Initiate textual transfer from the clipboard
     fn get_clipboard(&self, clipboard: Clipboard) -> Future<String>;
