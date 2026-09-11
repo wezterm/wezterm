@@ -88,8 +88,8 @@ impl TerminfoRenderer {
                 // The SetAttributes capability can only handle single underline and slow blink.
                 if let Some(sgr) = sgr {
                     sgr.expand()
-                        .bold(attr.intensity() == Intensity::Bold)
-                        .dim(attr.intensity() == Intensity::Half)
+                        .bold(attr.bold())
+                        .dim(attr.dim())
                         .underline(attr.underline() == Underline::Single)
                         .blink(attr.blink() == Blink::Slow)
                         .reverse(attr.reverse())
@@ -98,10 +98,11 @@ impl TerminfoRenderer {
                 } else {
                     attr_on!(ExitAttributeMode, Sgr::Reset);
 
-                    match attr.intensity() {
-                        Intensity::Bold => attr_on!(EnterBoldMode, Sgr::Intensity(Intensity::Bold)),
-                        Intensity::Half => attr_on!(EnterDimMode, Sgr::Intensity(Intensity::Half)),
-                        _ => {}
+                    if attr.bold() {
+                        attr_on!(EnterBoldMode, Sgr::Intensity(Intensity::Bold));
+                    }
+                    if attr.dim() {
+                        attr_on!(EnterDimMode, Sgr::Intensity(Intensity::Half));
                     }
 
                     if attr.underline() == Underline::Single {
@@ -1293,5 +1294,121 @@ mod test {
                 Action::Print('A'),
             ]
         );
+    }
+
+    fn bold_dim_cell_attrs() -> CellAttributes {
+        let mut attrs = CellAttributes::default();
+        attrs
+            .apply_sgr_intensity(Intensity::Bold)
+            .apply_sgr_intensity(Intensity::Half);
+        attrs
+    }
+
+    fn actions_for(caps: Capabilities, attrs: CellAttributes) -> Vec<Action> {
+        let mut out = FakeTerm::new(caps);
+        out.render(&[Change::AllAttributes(attrs), Change::Text("foo".into())])
+            .unwrap();
+        out.parse()
+    }
+
+    #[test]
+    fn bold_and_dim_emit_both_codes_via_capability() {
+        let actions = actions_for(xterm_terminfo(), bold_dim_cell_attrs());
+        assert!(
+            actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(Intensity::Bold)))),
+            "bold was not emitted: {:?}",
+            actions
+        );
+        assert!(
+            actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(Intensity::Half)))),
+            "dim was not emitted: {:?}",
+            actions
+        );
+    }
+
+    #[test]
+    fn bold_and_dim_emit_both_codes_via_fallback() {
+        let actions = actions_for(no_terminfo_all_enabled(), bold_dim_cell_attrs());
+        assert!(
+            actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(Intensity::Bold)))),
+            "bold was not emitted: {:?}",
+            actions
+        );
+        assert!(
+            actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(Intensity::Half)))),
+            "dim was not emitted: {:?}",
+            actions
+        );
+    }
+
+    fn replay_intensity(actions: &[Action]) -> CellAttributes {
+        let mut attrs = CellAttributes::default();
+        for action in actions {
+            match action {
+                Action::CSI(CSI::Sgr(Sgr::Reset)) => attrs = CellAttributes::default(),
+                Action::CSI(CSI::Sgr(Sgr::Intensity(value))) => {
+                    attrs.apply_sgr_intensity(*value);
+                }
+                _ => {}
+            }
+        }
+        attrs
+    }
+
+    #[test]
+    fn a_round_trip_preserves_both_attributes() {
+        for (name, caps) in [
+            ("capability", xterm_terminfo()),
+            ("fallback", no_terminfo_all_enabled()),
+        ] {
+            let actions = actions_for(caps, bold_dim_cell_attrs());
+            let round_tripped = replay_intensity(&actions);
+
+            assert!(
+                round_tripped.bold(),
+                "bold did not survive the {} path: {:?}",
+                name,
+                actions
+            );
+            assert!(
+                round_tripped.dim(),
+                "dim did not survive the {} path: {:?}",
+                name,
+                actions
+            );
+        }
+    }
+
+    #[test]
+    fn a_cell_with_one_attribute_still_emits_one_code() {
+        for (name, caps) in [
+            ("capability", xterm_terminfo()),
+            ("fallback", no_terminfo_all_enabled()),
+        ] {
+            for (present, absent) in [
+                (Intensity::Bold, Intensity::Half),
+                (Intensity::Half, Intensity::Bold),
+            ] {
+                let mut attrs = CellAttributes::default();
+                attrs.set_intensity(present);
+
+                let actions = actions_for(caps.clone(), attrs);
+                assert!(
+                    actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(present)))),
+                    "{:?} was not emitted on the {} path: {:?}",
+                    present,
+                    name,
+                    actions
+                );
+                assert!(
+                    !actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(absent)))),
+                    "{:?} must not be emitted on the {} path for a cell that does \
+                     not carry it: {:?}",
+                    absent,
+                    name,
+                    actions
+                );
+            }
+        }
     }
 }

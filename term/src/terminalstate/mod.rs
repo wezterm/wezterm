@@ -2661,7 +2661,7 @@ impl TerminalState {
                 self.pen.set_semantic_type(semantic_type);
             }
             Sgr::Intensity(intensity) => {
-                self.pen.set_intensity(intensity);
+                self.pen.apply_sgr_intensity(intensity);
             }
             Sgr::Underline(underline) => {
                 self.pen.set_underline(underline);

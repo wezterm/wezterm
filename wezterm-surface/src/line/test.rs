@@ -124,6 +124,8 @@ C(
                 attrs: CellAttributes {
                     attributes: 0,
                     intensity: Normal,
+                    bold: false,
+                    dim: false,
                     underline: None,
                     blink: None,
                     italic: false,
@@ -176,6 +178,8 @@ C(
                 attrs: CellAttributes {
                     attributes: 0,
                     intensity: Normal,
+                    bold: false,
+                    dim: false,
                     underline: None,
                     blink: None,
                     italic: false,
@@ -246,6 +250,8 @@ Line {
                     attrs: CellAttributes {
                         attributes: 0,
                         intensity: Normal,
+                        bold: false,
+                        dim: false,
                         underline: None,
                         blink: None,
                         italic: false,
@@ -265,6 +271,8 @@ Line {
                     attrs: CellAttributes {
                         attributes: 2048,
                         intensity: Normal,
+                        bold: false,
+                        dim: false,
                         underline: None,
                         blink: None,
                         italic: false,
@@ -335,6 +343,8 @@ C(
                 attrs: CellAttributes {
                     attributes: 0,
                     intensity: Normal,
+                    bold: false,
+                    dim: false,
                     underline: None,
                     blink: None,
                     italic: false,
@@ -354,6 +364,8 @@ C(
                 attrs: CellAttributes {
                     attributes: 1,
                     intensity: Bold,
+                    bold: true,
+                    dim: false,
                     underline: None,
                     blink: None,
                     italic: false,
@@ -373,6 +385,8 @@ C(
                 attrs: CellAttributes {
                     attributes: 0,
                     intensity: Normal,
+                    bold: false,
+                    dim: false,
                     underline: None,
                     blink: None,
                     italic: false,
@@ -392,6 +406,8 @@ C(
                 attrs: CellAttributes {
                     attributes: 1,
                     intensity: Bold,
+                    bold: true,
+                    dim: false,
                     underline: None,
                     blink: None,
                     italic: false,
@@ -439,6 +455,8 @@ ClusteredLine {
             attrs: CellAttributes {
                 attributes: 0,
                 intensity: Normal,
+                bold: false,
+                dim: false,
                 underline: None,
                 blink: None,
                 italic: false,
@@ -458,6 +476,8 @@ ClusteredLine {
             attrs: CellAttributes {
                 attributes: 1,
                 intensity: Bold,
+                bold: true,
+                dim: false,
                 underline: None,
                 blink: None,
                 italic: false,
@@ -477,6 +497,8 @@ ClusteredLine {
             attrs: CellAttributes {
                 attributes: 0,
                 intensity: Normal,
+                bold: false,
+                dim: false,
                 underline: None,
                 blink: None,
                 italic: false,
@@ -539,6 +561,8 @@ Line {
                     attrs: CellAttributes {
                         attributes: 0,
                         intensity: Normal,
+                        bold: false,
+                        dim: false,
                         underline: None,
                         blink: None,
                         italic: false,
@@ -558,6 +582,8 @@ Line {
                     attrs: CellAttributes {
                         attributes: 1,
                         intensity: Bold,
+                        bold: true,
+                        dim: false,
                         underline: None,
                         blink: None,
                         italic: false,
@@ -577,6 +603,8 @@ Line {
                     attrs: CellAttributes {
                         attributes: 0,
                         intensity: Normal,
+                        bold: false,
+                        dim: false,
                         underline: None,
                         blink: None,
                         italic: false,
