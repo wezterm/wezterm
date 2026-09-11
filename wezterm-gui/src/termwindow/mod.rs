@@ -1028,6 +1028,15 @@ impl TermWindow {
                 pane.send_paste(text.as_str())?;
                 Ok(true)
             }
+      #[cfg(windows)]
+      WindowEvent::AccessibilityInput { pane_id, text } => {
+        if let Some(pane) = self.get_active_pane_or_overlay() {
+          if self.focused.is_some() && pane.pane_id() == pane_id {
+            pane.send_paste(&text)?;
+          }
+        }
+        Ok(true)
+      }
             WindowEvent::DroppedUrl(urls) => {
                 let pane = match self.get_active_pane_or_overlay() {
                     Some(pane) => pane,
@@ -2133,6 +2142,8 @@ impl TermWindow {
                 self.render_metrics.cell_size,
             );
             win.set_text_cursor_position(r);
+      #[cfg(windows)]
+      win.set_accessibility_input_target(pos.pane.pane_id(), r);
         }
     }
 
