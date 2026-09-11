@@ -74,6 +74,8 @@ lazy_static! {
     static ref CONFIG: Configuration = Configuration::new();
     static ref CONFIG_FILE_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
     static ref CONFIG_SKIP: AtomicBool = AtomicBool::new(false);
+    static ref STARTUP_WARNINGS_SHOWN: AtomicBool = AtomicBool::new(false);
+    static ref LAST_WARNINGS_SHOWN: Mutex<Vec<String>> = Mutex::new(vec![]);
     static ref CONFIG_OVERRIDES: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
     static ref SHOW_ERROR: Mutex<Option<ErrorCallback>> =
         Mutex::new(Some(|e| log::error!("{}", e)));
@@ -369,6 +371,41 @@ pub fn show_error(err: &str) {
     }
 }
 
+/// The warnings the startup path is about to display, recorded as shown in the
+/// same breath, so that reporting can be handed over to `reload()`.
+///
+/// Startup loads the config several times, so `reload()` stays quiet until this
+/// is called; a process with nowhere to show warnings never calls it.
+pub fn take_startup_warnings_for_display() -> Vec<String> {
+    CONFIG.take_startup_warnings_for_display()
+}
+
+pub fn startup_warnings_shown() -> bool {
+    STARTUP_WARNINGS_SHOWN.load(Ordering::Relaxed)
+}
+
+/// An OS appearance change reloads the config once per open window
+/// (<https://github.com/wezterm/wezterm/issues/2295>) and the Configuration
+/// Error window appends, so three windows must not show the same paragraph
+/// three times.
+fn show_warnings_if_new(warnings: &[String]) {
+    {
+        let mut last = LAST_WARNINGS_SHOWN.lock().unwrap();
+        if last.as_slice() == warnings {
+            return;
+        }
+        *last = warnings.to_vec();
+    }
+
+    if !warnings.is_empty() {
+        show_error(&warnings.join("\n"));
+    }
+}
+
+fn forget_warnings_shown() {
+    LAST_WARNINGS_SHOWN.lock().unwrap().clear();
+}
+
 pub fn create_user_owned_dirs(p: &Path) -> anyhow::Result<()> {
     let mut builder = DirBuilder::new();
     builder.recursive(true);
@@ -608,6 +645,9 @@ impl ConfigInner {
 
         match config {
             Ok(config) => {
+                if startup_warnings_shown() {
+                    show_warnings_if_new(&self.warnings);
+                }
                 self.config = Arc::new(config);
                 self.error.take();
                 self.generation += 1;
@@ -629,6 +669,9 @@ impl ConfigInner {
                     show_error(&err);
                 }
                 self.error.replace(err);
+                // This error displaced the warnings, so the next good load
+                // repeats them.
+                forget_warnings_shown();
             }
         }
 
@@ -767,6 +810,20 @@ impl Configuration {
         result
     }
 
+    fn take_startup_warnings_for_display(&self) -> Vec<String> {
+        let inner = self.inner.lock().unwrap();
+
+        *LAST_WARNINGS_SHOWN.lock().unwrap() = inner.warnings.clone();
+        STARTUP_WARNINGS_SHOWN.store(true, Ordering::Relaxed);
+
+        let mut to_show = vec![];
+        if let Some(error) = &inner.error {
+            to_show.push(error.clone());
+        }
+        to_show.extend(inner.warnings.iter().cloned());
+        to_show
+    }
+
     /// Returns any captured error message, and clears
     /// it from the config state.
     #[allow(dead_code)]
@@ -831,4 +888,185 @@ fn default_one_point_oh() -> f32 {
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod startup_warnings_test {
+    use super::*;
+
+    lazy_static! {
+        static ref SHOWN: Mutex<Vec<String>> = Mutex::new(vec![]);
+    }
+
+    fn record(err: &str) {
+        SHOWN.lock().unwrap().push(err.to_string());
+    }
+
+    fn shown() -> Vec<String> {
+        SHOWN.lock().unwrap().clone()
+    }
+
+    /// Loads, and warns about the `count` rules it dropped, so that two
+    /// different counts raise warnings differing in text. Reloading is off so
+    /// that `reload()` leaves no filesystem watcher on the temp dir.
+    fn config_dropping_rules(count: usize) -> String {
+        let rule = r#"{
+                  intensity = "Half",
+                  font = { font = { {
+                    family = "TheRuleThePersonWrote",
+                    is_fallback = false,
+                    is_synthetic = false,
+                  } } },
+                },"#;
+        format!(
+            r#"return {{
+              automatically_reload_config = false,
+              track_bold_and_dim_separately = true,
+              font_rules = {{{}}},
+            }}"#,
+            rule.repeat(count)
+        )
+    }
+
+    /// One test rather than several: the switch, the last-shown set, the
+    /// error callback and the config file override are all process-wide, and
+    /// what is under test is the order these things happen in.
+    #[test]
+    fn reloads_speak_up_only_after_the_startup_path_has() {
+        let tmp = tempfile::TempDir::new().expect("creating the test directory");
+        let dir = tmp.path();
+
+        let one_rule = dir.join("one-rule.lua");
+        let two_rules = dir.join("two-rules.lua");
+        std::fs::write(&one_rule, config_dropping_rules(1)).expect("writing the lua file");
+        std::fs::write(&two_rules, config_dropping_rules(2)).expect("writing the lua file");
+
+        set_config_file_override(&one_rule);
+        assign_error_callback(record);
+
+        let mut inner = ConfigInner::new();
+        inner.reload();
+
+        assert!(
+            inner
+                .warnings
+                .iter()
+                .any(|w| w.contains("has been dropped")),
+            "the fixture has to raise a warning or this test proves nothing: {:?}",
+            inner.warnings
+        );
+        assert!(
+            shown().is_empty(),
+            "the first startup load stays quiet: {:?}",
+            shown()
+        );
+
+        inner.reload();
+        assert!(
+            shown().is_empty(),
+            "and so does the second startup load: {:?}",
+            shown()
+        );
+
+        *LAST_WARNINGS_SHOWN.lock().unwrap() = inner.warnings.clone();
+        STARTUP_WARNINGS_SHOWN.store(true, Ordering::Relaxed);
+
+        inner.reload();
+        inner.reload();
+        inner.reload();
+        assert!(
+            shown().is_empty(),
+            "three windows reloading on an appearance change say nothing the \
+             startup path has already said: {:?}",
+            shown()
+        );
+
+        set_config_file_override(&two_rules);
+        inner.reload();
+        assert_eq!(
+            shown().len(),
+            1,
+            "a reload whose warnings are new shows them: {:?}",
+            shown()
+        );
+        assert!(
+            shown()[0].contains("2 font rules have been dropped"),
+            "and shows the warning this load raised, not the one before it: {:?}",
+            shown()
+        );
+
+        inner.reload();
+        inner.reload();
+        assert_eq!(
+            shown().len(),
+            1,
+            "N identical reloads report once: {:?}",
+            shown()
+        );
+
+        SHOWN.lock().unwrap().clear();
+        let broken = dir.join("broken.lua");
+        std::fs::write(&broken, "return {").expect("writing the lua file");
+        set_config_file_override(&broken);
+        inner.reload();
+        assert_eq!(
+            shown().len(),
+            1,
+            "the failed load reports its own error: {:?}",
+            shown()
+        );
+
+        set_config_file_override(&two_rules);
+        inner.reload();
+        assert_eq!(
+            shown().len(),
+            2,
+            "and the repaired config says again what it was saying before the \
+             error, even though the set has not changed: {:?}",
+            shown()
+        );
+        assert!(
+            shown()[1].contains("2 font rules have been dropped"),
+            "and says the right thing: {:?}",
+            shown()
+        );
+
+        SHOWN.lock().unwrap().clear();
+        let clean = dir.join("clean.lua");
+        std::fs::write(&clean, "return {}").expect("writing the lua file");
+        set_config_file_override(&clean);
+        inner.reload();
+        assert!(
+            shown().is_empty(),
+            "a load that raises nothing shows nothing: {:?}",
+            shown()
+        );
+
+        set_config_file_override(&two_rules);
+        inner.reload();
+        assert_eq!(
+            shown().len(),
+            1,
+            "a warning that returns after being fixed is reported again: {:?}",
+            shown()
+        );
+
+        SHOWN.lock().unwrap().clear();
+        set_config_file_override(&one_rule);
+        let mut first_load = ConfigInner::new();
+        first_load.reload();
+        assert_eq!(
+            shown().len(),
+            1,
+            "the switch is what decides this, not the number of loads a \
+             `ConfigInner` has behind it: {:?}",
+            shown()
+        );
+
+        STARTUP_WARNINGS_SHOWN.store(false, Ordering::Relaxed);
+        LAST_WARNINGS_SHOWN.lock().unwrap().clear();
+        CONFIG_FILE_OVERRIDE.lock().unwrap().take();
+        assign_error_callback(|e| log::error!("{}", e));
+        SHOWN.lock().unwrap().clear();
+    }
 }

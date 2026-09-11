@@ -841,10 +841,31 @@ fn main() {
 }
 
 fn maybe_show_configuration_error_window() {
-    let warnings = config::configuration_warnings_and_errors();
+    let warnings = config::take_startup_warnings_for_display();
     if !warnings.is_empty() {
         let err = warnings.join("\n");
         mux::connui::show_configuration_error_message(&err);
+    }
+}
+
+#[cfg(test)]
+mod startup_handover_test {
+    /// The config crate's own test calls the marker directly; this is the
+    /// wiring it cannot reach.
+    #[test]
+    fn the_startup_path_hands_reporting_over_to_reload() {
+        assert!(
+            !config::startup_warnings_shown(),
+            "nothing else in this process may flip the switch, or this test \
+             proves nothing"
+        );
+
+        super::maybe_show_configuration_error_window();
+
+        assert!(
+            config::startup_warnings_shown(),
+            "without the handover, no reload in a GUI process ever reports"
+        );
     }
 }
 
