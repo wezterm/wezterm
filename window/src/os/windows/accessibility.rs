@@ -194,7 +194,19 @@ mod tests {
     assert!(!input.is_read_only());
     assert!(input.supports_text_ranges());
     assert_eq!(input.value().as_deref(), Some(""));
-    assert!(input.text_selection().is_some());
+    assert!(input.text_selection().unwrap().is_degenerate());
+    assert_eq!(input.document_range().text(), "");
+  }
+
+  #[test]
+  fn a_background_window_has_no_focused_input() {
+    let tree = Tree::new(state(3).tree(), false);
+    assert!(tree.state().focus().is_none());
+    let without_pane = Tree::new(InputState::default().tree(), true);
+    assert!(without_pane
+      .state()
+      .node_by_tree_local_id(InputState::input_id(3), TreeId::ROOT,)
+      .is_none());
   }
 
   #[test]
