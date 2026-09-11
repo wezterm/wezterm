@@ -46,7 +46,7 @@ use wezterm_input_types::{
     IntegratedTitleButton, IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle, Modifiers,
     UIKeyCapRendering, WindowDecorations,
 };
-use wezterm_term::TerminalSize;
+use wezterm_term::{CellAttributes, Intensity, TerminalSize};
 
 #[derive(Debug, Clone, FromDynamic, ToDynamic, ConfigMeta)]
 pub struct Config {
@@ -126,6 +126,18 @@ pub struct Config {
     /// doesn't apply to text that is the default color.
     #[dynamic(default)]
     pub bold_brightens_ansi_colors: BoldBrightening,
+
+    /// When true, bold and dim are two independent facts about a cell and
+    /// every consumer reads them separately. When false, wezterm uses
+    /// whichever of the two arrived most recently.
+    #[dynamic(default)]
+    pub track_bold_and_dim_separately: bool,
+
+    /// How faintly dim text is drawn. `None` means "not chosen"; the default
+    /// is resolved in `compute_extra_defaults`, after which this is always
+    /// `Some`. Read it through `dim_opacity()` rather than unwrapping.
+    #[dynamic(default, validate = "validate_dim_opacity")]
+    pub dim_opacity: Option<f32>,
 
     /// The color palette
     pub colors: Option<Palette>,
@@ -933,6 +945,63 @@ impl Default for Config {
     }
 }
 
+/// Generate warning message covering every font rule dropped for using `intensity`
+/// while `track_bold_and_dim_separately` is on.
+fn intensity_rules_rejected(rejected: &[(usize, &StyleRule)]) -> String {
+    let mut message = match rejected.len() {
+        1 => "A font rule has been dropped".to_string(),
+        n => format!("{} font rules have been dropped", n),
+    };
+    message.push_str(
+        ": `intensity` is not available while `track_bold_and_dim_separately = true`.\n\n",
+    );
+
+    for (index, rule) in rejected {
+        let intensity = rule
+            .intensity
+            .expect("only rules that state intensity are rejected");
+
+        let replacement = match intensity {
+            Intensity::Bold => "bold = true",
+            Intensity::Half => "dim = true",
+            Intensity::Normal => "bold = false, dim = false",
+        };
+
+        let also_states = match (rule.bold.is_some(), rule.dim.is_some()) {
+            (true, true) => Some(("the `bold` and `dim` conditions", "Keep `bold` and `dim`")),
+            (true, false) => Some(("the `bold` condition", "Keep `bold`")),
+            (false, true) => Some(("the `dim` condition", "Keep `dim`")),
+            (false, false) => None,
+        };
+
+        // Indices are reported one-based: `font_rules` is written in lua.
+        match also_states {
+            None => message.push_str(&format!(
+                "  font_rules[{}] uses `intensity = \"{:?}\"`. Use `{}` instead.\n",
+                index + 1,
+                intensity,
+                replacement,
+            )),
+            Some((stated, keep)) => {
+                message.push_str(&format!(
+                    "  font_rules[{}] uses `intensity = \"{:?}\"` as well as {}. \
+                     {}, and use `{}` instead of `intensity`.\n",
+                    index + 1,
+                    intensity,
+                    stated,
+                    keep,
+                    replacement,
+                ));
+            }
+        }
+    }
+
+    // The window is titled "Configuration Error", so say the launch was fine.
+    message.push_str("\nThe rest of your configuration was loaded.");
+
+    message
+}
+
 impl Config {
     pub fn load() -> LoadedConfig {
         Self::load_with_overrides(&wezterm_dynamic::Value::default())
@@ -1092,13 +1161,16 @@ impl Config {
     }
 
     pub fn try_default() -> anyhow::Result<LoadedConfig> {
-        let (config, warnings) =
+        let (config, mut warnings) =
             wezterm_dynamic::Error::capture_warnings(|| -> anyhow::Result<Config> {
-                Ok(default_config_with_overrides_applied()?.compute_extra_defaults(None))
+                default_config_with_overrides_applied()
             });
 
+        let (config, extra_warnings) = config?.compute_extra_defaults(None);
+        warnings.extend(extra_warnings);
+
         Ok(LoadedConfig {
-            config: Ok(config?),
+            config: Ok(config),
             file_name: None,
             lua: Some(make_lua_context(Path::new(""))?),
             warnings,
@@ -1123,7 +1195,7 @@ impl Config {
         file.read_to_string(&mut s)?;
         let lua = make_lua_context(p)?;
 
-        let (config, warnings) =
+        let (config, mut warnings) =
             wezterm_dynamic::Error::capture_warnings(|| -> anyhow::Result<Config> {
                 let cfg: Config;
 
@@ -1153,12 +1225,16 @@ impl Config {
                 if let Some(dir) = p.parent() {
                     std::env::set_var("WEZTERM_CONFIG_DIR", dir);
                 }
+
                 Ok(cfg)
             });
         let cfg = config?;
 
+        let (cfg, extra_warnings) = cfg.compute_extra_defaults(Some(p));
+        warnings.extend(extra_warnings);
+
         Ok(Some(LoadedConfig {
-            config: Ok(cfg.compute_extra_defaults(Some(p))),
+            config: Ok(cfg),
             file_name: Some(p.to_path_buf()),
             lua: Some(lua),
             warnings,
@@ -1276,7 +1352,43 @@ impl Config {
     }
 
     pub fn default_config() -> Self {
-        Self::default().compute_extra_defaults(None)
+        Self::default().compute_extra_defaults(None).0
+    }
+
+    /// The resolved opacity, 1.0 if `compute_extra_defaults` has not run.
+    pub fn dim_opacity(&self) -> f32 {
+        self.dim_opacity.unwrap_or(1.0)
+    }
+
+    /// Whether dim text is drawn faded.
+    pub fn dim_is_faded(&self) -> bool {
+        self.dim_opacity() < 1.0
+    }
+
+    /// Whether this cell is bold, as far as everything downstream is
+    /// concerned. Every consumer asks through here rather than reading
+    /// `attrs.bold()` or `attrs.intensity()` itself.
+    ///
+    /// Not a method on `CellAttributes`: the answer depends on
+    /// `track_bold_and_dim_separately`, and `wezterm-cell` knows nothing
+    /// about configuration.
+    pub fn is_bold(&self, attrs: &CellAttributes) -> bool {
+        if self.track_bold_and_dim_separately {
+            attrs.bold()
+        } else {
+            attrs.intensity() == Intensity::Bold
+        }
+    }
+
+    /// Whether this cell is dim, as far as everything downstream is
+    /// concerned. The mirror of `is_bold`; whether dim text *fades* is
+    /// `dim_is_faded`.
+    pub fn is_dim(&self, attrs: &CellAttributes) -> bool {
+        if self.track_bold_and_dim_separately {
+            attrs.dim()
+        } else {
+            attrs.intensity() == Intensity::Half
+        }
     }
 
     pub fn key_bindings(&self) -> KeyTables {
@@ -1331,8 +1443,18 @@ impl Config {
 
     /// In some cases we need to compute expanded values based
     /// on those provided by the user.  This is where we do that.
-    pub fn compute_extra_defaults(&self, config_path: Option<&Path>) -> Self {
+    pub fn compute_extra_defaults(&self, config_path: Option<&Path>) -> (Self, Vec<String>) {
         let mut cfg = self.clone();
+        let mut warnings = vec![];
+
+        cfg.dim_opacity = Some(
+            self.dim_opacity
+                .unwrap_or(if self.track_bold_and_dim_separately {
+                    0.5
+                } else {
+                    1.0
+                }),
+        );
 
         // Convert any relative font dirs to their config file relative locations
         if let Some(config_dir) = config_path.as_ref().and_then(|p| p.parent()) {
@@ -1350,7 +1472,25 @@ impl Config {
             }
         }
 
-        // Add some reasonable default font rules
+        // Under separate tracking a font rule stating `intensity` would fire
+        // by arrival order, which is the thing this mode exists to stop
+        // mattering, so drop it and warn.
+        if cfg.track_bold_and_dim_separately {
+            let rejected: Vec<_> = cfg
+                .font_rules
+                .iter()
+                .enumerate()
+                .filter(|(_, rule)| rule.intensity.is_some())
+                .collect();
+            if !rejected.is_empty() {
+                warnings.push(intensity_rules_rejected(&rejected));
+                cfg.font_rules.retain(|rule| rule.intensity.is_none());
+            }
+        }
+
+        // Add some reasonable default font rules. The first matching rule
+        // wins, and these are appended after the person's own, so theirs
+        // take precedence.
         let reduced = self.font.reduce_first_font_to_family();
 
         let italic = reduced.make_italic();
@@ -1361,37 +1501,63 @@ impl Config {
         let half_bright = reduced.make_half_bright();
         let half_bright_italic = half_bright.make_italic();
 
+        if cfg.dim_is_faded() {
+            // Dim is expressed as opacity, so we only bind bold.
+
+            // Bold, regardless of Dim
+            cfg.font_rules.push(StyleRule {
+                italic: Some(true),
+                bold: Some(true),
+                font: bold_italic,
+                ..Default::default()
+            });
+            cfg.font_rules.push(StyleRule {
+                italic: Some(false),
+                bold: Some(true),
+                font: bold,
+                ..Default::default()
+            });
+        } else {
+            // Dim is expressed as half bright font.
+
+            // Dim, not Bold
+            cfg.font_rules.push(StyleRule {
+                italic: Some(true),
+                dim: Some(true),
+                bold: Some(false),
+                font: half_bright_italic,
+                ..Default::default()
+            });
+            cfg.font_rules.push(StyleRule {
+                italic: Some(false),
+                dim: Some(true),
+                bold: Some(false),
+                font: half_bright,
+                ..Default::default()
+            });
+
+            // Bold, not Dim
+            cfg.font_rules.push(StyleRule {
+                italic: Some(true),
+                dim: Some(false),
+                bold: Some(true),
+                font: bold_italic,
+                ..Default::default()
+            });
+            cfg.font_rules.push(StyleRule {
+                italic: Some(false),
+                dim: Some(false),
+                bold: Some(true),
+                font: bold,
+                ..Default::default()
+            });
+
+            // Bold+Dim fall through to use normal font
+        }
+
+        // Normal Italic.
         cfg.font_rules.push(StyleRule {
             italic: Some(true),
-            intensity: Some(wezterm_term::Intensity::Half),
-            font: half_bright_italic,
-            ..Default::default()
-        });
-
-        cfg.font_rules.push(StyleRule {
-            italic: Some(false),
-            intensity: Some(wezterm_term::Intensity::Half),
-            font: half_bright,
-            ..Default::default()
-        });
-
-        cfg.font_rules.push(StyleRule {
-            italic: Some(false),
-            intensity: Some(wezterm_term::Intensity::Bold),
-            font: bold,
-            ..Default::default()
-        });
-
-        cfg.font_rules.push(StyleRule {
-            italic: Some(true),
-            intensity: Some(wezterm_term::Intensity::Bold),
-            font: bold_italic,
-            ..Default::default()
-        });
-
-        cfg.font_rules.push(StyleRule {
-            italic: Some(true),
-            intensity: Some(wezterm_term::Intensity::Normal),
             font: italic,
             ..Default::default()
         });
@@ -1423,7 +1589,7 @@ impl Config {
             cfg.background.insert(0, bg);
         }
 
-        cfg
+        (cfg, warnings)
     }
 
     fn compute_color_scheme_dirs(&self) -> Vec<PathBuf> {
@@ -2190,6 +2356,16 @@ fn validate_line_height(value: &f64) -> Result<(), String> {
     }
 }
 
+fn validate_dim_opacity(value: &Option<f32>) -> Result<(), String> {
+    match value {
+        None => Ok(()),
+        Some(value) if !value.is_finite() || *value < 0.0 || *value > 1.0 => Err(format!(
+            "Illegal value {value}; it must be between 0.0 and 1.0 inclusive"
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
 pub(crate) fn validate_domain_name(name: &str) -> Result<(), String> {
     if name == "local" {
         Err(format!(
@@ -2211,4 +2387,494 @@ fn default_macos_forward_mods() -> Modifiers {
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {
     FontRasterizerSelection::Harfbuzz
+}
+
+#[cfg(test)]
+mod dim_opacity_test {
+    use super::*;
+    use wezterm_dynamic::{FromDynamic, ToDynamic, Value};
+
+    fn load_with_dim_opacity(value: Value) -> Result<Config, wezterm_dynamic::Error> {
+        let mut obj = match Config::default().to_dynamic() {
+            Value::Object(obj) => obj,
+            other => panic!("Config did not serialise to an object: {:?}", other),
+        };
+        obj.insert(Value::String("dim_opacity".to_string()), value);
+        Config::from_dynamic(&Value::Object(obj), Default::default())
+    }
+
+    #[test]
+    fn defaults_to_fully_opaque_and_inert() {
+        let config = Config::default();
+        assert_eq!(config.dim_opacity, None, "unwritten means unchosen");
+        assert_eq!(config.dim_opacity(), 1.0);
+        assert!(
+            !config.dim_is_faded(),
+            "at the default the feature must be entirely inert"
+        );
+    }
+
+    #[test]
+    fn accepts_values_in_range() {
+        for v in [0.0, 0.01, 0.5, 0.999, 1.0] {
+            let config = load_with_dim_opacity(Value::F64(v.into()))
+                .unwrap_or_else(|e| panic!("dim_opacity = {} should load: {}", v, e));
+            assert_eq!(config.dim_opacity, Some(v as f32));
+        }
+    }
+
+    #[test]
+    fn zero_is_accepted_because_someone_may_mean_it() {
+        let config = load_with_dim_opacity(Value::F64(0.0.into())).expect("0.0 loads");
+        assert_eq!(config.dim_opacity, Some(0.0));
+        assert!(config.dim_is_faded());
+    }
+
+    #[test]
+    fn rejects_out_of_range_values() {
+        for v in [-0.1, 1.1, 2.0, f64::INFINITY, f64::NAN] {
+            let err = load_with_dim_opacity(Value::F64(v.into()))
+                .expect_err(&format!("dim_opacity = {v} must be rejected"));
+            let message = format!("{err}");
+            assert!(
+                message.contains("dim_opacity"),
+                "the error must be attributed to dim_opacity; got: {}",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_non_numeric_values() {
+        let err = load_with_dim_opacity(Value::String("half".to_string()))
+            .expect_err("a string must be rejected");
+        let message = format!("{err}");
+        assert!(
+            message.contains("dim_opacity"),
+            "the error must be attributed to dim_opacity; got: {}",
+            message
+        );
+    }
+
+    #[test]
+    fn anything_below_one_turns_the_fade_on() {
+        let mut config = Config::default();
+        config.dim_opacity = Some(0.999);
+        assert!(config.dim_is_faded());
+        config.dim_opacity = Some(1.0);
+        assert!(!config.dim_is_faded());
+    }
+
+    #[test]
+    fn track_bold_and_dim_separately_derives_the_opacity_but_never_overrides_it() {
+        let mut unset_off = Config::default();
+        assert_eq!(
+            unset_off
+                .clone()
+                .compute_extra_defaults(None)
+                .0
+                .dim_opacity(),
+            1.0
+        );
+
+        unset_off.track_bold_and_dim_separately = true;
+        assert_eq!(
+            unset_off
+                .clone()
+                .compute_extra_defaults(None)
+                .0
+                .dim_opacity(),
+            0.5,
+            "track_bold_and_dim_separately turns the fade on, because nothing \
+             else can show dim under it"
+        );
+
+        // Separate tracking with no fade at all, which must survive.
+        let mut explicit_one = Config::default();
+        explicit_one.track_bold_and_dim_separately = true;
+        explicit_one.dim_opacity = Some(1.0);
+        let explicit_one = explicit_one.compute_extra_defaults(None).0;
+        assert_eq!(explicit_one.dim_opacity(), 1.0);
+        assert!(!explicit_one.dim_is_faded());
+
+        let mut explicit_other = Config::default();
+        explicit_other.track_bold_and_dim_separately = true;
+        explicit_other.dim_opacity = Some(0.25);
+        assert_eq!(
+            explicit_other.compute_extra_defaults(None).0.dim_opacity(),
+            0.25
+        );
+    }
+
+    #[test]
+    fn the_predicates_follow_track_bold_and_dim_separately() {
+        let mut bold_only = CellAttributes::default();
+        bold_only.apply_sgr_intensity(Intensity::Bold);
+
+        let mut dim_only = CellAttributes::default();
+        dim_only.apply_sgr_intensity(Intensity::Half);
+
+        // Bold first, then dim: both records set, dim arrived last.
+        let mut dim_last = CellAttributes::default();
+        dim_last.apply_sgr_intensity(Intensity::Bold);
+        dim_last.apply_sgr_intensity(Intensity::Half);
+
+        // Dim first, then bold: both records set, bold arrived last.
+        let mut bold_last = CellAttributes::default();
+        bold_last.apply_sgr_intensity(Intensity::Half);
+        bold_last.apply_sgr_intensity(Intensity::Bold);
+
+        let mut config = Config::default();
+
+        config.track_bold_and_dim_separately = true;
+        for (label, attrs) in [("dim_last", &dim_last), ("bold_last", &bold_last)] {
+            assert!(
+                config.is_bold(attrs),
+                "{}: separate tracking reads the bold record",
+                label
+            );
+            assert!(
+                config.is_dim(attrs),
+                "{}: separate tracking reads the dim record",
+                label
+            );
+        }
+        assert!(config.is_bold(&bold_only) && !config.is_dim(&bold_only));
+        assert!(!config.is_bold(&dim_only) && config.is_dim(&dim_only));
+
+        config.track_bold_and_dim_separately = false;
+        assert!(
+            !config.is_bold(&dim_last),
+            "unified: dim arrived last, so not bold"
+        );
+        assert!(config.is_dim(&dim_last), "unified: dim arrived last");
+        assert!(config.is_bold(&bold_last), "unified: bold arrived last");
+        assert!(
+            !config.is_dim(&bold_last),
+            "unified: bold arrived last, so not dim"
+        );
+        assert!(config.is_bold(&bold_only) && !config.is_dim(&bold_only));
+        assert!(!config.is_bold(&dim_only) && config.is_dim(&dim_only));
+    }
+
+    #[test]
+    fn track_bold_and_dim_separately_defaults_to_off() {
+        let config = Config::default();
+        assert!(!config.track_bold_and_dim_separately);
+    }
+}
+
+#[cfg(test)]
+mod builtin_rules_test {
+    use super::*;
+
+    fn rules_for(separately: bool, opacity: f32) -> Vec<StyleRule> {
+        let mut config = Config::default();
+        config.track_bold_and_dim_separately = separately;
+        // Explicit, so track_bold_and_dim_separately cannot derive a different
+        // default.
+        config.dim_opacity = Some(opacity);
+        config.compute_extra_defaults(None).0.font_rules
+    }
+
+    /// Check that default rules don't contain conditions that would
+    /// trigger warnings from [`intensity_rules_rejected`].
+    #[test]
+    fn default_rules_dont_warn() {
+        for separately in [true, false] {
+            for opacity in [1.0, 0.5] {
+                assert!(
+                    rules_for(separately, opacity)
+                        .iter()
+                        .all(|r| r.intensity.is_none()),
+                    "separately={} opacity={}: no built-in rule may state intensity",
+                    separately,
+                    opacity
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_lighter_weight_survives_exactly_while_the_fade_is_off() {
+        let half_bright = Config::default()
+            .font
+            .reduce_first_font_to_family()
+            .make_half_bright();
+
+        for separately in [false, true] {
+            assert!(
+                rules_for(separately, 1.0)
+                    .iter()
+                    .any(|r| r.font == half_bright),
+                "separately={}: with no fade, the lighter font is what shows dim",
+                separately
+            );
+            assert!(
+                rules_for(separately, 0.5)
+                    .iter()
+                    .all(|r| r.font != half_bright),
+                "separately={}: the fade shows dim instead",
+                separately
+            );
+        }
+    }
+
+    #[test]
+    fn separate_tracking_alone_derives_the_opacity_and_restates_the_rules() {
+        let mut config = Config::default();
+        config.track_bold_and_dim_separately = true;
+        // Deliberately NOT setting dim_opacity: it must derive to 0.5.
+        let config = config.compute_extra_defaults(None).0;
+        assert_eq!(config.dim_opacity(), 0.5);
+        assert!(config.dim_is_faded());
+        assert_eq!(
+            config.font_rules.len(),
+            3,
+            "the restated rules, not the five"
+        );
+        assert!(
+            config.font_rules.iter().all(|r| r.intensity.is_none()),
+            "weight comes from bold, not from intensity"
+        );
+
+        // The control, with neither setting written, so this cannot pass by
+        // the branch being inverted.
+        let inert = Config::default().compute_extra_defaults(None).0;
+        assert!(!inert.dim_is_faded());
+        assert_eq!(inert.font_rules.len(), 5, "today's rules, untouched");
+    }
+
+    #[test]
+    fn no_default_rules_for_plain_text() {
+        for separately in [true, false] {
+            for opacity in [1.0, 0.5] {
+                let rules = rules_for(separately, opacity);
+                assert!(
+                    rules.iter().all(|r| r.italic == Some(true)
+                        || r.bold == Some(true)
+                        || r.dim == Some(true)
+                        || r.intensity.is_some_and(|i| i != Intensity::Normal)),
+                    "separately={} opacity={}: no rule claims plain text",
+                    separately,
+                    opacity
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod intensity_rejection_test {
+    use super::*;
+    use crate::font::FontAttributes;
+
+    /// A marker family, so an assertion can say *the person's rule* rather
+    /// than *some rule*: the built-in rules state `intensity` too.
+    const MARKER: &str = "TheRuleThePersonWrote";
+
+    fn marked(intensity: Option<Intensity>, bold: Option<bool>, dim: Option<bool>) -> StyleRule {
+        StyleRule {
+            intensity,
+            bold,
+            dim,
+            font: TextStyle {
+                font: vec![FontAttributes::new(MARKER)],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn survived(rules: &[StyleRule]) -> bool {
+        rules
+            .iter()
+            .any(|r| r.font.font.first().map_or(false, |f| f.family == MARKER))
+    }
+
+    fn rejections(warnings: &[String]) -> Vec<&String> {
+        warnings
+            .iter()
+            .filter(|w| w.contains("font_rules["))
+            .collect()
+    }
+
+    fn the_warning(warnings: &[String]) -> String {
+        let rejections = rejections(warnings);
+        assert_eq!(
+            rejections.len(),
+            1,
+            "expected exactly one rejection warning, got {:?}",
+            rejections
+        );
+        rejections[0].clone()
+    }
+
+    fn compute(config: Config) -> (Config, Vec<String>) {
+        config.compute_extra_defaults(None)
+    }
+
+    #[test]
+    fn intensity_rules_are_dropped_only_under_separate_tracking() {
+        let user_rule = marked(Some(Intensity::Half), None, None);
+
+        let mut separate = Config::default();
+        separate.track_bold_and_dim_separately = true;
+        separate.font_rules.push(user_rule.clone());
+        let (separate, warnings) = compute(separate);
+        assert!(
+            !survived(&separate.font_rules),
+            "the rule stating intensity is dropped"
+        );
+        assert!(
+            separate.font_rules.iter().all(|r| r.intensity.is_none()),
+            "and nothing stating intensity is left behind"
+        );
+        assert_eq!(rejections(&warnings).len(), 1, "and it is warned about");
+
+        let mut unified = Config::default();
+        unified.font_rules.push(user_rule);
+        let (unified, warnings) = compute(unified);
+        assert!(
+            survived(&unified.font_rules),
+            "unified tracking leaves it alone"
+        );
+        assert!(
+            rejections(&warnings).is_empty(),
+            "and says nothing about it"
+        );
+    }
+
+    #[test]
+    fn a_rule_mixing_vocabularies_is_dropped_whole() {
+        let mut config = Config::default();
+        config.track_bold_and_dim_separately = true;
+        config
+            .font_rules
+            .push(marked(Some(Intensity::Bold), None, Some(true)));
+        let (config, warnings) = compute(config);
+
+        assert!(!survived(&config.font_rules));
+        assert!(
+            config.font_rules.iter().all(|r| r.dim != Some(true)),
+            "the mixed rule is gone, not stripped down to its dim half"
+        );
+
+        let mixed = the_warning(&warnings);
+        assert!(
+            mixed.contains("as well as the `dim` condition. Keep `dim`"),
+            "the line for the rule says to keep the condition that was never in \
+             question: {}",
+            mixed
+        );
+        assert!(
+            mixed.contains("use `bold = true` instead of `intensity`"),
+            "and scopes the substitution to `intensity` alone: {}",
+            mixed
+        );
+
+        let mut plain = Config::default();
+        plain.track_bold_and_dim_separately = true;
+        plain
+            .font_rules
+            .push(marked(Some(Intensity::Bold), None, None));
+        let (_, warnings) = compute(plain);
+        let plain = the_warning(&warnings);
+        assert!(
+            !plain.contains("Keep"),
+            "a rule that states nothing else must not be told to keep anything: {}",
+            plain
+        );
+        assert!(
+            plain.contains("Use `bold = true` instead."),
+            "it gets the plain substitution instead: {}",
+            plain
+        );
+    }
+
+    #[test]
+    fn rules_in_the_new_vocabulary_are_left_alone() {
+        let mut config = Config::default();
+        config.track_bold_and_dim_separately = true;
+        config.font_rules.push(marked(None, None, Some(true)));
+        let (config, warnings) = compute(config);
+
+        assert!(survived(&config.font_rules));
+        assert!(
+            config.font_rules.iter().any(|r| r.dim == Some(true)),
+            "no built-in rule states dim, so this is the person's rule"
+        );
+        assert!(rejections(&warnings).is_empty());
+    }
+
+    #[test]
+    fn the_built_in_rules_are_never_warned_about() {
+        for separately in [true, false] {
+            let mut config = Config::default();
+            config.track_bold_and_dim_separately = separately;
+            let (_, warnings) = compute(config);
+            assert!(
+                rejections(&warnings).is_empty(),
+                "a config with no rules of its own must draw no rule warnings \
+                 (separately = {})",
+                separately
+            );
+        }
+    }
+
+    #[test]
+    fn the_warning_names_the_rule_the_setting_and_the_replacement() {
+        let mut config = Config::default();
+        config.track_bold_and_dim_separately = true;
+        // Two rules, so a zero-based or hardcoded index reports the wrong one.
+        config.font_rules.push(marked(None, Some(true), None));
+        config
+            .font_rules
+            .push(marked(Some(Intensity::Half), None, None));
+        let (_, warnings) = compute(config);
+        let warning = the_warning(&warnings);
+
+        assert!(
+            warning.contains("font_rules[2]"),
+            "names the rule, counting the way lua does: {}",
+            warning
+        );
+        assert!(
+            warning.contains("intensity") && warning.contains("Half"),
+            "names the condition and the value: {}",
+            warning
+        );
+        assert!(
+            warning.contains("track_bold_and_dim_separately"),
+            "names the setting that made it unavailable: {}",
+            warning
+        );
+        assert!(
+            warning.contains("`dim = true`"),
+            "says what to write instead: {}",
+            warning
+        );
+    }
+
+    #[test]
+    fn each_intensity_gets_its_own_replacement() {
+        for (intensity, replacement) in [
+            (Intensity::Bold, "`bold = true`"),
+            (Intensity::Half, "`dim = true`"),
+            (Intensity::Normal, "`bold = false, dim = false`"),
+        ] {
+            let mut config = Config::default();
+            config.track_bold_and_dim_separately = true;
+            config.font_rules.push(marked(Some(intensity), None, None));
+            let (_, warnings) = compute(config);
+            let warning = the_warning(&warnings);
+            assert!(
+                warning.contains(&format!("Use {} instead.", replacement)),
+                "intensity = {:?} should be told to use {}: {}",
+                intensity,
+                replacement,
+                warning
+            );
+        }
+    }
 }
