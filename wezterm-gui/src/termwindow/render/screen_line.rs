@@ -1,8 +1,8 @@
 use crate::quad::{QuadTrait, TripleLayerQuadAllocator, TripleLayerQuadAllocatorTrait};
 use crate::termwindow::render::{
-    resolve_fg_color_attr, same_hyperlink, update_next_frame_time, ClusterStyleCache,
-    ComputeCellFgBgParams, ComputeCellFgBgResult, LineToElementParams, LineToElementShape,
-    RenderScreenLineParams, RenderScreenLineResult,
+    apply_dim_fade, glyph_is_invisible, resolve_fg_color_attr, same_hyperlink,
+    update_next_frame_time, ClusterStyleCache, ComputeCellFgBgParams, ComputeCellFgBgResult,
+    LineToElementParams, LineToElementShape, RenderScreenLineParams, RenderScreenLineResult,
 };
 use crate::termwindow::LineToElementShapeItem;
 use ::window::DeadKeyStatus;
@@ -624,7 +624,12 @@ impl crate::TermWindow {
                                 pane: params.pane,
                             });
 
-                            if glyph_color == bg_color || cluster.attrs.invisible() {
+                            // `fg_color_mix` above zero means the colour is
+                            // moving between two endpoints and this tests only
+                            // one of them, so claim nothing.
+                            if (fg_color_mix == 0.0 && glyph_is_invisible(glyph_color, bg_color))
+                                || cluster.attrs.invisible()
+                            {
                                 // Essentially invisible: don't render it, as anti-aliasing
                                 // can cause a ghostly outline of the invisible glyph to appear.
                                 continue;
@@ -793,10 +798,7 @@ impl crate::TermWindow {
                         bg_default = false;
                     }
 
-                    // Check for blink, and if this is the "not-visible"
-                    // part of blinking then set fg = bg.  This is a cheap
-                    // means of getting it done without impacting other
-                    // features.
+                    // Check for blink, fading the glyph out via its alpha channel.
                     let blink_rate = match attrs.blink() {
                         Blink::None => None,
                         Blink::Slow => {
@@ -811,14 +813,7 @@ impl crate::TermWindow {
                         if blink_rate != 0 {
                             let (intensity, next) = colorease.intensity_continuous();
 
-                            let (r1, g1, b1, a) = bg.tuple();
-                            let (r, g, b, _a) = fg.tuple();
-                            fg = LinearRgba::with_components(
-                                r1 + (r - r1) * intensity,
-                                g1 + (g - g1) * intensity,
-                                b1 + (b - b1) * intensity,
-                                a,
-                            );
+                            fg = fg.mul_alpha(intensity);
 
                             update_next_frame_time(&mut expires, Some(next));
                             self.update_next_frame_time(Some(next));
@@ -828,23 +823,26 @@ impl crate::TermWindow {
                     (fg, bg, bg_default)
                 };
 
-                let glyph_color = fg_color;
+                let glyph_color = apply_dim_fade(fg_color, &attrs, &params.config);
                 let underline_color = match attrs.underline_color() {
-                    ColorAttribute::Default => fg_color,
-                    c => resolve_fg_color_attr(&attrs, c, &params.palette, &params.config, style),
+                    ColorAttribute::Default => glyph_color,
+                    c => apply_dim_fade(
+                        resolve_fg_color_attr(&attrs, c, &params.palette, &params.config, style),
+                        &attrs,
+                        &params.config,
+                    ),
                 };
 
-                let (bg_r, bg_g, bg_b, _) = bg_color.tuple();
-                let bg_color = LinearRgba::with_components(
-                    bg_r,
-                    bg_g,
-                    bg_b,
-                    if params.window_is_transparent && bg_is_default {
-                        0.0
-                    } else {
-                        params.config.text_background_opacity
-                    },
-                );
+                // Zero marks a background whose stack is unknown, so that
+                // `glyph_is_invisible` declines to claim anything about it.
+                // Otherwise this has to be the alpha the rectangle is really
+                // painted at, which is the same product taken above.
+                let bg_color = if params.window_is_transparent && bg_is_default {
+                    let (r, g, b, _) = bg_color.tuple();
+                    LinearRgba::with_components(r, g, b, 0.0)
+                } else {
+                    bg_color.mul_alpha(params.config.text_background_opacity)
+                };
 
                 last_style.replace(ClusterStyleCache {
                     attrs,

@@ -13,8 +13,8 @@ use ::window::bitmaps::{TextureCoord, TextureRect, TextureSize};
 use ::window::{DeadKeyStatus, PointF, RectF, SizeF, WindowOps};
 use anyhow::{anyhow, Context};
 use config::{
-    BoldBrightening, ConfigHandle, DimensionContext, HorizontalWindowContentAlignment, TextStyle,
-    VerticalWindowContentAlignment, VisualBellTarget,
+    BoldBrightening, Config, ConfigHandle, DimensionContext, HorizontalWindowContentAlignment,
+    TextStyle, VerticalWindowContentAlignment, VisualBellTarget,
 };
 use euclid::num::Zero;
 use mux::pane::{Pane, PaneId};
@@ -537,27 +537,34 @@ impl crate::TermWindow {
                 VisualBellTarget::CursorColor,
             ) {
                 let (fg_color, bg_color) = if self.use_reverse_video_cursor(&params) {
-                    (params.bg_color, params.fg_color)
+                    (force_opaque(params.bg_color), force_opaque(params.fg_color))
                 } else {
-                    (params.cursor_fg, params.cursor_bg)
+                    (
+                        force_opaque(params.cursor_fg),
+                        force_opaque(params.cursor_bg),
+                    )
                 };
 
                 let fg_color = self.ensure_min_contrast(fg_color, bg_color);
 
                 // interpolate between the background color and the target color
-                let bg_color_alt = params
-                    .config
-                    .resolved_palette
-                    .visual_bell
-                    .map(|c| c.to_linear())
-                    .unwrap_or(fg_color);
+                let bg_color_alt = force_opaque(
+                    params
+                        .config
+                        .resolved_palette
+                        .visual_bell
+                        .map(|c| c.to_linear())
+                        .unwrap_or(fg_color),
+                );
 
+                // Cursor is mid-visual-bell. It's appearance reset to solid block,
+                // so cell's bg equals cursor's color.
                 return ComputeCellFgBgResult {
                     fg_color,
                     fg_color_alt: fg_color,
                     fg_color_mix: 0.,
                     bg_color,
-                    bg_color_alt,
+                    bg_color_alt: bg_color_alt,
                     bg_color_mix,
                     cursor_shape: Some(CursorShape::Default),
                     cursor_border_color: bg_color,
@@ -571,26 +578,33 @@ impl crate::TermWindow {
 
             if dead_key_or_leader && params.is_active_pane {
                 let (fg_color, bg_color) = if self.use_reverse_video_cursor(&params) {
-                    (params.bg_color, params.fg_color)
+                    (force_opaque(params.bg_color), force_opaque(params.fg_color))
                 } else {
-                    (params.cursor_fg, params.cursor_bg)
+                    (
+                        force_opaque(params.cursor_fg),
+                        force_opaque(params.cursor_bg),
+                    )
                 };
 
                 let fg_color = self.ensure_min_contrast(fg_color, bg_color);
 
-                let color = params
-                    .config
-                    .resolved_palette
-                    .compose_cursor
-                    .map(|c| c.to_linear())
-                    .unwrap_or(bg_color);
+                let color = force_opaque(
+                    params
+                        .config
+                        .resolved_palette
+                        .compose_cursor
+                        .map(|c| c.to_linear())
+                        .unwrap_or(bg_color),
+                );
 
+                // Cursor is mid-leader-indication. It's appearance reset to solid block,
+                // so cell's bg equals cursor's color.
                 return ComputeCellFgBgResult {
                     fg_color,
                     fg_color_alt: fg_color,
                     fg_color_mix: 0.,
-                    bg_color,
-                    bg_color_alt: bg_color,
+                    bg_color: color,
+                    bg_color_alt: color,
                     bg_color_mix: 0.,
                     cursor_shape: Some(CursorShape::Default),
                     cursor_border_color: color,
@@ -621,9 +635,16 @@ impl crate::TermWindow {
         ) {
             // Selected text overrides colors
             (true, _, _, CursorVisibility::Hidden) => (
-                params.selection_fg.when_fully_transparent(params.fg_color),
+                // A fully transparent `selection_fg` means
+                // the selection supplied no colour, so the cell keeps its own
+                // foreground.
+                if params.selection_fg.is_fully_transparent() {
+                    params.fg_color
+                } else {
+                    force_opaque(params.selection_fg)
+                },
                 params.selection_bg,
-                params.cursor_bg,
+                force_opaque(params.cursor_bg),
             ),
             // block Cursor cell overrides colors
             (
@@ -633,12 +654,21 @@ impl crate::TermWindow {
                 CursorVisibility::Visible,
             ) => {
                 if self.use_reverse_video_cursor(&params) {
-                    (params.bg_color, params.fg_color, params.fg_color)
+                    let (fg_color, bg_color) =
+                        (force_opaque(params.bg_color), force_opaque(params.fg_color));
+                    (fg_color, bg_color, bg_color)
                 } else {
                     (
-                        params.cursor_fg.when_fully_transparent(params.fg_color),
-                        params.cursor_bg,
-                        params.cursor_bg,
+                        // A fully transparent `cursor_fg` means the cursor
+                        // supplied no colour, so the cell keeps its own
+                        // foreground.
+                        if params.cursor_fg.is_fully_transparent() {
+                            params.fg_color
+                        } else {
+                            force_opaque(params.cursor_fg)
+                        },
+                        force_opaque(params.cursor_bg),
+                        force_opaque(params.cursor_bg),
                     )
                 }
             }
@@ -651,14 +681,28 @@ impl crate::TermWindow {
                 | CursorShape::SteadyBar,
                 CursorVisibility::Visible,
             ) => {
+                // A bar or underline cursor substitutes only the cursor
+                // border, so the glyph keeps the cell's own foreground.
                 if self.use_reverse_video_cursor(&params) {
-                    (params.fg_color, params.bg_color, params.fg_color)
+                    (
+                        params.fg_color,
+                        params.bg_color,
+                        force_opaque(params.fg_color),
+                    )
                 } else {
-                    (params.fg_color, params.bg_color, params.cursor_bg)
+                    (
+                        params.fg_color,
+                        params.bg_color,
+                        force_opaque(params.cursor_bg),
+                    )
                 }
             }
             // Normally, render the cell as configured (or if the window is unfocused)
-            _ => (params.fg_color, params.bg_color, params.cursor_border_color),
+            _ => (
+                params.fg_color,
+                params.bg_color,
+                force_opaque(params.cursor_border_color),
+            ),
         };
 
         let fg_color = self.ensure_min_contrast(fg_color, bg_color);
@@ -682,12 +726,17 @@ impl crate::TermWindow {
             let (intensity, next) = color_ease.intensity_continuous();
 
             cursor_border_mix = intensity;
-            cursor_border_color_alt = params.bg_color;
+            // Note: don't use LinearRgba::TRANSPARENT here or it will affect
+            // interpolation of RGB components between `cursor_border_color`
+            // and `cursor_border_color_alt`.
+            cursor_border_color_alt = cursor_bg.mul_alpha(0.0);
 
             if matches!(
                 cursor_shape,
                 CursorShape::BlinkingBlock | CursorShape::SteadyBlock,
             ) {
+                // The blink's other endpoint is the cell as it looks with no
+                // cursor on it, fade and all.
                 fg_color_alt = params.fg_color;
                 fg_color_mix = intensity;
             }
@@ -903,11 +952,59 @@ impl crate::TermWindow {
     }
 }
 
+/// Force a colour to full opacity by setting its alpha to 1. Used throughout
+/// this code for elements where dim style and translucent colors should not
+/// affect rendering, e.g. when rendering cursor, search/select overlay, etc.
+fn force_opaque(color: LinearRgba) -> LinearRgba {
+    let (r, g, b, _) = color.tuple();
+    LinearRgba::with_components(r, g, b, 1.0)
+}
+
+/// How much `dim_opacity` fades this cell.
+pub fn dim_fade_factor(attrs: &CellAttributes, config: &Config) -> f32 {
+    if config.dim_is_faded() && config.is_dim(attrs) && !attrs.suppress_dim_fade() {
+        config.dim_opacity()
+    } else {
+        1.0
+    }
+}
+
+/// Apply `dim_opacity` to a colour about to draw glyphs or decorations for
+/// this cell.
+pub fn apply_dim_fade(color: LinearRgba, attrs: &CellAttributes, config: &Config) -> LinearRgba {
+    color.mul_alpha(dim_fade_factor(attrs, config))
+}
+
+/// Would drawing this glyph change nothing? Such a glyph must not be drawn:
+/// antialiasing gives it a ghostly outline.
+///
+/// Compositing the glyph over the background leaves the result untouched only
+/// when `fg.a * (1 - bg.a) == 0`, so there are two cases: a glyph that is
+/// fully transparent, and an opaque background the glyph matches in colour.
+///
+/// `bg_color` describes one quad, not the stack under it, so its alpha is what
+/// says whether that stack matters. `render_screen_line` zeroes it for a cell
+/// with the default background in a transparent window, where the pixels
+/// behind are the desktop or a background image and nothing can be claimed
+/// about them; an alpha of 1.0 means something opaque is known to be there,
+/// either the cell's own quad or the pane's, drawn in the colour named here.
+pub fn glyph_is_invisible(glyph_color: LinearRgba, bg_color: LinearRgba) -> bool {
+    let (fg_r, fg_g, fg_b, fg_a) = glyph_color.tuple();
+    let (bg_r, bg_g, bg_b, bg_a) = bg_color.tuple();
+    fg_a == 0.0 || (bg_a == 1.0 && (fg_r, fg_g, fg_b) == (bg_r, bg_g, bg_b))
+}
+
+/// Resolve the colour a cell's foreground attribute names, including the
+/// standard-palette lift that `bold_brightens_ansi_colors` performs.
+///
+/// Takes `&Config` and not `&ConfigHandle` because a handle has no
+/// constructor that accepts a custom value, so the lift could not otherwise be
+/// tested. Call sites pass their `&ConfigHandle` and coerce.
 fn resolve_fg_color_attr(
     attrs: &CellAttributes,
     fg: ColorAttribute,
     palette: &ColorPalette,
-    config: &ConfigHandle,
+    config: &Config,
     style: &config::TextStyle,
 ) -> LinearRgba {
     match fg {
@@ -924,11 +1021,7 @@ fn resolve_fg_color_attr(
             // For compatibility purposes, switch to a brighter version
             // of one of the standard ANSI colors when Bold is enabled.
             // This lifts black to dark grey.
-            let idx = if attrs.intensity() == wezterm_term::Intensity::Bold {
-                idx + 8
-            } else {
-                idx
-            };
+            let idx = if config.is_bold(attrs) { idx + 8 } else { idx };
 
             palette.resolve_fg(wezterm_term::color::ColorAttribute::PaletteIndex(idx))
         }
@@ -957,5 +1050,386 @@ fn same_hyperlink(a: Option<&Arc<Hyperlink>>, b: Option<&Arc<Hyperlink>>) -> boo
     match (a, b) {
         (Some(a), Some(b)) => Arc::ptr_eq(a, b),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod fade_test {
+    use super::{apply_dim_fade, dim_fade_factor, force_opaque, glyph_is_invisible};
+    use ::window::color::LinearRgba;
+    use config::Config;
+    use wezterm_term::{CellAttributes, Intensity};
+
+    fn opaque_white() -> LinearRgba {
+        LinearRgba::with_components(1.0, 1.0, 1.0, 1.0)
+    }
+
+    fn config_with_opacity(opacity: Option<f32>) -> Config {
+        let mut config = Config::default_config();
+        config.dim_opacity = opacity;
+        config
+    }
+
+    fn dim() -> CellAttributes {
+        let mut attrs = CellAttributes::default();
+        attrs.set_intensity(Intensity::Half);
+        attrs
+    }
+
+    #[test]
+    fn forcing_a_colour_opaque_leaves_its_rgb_alone() {
+        let transparent = LinearRgba::with_components(0.2, 0.3, 0.4, 0.0);
+        assert_eq!(force_opaque(transparent).tuple(), (0.2, 0.3, 0.4, 1.0));
+    }
+
+    #[test]
+    fn a_reverse_video_cursor_can_still_hide_an_invisible_faded_glyph() {
+        let config = config_with_opacity(Some(0.5));
+        let cell = LinearRgba::with_components(0.23, 0.23, 0.23, 1.0);
+        let faded_fg = apply_dim_fade(cell, &dim(), &config);
+        assert_eq!(
+            faded_fg.tuple().3,
+            0.5,
+            "the fixture has to be faded or this test proves nothing"
+        );
+
+        let (glyph, behind) = (force_opaque(cell), force_opaque(faded_fg));
+        assert!(
+            glyph_is_invisible(glyph, behind),
+            "the glyph and the rectangle behind it are the same opaque \
+             colour: {:?} against {:?}",
+            glyph,
+            behind
+        );
+
+        let red = LinearRgba::with_components(0.9, 0.1, 0.1, 1.0);
+        let (glyph, behind) = (
+            force_opaque(cell),
+            force_opaque(apply_dim_fade(red, &dim(), &config)),
+        );
+        assert!(
+            !glyph_is_invisible(glyph, behind),
+            "a different colour still draws: {:?} against {:?}",
+            glyph,
+            behind
+        );
+    }
+
+    #[test]
+    fn the_fade_does_nothing_at_the_default() {
+        let config = Config::default_config();
+        assert_eq!(
+            apply_dim_fade(opaque_white(), &dim(), &config).tuple().3,
+            1.0
+        );
+    }
+
+    #[test]
+    fn the_fade_does_nothing_at_the_default_whatever_the_intensity() {
+        let config = Config::default_config();
+        for intensity in [Intensity::Normal, Intensity::Bold, Intensity::Half] {
+            let mut attrs = CellAttributes::default();
+            attrs.set_intensity(intensity);
+            assert_eq!(
+                apply_dim_fade(opaque_white(), &attrs, &config).tuple().3,
+                1.0
+            );
+        }
+    }
+
+    #[test]
+    fn a_configured_opacity_fades_dim_text_and_nothing_else() {
+        let config = config_with_opacity(Some(0.25));
+
+        assert_eq!(
+            apply_dim_fade(opaque_white(), &dim(), &config).tuple().3,
+            0.25,
+            "dim text fades"
+        );
+
+        for intensity in [Intensity::Normal, Intensity::Bold] {
+            let mut attrs = CellAttributes::default();
+            attrs.set_intensity(intensity);
+            assert_eq!(
+                apply_dim_fade(opaque_white(), &attrs, &config).tuple().3,
+                1.0,
+                "{intensity:?} text does not fade"
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_opacity_of_one_is_inert() {
+        let config = config_with_opacity(Some(1.0));
+        let faded = LinearRgba::with_components(1.0, 1.0, 1.0, 0.6);
+        assert_eq!(apply_dim_fade(faded, &dim(), &config), faded);
+    }
+
+    #[test]
+    fn the_fade_follows_the_tracking_mode() {
+        let mut attrs = CellAttributes::default();
+        attrs.apply_sgr_intensity(Intensity::Half);
+        attrs.apply_sgr_intensity(Intensity::Bold);
+        assert!(attrs.dim(), "the dim record is set");
+        assert_eq!(
+            attrs.intensity(),
+            Intensity::Bold,
+            "but bold arrived most recently"
+        );
+
+        let mut unified = config_with_opacity(Some(0.25));
+        unified.track_bold_and_dim_separately = false;
+        assert_eq!(
+            apply_dim_fade(opaque_white(), &attrs, &unified).tuple().3,
+            1.0,
+            "under unified tracking this cell is bold, so it does not fade"
+        );
+
+        let mut separate = config_with_opacity(Some(0.25));
+        separate.track_bold_and_dim_separately = true;
+        assert_eq!(
+            apply_dim_fade(opaque_white(), &attrs, &separate).tuple().3,
+            0.25,
+            "under separate tracking it is dim as well, so it fades"
+        );
+    }
+
+    #[test]
+    fn a_glyph_matching_an_opaque_background_draws_nothing() {
+        let c = LinearRgba::with_components(0.23, 0.23, 0.23, 1.0);
+        assert!(glyph_is_invisible(c, c));
+        assert!(!glyph_is_invisible(
+            c,
+            LinearRgba::with_components(0.23, 0.23, 0.24, 1.0)
+        ));
+    }
+
+    #[test]
+    fn a_faded_glyph_matching_an_opaque_background_draws_nothing() {
+        let bg = LinearRgba::with_components(0.23, 0.23, 0.23, 1.0);
+        let faded_glyph = bg.mul_alpha(0.5);
+        assert_ne!(faded_glyph, bg, "the fixture has to differ in alpha");
+        assert!(glyph_is_invisible(faded_glyph, bg));
+    }
+
+    #[test]
+    fn a_glyph_over_a_translucent_background_is_always_drawn() {
+        let rgb = (0.23, 0.23, 0.23);
+        let glyph = LinearRgba::with_components(rgb.0, rgb.1, rgb.2, 1.0);
+
+        for bg_alpha in [0.0, 0.5, 0.999] {
+            let bg = LinearRgba::with_components(rgb.0, rgb.1, rgb.2, bg_alpha);
+            assert!(!glyph_is_invisible(glyph, bg), "bg alpha {}", bg_alpha);
+            assert!(
+                !glyph_is_invisible(glyph.mul_alpha(0.5), bg),
+                "bg alpha {}, faded glyph",
+                bg_alpha
+            );
+        }
+    }
+
+    #[test]
+    fn a_fully_transparent_glyph_draws_nothing() {
+        let clear = LinearRgba::with_components(0.9, 0.1, 0.1, 0.0);
+        for bg_alpha in [0.0, 0.5, 1.0] {
+            let bg = LinearRgba::with_components(0.23, 0.23, 0.23, bg_alpha);
+            assert!(glyph_is_invisible(clear, bg), "bg alpha {}", bg_alpha);
+        }
+    }
+
+    #[test]
+    fn the_fade_factor_is_exactly_one_when_inert() {
+        let config = Config::default_config();
+        assert_eq!(dim_fade_factor(&dim(), &config), 1.0);
+    }
+
+    #[test]
+    fn a_marked_cell_never_fades() {
+        for track_separately in [false, true] {
+            for opacity in [0.0f32, 0.25, 0.5, 1.0] {
+                let mut config = config_with_opacity(Some(opacity));
+                config.track_bold_and_dim_separately = track_separately;
+                let case = format!("separate={track_separately} opacity={opacity}");
+
+                let mut marked = dim();
+                marked.set_suppress_dim_fade(true);
+                assert_eq!(
+                    dim_fade_factor(&marked, &config),
+                    1.0,
+                    "a marked cell does not fade ({case})"
+                );
+
+                assert_eq!(
+                    dim_fade_factor(&dim(), &config),
+                    opacity,
+                    "the same cell unmarked reports the opacity ({case})"
+                );
+
+                assert_eq!(
+                    apply_dim_fade(opaque_white(), &marked, &config).tuple().3,
+                    1.0,
+                    "the wrapper follows the factor ({case})"
+                );
+
+                for intensity in [Intensity::Normal, Intensity::Bold] {
+                    let mut attrs = CellAttributes::default();
+                    attrs.set_intensity(intensity);
+                    attrs.set_suppress_dim_fade(true);
+                    assert_eq!(
+                        dim_fade_factor(&attrs, &config),
+                        1.0,
+                        "marking {intensity:?} text changes nothing ({case})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod colour_lift_test {
+    use super::resolve_fg_color_attr;
+    use ::window::color::LinearRgba;
+    use config::{BoldBrightening, Config, TextStyle};
+    use wezterm_term::color::{AnsiColor, ColorAttribute, ColorPalette};
+    use wezterm_term::{CellAttributes, Intensity};
+
+    /// `AnsiColor::Red` is index 9, the bright one.
+    const STANDARD_PALETTE_RED: u8 = AnsiColor::Maroon as u8;
+
+    fn config(track_separately: bool, brightening: BoldBrightening) -> Config {
+        let mut config = Config::default_config();
+        config.track_bold_and_dim_separately = track_separately;
+        config.bold_brightens_ansi_colors = brightening;
+        config
+    }
+
+    fn both_attributes(dim_last: bool) -> CellAttributes {
+        let mut attrs = CellAttributes::default();
+        if dim_last {
+            attrs.apply_sgr_intensity(Intensity::Bold);
+            attrs.apply_sgr_intensity(Intensity::Half);
+        } else {
+            attrs.apply_sgr_intensity(Intensity::Half);
+            attrs.apply_sgr_intensity(Intensity::Bold);
+        }
+        attrs
+    }
+
+    fn cell(intensity: Intensity) -> CellAttributes {
+        let mut attrs = CellAttributes::default();
+        attrs.set_intensity(intensity);
+        attrs
+    }
+
+    fn resolved(config: &Config, attrs: &CellAttributes, idx: u8) -> LinearRgba {
+        resolve_fg_color_attr(
+            attrs,
+            ColorAttribute::PaletteIndex(idx),
+            &ColorPalette::default(),
+            config,
+            &TextStyle::default(),
+        )
+    }
+
+    fn palette_colour(idx: u8) -> LinearRgba {
+        ColorPalette::default()
+            .resolve_fg(ColorAttribute::PaletteIndex(idx))
+            .to_linear()
+    }
+
+    #[test]
+    fn a_lifted_colour_differs_from_its_unlifted_one() {
+        assert_ne!(
+            palette_colour(STANDARD_PALETTE_RED),
+            palette_colour(STANDARD_PALETTE_RED + 8)
+        );
+        assert_ne!(palette_colour(7), palette_colour(15));
+    }
+
+    #[test]
+    fn the_lift_follows_the_bold_record_under_separate_tracking() {
+        for brightening in [BoldBrightening::BrightAndBold, BoldBrightening::BrightOnly] {
+            let config = config(true, brightening);
+            for dim_last in [true, false] {
+                assert_eq!(
+                    resolved(&config, &both_attributes(dim_last), STANDARD_PALETTE_RED),
+                    palette_colour(STANDARD_PALETTE_RED + 8),
+                    "separate tracking lifts in either order \
+                     (dim_last = {dim_last}, {brightening:?})"
+                );
+            }
+        }
+
+        let unified = config(false, BoldBrightening::BrightAndBold);
+        assert_eq!(
+            resolved(&unified, &both_attributes(true), STANDARD_PALETTE_RED),
+            palette_colour(STANDARD_PALETTE_RED),
+            "dim arrived last, so unified tracking does not call this bold"
+        );
+        assert_eq!(
+            resolved(&unified, &both_attributes(false), STANDARD_PALETTE_RED),
+            palette_colour(STANDARD_PALETTE_RED + 8),
+            "and bold arriving last is what lifts it there"
+        );
+    }
+
+    #[test]
+    fn dim_alone_is_never_lifted() {
+        for track_separately in [false, true] {
+            let config = config(track_separately, BoldBrightening::BrightAndBold);
+            assert_eq!(
+                resolved(&config, &cell(Intensity::Half), STANDARD_PALETTE_RED),
+                palette_colour(STANDARD_PALETTE_RED),
+                "separate = {track_separately}"
+            );
+            assert_eq!(
+                resolved(&config, &cell(Intensity::Normal), STANDARD_PALETTE_RED),
+                palette_colour(STANDARD_PALETTE_RED),
+                "and plain text likewise (separate = {track_separately})"
+            );
+        }
+    }
+
+    #[test]
+    fn the_lift_is_retired_only_by_no() {
+        for track_separately in [false, true] {
+            let off = config(track_separately, BoldBrightening::No);
+            for dim_last in [true, false] {
+                assert_eq!(
+                    resolved(&off, &both_attributes(dim_last), STANDARD_PALETTE_RED),
+                    palette_colour(STANDARD_PALETTE_RED),
+                    "separate = {track_separately}, dim_last = {dim_last}"
+                );
+            }
+            assert_eq!(
+                resolved(&off, &cell(Intensity::Bold), STANDARD_PALETTE_RED),
+                palette_colour(STANDARD_PALETTE_RED),
+                "not even plain bold text (separate = {track_separately})"
+            );
+        }
+    }
+
+    #[test]
+    fn the_lift_stops_at_palette_index_eight() {
+        assert_eq!(AnsiColor::Silver as u8, 7, "last standard-palette colour");
+        assert_eq!(AnsiColor::Grey as u8, 8, "first bright-palette colour");
+
+        for track_separately in [false, true] {
+            let config = config(track_separately, BoldBrightening::BrightAndBold);
+            let bold = cell(Intensity::Bold);
+            assert_eq!(
+                resolved(&config, &bold, 7),
+                palette_colour(15),
+                "7 is inside the lift and becomes 7 + 8 \
+                 (separate = {track_separately})"
+            );
+            assert_eq!(
+                resolved(&config, &bold, 8),
+                palette_colour(8),
+                "8 is outside it and is drawn as itself \
+                 (separate = {track_separately})"
+            );
+        }
     }
 }
