@@ -72,6 +72,8 @@ impl core::fmt::Debug for CellAttributes {
         fmt.debug_struct("CellAttributes")
             .field("attributes", &self.attributes)
             .field("intensity", &self.intensity())
+            .field("bold", &self.bold())
+            .field("dim", &self.dim())
             .field("underline", &self.underline())
             .field("blink", &self.blink())
             .field("italic", &self.italic())
@@ -127,28 +129,28 @@ impl FatAttributes {
 /// to transform from the stored bit value to the consumable
 /// value.
 macro_rules! bitfield {
-    ($getter:ident, $setter:ident, $bitnum:expr) => {
+    ($gvis:vis $getter:ident, $svis:vis $setter:ident, $bitnum:expr) => {
         #[inline]
-        pub fn $getter(&self) -> bool {
+        $gvis fn $getter(&self) -> bool {
             (self.attributes & (1 << $bitnum)) == (1 << $bitnum)
         }
 
         #[inline]
-        pub fn $setter(&mut self, value: bool) -> &mut Self {
+        $svis fn $setter(&mut self, value: bool) -> &mut Self {
             let attr_value = if value { 1 << $bitnum } else { 0 };
             self.attributes = (self.attributes & !(1 << $bitnum)) | attr_value;
             self
         }
     };
 
-    ($getter:ident, $setter:ident, $bitmask:expr, $bitshift:expr) => {
+    ($gvis:vis $getter:ident, $svis:vis $setter:ident, $bitmask:expr, $bitshift:expr) => {
         #[inline]
-        pub fn $getter(&self) -> u32 {
+        $gvis fn $getter(&self) -> u32 {
             (self.attributes >> $bitshift) & $bitmask
         }
 
         #[inline]
-        pub fn $setter(&mut self, value: u32) -> &mut Self {
+        $svis fn $setter(&mut self, value: u32) -> &mut Self {
             let clear = !($bitmask << $bitshift);
             let attr_value = (value & $bitmask) << $bitshift;
             self.attributes = (self.attributes & clear) | attr_value;
@@ -156,14 +158,14 @@ macro_rules! bitfield {
         }
     };
 
-    ($getter:ident, $setter:ident, $enum:ident, $bitmask:expr, $bitshift:expr) => {
+    ($gvis:vis $getter:ident, $svis:vis $setter:ident, $enum:ident, $bitmask:expr, $bitshift:expr) => {
         #[inline]
-        pub fn $getter(&self) -> $enum {
+        $gvis fn $getter(&self) -> $enum {
             unsafe { mem::transmute(((self.attributes >> $bitshift) & $bitmask) as u8) }
         }
 
         #[inline]
-        pub fn $setter(&mut self, value: $enum) -> &mut Self {
+        $svis fn $setter(&mut self, value: $enum) -> &mut Self {
             let value = value as u32;
             let clear = !($bitmask << $bitshift);
             let attr_value = (value & $bitmask) << $bitshift;
@@ -202,17 +204,75 @@ impl Default for CellAttributes {
 }
 
 impl CellAttributes {
-    bitfield!(intensity, set_intensity, Intensity, 0b11, 0);
-    bitfield!(underline, set_underline, Underline, 0b111, 2);
-    bitfield!(blink, set_blink, Blink, 0b11, 5);
-    bitfield!(italic, set_italic, 7);
-    bitfield!(reverse, set_reverse, 8);
-    bitfield!(strikethrough, set_strikethrough, 9);
-    bitfield!(invisible, set_invisible, 10);
-    bitfield!(wrapped, set_wrapped, 11);
-    bitfield!(overline, set_overline, 12);
-    bitfield!(semantic_type, set_semantic_type, SemanticType, 0b11, 13);
-    bitfield!(vertical_align, set_vertical_align, VerticalAlign, 0b11, 15);
+    bitfield!(pub bold, set_bold_bit, 0);
+    bitfield!(pub dim, set_dim_bit, 1);
+    bitfield!(pub underline, pub set_underline, Underline, 0b111, 2);
+    bitfield!(pub blink, pub set_blink, Blink, 0b11, 5);
+    bitfield!(pub italic, pub set_italic, 7);
+    bitfield!(pub reverse, pub set_reverse, 8);
+    bitfield!(pub strikethrough, pub set_strikethrough, 9);
+    bitfield!(pub invisible, pub set_invisible, 10);
+    bitfield!(pub wrapped, pub set_wrapped, 11);
+    bitfield!(pub overline, pub set_overline, 12);
+    bitfield!(pub semantic_type, pub set_semantic_type, SemanticType, 0b11, 13);
+    bitfield!(pub vertical_align, pub set_vertical_align, VerticalAlign, 0b11, 15);
+
+    // Which of bold and dim arrived last. This bit is set only when both dim
+    // and bold are enabled, which is important for hashing and bitwise comparison
+    // to stay semantically accurate.
+    bitfield!(dim_is_most_recent, set_dim_is_most_recent, 17);
+
+    // Set on a cell whose colours have been replaced by a highlight, to say
+    // that the dim fade should not be applied on top of the replacement.
+    // Render state rather than terminal state: only the copy-mode overlay sets
+    // it, on a cloned line, and font rules never read it.
+    bitfield!(pub suppress_dim_fade, pub set_suppress_dim_fade, 18);
+
+    /// Record the bold attribute arriving or leaving, without disturbing dim.
+    #[inline]
+    pub fn set_bold(&mut self, value: bool) -> &mut Self {
+        self.set_bold_bit(value).set_dim_is_most_recent(false)
+    }
+
+    /// Record the dim attribute arriving or leaving, without disturbing bold.
+    #[inline]
+    pub fn set_dim(&mut self, value: bool) -> &mut Self {
+        // Only set `dim_is_most_recent` if both bold and dim are on.
+        let bold = self.bold();
+        self.set_dim_bit(value)
+            .set_dim_is_most_recent(value && bold)
+    }
+
+    /// The three-valued view of the two attributes. A cell carrying both
+    /// reports whichever one arrived most recently.
+    #[inline]
+    pub fn intensity(&self) -> Intensity {
+        match (self.bold(), self.dim()) {
+            (false, false) => Intensity::Normal,
+            (true, false) => Intensity::Bold,
+            (false, true) => Intensity::Half,
+            (true, true) if self.dim_is_most_recent() => Intensity::Half,
+            (true, true) => Intensity::Bold,
+        }
+    }
+
+    /// Reset the intensity and apply a new one instead. Use `apply_sgr_intensity`
+    /// to toggle one intensity flag without resetting another.
+    pub fn set_intensity(&mut self, value: Intensity) -> &mut Self {
+        self.set_bold(value == Intensity::Bold)
+            .set_dim(value == Intensity::Half)
+    }
+
+    /// Record the intensity named by an SGR escape code: set the attribute the
+    /// code names and leave the other one alone, so that SGR 1 followed by
+    /// SGR 2 keeps both. [`Intensity::Normal`] (SGR 22) clears both.
+    pub fn apply_sgr_intensity(&mut self, value: Intensity) -> &mut Self {
+        match value {
+            Intensity::Normal => self.set_bold(false).set_dim(false),
+            Intensity::Bold => self.set_bold(true),
+            Intensity::Half => self.set_dim(true),
+        }
+    }
 
     pub const fn blank() -> Self {
         Self {
@@ -1227,5 +1287,214 @@ mod test {
         // due to <https://github.com/wezterm/wezterm/issues/1422>.
         // It is Non-Printing, non-White_Space
         assert!(!is_white_space_char('\u{2068}'));
+    }
+
+    #[test]
+    fn bold_then_dim_keeps_both() {
+        let mut attrs = CellAttributes::default();
+        attrs.apply_sgr_intensity(Intensity::Bold);
+        attrs.apply_sgr_intensity(Intensity::Half);
+
+        assert!(attrs.bold(), "bold survives dim arriving after it");
+        assert!(attrs.dim());
+        assert_eq!(attrs.intensity(), Intensity::Half);
+    }
+
+    #[test]
+    fn dim_then_bold_keeps_both() {
+        let mut attrs = CellAttributes::default();
+        attrs.apply_sgr_intensity(Intensity::Half);
+        attrs.apply_sgr_intensity(Intensity::Bold);
+
+        assert!(attrs.bold());
+        assert!(attrs.dim());
+        assert_eq!(attrs.intensity(), Intensity::Bold);
+    }
+
+    #[test]
+    fn repeating_a_code_is_idempotent() {
+        let mut once = CellAttributes::default();
+        once.apply_sgr_intensity(Intensity::Bold)
+            .apply_sgr_intensity(Intensity::Half);
+
+        let mut twice = CellAttributes::default();
+        twice
+            .apply_sgr_intensity(Intensity::Bold)
+            .apply_sgr_intensity(Intensity::Bold)
+            .apply_sgr_intensity(Intensity::Half)
+            .apply_sgr_intensity(Intensity::Half);
+
+        assert!(once.attribute_bits_equal(&twice));
+    }
+
+    #[test]
+    fn sgr_normal_clears_both() {
+        let mut attrs = CellAttributes::default();
+        attrs
+            .apply_sgr_intensity(Intensity::Bold)
+            .apply_sgr_intensity(Intensity::Half)
+            .apply_sgr_intensity(Intensity::Normal);
+
+        assert!(!attrs.bold());
+        assert!(!attrs.dim());
+        assert_eq!(attrs.intensity(), Intensity::Normal);
+        // The word returns to the blank one, so the two cells hash alike.
+        assert!(attrs.attribute_bits_equal(&CellAttributes::default()));
+    }
+
+    #[test]
+    fn setting_the_intensity_clears_the_other_record() {
+        let mut attrs = CellAttributes::default();
+        attrs
+            .apply_sgr_intensity(Intensity::Bold)
+            .apply_sgr_intensity(Intensity::Half);
+        assert!(attrs.bold() && attrs.dim());
+
+        attrs.set_intensity(Intensity::Bold);
+        assert!(attrs.bold());
+        assert!(!attrs.dim(), "setting bold clears dim");
+        assert_eq!(attrs.intensity(), Intensity::Bold);
+
+        attrs.set_intensity(Intensity::Half);
+        assert!(!attrs.bold(), "setting half clears bold");
+        assert!(attrs.dim());
+        assert_eq!(attrs.intensity(), Intensity::Half);
+
+        attrs.set_intensity(Intensity::Normal);
+        assert!(!attrs.bold() && !attrs.dim());
+    }
+
+    /// A single-attribute state reached by any route carries the same
+    /// attribute word, so the cells compare and hash alike: every writer
+    /// leaves the recency bit clear unless both attributes are set.
+    #[test]
+    fn the_recency_bit_is_canonical_when_it_does_not_matter() {
+        let mut via_sgr = CellAttributes::default();
+        via_sgr
+            .apply_sgr_intensity(Intensity::Half)
+            .apply_sgr_intensity(Intensity::Normal)
+            .apply_sgr_intensity(Intensity::Bold);
+
+        let mut via_set_intensity = CellAttributes::default();
+        via_set_intensity.set_intensity(Intensity::Bold);
+
+        assert!(via_sgr.attribute_bits_equal(&via_set_intensity));
+
+        let mut dim_via_sgr = CellAttributes::default();
+        dim_via_sgr.apply_sgr_intensity(Intensity::Half);
+        let mut dim_via_set_intensity = CellAttributes::default();
+        dim_via_set_intensity.set_intensity(Intensity::Half);
+        assert!(dim_via_sgr.attribute_bits_equal(&dim_via_set_intensity));
+    }
+
+    /// `Normal`, `Bold` and `Half` encode as the attribute words 0, 1 and 2,
+    /// and the two both-attributes states collide with neither those nor each
+    /// other. Nothing else in the suite pins this, and the raw word is what
+    /// crosses the multiplexer, where a cell is rebuilt without passing
+    /// through any setter.
+    #[test]
+    fn the_legacy_encodings_are_unchanged() {
+        /// A cell whose attribute word is exactly `bits`.
+        fn word(bits: u32) -> CellAttributes {
+            CellAttributes {
+                attributes: bits,
+                ..CellAttributes::blank()
+            }
+        }
+
+        let mut normal = CellAttributes::default();
+        normal.set_intensity(Intensity::Normal);
+        assert!(normal.attribute_bits_equal(&word(0)), "Normal is word 0");
+
+        let mut bold = CellAttributes::default();
+        bold.set_intensity(Intensity::Bold);
+        assert!(bold.attribute_bits_equal(&word(1)), "Bold is word 1");
+
+        let mut half = CellAttributes::default();
+        half.set_intensity(Intensity::Half);
+        assert!(half.attribute_bits_equal(&word(2)), "Half is word 2");
+
+        let mut bold_then_dim = CellAttributes::default();
+        bold_then_dim
+            .apply_sgr_intensity(Intensity::Bold)
+            .apply_sgr_intensity(Intensity::Half);
+
+        let mut dim_then_bold = CellAttributes::default();
+        dim_then_bold
+            .apply_sgr_intensity(Intensity::Half)
+            .apply_sgr_intensity(Intensity::Bold);
+
+        for (new_name, new_state) in [
+            ("bold then dim", &bold_then_dim),
+            ("dim then bold", &dim_then_bold),
+        ] {
+            for (legacy_name, legacy) in [("Normal", &normal), ("Bold", &bold), ("Half", &half)] {
+                assert!(
+                    !new_state.attribute_bits_equal(legacy),
+                    "{new_name} must not encode as {legacy_name}"
+                );
+            }
+        }
+        assert!(
+            !bold_then_dim.attribute_bits_equal(&dim_then_bold),
+            "the two both-attributes states must differ from each other"
+        );
+    }
+
+    /// The intensity writers touch no other attribute.
+    #[test]
+    fn other_attributes_are_undisturbed() {
+        let mut attrs = CellAttributes::default();
+        attrs
+            .set_underline(Underline::Double)
+            .set_blink(Blink::Rapid)
+            .set_italic(true)
+            .set_reverse(true)
+            .set_strikethrough(true)
+            .set_invisible(true)
+            .set_wrapped(true)
+            .set_overline(true)
+            .set_semantic_type(SemanticType::Prompt)
+            .set_vertical_align(VerticalAlign::SuperScript);
+
+        attrs
+            .apply_sgr_intensity(Intensity::Bold)
+            .apply_sgr_intensity(Intensity::Half)
+            .apply_sgr_intensity(Intensity::Normal);
+
+        assert_eq!(attrs.underline(), Underline::Double);
+        assert_eq!(attrs.blink(), Blink::Rapid);
+        assert!(attrs.italic());
+        assert!(attrs.reverse());
+        assert!(attrs.strikethrough());
+        assert!(attrs.invisible());
+        assert!(attrs.wrapped());
+        assert!(attrs.overline());
+        assert_eq!(attrs.semantic_type(), SemanticType::Prompt);
+        assert_eq!(attrs.vertical_align(), VerticalAlign::SuperScript);
+    }
+
+    /// The fade marker shares the attribute word with bold, dim and the
+    /// recency bit, and collides with none of them.
+    #[test]
+    fn the_fade_marker_is_independent_of_the_two_records() {
+        let mut attrs = CellAttributes::default();
+        attrs
+            .apply_sgr_intensity(Intensity::Bold)
+            .apply_sgr_intensity(Intensity::Half);
+
+        assert!(!attrs.suppress_dim_fade());
+        attrs.set_suppress_dim_fade(true);
+
+        assert!(attrs.suppress_dim_fade());
+        assert!(attrs.bold(), "the marker must not disturb the records");
+        assert!(attrs.dim());
+        assert_eq!(attrs.intensity(), Intensity::Half);
+
+        attrs.set_suppress_dim_fade(false);
+        assert!(!attrs.suppress_dim_fade());
+        assert!(attrs.bold());
+        assert!(attrs.dim());
+        assert_eq!(attrs.intensity(), Intensity::Half);
     }
 }
