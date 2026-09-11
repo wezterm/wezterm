@@ -389,7 +389,7 @@ fn apply_decoration_immediate(hwnd: HWND, decorations: WindowDecorations) {
 
 fn decorations_to_style(decorations: WindowDecorations) -> u32 {
     if decorations == WindowDecorations::RESIZE {
-        WS_OVERLAPPEDWINDOW
+        WS_OVERLAPPEDWINDOW & !(WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
     } else if decorations == WindowDecorations::TITLE {
         WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
     } else if decorations == WindowDecorations::NONE {
