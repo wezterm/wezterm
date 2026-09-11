@@ -23,6 +23,40 @@ use wezterm_term::{
 };
 use window::WindowOps;
 
+/// Apply the quick-select match highlight to a cell's attributes.
+fn apply_match_highlight(attrs: &mut CellAttributes, colors: &config::Palette) {
+    attrs
+        .set_background(
+            colors
+                .quick_select_match_bg
+                .unwrap_or(AnsiColor::Black.into()),
+        )
+        .set_foreground(
+            colors
+                .quick_select_match_fg
+                .unwrap_or(AnsiColor::Green.into()),
+        )
+        .set_reverse(false)
+        .set_intensity(Intensity::Bold);
+}
+
+/// Apply the quick-select label highlight (typeable prefix) to a cell's attributes.
+fn apply_label_highlight(attrs: &mut CellAttributes, colors: &config::Palette) {
+    attrs
+        .set_background(
+            colors
+                .quick_select_label_bg
+                .unwrap_or(AnsiColor::Black.into()),
+        )
+        .set_foreground(
+            colors
+                .quick_select_label_fg
+                .unwrap_or(AnsiColor::Olive.into()),
+        )
+        .set_reverse(false)
+        .set_intensity(Intensity::Bold);
+}
+
 const PATTERNS: [&str; 14] = [
     // markdown_url
     r"\[[^]]*\]\(([^)]+)\)",
@@ -660,19 +694,7 @@ impl Pane for QuickSelectOverlay {
                                 if let Some(cell) =
                                     line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
                                 {
-                                    cell.attrs_mut()
-                                        .set_background(
-                                            colors
-                                                .quick_select_match_bg
-                                                .unwrap_or(AnsiColor::Black.into()),
-                                        )
-                                        .set_foreground(
-                                            colors
-                                                .quick_select_match_fg
-                                                .unwrap_or(AnsiColor::Green.into()),
-                                        )
-                                        .set_reverse(false)
-                                        .set_intensity(Intensity::Bold);
+                                    apply_match_highlight(cell.attrs_mut(), &colors);
                                 }
                             }
                             for (idx, c) in m.label.chars().enumerate() {
@@ -680,18 +702,7 @@ impl Pane for QuickSelectOverlay {
                                     .get_cell(idx)
                                     .map(|cell| cell.attrs().clone())
                                     .unwrap_or_else(|| CellAttributes::default());
-                                attr.set_background(
-                                    colors
-                                        .quick_select_label_bg
-                                        .unwrap_or(AnsiColor::Black.into()),
-                                )
-                                .set_foreground(
-                                    colors
-                                        .quick_select_label_fg
-                                        .unwrap_or(AnsiColor::Olive.into()),
-                                )
-                                .set_reverse(false)
-                                .set_intensity(Intensity::Bold);
+                                apply_label_highlight(&mut attr, &colors);
                                 line.set_cell(m.range.start + idx, Cell::new(c, attr), SEQ_ZERO);
                             }
                         }
@@ -752,19 +763,7 @@ impl Pane for QuickSelectOverlay {
                     for cell_idx in m.range.clone() {
                         if let Some(cell) = line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
                         {
-                            cell.attrs_mut()
-                                .set_background(
-                                    colors
-                                        .quick_select_match_bg
-                                        .unwrap_or(AnsiColor::Black.into()),
-                                )
-                                .set_foreground(
-                                    colors
-                                        .quick_select_match_fg
-                                        .unwrap_or(AnsiColor::Green.into()),
-                                )
-                                .set_reverse(false)
-                                .set_intensity(Intensity::Bold);
+                            apply_match_highlight(cell.attrs_mut(), &colors);
                         }
                     }
                     for (idx, c) in m.label.chars().enumerate() {
@@ -772,18 +771,7 @@ impl Pane for QuickSelectOverlay {
                             .get_cell(idx)
                             .map(|cell| cell.attrs().clone())
                             .unwrap_or_else(|| CellAttributes::default());
-                        attr.set_background(
-                            colors
-                                .quick_select_label_bg
-                                .unwrap_or(AnsiColor::Black.into()),
-                        )
-                        .set_foreground(
-                            colors
-                                .quick_select_label_fg
-                                .unwrap_or(AnsiColor::Olive.into()),
-                        )
-                        .set_reverse(false)
-                        .set_intensity(Intensity::Bold);
+                        apply_label_highlight(&mut attr, &colors);
                         line.set_cell(m.range.start + idx, Cell::new(c, attr), SEQ_ZERO);
                     }
                 }
@@ -1049,5 +1037,50 @@ impl QuickSelectRenderable {
         self.result_pos.replace(n);
         let result = self.results[n].clone();
         self.set_viewport(Some(result.start_y));
+    }
+}
+
+#[cfg(test)]
+mod quick_select_fade_test {
+    use super::{apply_label_highlight, apply_match_highlight};
+    use crate::termwindow::render::dim_fade_factor;
+    use config::Config;
+    use wezterm_term::{CellAttributes, Intensity};
+
+    #[test]
+    fn a_highlighted_match_reports_no_fade() {
+        type Highlight = fn(&mut CellAttributes, &config::Palette);
+        let highlights: [(&str, Highlight); 2] = [
+            ("match", apply_match_highlight),
+            ("label", apply_label_highlight),
+        ];
+
+        for track_separately in [false, true] {
+            let mut config = Config::default_config();
+            config.track_bold_and_dim_separately = track_separately;
+            config.dim_opacity = Some(0.5);
+
+            let mut dim = CellAttributes::default();
+            dim.apply_sgr_intensity(Intensity::Half);
+
+            // The control, without which the assertions below would pass
+            // against a configuration that fades nothing at all.
+            assert_eq!(
+                dim_fade_factor(&dim, &config),
+                0.5,
+                "this cell does fade before the highlight \
+                 (separate = {track_separately})"
+            );
+
+            for (name, highlight) in highlights {
+                let mut attrs = dim.clone();
+                highlight(&mut attrs, &config::Palette::default());
+                assert_eq!(
+                    dim_fade_factor(&attrs, &config),
+                    1.0,
+                    "and not after it ({name}, separate = {track_separately})"
+                );
+            }
+        }
     }
 }

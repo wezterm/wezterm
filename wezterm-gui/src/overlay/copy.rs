@@ -36,6 +36,35 @@ lazy_static::lazy_static! {
     static ref SAVED_PATTERN: Mutex<HashMap<TabId, Pattern>> = Mutex::new(HashMap::new());
 }
 
+/// Apply the search-match highlight to a cell's attributes.
+fn apply_search_highlight(attrs: &mut CellAttributes, colors: &config::Palette, active: bool) {
+    let (bg, fg) = if active {
+        (
+            colors
+                .copy_mode_active_highlight_bg
+                .unwrap_or(AnsiColor::Yellow.into()),
+            colors
+                .copy_mode_active_highlight_fg
+                .unwrap_or(AnsiColor::Black.into()),
+        )
+    } else {
+        (
+            colors
+                .copy_mode_inactive_highlight_bg
+                .unwrap_or(AnsiColor::Fuchsia.into()),
+            colors
+                .copy_mode_inactive_highlight_fg
+                .unwrap_or(AnsiColor::Black.into()),
+        )
+    };
+
+    attrs
+        .set_background(bg)
+        .set_foreground(fg)
+        .set_reverse(false)
+        .set_suppress_dim_fade(true);
+}
+
 const SEARCH_CHUNK_SIZE: StableRowIndex = 1000;
 
 pub struct CopyOverlay {
@@ -1467,33 +1496,8 @@ impl Pane for CopyOverlay {
                                 if let Some(cell) =
                                     line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
                                 {
-                                    if Some(m.result_index) == self.renderer.result_pos {
-                                        cell.attrs_mut()
-                                            .set_background(
-                                                colors
-                                                    .copy_mode_active_highlight_bg
-                                                    .unwrap_or(AnsiColor::Yellow.into()),
-                                            )
-                                            .set_foreground(
-                                                colors
-                                                    .copy_mode_active_highlight_fg
-                                                    .unwrap_or(AnsiColor::Black.into()),
-                                            )
-                                            .set_reverse(false);
-                                    } else {
-                                        cell.attrs_mut()
-                                            .set_background(
-                                                colors
-                                                    .copy_mode_inactive_highlight_bg
-                                                    .unwrap_or(AnsiColor::Fuchsia.into()),
-                                            )
-                                            .set_foreground(
-                                                colors
-                                                    .copy_mode_inactive_highlight_fg
-                                                    .unwrap_or(AnsiColor::Black.into()),
-                                            )
-                                            .set_reverse(false);
-                                    }
+                                    let active = Some(m.result_index) == self.renderer.result_pos;
+                                    apply_search_highlight(cell.attrs_mut(), colors, active);
                                 }
                             }
                         }
@@ -1559,33 +1563,8 @@ impl Pane for CopyOverlay {
                     for cell_idx in m.range.clone() {
                         if let Some(cell) = line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
                         {
-                            if Some(m.result_index) == renderer.result_pos {
-                                cell.attrs_mut()
-                                    .set_background(
-                                        colors
-                                            .copy_mode_active_highlight_bg
-                                            .unwrap_or(AnsiColor::Yellow.into()),
-                                    )
-                                    .set_foreground(
-                                        colors
-                                            .copy_mode_active_highlight_fg
-                                            .unwrap_or(AnsiColor::Black.into()),
-                                    )
-                                    .set_reverse(false);
-                            } else {
-                                cell.attrs_mut()
-                                    .set_background(
-                                        colors
-                                            .copy_mode_inactive_highlight_bg
-                                            .unwrap_or(AnsiColor::Fuchsia.into()),
-                                    )
-                                    .set_foreground(
-                                        colors
-                                            .copy_mode_inactive_highlight_fg
-                                            .unwrap_or(AnsiColor::Black.into()),
-                                    )
-                                    .set_reverse(false);
-                            }
+                            let active = Some(m.result_index) == renderer.result_pos;
+                            apply_search_highlight(cell.attrs_mut(), colors, active);
                         }
                     }
                 }
@@ -2024,4 +2003,41 @@ pub fn copy_key_table() -> KeyTable {
         table.insert((key, mods), KeyTableEntry { action });
     }
     table
+}
+
+#[cfg(test)]
+mod copy_mode_fade_test {
+    use super::apply_search_highlight;
+    use crate::termwindow::render::dim_fade_factor;
+    use config::Config;
+    use wezterm_term::{CellAttributes, Intensity};
+
+    #[test]
+    fn a_highlighted_match_reports_no_fade() {
+        for track_separately in [false, true] {
+            let mut config = Config::default_config();
+            config.track_bold_and_dim_separately = track_separately;
+            config.dim_opacity = Some(0.5);
+
+            let mut dim = CellAttributes::default();
+            dim.apply_sgr_intensity(Intensity::Half);
+
+            assert_eq!(
+                dim_fade_factor(&dim, &config),
+                0.5,
+                "this cell does fade before the highlight \
+                 (separate = {track_separately})"
+            );
+
+            for active in [true, false] {
+                let mut attrs = dim.clone();
+                apply_search_highlight(&mut attrs, &config::Palette::default(), active);
+                assert_eq!(
+                    dim_fade_factor(&attrs, &config),
+                    1.0,
+                    "and not after it (active = {active}, separate = {track_separately})"
+                );
+            }
+        }
+    }
 }
