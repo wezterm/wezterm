@@ -292,7 +292,11 @@ impl ParsedFont {
     pub fn lua_fallback(handles: &[Self]) -> String {
         let mut code = "wezterm.font_with_fallback({\n".to_string();
 
+        let mut separator = "";
         for p in handles {
+            code.push_str(separator);
+            separator = "\n";
+
             code.push_str(&format!("  -- {}\n", p.handle.diagnostic_string()));
             if p.synthesize_italic {
                 code.push_str("  -- Will synthesize italics\n");
@@ -376,7 +380,6 @@ impl ParsedFont {
                 }
                 code.push_str("},\n")
             }
-            code.push_str("\n");
         }
         code.push_str("})");
         code
