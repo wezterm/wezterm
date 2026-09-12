@@ -74,11 +74,11 @@ impl BlobStorage for SimpleTempDir {
     fn store(&self, content_id: ContentId, data: &[u8], _lease_id: LeaseId) -> Result<(), Error> {
         let mut refs = self.refs.lock().unwrap();
 
-        // A live reference means that this content-addressed file is already
-        // stored, so reuse it rather than trying to replace it.
+        // A live reference means that this content-addressed file is already stored, reuse it.
         if let Some(count) = refs.get_mut(&content_id) {
             if *count > 0 {
                 *count += 1;
+                log::trace!("store: tempfile for content ID {content_id} already exists, reusing");
                 return Ok(());
             }
         }
@@ -92,6 +92,7 @@ impl BlobStorage for SimpleTempDir {
         file.write_all(data)?;
         file.persist(&path)
             .map_err(|persist_err| persist_err.error)?;
+        log::trace!("store: tempfile for content ID {content_id} written");
 
         *refs.entry(content_id).or_insert(0) += 1;
 
