@@ -1,5 +1,4 @@
 [package]
-authors = ["Wez Furlong"]
 name = "wezterm-char-props"
 version = "0.1.3"
 edition = "2021"
