@@ -1,10 +1,13 @@
 #![allow(clippy::many_single_char_names)]
+
 #[cfg(feature = "tmux_cc")]
 use crate::tmux_cc::Event;
 use crate::{
     Action, CSI, DeviceControlMode, EnterDeviceControlMode, Esc, OperatingSystemCommand,
     ShortDeviceControl,
 };
+#[cfg(not(feature = "std"))]
+use alloc::vec;
 #[cfg(feature = "tmux_cc")]
 use core::borrow::BorrowMut;
 use core::cell::RefCell;

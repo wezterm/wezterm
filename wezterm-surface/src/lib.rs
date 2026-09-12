@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+
 use crate::line::CellRef;
 use alloc::borrow::Cow;
 use core::cmp::min;
