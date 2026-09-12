@@ -9,7 +9,7 @@ Note that wezterm ships with all of the pre-defined terminal.sexy color
 schemes, so this function is primarily useful if you want to design a color
 scheme using terminal.sexy and then import it to wezterm.
 
-This function returns a tuple of the the color definitions and the metadata.
+This function returns a tuple of the color definitions and the metadata.
 
 For example, given a json file with these contents:
 

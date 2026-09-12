@@ -188,9 +188,10 @@ impl log::Log for Logger {
                 // to a device that is out of disk space.
                 // <https://github.com/wezterm/wezterm/issues/1839>
                 let mut stderr = std::io::stderr();
-                let _ = writeln!(
-                    stderr,
-                    "{}  {level_color}{:6}{reset} {target_color}{:padding$}{reset} > {}",
+                // Direct `write!` will `write()` every single padding space as individual syscall
+                // which makes terminal with tracing logs enabled unusably slow.
+                let logline = format!(
+                    "{}  {level_color}{:6}{reset} {target_color}{:padding$}{reset} > {}\n",
                     ts,
                     level,
                     target,
@@ -200,6 +201,7 @@ impl log::Log for Logger {
                     reset = reset,
                     target_color = target_color
                 );
+                let _ = stderr.write_all(logline.as_bytes());
                 let _ = stderr.flush();
             }
 

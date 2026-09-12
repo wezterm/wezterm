@@ -41,7 +41,7 @@ fn compute_repo_dir(url: &str) -> String {
     dir
 }
 
-fn get_remote(repo: &Repository) -> anyhow::Result<Option<Remote>> {
+fn get_remote(repo: &Repository) -> anyhow::Result<Option<Remote<'_>>> {
     let remotes = repo.remotes()?;
     for remote in remotes.iter() {
         if let Some(name) = remote {
@@ -184,7 +184,7 @@ impl RepoSpec {
     }
 }
 
-fn require_plugin(lua: &Lua, url: String) -> anyhow::Result<Value> {
+fn require_plugin(lua: &Lua, url: String) -> anyhow::Result<Value<'_>> {
     let spec = RepoSpec::parse(url)?;
 
     if !spec.is_checked_out() {

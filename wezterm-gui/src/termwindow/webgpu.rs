@@ -52,13 +52,13 @@ impl RawHandlePair {
 }
 
 impl HasWindowHandle for RawHandlePair {
-    fn window_handle(&self) -> Result<WindowHandle, HandleError> {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
         unsafe { Ok(WindowHandle::borrow_raw(self.window)) }
     }
 }
 
 impl HasDisplayHandle for RawHandlePair {
-    fn display_handle(&self) -> Result<DisplayHandle, HandleError> {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         unsafe { Ok(DisplayHandle::borrow_raw(self.display)) }
     }
 }

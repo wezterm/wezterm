@@ -271,7 +271,7 @@ impl<L, N> Cursor<L, N> {
     /// Return an iterator that will visit the chain of nodes leading
     /// to the root from the current position and yield their node
     /// data at each step of iteration.
-    pub fn path_to_root(&self) -> ParentIterator<L, N> {
+    pub fn path_to_root(&self) -> ParentIterator<'_, L, N> {
         ParentIterator { path: &*self.path }
     }
 

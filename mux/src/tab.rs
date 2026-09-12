@@ -535,7 +535,7 @@ impl Tab {
 
     /// Called by the multiplexer client when building a local tab to
     /// mirror a remote tab.  The supplied `root` is the information
-    /// about our counterpart in the the remote server.
+    /// about our counterpart in the remote server.
     /// This method builds a local tree based on the remote tree which
     /// then replaces the local tree structure.
     ///
@@ -2279,7 +2279,7 @@ mod test {
         fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>> {
             Ok(None)
         }
-        fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+        fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
             unimplemented!()
         }
         fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {

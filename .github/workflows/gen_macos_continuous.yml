@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: "recursive"
       - name: "Install Rust (ARM)"
@@ -101,7 +101,7 @@ jobs:
         shell: bash
         run: "bash ci/deploy.sh"
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "macos"
           path: "WezTerm-*.zip"
@@ -118,9 +118,9 @@ jobs:
 
     steps:
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: "Download artifact"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: "macos"
       - name: "Checksum"

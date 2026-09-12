@@ -142,15 +142,15 @@ impl<'a> std::borrow::Borrow<dyn GlyphKeyTrait + 'a> for GlyphKey {
     }
 }
 
-impl<'a> PartialEq for (dyn GlyphKeyTrait + 'a) {
+impl<'a> PartialEq for dyn GlyphKeyTrait + 'a {
     fn eq(&self, other: &Self) -> bool {
         self.key().eq(&other.key())
     }
 }
 
-impl<'a> Eq for (dyn GlyphKeyTrait + 'a) {}
+impl<'a> Eq for dyn GlyphKeyTrait + 'a {}
 
-impl<'a> std::hash::Hash for (dyn GlyphKeyTrait + 'a) {
+impl<'a> std::hash::Hash for dyn GlyphKeyTrait + 'a {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.key().hash(state)
     }

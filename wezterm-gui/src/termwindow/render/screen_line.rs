@@ -445,7 +445,7 @@ impl crate::TermWindow {
             };
 
             // TODO: remember logical/visual mapping for selection
-            #[allow(unused_variables)]
+            #[allow(unused_variables, unused_assignments)]
             let mut phys_cell_idx = cluster.first_cell_idx;
 
             // Pre-decrement by the cluster width when doing RTL,
@@ -674,7 +674,10 @@ impl crate::TermWindow {
                         }
                     }
                 }
-                phys_cell_idx += info.pos.num_cells as usize;
+                #[allow(unused_assignments)]
+                {
+                    phys_cell_idx += info.pos.num_cells as usize;
+                }
                 visual_cell_idx += info.pos.num_cells as usize;
                 cluster_x_pos += if params.use_pixel_positioning {
                     glyph.x_advance.get() as f32 * width_scale

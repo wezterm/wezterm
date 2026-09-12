@@ -9,6 +9,11 @@ use num_traits::NumCast;
 use std::fmt::Display;
 use std::time::Duration;
 
+#[cfg(feature = "use_serde")]
+use serde::Deserialize;
+#[cfg(feature = "use_serde")]
+use serde::Serialize;
+
 #[cfg(unix)]
 pub mod unix;
 #[cfg(windows)]
@@ -27,6 +32,7 @@ pub use self::windows::{WindowsTerminal, WindowsTerminalWaker as TerminalWaker};
 // On Windows, GetConsoleFontSize() can return the size of a cell in
 // logical units and we can probably use this to populate xpixel, ypixel.
 // GetConsoleScreenBufferInfo() can return the rows and cols.
+#[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreenSize {
     /// The number of rows of text
@@ -41,6 +47,7 @@ pub struct ScreenSize {
     pub ypixel: usize,
 }
 
+#[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Blocking {
     DoNotWait,
@@ -71,7 +78,7 @@ pub trait Terminal {
 
     /// Returns a capability probing helper that will use escape
     /// sequences to attempt to probe information from the terminal
-    fn probe_capabilities(&mut self) -> Option<ProbeCapabilities> {
+    fn probe_capabilities(&mut self) -> Option<ProbeCapabilities<'_>> {
         None
     }
 
