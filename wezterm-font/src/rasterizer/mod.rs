@@ -41,10 +41,11 @@ pub fn new_rasterizer(
     rasterizer: FontRasterizerSelection,
     handle: &ParsedFont,
     pixel_geometry: config::DisplayPixelGeometry,
+    config: &config::Config,
 ) -> anyhow::Result<Box<dyn FontRasterizer>> {
     match rasterizer {
         FontRasterizerSelection::FreeType => Ok(Box::new(
-            freetype::FreeTypeRasterizer::from_locator(handle, pixel_geometry)?,
+            freetype::FreeTypeRasterizer::from_locator(handle, pixel_geometry, config)?,
         )),
         FontRasterizerSelection::Harfbuzz => Ok(Box::new(
             harfbuzz::HarfbuzzRasterizer::from_locator(handle)?,

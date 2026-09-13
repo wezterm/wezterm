@@ -914,6 +914,8 @@ impl Face {
         load_flags: FT_Int32,
         render_mode: FT_Render_Mode,
         synthesize_bold: bool,
+        thicken: bool,
+        thicken_strength: u8,
     ) -> anyhow::Result<&FT_GlyphSlotRec_> {
         unsafe {
             ft_result(
@@ -934,6 +936,17 @@ impl Face {
 
             if synthesize_bold {
                 FT_GlyphSlot_Embolden(slot as *mut _);
+            }
+
+            if thicken && slot.format == FT_Glyph_Format_::FT_GLYPH_FORMAT_OUTLINE {
+                let strength = thicken_strength as i64;
+                // Maps [0, 255] to [1, 37] in F26Dot6 units (64 units = 1 pixel),
+                // giving a thickening range of roughly 0.016–0.578 pixels.
+                // The +1 ensures a minimum non-zero thickening when enabled.
+                let amount = 1 + (strength * 36 / 255);
+                let amount = FT_Pos::from(FT_F26Dot6::from_bits(amount as _));
+                ft_result(FT_Outline_EmboldenXY(&mut slot.outline, amount, amount), ())
+                    .context("load_and_render_glyph: FT_Outline_EmboldenXY")?;
             }
 
             // Current versions of freetype overload the operation of FT_LOAD_COLOR
@@ -976,7 +989,8 @@ impl Face {
             anyhow::bail!("no I from which to compute cap height");
         }
         let (load_flags, render_mode) = compute_load_flags_from_config(None, None, None, None);
-        let ft_glyph = self.load_and_render_glyph(glyph_pos, load_flags, render_mode, false)?;
+        let ft_glyph =
+            self.load_and_render_glyph(glyph_pos, load_flags, render_mode, false, false, 255)?;
 
         let mode: FT_Pixel_Mode =
             unsafe { std::mem::transmute(u32::from(ft_glyph.bitmap.pixel_mode)) };
