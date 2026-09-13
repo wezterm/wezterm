@@ -153,9 +153,9 @@ It is valid to omit the code number; for example `CSI m` is equivalent to `CSI
 
 |Code|Description|Action|
 |--- |-----------|------|
-|0   |Reset      |Reset to default foreground/background colors, reset all presentation attributes, clear any explicit hyperlinks| 
-|1   |IntensityBold|Set the intensity level to Bold.  This causes subsequent text to be rendered in a bold font variant and, if the foreground color is set to a palette index in the 0-7 range, effectively shifts it to the brighter value in the 8-15 range|
-|2   |IntensityDim|Set the intensity level to Dim or Half-Bright.  This causes text to be rendered in a lighter weight font variant|
+|0   |Reset      |Reset to default foreground/background colors, reset all presentation attributes, clear any explicit hyperlinks|
+|1   |IntensityBold|Sets the bold attribute.  This causes subsequent text to be rendered in a bold font variant and, if the foreground color is set to a palette index in the 0-7 range, effectively shifts it to the brighter value in the 8-15 range|
+|2   |IntensityDim|Sets the dim (or half-bright) attribute.  How dim text is rendered depends on [dim_opacity](config/lua/config/dim_opacity.md) and on your [font_rules](config/lua/config/font_rules.md); by default it is rendered in a lighter weight font variant|
 |3   |ItalicOn|Sets the italic attribute on the text, causing an italic font variant to be selected|
 |4   |UnderlineOn|Text will have a single underline|
 |4:0 |UnderlineOff|Text will have no underline|
@@ -170,7 +170,7 @@ It is valid to omit the code number; for example `CSI m` is equivalent to `CSI
 |8   |InvisibleOn|Marks text as invisible.|
 |9   |StrikeThroughOn|Text will be rendered with a single line struck through the middle|
 |21  |UnderlineDouble|Text will be rendered with double underline|
-|22  |NormalIntensity|Cancels the effect of IntensityBold and IntensityDim, returning the text to normal intensity|
+|22  |NormalIntensity|Clears both the bold and the dim attributes, returning the text to normal intensity|
 |23  |ItalicOff|Cancels the effect of ItalicOn|
 |24  |UnderlineOff|Text will have no underline|
 |25  |BlinkOff|Cancels the effect of BlinkOn and RapidBlinkOn|
@@ -287,6 +287,10 @@ allowing you to specify the alpha channel in addition to the RGB channels.
 CSI 38 : 6 : : R : G : B : A m
 ```
 
+{{since('nightly')}}
+
+The alpha channel was ignored before this version.
+
 ##### CSI 48:2 - background color: RGB
 
 This sequence will set the *background color* to an arbitrary color in RGB colorspace.
@@ -342,6 +346,28 @@ allowing you to specify the alpha channel in addition to the RGB channels.
 ```
 CSI 58 : 6 : : R : G : B : A m
 ```
+
+{{since('nightly')}}
+
+The alpha channel was ignored before this version.
+
+##### Bold and dim together
+
+{{since('nightly')}}
+
+Historically, handling of bold dim text is under-specified. Some terminals
+use lighter font to express dimness, so they can't mix dim with bold. Others
+render dim text by decreasing its opacity or changing color value, so they can express bold dim text.
+
+Wezterm used to be in the first group, making bold and dim mutually exclusive.
+Today, it tracks both attributes separately, and allows users to configure
+how to render text that has both of them enabled:
+
+* [track_bold_and_dim_separately](config/lua/config/track_bold_and_dim_separately.md)
+  decides whether wezterm reads the two attributes independently or uses
+  whichever arrived last.
+* [dim_opacity](config/lua/config/dim_opacity.md) decides whether dim text is
+  drawn faded or using a lighter font.
 
 #### Cursor Movement
 

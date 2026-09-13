@@ -1,4 +1,4 @@
-### Color Scheme
+## Color Scheme
 
 WezTerm ships with over 700 color schemes available from
 [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes#screenshots),
@@ -180,8 +180,9 @@ hsv(120,100%,100%)
 hsv(120deg 100% 100% / 100%)
 ```
 
-The alpha value is ignored except when used with `selection_fg` and
-`selection_bg`:
+The alpha value is ignored except when used with `selection_bg` and
+{{since('nightly', inline=True)}} all foreground colors except `cursor_fg` and `selection_fg`, which reserve alpha `0` to mean "use the cell's own foreground",
+and ignore it otherwise:
 
 ```lua
 config.colors = {
@@ -265,6 +266,35 @@ $ for scheme in *.sh ; do ; echo $scheme ; \
 ```
 
   <video width="80%" controls src="../screenshots/wezterm-dynamic-colors.mp4" loop></video>
+
+### Appearance of bold and dim text
+
+By default, `wezterm` treats bold and dim attributes according to the letter
+of the ECMA-48 standard: text can be either normal, bold (increased font weight),
+or faint (decreased font weight). You can customize this behavior, though:
+
+* [track_bold_and_dim_separately](lua/config/track_bold_and_dim_separately.md)
+  decides whether a cell can carry both attributes at once.
+  {{since('nightly', inline=True)}}
+* [dim_opacity](lua/config/dim_opacity.md) draws dim text faded rather than in
+  a lighter font, at an opacity you choose. {{since('nightly', inline=True)}}
+* [bold_brightens_ansi_colors](lua/config/bold_brightens_ansi_colors.md)
+  decides whether bold text also shifts palette indices 0-7 to their bright
+  counterparts. It is on by default, and a third value brightens the color
+  without using a bold font as well.
+
+For example, this config draws dim text faded rather than thinner, and lets a
+cell carry both attributes at once:
+
+```lua
+-- Allow text to be bold and dim at the same time.
+-- With this setting on, dim text is highlighted using opacity
+-- rather than font weight.
+config.track_bold_and_dim_separately = true
+
+-- Adjust opacity of dim text to your liking.
+config.dim_opacity = 0.65
+```
 
 ### Tab Bar Appearance & Colors
 
@@ -402,7 +432,7 @@ config.colors = {
 }
 ```
 
-### Window Padding
+## Window Padding
 
 You may add padding around the edges of the terminal area.
 
@@ -492,4 +522,3 @@ through to `1.0` (completely opaque).
 ```lua
 config.text_background_opacity = 0.3
 ```
-
