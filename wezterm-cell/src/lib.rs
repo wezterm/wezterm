@@ -220,7 +220,7 @@ impl CellAttributes {
     // Which of bold and dim arrived last. This bit is set only when both dim
     // and bold are enabled, which is important for hashing and bitwise comparison
     // to stay semantically accurate.
-    bitfield!(dim_is_most_recent, set_dim_is_most_recent, 17);
+    bitfield!(pub dim_is_most_recent, set_dim_is_most_recent, 17);
 
     // Set on a cell whose colours have been replaced by a highlight, to say
     // that the dim fade should not be applied on top of the replacement.
