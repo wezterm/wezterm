@@ -587,6 +587,7 @@ pub enum KeyAssignment {
     Search(Pattern),
     ActivateCopyMode,
 
+    SelectAll,
     SelectTextAtMouseCursor(SelectionMode),
     ExtendSelectionToMouseCursor(SelectionMode),
     OpenLinkAtMouseCursor,
