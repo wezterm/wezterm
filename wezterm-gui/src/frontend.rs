@@ -65,8 +65,32 @@ impl GuiFrontEnd {
                         .detach();
                     }
                 }
+                MuxNotification::ActiveWorkspaceChanged {
+                    client_id: changed_for,
+                    new_workspace,
+                    old_workspace,
+                } => {
+                    // Other mux clients keep their own active workspace.
+                    let mine = changed_for == client_id;
+                    // The lua config is main-thread only, and reporting after
+                    // the reconcile lets a handler see the windows the change
+                    // brought with it.
+                    promise::spawn::spawn_into_main_thread(async move {
+                        let fe = crate::frontend::front_end();
+                        if !fe.is_switching_workspace() {
+                            fe.reconcile_workspace();
+                        }
+                        if mine {
+                            promise::spawn::spawn(trigger_and_log_workspace_changed(
+                                new_workspace,
+                                old_workspace,
+                            ))
+                            .detach();
+                        }
+                    })
+                    .detach();
+                }
                 MuxNotification::WindowWorkspaceChanged(_)
-                | MuxNotification::ActiveWorkspaceChanged(_)
                 | MuxNotification::WindowCreated(_)
                 | MuxNotification::WindowRemoved(_) => {
                     promise::spawn::spawn_into_main_thread(async move {
@@ -483,6 +507,28 @@ impl GuiFrontEnd {
             }
         }
         None
+    }
+}
+
+async fn trigger_workspace_changed(
+    lua: Option<Rc<mlua::Lua>>,
+    workspace: String,
+    old_workspace: String,
+) -> anyhow::Result<()> {
+    if let Some(lua) = lua {
+        let args = lua.pack_multi((workspace, old_workspace))?;
+        config::lua::emit_event(&lua, ("workspace-changed".to_string(), args)).await?;
+    }
+    Ok(())
+}
+
+async fn trigger_and_log_workspace_changed(workspace: String, old_workspace: String) {
+    if let Err(err) = config::with_lua_config_on_main_thread(move |lua| {
+        trigger_workspace_changed(lua, workspace, old_workspace)
+    })
+    .await
+    {
+        log::error!("while processing workspace-changed event: {:#}", err);
     }
 }
 
