@@ -49,6 +49,7 @@ mod scripting;
 mod scrollbar;
 mod selection;
 mod shapecache;
+mod simulated_gui;
 mod spawn;
 mod stats;
 mod tabbar;
@@ -131,13 +132,22 @@ enum SubCommand {
 
     #[command(name = "show-keys", about = "Show key assignments")]
     ShowKeys(ShowKeysCommand),
+
+    #[command(
+        name = "check-config",
+        about = "Check that the configuration loads, and exit non-zero if it does not"
+    )]
+    CheckConfig(CheckConfigCommand),
 }
 
 impl SubCommand {
     /// Subcommands that print their result into the terminal the user ran
     /// them in.
     fn runs_in_terminal(&self) -> bool {
-        matches!(self, Self::LsFonts(_) | Self::ShowKeys(_))
+        matches!(
+            self,
+            Self::LsFonts(_) | Self::ShowKeys(_) | Self::CheckConfig(_)
+        )
     }
 }
 
@@ -902,6 +912,59 @@ fn run_show_keys(config: config::ConfigHandle, cmd: &ShowKeysCommand) -> anyhow:
     Ok(())
 }
 
+fn run_check_config(cmd: &CheckConfigCommand, skip_config: bool) -> anyhow::Result<()> {
+    // Only `warnings_as_errors` is read here.  The other fields had to be
+    // applied in `run`, before the lua state was built.
+    config::assign_error_callback(|err| eprintln!("{}", err));
+
+    // `common_init` has already loaded the configuration, exactly once,
+    // with every lua module registered.  Reloading it here would run a
+    // configuration that is a test suite twice.
+    let error = config::configuration_result().err();
+    let mut warnings = config::configuration_warnings();
+
+    // Set at the end of a successful load, and cleared when no
+    // configuration file was found.
+    let config_file = std::env::var_os("WEZTERM_CONFIG_FILE");
+
+    // Naming a file that is not there already failed, so none was asked
+    // for.  A job whose configuration was never put in place should not
+    // read a bare pass -- unless it asked for the defaults, in which case
+    // this is what it wanted.
+    //
+    // A failed load leaves `WEZTERM_CONFIG_FILE` unset too, so the error
+    // has to be ruled out first: there was a file, and it is about to be
+    // reported on.
+    if error.is_none() && config_file.is_none() && !skip_config {
+        warnings.push(
+            "no configuration file was found; checked wezterm's built-in defaults instead"
+                .to_string(),
+        );
+    }
+
+    for warning in &warnings {
+        eprintln!("{warning}");
+    }
+
+    let error_text = error.as_ref().map(|err| format!("{err:#}"));
+    match check_outcome(error_text.as_deref(), &warnings, cmd.warnings_as_errors) {
+        CheckOutcome::Ok => {
+            match config_file {
+                Some(path) => {
+                    println!("config ok: {}", std::path::Path::new(&path).display())
+                }
+                None => println!("config ok: no configuration file; using built-in defaults"),
+            }
+            Ok(())
+        }
+        // The error is returned rather than printed, so that it reaches
+        // stderr by the same route as every other cli failure.
+        CheckOutcome::Failed => {
+            Err(error.unwrap_or_else(|| anyhow!("the configuration produced warnings")))
+        }
+    }
+}
+
 pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyhow::Result<()> {
     use wezterm_font::parser::ParsedFont;
 
@@ -1256,12 +1319,45 @@ fn run() -> Result<(), Failure> {
     stats::Stats::init()?;
     let _saver = umask::UmaskSaver::new();
 
-    config::common_init(
-        opts.config_file.as_ref(),
-        &opts.config_override,
-        opts.skip_config,
-    )
-    .map_err(|err| Failure::new(in_terminal, err))?;
+    // Special handling for check-config: it allows specifying config path
+    // positionally, and enabling lua's debug mode.
+    if let Some(SubCommand::CheckConfig(check_config)) = opts.cmd.as_ref() {
+        // Mock lua's wezterm.gui module.
+        crate::simulated_gui::set_simulated_appearance(check_config.appearance);
+        config::lua::add_context_setup_func(crate::simulated_gui::register);
+
+        // Resolve config path.
+        let config_file = resolve_config_file(
+            opts.config_file.as_ref(),
+            check_config.config_file.as_ref(),
+            opts.skip_config,
+        )
+        .map_err(Failure::Cli)?;
+
+        let lua_debug_module = if check_config.unsafe_enable_debug_module {
+            config::LuaDebugModule::Available
+        } else {
+            config::LuaDebugModule::Withheld
+        };
+
+        // SAFETY: check-config command is permitted to enable lua debug.
+        unsafe {
+            config::common_init_with_lua_debug(
+                config_file.as_ref(),
+                &opts.config_override,
+                opts.skip_config,
+                lua_debug_module,
+            )
+        }
+        .map_err(Failure::Cli)?;
+    } else {
+        config::common_init(
+            opts.config_file.as_ref(),
+            &opts.config_override,
+            opts.skip_config,
+        )
+        .map_err(|err| Failure::new(in_terminal, err))?;
+    }
     let config = config::configuration();
     if let Some(value) = &config.default_ssh_auth_sock {
         std::env::set_var("SSH_AUTH_SOCK", value);
@@ -1322,6 +1418,7 @@ fn run() -> Result<(), Failure> {
         ),
         SubCommand::LsFonts(cmd) => run_ls_fonts(config, &cmd),
         SubCommand::ShowKeys(cmd) => run_show_keys(config, &cmd),
+        SubCommand::CheckConfig(cmd) => run_check_config(&cmd, opts.skip_config),
     };
 
     result.map_err(|err| Failure::new(in_terminal, err))

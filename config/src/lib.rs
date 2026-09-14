@@ -511,6 +511,12 @@ pub fn configuration_warnings_and_errors() -> Vec<String> {
     CONFIG.get_warnings_and_errors()
 }
 
+/// Returns warnings encountered
+/// while loading the preferred configuration
+pub fn configuration_warnings() -> Vec<String> {
+    CONFIG.get_warnings()
+}
+
 struct ConfigInner {
     config: Arc<Config>,
     error: Option<String>,
@@ -822,6 +828,11 @@ impl Configuration {
             result.push(warning.clone());
         }
         result
+    }
+
+    pub fn get_warnings(&self) -> Vec<String> {
+        let inner = self.inner.lock().unwrap();
+        inner.warnings.clone()
     }
 
     /// Returns any captured error message, and clears
