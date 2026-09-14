@@ -809,11 +809,12 @@ impl Keyboard {
 }
 
 /// Build the compose table for the process locale, retrying with the C locale
-/// when xkbcommon cannot resolve it. xkbcommon owns Compose-file discovery.
+/// if xkbcommon cannot resolve it.
 fn new_compose_table(context: &xkb::Context) -> anyhow::Result<xkb::compose::Table> {
     let locale = query_lc_ctype()?;
     xkb::compose::Table::new_from_locale(context, locale, xkb::compose::COMPILE_NO_FLAGS)
         .or_else(|_| {
+            log::info!("Failed to acquire compose table for locale {locale:?}; falling back to C");
             xkb::compose::Table::new_from_locale(
                 context,
                 OsStr::new("C"),
