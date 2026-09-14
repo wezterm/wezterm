@@ -20,9 +20,6 @@ default = ["std"]
 std = ["serde/std", "ucd-trie/std", "phf/std"]
 use_serde = ["serde"]
 
-[dev-dependencies]
-k9.workspace = true
-
 [[bench]]
 name = "wcwidth"
 harness = false

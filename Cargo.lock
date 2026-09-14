@@ -904,7 +904,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "wezterm-color-types",
  "wezterm-dynamic",
  "wezterm-term",
 ]
@@ -1543,7 +1542,6 @@ dependencies = [
  "log",
  "logging",
  "mux-lua",
- "objc2",
  "objc2-foundation",
  "plugin",
  "procinfo-funcs",
@@ -1556,7 +1554,6 @@ dependencies = [
  "time-funcs",
  "url-funcs",
  "wezterm-version",
- "winapi",
 ]
 
 [[package]]
@@ -1772,7 +1769,6 @@ dependencies = [
  "anyhow",
  "config",
  "filenamegen",
- "luahelper",
  "smol",
 ]
 
@@ -3353,7 +3349,6 @@ dependencies = [
 name = "luahelper"
 version = "0.1.0"
 dependencies = [
- "bstr",
  "log",
  "mlua",
  "wezterm-dynamic",
@@ -3573,9 +3568,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64",
  "bintree",
- "bitflags 1.3.2",
  "chrono",
  "config",
  "crossbeam",
@@ -3593,7 +3586,6 @@ dependencies = [
  "mlua",
  "names",
  "nix",
- "ntapi",
  "parking_lot",
  "percent-encoding",
  "portable-pty",
@@ -3601,10 +3593,8 @@ dependencies = [
  "promise",
  "rangeset",
  "serde",
- "serial2",
  "shell-words",
  "smol",
- "terminfo",
  "termwiz",
  "termwiz-funcs",
  "textwrap",
@@ -3623,12 +3613,10 @@ dependencies = [
  "anyhow",
  "config",
  "libc",
- "log",
  "luahelper",
  "mux",
  "parking_lot",
  "portable-pty",
- "smol",
  "termwiz",
  "termwiz-funcs",
  "url-funcs",
@@ -4432,7 +4420,6 @@ name = "portable-pty"
 version = "0.9.0"
 dependencies = [
  "anyhow",
- "bitflags 1.3.2",
  "downcast-rs",
  "filedescriptor",
  "futures",
@@ -4546,9 +4533,7 @@ dependencies = [
  "anyhow",
  "config",
  "libc",
- "luahelper",
  "procinfo",
- "wezterm-dynamic",
 ]
 
 [[package]]
@@ -5466,9 +5451,7 @@ dependencies = [
  "anyhow",
  "config",
  "lazy_static",
- "luahelper",
  "ordered-float 4.6.0",
- "wezterm-dynamic",
 ]
 
 [[package]]
@@ -5643,10 +5626,7 @@ dependencies = [
  "anyhow",
  "bstr",
  "config",
- "log",
- "luahelper",
  "smol",
- "wezterm-dynamic",
  "wezterm-open-url",
  "windows-sys 0.61.2",
 ]
@@ -5687,7 +5667,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "config",
- "luahelper",
  "wezterm-ssh",
 ]
 
@@ -5842,7 +5821,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.8.23",
- "wezterm-dynamic",
 ]
 
 [[package]]
@@ -5971,40 +5949,27 @@ dependencies = [
  "bitflags 2.13.1",
  "cassowary",
  "criterion",
- "env_logger 0.11.11",
  "fancy-regex",
  "filedescriptor",
- "finl_unicode",
- "fixedbitset",
  "fnv",
  "image",
- "k9",
  "libc",
- "log",
  "memmem",
- "nix",
- "num-derive",
  "num-traits",
  "ordered-float 4.6.0",
  "pest",
  "pest_derive",
- "phf",
  "serde",
  "sha2",
  "signal-hook",
- "siphasher",
  "terminfo",
  "termios",
  "thiserror 2.0.20",
- "ucd-trie",
  "unicode-segmentation",
- "vtparse",
- "wezterm-bidi",
  "wezterm-blob-leases",
  "wezterm-cell",
  "wezterm-char-props",
  "wezterm-color-types",
- "wezterm-dynamic",
  "wezterm-escape-parser",
  "wezterm-input-types",
  "wezterm-surface",
@@ -6125,11 +6090,9 @@ dependencies = [
  "chrono",
  "config",
  "lazy_static",
- "luahelper",
  "promise",
  "smol",
  "spa",
- "wezterm-dynamic",
 ]
 
 [[package]]
@@ -6541,10 +6504,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "config",
- "luahelper",
  "percent-encoding",
  "url",
- "wezterm-dynamic",
 ]
 
 [[package]]
@@ -6897,7 +6858,6 @@ dependencies = [
  "termios",
  "termwiz",
  "termwiz-funcs",
- "textwrap",
  "umask",
  "url",
  "wezterm-client",
@@ -6920,7 +6880,6 @@ dependencies = [
 name = "wezterm-blob-leases"
 version = "0.1.1"
 dependencies = [
- "getrandom 0.3.4",
  "serde",
  "sha2",
  "tempfile",
@@ -6950,7 +6909,6 @@ dependencies = [
 name = "wezterm-char-props"
 version = "0.1.3"
 dependencies = [
- "k9",
  "phf",
  "serde",
  "ucd-trie",
@@ -7040,7 +6998,6 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bitflags 2.13.1",
- "criterion",
  "env_logger 0.11.11",
  "hex",
  "image",
@@ -7075,7 +7032,6 @@ dependencies = [
  "core-text",
  "dwrote",
  "encoding_rs",
- "enum-display-derive",
  "env_logger 0.11.11",
  "euclid",
  "finl_unicode",
@@ -7085,7 +7041,6 @@ dependencies = [
  "image",
  "k9",
  "lazy_static",
- "lfucache",
  "log",
  "memmap2 0.9.11",
  "metrics",
@@ -7126,7 +7081,6 @@ dependencies = [
  "env_logger 0.11.11",
  "euclid",
  "fastrand",
- "filedescriptor",
  "finl_unicode",
  "frecency",
  "futures",
@@ -7149,28 +7103,21 @@ dependencies = [
  "portable-pty",
  "promise",
  "rangeset",
- "ratelim",
  "rayon",
- "regex",
  "serde",
  "serde_json",
- "shared_library",
  "shlex 1.3.0",
  "smol",
  "tabout",
- "tempfile",
- "terminfo",
  "termwiz",
  "termwiz-funcs",
  "textwrap",
- "thiserror 2.0.20",
  "tiny-skia",
  "umask",
  "unicode-normalization",
  "unicode-segmentation",
  "url",
  "url-funcs",
- "walkdir",
  "wezterm-bidi",
  "wezterm-blob-leases",
  "wezterm-client",
@@ -7179,7 +7126,6 @@ dependencies = [
  "wezterm-gui-subcommands",
  "wezterm-mux-server-impl",
  "wezterm-open-url",
- "wezterm-ssh",
  "wezterm-term",
  "wezterm-toast-notification",
  "wgpu",
@@ -7229,7 +7175,6 @@ dependencies = [
  "wezterm-blob-leases",
  "wezterm-gui-subcommands",
  "wezterm-mux-server-impl",
- "wezterm-term",
  "winapi",
 ]
 
@@ -7249,9 +7194,7 @@ dependencies = [
  "libc",
  "log",
  "mux",
- "portable-pty",
  "promise",
- "rangeset",
  "rcgen",
  "smol",
  "termwiz",
@@ -7275,7 +7218,6 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "assert_fs",
- "async_ossl",
  "base64",
  "bitflags 1.3.2",
  "camino",
@@ -7323,10 +7265,8 @@ dependencies = [
  "wezterm-blob-leases",
  "wezterm-cell",
  "wezterm-char-props",
- "wezterm-color-types",
  "wezterm-dynamic",
  "wezterm-escape-parser",
- "wezterm-input-types",
 ]
 
 [[package]]
@@ -7604,7 +7544,6 @@ dependencies = [
  "anyhow",
  "async-channel",
  "async-io",
- "async-task",
  "async-trait",
  "bitflags 1.3.2",
  "bytes",
