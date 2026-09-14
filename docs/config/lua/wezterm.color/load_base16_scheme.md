@@ -11,7 +11,7 @@ when the release was prepared so this function is primarily useful if you want
 to import a base16 color scheme that either isn't listed from the main list, or
 that was created after your version of wezterm was built.
 
-This function returns a tuple of the the color definitions and the metadata.
+This function returns a tuple of the color definitions and the metadata.
 
 For example, given a yaml file with these contents:
 

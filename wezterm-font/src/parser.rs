@@ -432,7 +432,7 @@ impl ParsedFont {
         // fontconfig resorts to name matching, so we do too :-/
         let style = match style {
             FontStyle::Normal => {
-                let lower = names.full_name.to_lowercase();
+                let lower = names.full_name.to_ascii_lowercase();
                 if lower.contains("italic") || lower.contains("kursiv") {
                     FontStyle::Italic
                 } else if lower.contains("oblique") {
@@ -442,7 +442,7 @@ impl ParsedFont {
                 }
             }
             FontStyle::Italic => {
-                let lower = names.full_name.to_lowercase();
+                let lower = names.full_name.to_ascii_lowercase();
                 if lower.contains("oblique") {
                     FontStyle::Oblique
                 } else {
@@ -802,7 +802,7 @@ impl ParsedFont {
                 // This heuristic is awful, TBH.
                 if !self.is_built_in_fallback
                     && !attr.is_synthetic
-                    && self.names.full_name.to_lowercase().contains("moji")
+                    && self.names.full_name.to_ascii_lowercase().contains("moji")
                 {
                     self.assume_emoji_presentation = true;
                 }
