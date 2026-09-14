@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use luahelper::{from_lua_value_dynamic, lua_value_to_dynamic, to_lua};
-use mlua::{FromLua, IntoLuaMulti, Lua, Table, Value, Variadic};
+use mlua::{FromLua, IntoLuaMulti, Lua, LuaOptions, StdLib, Table, Value, Variadic};
 use ordered_float::NotNan;
 use portable_pty::CommandBuilder;
 use std::convert::TryFrom;
@@ -183,6 +183,32 @@ fn config_builder_new_index<'lua>(
     }
 }
 
+/// Mirrors mlua 0.9's private `Lua::disable_c_modules`, which its safe
+/// constructor runs and its unsafe one skips.
+fn disable_c_modules(lua: &Lua) -> anyhow::Result<()> {
+    let package: Table = lua.globals().get("package").context("get _G.package")?;
+
+    // Override loadlib to deny access to it.
+    package.set(
+        "loadlib",
+        lua.create_function(|_, ()| -> mlua::Result<()> {
+            Err(mlua::Error::SafetyError(
+                "package.loadlib is disabled".to_string(),
+            ))
+        })?,
+    )?;
+
+    // Disable searchers for C modules.
+    // Lua 5.2+ fixes the searcher order: preload, lua, C, all-in-one,
+    // so we can disable loaders 3 and 4.
+    let searchers: Table = package.get("searchers").context("get package.searchers")?;
+    let loader = lua.create_function(|_, ()| Ok("\n\tcan't load C modules"))?;
+    searchers.raw_set(3, loader)?;
+    searchers.raw_remove(4)?;
+
+    Ok(())
+}
+
 /// Set up a lua context for executing some code.
 /// The path to the directory containing the configuration is
 /// passed in and is used to pre-set some global values in
@@ -208,8 +234,32 @@ fn config_builder_new_index<'lua>(
 ///
 /// In addition to this, the lua standard library, except for
 /// the `debug` module, is also available to the script.
+/// An unsafe call to [`crate::common_init_with_lua_debug`] is the only
+/// way to enable `debug` module, see its safety note.
 pub fn make_lua_context(config_file: &Path) -> anyhow::Result<Lua> {
-    let lua = Lua::new();
+    make_lua_context_with_debug_module(config_file, crate::lua_debug_module_enabled())
+}
+
+/// As `make_lua_context`, but takes the `debug` decision as an argument
+/// instead of reading the process-wide setting, so that a test need not
+/// mutate it.
+fn make_lua_context_with_debug_module(
+    config_file: &Path,
+    debug_module: bool,
+) -> anyhow::Result<Lua> {
+    let lua = if debug_module {
+        // SAFETY: lua debug is gated by [`crate::common_init_with_lua_debug`]
+        // being unsafe.
+        let lua = unsafe {
+            Lua::unsafe_new_with(StdLib::ALL_SAFE | StdLib::DEBUG, LuaOptions::default())
+        };
+        // The unsafe constructor skips the lockdown the safe one applies,
+        // leaving `debug` as the only difference between the two.
+        disable_c_modules(&lua).context("disable_c_modules")?;
+        lua
+    } else {
+        Lua::new()
+    };
 
     let config_dir = config_file.parent().unwrap_or_else(|| Path::new("/"));
 
@@ -949,6 +999,61 @@ assert(wezterm.emit('bar', 42, 'woot') == true)
 
         assert_eq!(*total.lock().unwrap(), 6);
 
+        Ok(())
+    }
+
+    #[test]
+    fn debug_module_is_absent_by_default() -> anyhow::Result<()> {
+        let lua = make_lua_context_with_debug_module(Path::new("testing"), false)?;
+        let has_debug: bool = lua.load("return debug ~= nil").eval()?;
+        assert!(!has_debug, "the debug module should not be available");
+        Ok(())
+    }
+
+    #[test]
+    fn debug_module_is_present_when_enabled() -> anyhow::Result<()> {
+        let lua = make_lua_context_with_debug_module(Path::new("testing"), true)?;
+        let traceback: String = lua.load("return debug.traceback('hello')").eval()?;
+        assert!(
+            traceback.starts_with("hello"),
+            "expected a traceback beginning with the message, got {}",
+            traceback
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn c_modules_stay_disabled_when_debug_is_enabled() -> anyhow::Result<()> {
+        let lua = make_lua_context_with_debug_module(Path::new("testing"), true)?;
+        let loaded: bool = lua
+            .load("local ok, _ = pcall(package.loadlib, 'libfoo.so', 'luaopen_foo'); return ok")
+            .eval()?;
+        assert!(!loaded, "package.loadlib should still be disabled");
+        Ok(())
+    }
+
+    #[test]
+    fn the_debug_context_locks_down_c_modules_like_the_safe_one() -> anyhow::Result<()> {
+        // The searchers are replaced by index, so this diverges if either
+        // lua or mlua ever reorders them.
+        for debug_module in [false, true] {
+            let lua = make_lua_context_with_debug_module(Path::new("testing"), debug_module)?;
+
+            let count: usize = lua.load("return #package.searchers").eval()?;
+            assert_eq!(
+                count, 3,
+                "debug_module={}: the C library searcher should be gone",
+                debug_module
+            );
+
+            let message: String = lua.load("return package.searchers[3]()").eval()?;
+            assert!(
+                message.contains("can't load C modules"),
+                "debug_module={}: expected the stub searcher, got {}",
+                debug_module,
+                message
+            );
+        }
         Ok(())
     }
 }

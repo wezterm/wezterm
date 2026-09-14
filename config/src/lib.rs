@@ -74,6 +74,7 @@ lazy_static! {
     static ref CONFIG: Configuration = Configuration::new();
     static ref CONFIG_FILE_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
     static ref CONFIG_SKIP: AtomicBool = AtomicBool::new(false);
+    static ref LUA_DEBUG_MODULE: AtomicBool = AtomicBool::new(false);
     static ref CONFIG_OVERRIDES: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
     static ref SHOW_ERROR: Mutex<Option<ErrorCallback>> =
         Mutex::new(Some(|e| log::error!("{}", e)));
@@ -341,16 +342,55 @@ fn default_config_with_overrides_applied() -> anyhow::Result<Config> {
     Ok(cfg)
 }
 
+/// Whether lua's `debug` module is available to the configuration.
+///
+/// Never enable debug outside of `wezterm check-config` command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LuaDebugModule {
+    Available,
+    Withheld,
+}
+
 pub fn common_init(
     config_file: Option<&OsString>,
     overrides: &[(String, String)],
     skip_config: bool,
+) -> anyhow::Result<()> {
+    // SAFETY: calling [`common_init_with_lua_debug`]
+    // with [`LuaDebugModule::Withheld`] is safe.
+    unsafe {
+        common_init_with_lua_debug(
+            config_file,
+            overrides,
+            skip_config,
+            LuaDebugModule::Withheld,
+        )
+    }
+}
+
+/// Same as [`common_init`], but enables lua's debug module.
+///
+/// # Safety
+///
+/// Using lua debug allows lua scripts to break sandbox, so users should only
+/// enable it under specific use-cases, such as testing plugins.
+pub unsafe fn common_init_with_lua_debug(
+    config_file: Option<&OsString>,
+    overrides: &[(String, String)],
+    skip_config: bool,
+    lua_debug_module: LuaDebugModule,
 ) -> anyhow::Result<()> {
     if let Some(config_file) = config_file {
         set_config_file_override(Path::new(config_file));
     } else if skip_config {
         CONFIG_SKIP.store(true, Ordering::Relaxed);
     }
+
+    // Must be recorded before the `reload` below builds the lua state.
+    LUA_DEBUG_MODULE.store(
+        lua_debug_module == LuaDebugModule::Available,
+        Ordering::Relaxed,
+    );
 
     set_config_overrides(overrides).context("common_init: set_config_overrides")?;
     reload();
@@ -406,6 +446,10 @@ pub fn set_config_file_override(path: &Path) {
         .lock()
         .unwrap()
         .replace(path.to_path_buf());
+}
+
+pub(crate) fn lua_debug_module_enabled() -> bool {
+    LUA_DEBUG_MODULE.load(Ordering::Relaxed)
 }
 
 pub fn set_config_overrides(items: &[(String, String)]) -> anyhow::Result<()> {
