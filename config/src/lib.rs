@@ -506,11 +506,20 @@ impl ConfigInner {
         self.subscribers.retain(|_, notify| notify());
     }
 
-    fn watch_path(&mut self, path: PathBuf) {
+    /// Errs when no watcher could be created, so that the caller can stop
+    /// asking rather than repeat the same failure for every path.
+    fn watch_path(&mut self, path: PathBuf) -> Result<(), ()> {
         if self.watcher.is_none() {
             let (tx, rx) = std::sync::mpsc::channel();
             const DELAY: Duration = Duration::from_millis(200);
-            let watcher = notify::recommended_watcher(tx).unwrap();
+            let watcher = match notify::recommended_watcher(tx) {
+                Ok(watcher) => watcher,
+                Err(err) => {
+                    // Host ran out of inotify instances.
+                    log::warn!("unable to watch for configuration changes: {err:#}");
+                    return Err(());
+                }
+            };
             let path = path.clone();
 
             std::thread::spawn(move || {
@@ -558,6 +567,7 @@ impl ConfigInner {
                 .watch(&path, notify::RecursiveMode::NonRecursive)
                 .ok();
         }
+        Ok(())
     }
 
     fn accumulate_watch_paths(lua: &Lua, watch_paths: &mut Vec<PathBuf>) {
@@ -635,7 +645,10 @@ impl ConfigInner {
         self.notify();
         if self.config.automatically_reload_config {
             for path in watch_paths {
-                self.watch_path(path);
+                if self.watch_path(path).is_err() {
+                    // Host ran out of inotify instances.
+                    break;
+                }
             }
         }
     }
