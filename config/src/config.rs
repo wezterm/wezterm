@@ -1120,7 +1120,8 @@ impl Config {
         };
 
         let mut s = String::new();
-        file.read_to_string(&mut s)?;
+        file.read_to_string(&mut s)
+            .with_context(|| format!("Error reading {}", p.display()))?;
         let lua = make_lua_context(p)?;
 
         let (config, warnings) =
