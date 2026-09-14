@@ -202,6 +202,7 @@ impl super::TermWindow {
             return None;
         }
         if let KeyboardEncoding::Kitty(flags) = pane.get_keyboard_encoding() {
+            log::error!("asdf");
             Some(key.encode_kitty(flags))
         } else {
             None

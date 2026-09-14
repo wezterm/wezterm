@@ -13,6 +13,7 @@ license = "MIT"
 bitflags.workspace = true
 euclid.workspace = true
 serde = {workspace=true, features = ["rc", "derive"], optional=true}
+log.workspace = true
 wezterm-dynamic.workspace = true
 
 [features]
