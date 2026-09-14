@@ -17,6 +17,22 @@ use termwiz::escape::{Action, OneBased};
 use termwiz::tmux_cc::*;
 use wezterm_term::TerminalSize;
 
+fn tmux_quote(name: &str) -> String {
+    let mut quoted = String::with_capacity(name.len() + 2);
+    quoted.push('"');
+    for ch in name.chars() {
+        match ch {
+            '\\' | '"' => {
+                quoted.push('\\');
+                quoted.push(ch);
+            }
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
 pub(crate) trait TmuxCommand: Send + Debug {
     fn get_command(&self, domain_id: DomainId) -> String;
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()>;
@@ -93,17 +109,20 @@ impl TmuxDomainState {
 
     fn add_attached_window(&self, target: &WindowItem, tab_id: &TabId) -> anyhow::Result<()> {
         let mut gui_tabs = self.gui_tabs.lock();
-        if !gui_tabs.contains_key(&target.window_id) {
-            gui_tabs.insert(
-                target.window_id,
-                TmuxTab {
-                    tab_id: *tab_id,
-                    tmux_window_id: target.window_id,
-                    layout_csum: target.layout_csum.clone(),
-                    panes: HashSet::new(),
-                },
-            );
-        }
+        gui_tabs
+            .entry(target.window_id)
+            .and_modify(|tab| {
+                tab.layout_csum = target.layout_csum.clone();
+                tab.title = target.window_name.clone();
+                tab.tab_id = *tab_id;
+            })
+            .or_insert_with(|| TmuxTab {
+                tab_id: *tab_id,
+                tmux_window_id: target.window_id,
+                layout_csum: target.layout_csum.clone(),
+                title: target.window_name.clone(),
+                panes: HashSet::new(),
+            });
 
         Ok(())
     }
@@ -143,16 +162,22 @@ impl TmuxDomainState {
 
     pub fn remove_detached_window(&self, window_id: TmuxWindowId) -> anyhow::Result<()> {
         let mut gui_tabs = self.gui_tabs.lock();
-        let tab = match gui_tabs.get(&window_id) {
-            Some(x) => x,
-            None => {
-                anyhow::bail!("Cannot find the window {window_id}")
-            }
+        let Some(tab) = gui_tabs.remove(&window_id) else {
+            anyhow::bail!("Cannot find the window {window_id}")
         };
 
         let mux = Mux::get();
         mux.remove_tab(tab.tab_id);
-        gui_tabs.remove(&window_id);
+
+        let mut pane_map = self.remote_panes.lock();
+        let mut handshake = self.handshake_buffers.lock();
+        let mut backlog = self.backlog.lock();
+        for pane_id in &tab.panes {
+            pane_map.remove(pane_id);
+            handshake.remove(pane_id);
+            backlog.remove(pane_id);
+        }
+        self.window_order.lock().retain(|id| *id != window_id);
 
         Ok(())
     }
@@ -361,6 +386,8 @@ impl TmuxDomainState {
         };
         let mux = Mux::get();
 
+        let mut new_order = Vec::new();
+
         self.create_gui_window();
         let mut gui_window = self.gui_window.lock();
         let gui_window_id = match gui_window.as_mut() {
@@ -374,6 +401,8 @@ impl TmuxDomainState {
             if window.session_id != current_session {
                 continue;
             }
+
+            new_order.push(window.window_id);
 
             let size = TerminalSize {
                 rows: window.window_height as usize,
@@ -526,6 +555,10 @@ impl TmuxDomainState {
             }
         }
 
+        if !new_order.is_empty() {
+            *self.window_order.lock() = new_order;
+        }
+
         // To keep the active window last one to make it active after set the focus pane
         match windows.iter().find(|w| w.window_active) {
             Some(window) => {
@@ -588,6 +621,34 @@ impl TmuxDomainState {
                             TmuxDomainState::schedule_send_next_command(domain_id);
                         }
                     }
+                    MuxNotification::TabTitleChanged { tab_id, title } => {
+                        let rename = {
+                            let mut gui_tabs = tmux_domain.inner.gui_tabs.lock();
+                            gui_tabs.iter_mut().find_map(|(window_id, tab)| {
+                                if tab.tab_id == tab_id {
+                                    if tab.title == title {
+                                        None
+                                    } else {
+                                        tab.title = title.clone();
+                                        Some((*window_id, title.clone()))
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                        };
+                        if let Some((window_id, title)) = rename {
+                            tmux_domain
+                                .inner
+                                .cmd_queue
+                                .lock()
+                                .push_back(Box::new(RenameWindow {
+                                    window_id,
+                                    name: title,
+                                }));
+                            TmuxDomainState::schedule_send_next_command(domain_id);
+                        }
+                    }
                     MuxNotification::WindowInvalidated(window_id) => {
                         if let Some(window) = mux.get_window(window_id) {
                             let Some(tab) = window.get_active_tab() else {
@@ -612,6 +673,7 @@ impl TmuxDomainState {
                                 TmuxDomainState::schedule_send_next_command(domain_id);
                             }
                         }
+                        tmux_domain.inner.reconcile_tab_order(window_id);
                     }
                     _ => {}
                 }
@@ -1030,6 +1092,94 @@ impl TmuxCommand for SendKeys {
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
             let error = format!("send-key in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RenameWindow {
+    pub window_id: TmuxWindowId,
+    pub name: String,
+}
+
+impl TmuxCommand for RenameWindow {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        format!(
+            "rename-window -t %{} {}\n",
+            self.window_id,
+            tmux_quote(&self.name)
+        )
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        if result.error {
+            let error = format!("rename-window in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SendPaneReport {
+    pub pane: TmuxPaneId,
+    pub report: Vec<u8>,
+}
+
+impl TmuxCommand for SendPaneReport {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        let mut s = String::new();
+        write!(&mut s, "refresh-client -r \"%%{}:", self.pane).unwrap();
+        escape_bytes_for_tmux(&mut s, &self.report);
+        s.push_str("\"\r");
+        s
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        if result.error {
+            let error = format!(
+                "refresh-client -r in domain={domain_id} failed: {result:#?}"
+            );
+            log::error!("{error}");
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+}
+
+fn escape_bytes_for_tmux(dest: &mut String, data: &[u8]) {
+    for &byte in data {
+        match byte {
+            0..=31 => {
+                write!(dest, "\\{:03o}", byte).expect("write! to string cannot fail");
+            }
+            b'\\' | b'"' => {
+                dest.push('\\');
+                dest.push(byte as char);
+            }
+            _ => dest.push(byte as char),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SwapWindow {
+    pub src: TmuxWindowId,
+    pub dst: TmuxWindowId,
+}
+
+impl TmuxCommand for SwapWindow {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        format!("swap-window -s %{} -t %{}\n", self.src, self.dst)
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        if result.error {
+            let error = format!("swap-window in domain={domain_id} failed: {result:#?}");
             log::error!("{error}");
             anyhow::bail!("{error}");
         }
