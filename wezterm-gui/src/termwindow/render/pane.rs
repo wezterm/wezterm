@@ -1,6 +1,9 @@
-use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
+use crate::quad::{
+    HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator, TripleLayerQuadAllocatorTrait,
+};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
+use crate::termwindow::cursortrail::CursorTrailState;
 use crate::termwindow::render::{
     same_hyperlink, CursorProperties, LineQuadCacheKey, LineQuadCacheValue, LineToEleShapeCacheKey,
     RenderScreenLineParams,
@@ -571,16 +574,166 @@ impl crate::TermWindow {
             }
         }
 
-        /*
-        if let Some(zone) = zone {
-            // TODO: render a thingy to jump to prior prompt
+        if pos.is_active && self.config.cursor_trail {
+            self.paint_cursor_trail(pos, layers, current_viewport, &dims, &palette)?;
         }
-        */
+
         metrics::histogram!("paint_pane.lines").record(start.elapsed());
         log::trace!("lines elapsed {:?}", start.elapsed());
 
         Ok(())
     }
+
+    pub fn paint_cursor_trail(
+        &mut self,
+        pos: &PositionedPane,
+        layers: &mut TripleLayerQuadAllocator,
+        current_viewport: Option<StableRowIndex>,
+        dims: &RenderableDimensions,
+        palette: &ColorPalette,
+    ) -> anyhow::Result<()> {
+        let cursor = pos.pane.get_cursor_position();
+        if cursor.visibility != termwiz::surface::CursorVisibility::Visible {
+            return Ok(());
+        }
+
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+        let (padding_left, padding_top) = self.padding_left_top();
+        let border = self.get_os_border();
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().context("tab_bar_pixel_height")?
+        } else {
+            0.
+        };
+        let (top_bar_height, _) = if self.config.tab_bar_at_bottom {
+            (0.0, tab_bar_height)
+        } else {
+            (tab_bar_height, 0.0)
+        };
+
+        let left_pixel_x = padding_left
+            + border.left.get() as f32
+            + (pos.left as f32 * cell_width);
+        let top_pixel_y = top_bar_height
+            + padding_top
+            + border.top.get() as f32
+            + (pos.top as f32 * cell_height);
+
+        let viewport_top = current_viewport.unwrap_or(dims.physical_top);
+        let rel_row = cursor.y - viewport_top;
+
+        if rel_row < 0 || rel_row >= dims.viewport_rows as StableRowIndex {
+            return Ok(());
+        }
+
+        let shape = self.config.default_cursor_style.effective_shape(cursor.shape);
+        let (cursor_w, cursor_h, offset_y) = match shape {
+            termwiz::surface::CursorShape::BlinkingBar | termwiz::surface::CursorShape::SteadyBar => {
+                (2.5f32, cell_height, 0.0)
+            }
+            termwiz::surface::CursorShape::BlinkingUnderline
+            | termwiz::surface::CursorShape::SteadyUnderline => {
+                let thickness = 2.5f32;
+                (cell_width, thickness, cell_height - thickness)
+            }
+            _ => (cell_width, cell_height, 0.0),
+        };
+
+        let target_x = left_pixel_x + (cursor.x as f32 * cell_width);
+        let target_y = top_pixel_y + (rel_row as f32 * cell_height) + offset_y;
+
+        let left_offset = self.dimensions.pixel_width as f32 / 2.0;
+        let top_offset = self.dimensions.pixel_height as f32 / 2.0;
+
+        let decay = self.config.cursor_trail_decay as f32;
+        let now = Instant::now();
+
+        let (still_animating, trail_nodes, corners) = {
+            let mut trails = self.cursor_trail.borrow_mut();
+            let trail_state = trails
+                .entry(pos.pane.pane_id())
+                .or_insert_with(CursorTrailState::new);
+
+            trail_state.set_target(
+                target_x,
+                target_y,
+                target_x + cursor_w,
+                target_y + cursor_h,
+                false,
+            );
+
+            let animating = trail_state.tick(now, decay);
+            let nodes: Vec<crate::termwindow::cursortrail::TrailNode> =
+                trail_state.trail.iter().copied().collect();
+            let c_x = trail_state.corner_x;
+            let c_y = trail_state.corner_y;
+            (animating, nodes, (c_x, c_y))
+        };
+
+        if still_animating {
+            self.update_next_frame_time(Some(now + std::time::Duration::from_millis(8)));
+        }
+
+        let cursor_color = palette.cursor_bg.to_linear();
+        let gl_state = self.render_state.as_ref().unwrap();
+        let filled_box = gl_state.util_sprites.filled_box.texture_coords();
+
+        // 1. Draw decaying trail comet nodes
+        let max_age = decay * 1.5;
+        for node in trail_nodes {
+            let age = now.duration_since(node.time).as_secs_f32();
+            if age < max_age {
+                let alpha_ratio = (1.0 - (age / max_age)).clamp(0.0, 1.0);
+                let seg_color = cursor_color.mul_alpha(alpha_ratio * 0.35);
+                if let Ok(mut quad) = layers.allocate(2) {
+                    quad.set_position(
+                        node.left - left_offset,
+                        node.top - top_offset,
+                        node.right - left_offset,
+                        node.bottom - top_offset,
+                    );
+                    quad.set_texture(filled_box);
+                    quad.set_is_background();
+                    quad.set_fg_color(seg_color);
+                    quad.set_hsv(None);
+                }
+            }
+        }
+
+        // 2. Draw the liquid gliding/stretched cursor quad
+        let (c_x, c_y) = corners;
+        let tl = [c_x[0] - left_offset, c_y[0] - top_offset];
+        let tr = [c_x[1] - left_offset, c_y[1] - top_offset];
+        let br = [c_x[2] - left_offset, c_y[2] - top_offset];
+        let bl = [c_x[3] - left_offset, c_y[3] - top_offset];
+
+        if let Ok(mut quad) = layers.allocate(2) {
+            quad.set_corners(tl, tr, br, bl);
+            quad.set_texture(filled_box);
+            quad.set_is_background();
+
+            let cursor_alpha = if !still_animating
+                && shape.is_blinking()
+                && self.config.cursor_blink_rate != 0
+                && self.focused.is_some()
+            {
+                let mut color_ease = self.cursor_blink_state.borrow_mut();
+                color_ease.update_start(self.prev_cursor.last_cursor_movement());
+                let (intensity, next) = color_ease.intensity_continuous();
+                self.update_next_frame_time(Some(next));
+                1.0 - intensity * 0.75
+            } else {
+                0.85
+            };
+
+            quad.set_fg_color(cursor_color.mul_alpha(cursor_alpha));
+            quad.set_hsv(None);
+        }
+
+        Ok(())
+    }
+
 
     pub fn build_pane(&mut self, pos: &PositionedPane) -> anyhow::Result<ComputedElement> {
         // First compute the bounds for the pane background
