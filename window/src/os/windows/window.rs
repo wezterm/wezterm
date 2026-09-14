@@ -1,3 +1,4 @@
+use super::accessibility::{input_text, InputBridge};
 use super::*;
 use crate::connection::ConnectionOps;
 use crate::parameters::{self, Parameters};
@@ -100,7 +101,7 @@ lazy_static! {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
-pub(crate) struct HWindow(HWND);
+pub(crate) struct HWindow(pub(super) HWND);
 unsafe impl Send for HWindow {}
 unsafe impl Sync for HWindow {}
 
@@ -127,6 +128,7 @@ pub(crate) struct WindowInner {
     config: ConfigHandle,
     paint_throttled: bool,
     invalidated: bool,
+    accessibility: Option<InputBridge>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -221,6 +223,44 @@ impl HasWindowHandle for WindowInner {
 }
 
 impl WindowInner {
+    pub(super) fn accessibility_action(
+        &mut self,
+        request: accesskit::ActionRequest,
+        lifetime: std::sync::Weak<()>,
+    ) {
+        let bridge = match self.accessibility.as_ref() {
+            Some(bridge)
+                if std::sync::Weak::ptr_eq(
+                    &lifetime,
+                    &std::sync::Arc::downgrade(&bridge.lifetime),
+                ) =>
+            {
+                bridge
+            }
+            _ => return,
+        };
+        let pane_id = match bridge.state.accepts(&request) {
+            Some(pane) => pane,
+            None => return,
+        };
+        if request.action == accesskit::Action::Focus {
+            let hwnd = self.hwnd;
+            promise::spawn::spawn(async move {
+                if lifetime.upgrade().is_some() {
+                    unsafe {
+                        SetFocus(hwnd.0);
+                    }
+                }
+            })
+            .detach();
+        } else if unsafe { GetFocus() == self.hwnd.0 } {
+            if let Some(text) = input_text(request) {
+                self.events
+                    .dispatch(WindowEvent::AccessibilityInput { pane_id, text });
+            }
+        }
+    }
+
     fn enable_opengl(&mut self) -> anyhow::Result<Rc<glium::backend::Context>> {
         let conn = Connection::get().unwrap();
 
@@ -547,6 +587,7 @@ impl Window {
             config: config.clone(),
             paint_throttled: false,
             invalidated: true,
+            accessibility: None,
         }));
 
         // Careful: `raw` owns a ref to inner, but there is no Drop impl
@@ -556,6 +597,7 @@ impl Window {
 
         let geometry = conn.resolve_geometry(geometry);
 
+        let enable_accessibility = config.enable_win32_accessibility_input;
         let hwnd = match Self::create_window(config, class_name, name, geometry, raw) {
             Ok(hwnd) => HWindow(hwnd),
             Err(err) => {
@@ -565,6 +607,11 @@ impl Window {
             }
         };
         let window_handle = Window(hwnd);
+        if enable_accessibility {
+            // 初始化会调用 Windows 接口，避免在持有窗口状态借用时执行。
+            let bridge = InputBridge::new(hwnd, unsafe { GetFocus() == hwnd.0 });
+            inner.borrow_mut().accessibility = Some(bridge);
+        }
         inner
             .borrow_mut()
             .events
@@ -899,6 +946,15 @@ impl WindowOps for Window {
         });
     }
 
+    fn set_accessibility_input_target(&self, pane_id: Option<usize>, cursor: Rect) {
+        Connection::with_window_inner(self.0, move |inner| {
+            if let Some(bridge) = inner.accessibility.as_mut() {
+                bridge.update_target(pane_id, cursor);
+            }
+            Ok(())
+        });
+    }
+
     fn set_inner_size(&self, width: usize, height: usize) {
         Connection::with_window_inner(self.0, move |inner| {
             let hwnd = inner.hwnd;
@@ -1115,6 +1171,7 @@ unsafe fn wm_ncdestroy(
         let inner = take_rc_from_pointer(raw);
         let mut inner = inner.borrow_mut();
         inner.events.dispatch(WindowEvent::Destroyed);
+        inner.accessibility = None;
         inner.hwnd = HWindow(null_mut());
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
     }
@@ -1588,6 +1645,9 @@ unsafe fn wm_set_focus(
     _wparam: WPARAM,
     _lparam: LPARAM,
 ) -> Option<LRESULT> {
+    if let Some(bridge) = rc_from_hwnd(hwnd)?.borrow_mut().accessibility.as_mut() {
+        bridge.update_focus(true);
+    }
     rc_from_hwnd(hwnd)?
         .borrow_mut()
         .events
@@ -1601,6 +1661,9 @@ unsafe fn wm_kill_focus(
     _wparam: WPARAM,
     _lparam: LPARAM,
 ) -> Option<LRESULT> {
+    if let Some(bridge) = rc_from_hwnd(hwnd)?.borrow_mut().accessibility.as_mut() {
+        bridge.update_focus(false);
+    }
     rc_from_hwnd(hwnd)?
         .borrow_mut()
         .events
@@ -2944,8 +3007,28 @@ unsafe fn drop_files(hwnd: HWND, _msg: UINT, wparam: WPARAM, _lparam: LPARAM) ->
     Some(0)
 }
 
+unsafe fn wm_getobject(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    let inner = rc_from_hwnd(hwnd)?;
+    let result = {
+        // 系统查询可能重入；重入时交给默认窗口过程。
+        let mut inner = inner.try_borrow_mut().ok()?;
+        let bridge = inner.accessibility.as_mut()?;
+        bridge.adapter.handle_wm_getobject(
+            accesskit_windows::WPARAM(wparam),
+            accesskit_windows::LPARAM(lparam),
+            &mut bridge.state,
+        )
+    };
+    // 转换结果会调用 UI Automation，此时不再持有窗口状态借用。
+    result.map(|value| {
+        let result: accesskit_windows::LRESULT = value.into();
+        result.0
+    })
+}
+
 unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     match msg {
+        WM_GETOBJECT => wm_getobject(hwnd, wparam, lparam),
         WM_NCCREATE => wm_nccreate(hwnd, msg, wparam, lparam),
         WM_NCDESTROY => wm_ncdestroy(hwnd, msg, wparam, lparam),
         WM_NCCALCSIZE => wm_nccalcsize(hwnd, msg, wparam, lparam),

@@ -723,6 +723,9 @@ pub struct Config {
 
     #[dynamic(default = "default_true")]
     pub use_ime: bool,
+    /// 为 Windows 辅助输入工具提供立即提交的终端输入缓冲区。
+    #[dynamic(default)]
+    pub enable_win32_accessibility_input: bool,
     #[dynamic(default)]
     pub xim_im_name: Option<String>,
     #[dynamic(default)]
