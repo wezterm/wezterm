@@ -5,21 +5,23 @@ Usage: wezterm [OPTIONS] [COMMAND]
 
 Commands:
   start                  Start the GUI, optionally running an alternative
-                             program [aliases: -e]
+                         program [aliases: -e]
   ssh                    Establish an ssh session
   serial                 Open a serial port
   connect                Connect to wezterm multiplexer
   ls-fonts               Display information about fonts
   show-keys              Show key assignments
+  check-config           Check that the configuration loads, and exit non-zero
+                         if it does not
   cli                    Interact with experimental mux server
   imgcat                 Output an image to the terminal
-  set-working-directory  Advise the terminal of the current working
-                             directory by emitting an OSC 7 escape sequence
+  set-working-directory  Advise the terminal of the current working directory by
+                         emitting an OSC 7 escape sequence
   record                 Record a terminal session as an asciicast
   replay                 Replay an asciicast terminal session
   shell-completion       Generate shell completion information
   help                   Print this message or the help of the given
-                             subcommand(s)
+                         subcommand(s)
 
 Options:
   -n, --skip-config

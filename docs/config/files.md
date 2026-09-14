@@ -71,6 +71,9 @@ failed to parse, wezterm would treat it as though it didn't exist and continue
 to try other candidate file locations. In all current versions of wezterm, an
 error will be shown and the default configuration will be used instead.
 
+[wezterm check-config](../cli/check-config.md) checks a configuration without starting
+wezterm and without falling back to the defaults, exiting non-zero if anything is wrong.
+
 !!! note
     On Windows, to support users that carry their wezterm application and
     configuration around on a thumb drive, wezterm will look for the config file in
