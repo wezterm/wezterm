@@ -54,6 +54,8 @@
 	<string>An application launched via WezTerm would like to access your microphone.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>An application launched via WezTerm would like to access your reminders.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>An application launched via WezTerm would like to use speech recognition.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>An application launched via WezTerm would like to access your Documents folder.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
