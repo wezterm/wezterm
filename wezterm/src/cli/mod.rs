@@ -179,6 +179,8 @@ async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()>
             .unwrap_or(wezterm_gui_subcommands::DEFAULT_WINDOW_CLASS),
     )?;
 
+    client.verify_version_compat(&ui).await?;
+
     match cli.sub {
         CliSubCommand::ListClients(cmd) => cmd.run(client).await,
         CliSubCommand::List(cmd) => cmd.run(client).await,

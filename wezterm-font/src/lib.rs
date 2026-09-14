@@ -5,7 +5,7 @@ use crate::rasterizer::{new_rasterizer, FontRasterizer};
 use crate::shaper::{new_shaper, FontShaper, PresentationWidth};
 use anyhow::{Context, Error};
 use config::{
-    configuration, BoldBrightening, ConfigHandle, DisplayPixelGeometry, FontAttributes,
+    configuration, BoldBrightening, Config, ConfigHandle, DisplayPixelGeometry, FontAttributes,
     FontRasterizerSelection, FontStretch, FontStyle, FontWeight, TextStyle,
 };
 use rangeset::RangeSet;
@@ -996,56 +996,88 @@ impl FontConfigInner {
         config: &'a ConfigHandle,
         attrs: &CellAttributes,
     ) -> &'a TextStyle {
-        // a little macro to avoid boilerplate for matching the rules.
-        // If the rule doesn't specify a value for an attribute then
-        // it will implicitly match.  If it specifies an attribute
-        // then it has to have the same value as that in the input attrs.
-        macro_rules! attr_match {
-            ($ident:ident, $rule:expr) => {
-                if let Some($ident) = $rule.$ident {
-                    if $ident != attrs.$ident() {
-                        // Does not match
-                        continue;
-                    }
-                }
-                // matches so far...
-            };
-        }
+        match_style(config, attrs)
+    }
+}
 
-        let would_bright = match attrs.foreground() {
-            wezterm_term::color::ColorAttribute::PaletteIndex(idx) if idx < 8 => {
-                attrs.intensity() == Intensity::Bold
-            }
-            _ => false,
-        };
-
-        for rule in &config.font_rules {
-            if let Some(intensity) = rule.intensity {
-                let effective_intensity = match config.bold_brightens_ansi_colors {
-                    BoldBrightening::BrightOnly if would_bright => Intensity::Normal,
-                    BoldBrightening::No
-                    | BoldBrightening::BrightAndBold
-                    | BoldBrightening::BrightOnly => attrs.intensity(),
-                };
-                if intensity != effective_intensity {
-                    // Rule does not match
+/// Apply the defined font_rules from the user configuration to produce the
+/// text style that best matches the supplied input cell attributes.
+///
+/// Expects a config that has been through `Config::compute_extra_defaults`.
+fn match_style<'a>(config: &'a Config, attrs: &CellAttributes) -> &'a TextStyle {
+    // a little macro to avoid boilerplate for matching the rules.
+    // If the rule doesn't specify a value for an attribute then
+    // it will implicitly match.  If it specifies an attribute
+    // then it has to have the same value as that in the input attrs.
+    macro_rules! attr_match {
+        ($ident:ident, $rule:expr) => {
+            if let Some($ident) = $rule.$ident {
+                if $ident != attrs.$ident() {
+                    // Does not match
                     continue;
                 }
-                // matches so far
             }
-            attr_match!(underline, &rule);
-            attr_match!(italic, &rule);
-            attr_match!(blink, &rule);
-            attr_match!(reverse, &rule);
-            attr_match!(strikethrough, &rule);
-            attr_match!(invisible, &rule);
-
-            // If we get here, then none of the rules didn't match,
-            // so we therefore assume that it did match overall.
-            return &rule.font;
-        }
-        &config.font
+            // matches so far...
+        };
     }
+
+    // Palette indices below 8 are the standard colours, and are the only ones
+    // BrightOnly brightens in place of using a bold font.
+    let would_bright = match attrs.foreground() {
+        wezterm_term::color::ColorAttribute::PaletteIndex(idx) if idx < 8 => config.is_bold(attrs),
+        _ => false,
+    };
+
+    // What the conditions compare against: under BrightOnly on a standard
+    // palette the colour is brightened in place of a bold font, so bold
+    // is suppressed for matching.
+    let (effective_bold, effective_intensity) = match config.bold_brightens_ansi_colors {
+        BoldBrightening::BrightOnly if would_bright => (false, Intensity::Normal),
+        BoldBrightening::No | BoldBrightening::BrightAndBold | BoldBrightening::BrightOnly => {
+            (config.is_bold(attrs), attrs.intensity())
+        }
+    };
+
+    // Never rewritten, but it still goes through `config.is_dim`, whose answer
+    // depends on the tracking mode.
+    let effective_dim = config.is_dim(attrs);
+
+    for rule in &config.font_rules {
+        if let Some(intensity) = rule.intensity {
+            debug_assert!(
+                !config.track_bold_and_dim_separately,
+                "a font rule states `intensity` under \
+                 track_bold_and_dim_separately; Config::compute_extra_defaults \
+                 is what removes those, so this config has not been through it"
+            );
+            if intensity != effective_intensity {
+                // Rule does not match
+                continue;
+            }
+            // matches so far
+        }
+        if let Some(bold) = rule.bold {
+            if bold != effective_bold {
+                continue;
+            }
+        }
+        if let Some(dim) = rule.dim {
+            if dim != effective_dim {
+                continue;
+            }
+        }
+        attr_match!(underline, &rule);
+        attr_match!(italic, &rule);
+        attr_match!(blink, &rule);
+        attr_match!(reverse, &rule);
+        attr_match!(strikethrough, &rule);
+        attr_match!(invisible, &rule);
+
+        // If we get here, then none of the rules didn't match,
+        // so we therefore assume that it did match overall.
+        return &rule.font;
+    }
+    &config.font
 }
 
 impl FontConfiguration {
@@ -1128,5 +1160,668 @@ impl FontConfiguration {
         attrs: &CellAttributes,
     ) -> &'a TextStyle {
         self.inner.match_style(config, attrs)
+    }
+}
+
+#[cfg(test)]
+mod match_style_test {
+    use super::match_style;
+    use config::{
+        BoldBrightening, Config, FontAttributes, FontStyle, FontWeight, StyleRule, TextStyle,
+    };
+    use wezterm_term::color::{AnsiColor, ColorAttribute};
+    use wezterm_term::{CellAttributes, Intensity};
+
+    const STANDARD_PALETTE_RED: u8 = AnsiColor::Maroon as u8;
+
+    fn base_config() -> Config {
+        Config::default().compute_extra_defaults(None).0
+    }
+
+    fn weight_and_style(style: &TextStyle) -> (u16, FontStyle) {
+        let attr = style.font.first().expect("a TextStyle always has a font");
+        (attr.weight.to_opentype_weight(), attr.style)
+    }
+
+    fn family(style: &TextStyle) -> &str {
+        let attr = style.font.first().expect("a TextStyle always has a font");
+        &attr.family
+    }
+
+    fn cell(intensity: Intensity, italic: bool) -> CellAttributes {
+        let mut attrs = CellAttributes::default();
+        attrs.set_intensity(intensity).set_italic(italic);
+        attrs
+    }
+
+    #[test]
+    fn built_in_rules_at_defaults() {
+        let config = base_config();
+        let m =
+            |intensity, italic| weight_and_style(match_style(&config, &cell(intensity, italic)));
+
+        // Regular is 400; bolder() adds 400, lighter() subtracts 300.
+        assert_eq!(m(Intensity::Normal, false), (400, FontStyle::Normal));
+        assert_eq!(m(Intensity::Normal, true), (400, FontStyle::Italic));
+        assert_eq!(m(Intensity::Bold, false), (800, FontStyle::Normal));
+        assert_eq!(m(Intensity::Bold, true), (800, FontStyle::Italic));
+        assert_eq!(m(Intensity::Half, false), (100, FontStyle::Normal));
+        assert_eq!(m(Intensity::Half, true), (100, FontStyle::Italic));
+    }
+
+    #[test]
+    fn bright_only_suppresses_bold_weight_on_standard_palette() {
+        let mut config = base_config();
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+
+        let mut attrs = cell(Intensity::Bold, false);
+        attrs.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+
+        // The rewrite makes the effective intensity Normal, so the Bold rule
+        // does not fire.
+        assert_eq!(
+            weight_and_style(match_style(&config, &attrs)),
+            (400, FontStyle::Normal)
+        );
+    }
+
+    #[test]
+    fn bright_and_bold_keeps_bold_weight() {
+        let mut config = base_config();
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightAndBold;
+
+        let mut attrs = cell(Intensity::Bold, false);
+        attrs.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+
+        assert_eq!(
+            weight_and_style(match_style(&config, &attrs)),
+            (800, FontStyle::Normal)
+        );
+    }
+
+    #[test]
+    fn bold_brightening_off_keeps_bold_weight() {
+        let mut config = base_config();
+        config.bold_brightens_ansi_colors = BoldBrightening::No;
+
+        let mut attrs = cell(Intensity::Bold, false);
+        attrs.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+
+        assert_eq!(
+            weight_and_style(match_style(&config, &attrs)),
+            (800, FontStyle::Normal)
+        );
+    }
+
+    #[test]
+    fn a_user_rule_beats_the_built_ins() {
+        let mut config = Config::default();
+        config.font_rules.push(StyleRule {
+            intensity: Some(Intensity::Bold),
+            font: TextStyle {
+                font: vec![FontAttributes::new("UserChosenFace")],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let config = config.compute_extra_defaults(None).0;
+
+        let style = match_style(&config, &cell(Intensity::Bold, false));
+        assert_eq!(family(style), "UserChosenFace");
+    }
+
+    #[test]
+    fn no_default_rule_matches_plain_text() {
+        let config = base_config();
+        let style = match_style(&config, &cell(Intensity::Normal, false));
+        // Identity, not equality: this pins that *no rule matched*, not that
+        // the winner happened to equal the base font.
+        assert!(std::ptr::eq(style, &config.font));
+    }
+
+    #[test]
+    fn bright_only_rewrite_only_affects_normal_non_bright_colors() {
+        let mut config = base_config();
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+
+        let bold_on = |idx: u8| {
+            let mut attrs = cell(Intensity::Bold, false);
+            attrs.set_foreground(ColorAttribute::PaletteIndex(idx));
+            weight_and_style(match_style(&config, &attrs))
+        };
+
+        assert_eq!(bold_on(AnsiColor::Silver as u8), (400, FontStyle::Normal));
+        assert_eq!(bold_on(AnsiColor::Grey as u8), (800, FontStyle::Normal));
+    }
+
+    #[test]
+    fn a_default_foreground_is_never_suppressed() {
+        for brightening in [
+            BoldBrightening::No,
+            BoldBrightening::BrightAndBold,
+            BoldBrightening::BrightOnly,
+        ] {
+            let mut config = base_config();
+            config.bold_brightens_ansi_colors = brightening;
+
+            let mut attrs = cell(Intensity::Bold, false);
+            attrs.set_foreground(ColorAttribute::Default);
+
+            assert_eq!(
+                weight_and_style(match_style(&config, &attrs)),
+                (800, FontStyle::Normal),
+                "with bold_brightens_ansi_colors = {brightening:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_bright_only_rewrite_is_per_condition_not_per_rule() {
+        let mut config = Config::default();
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+
+        // States `intensity`, so the rewrite is consulted for it.
+        config.font_rules.push(StyleRule {
+            intensity: Some(Intensity::Bold),
+            italic: Some(false),
+            font: TextStyle {
+                font: vec![FontAttributes::new("StatesIntensity")],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        // States no `intensity`, so the rewrite is never consulted for it.
+        config.font_rules.push(StyleRule {
+            italic: Some(true),
+            font: TextStyle {
+                font: vec![FontAttributes::new("StatesNoIntensity")],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let config = config.compute_extra_defaults(None).0;
+
+        // Bold on a standard-palette colour: the rewrite makes the effective
+        // intensity Normal, so the intensity-stating rule does not fire.
+        let mut bold = cell(Intensity::Bold, false);
+        bold.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+        assert!(std::ptr::eq(match_style(&config, &bold), &config.font));
+
+        // The same cell with italic added. The rule that states no intensity
+        // is unaffected by the rewrite and fires.
+        let mut bold_italic = cell(Intensity::Bold, true);
+        bold_italic.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+        assert_eq!(
+            family(match_style(&config, &bold_italic)),
+            "StatesNoIntensity"
+        );
+    }
+
+    #[test]
+    fn the_fall_through_font_keeps_its_family_but_rule_fonts_are_reduced() {
+        let mut config = Config::default();
+        config.font = TextStyle {
+            font: vec![FontAttributes {
+                weight: FontWeight::MEDIUM,
+                ..FontAttributes::new("Iosevka Light")
+            }],
+            ..Default::default()
+        };
+        let config = config.compute_extra_defaults(None).0;
+
+        // compute_extra_defaults derives the built-in rule fonts from
+        // `self.font.reduce_first_font_to_family()`, but leaves `cfg.font`
+        // itself alone. So plain text keeps the configured family verbatim...
+        let plain = match_style(&config, &cell(Intensity::Normal, false));
+        assert!(std::ptr::eq(plain, &config.font));
+        let attr = plain.font.first().expect("a font");
+        assert_eq!(attr.family, "Iosevka Light");
+        assert_eq!(attr.weight, FontWeight::MEDIUM);
+        assert!(!attr.is_synthetic);
+
+        // ...while bold text matches a rule built from the reduced family,
+        // and so resolves to a *different family* than the plain text does.
+        let bold = match_style(&config, &cell(Intensity::Bold, false));
+        let attr = bold.font.first().expect("a font");
+        assert_eq!(attr.family, "Iosevka");
+        assert_eq!(attr.weight, FontWeight::MEDIUM.bolder());
+        assert!(attr.is_synthetic);
+    }
+
+    #[test]
+    fn a_rule_naming_fewer_conditions_matches_more_text() {
+        let mut config = Config::default();
+        // This rule states only italic, so it also claims bold-italic text.
+        config.font_rules.push(StyleRule {
+            italic: Some(true),
+            font: TextStyle {
+                font: vec![FontAttributes::new("AnyItalic")],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let config = config.compute_extra_defaults(None).0;
+
+        let style = match_style(&config, &cell(Intensity::Bold, true));
+        assert_eq!(family(style), "AnyItalic");
+    }
+
+    fn config_with_tracking(rule: StyleRule, separately: bool) -> Config {
+        let mut config = Config::default();
+        config.track_bold_and_dim_separately = separately;
+        config.dim_opacity = Some(1.0);
+        config.font_rules.push(rule);
+        config.compute_extra_defaults(None).0
+    }
+
+    fn config_with_rule(rule: StyleRule) -> Config {
+        config_with_tracking(rule, true)
+    }
+
+    fn marked_rule(bold: Option<bool>, dim: Option<bool>) -> StyleRule {
+        StyleRule {
+            bold,
+            dim,
+            font: TextStyle {
+                font: vec![FontAttributes::new("RuleFired")],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn rule_fired(config: &Config, attrs: &CellAttributes) -> bool {
+        match_style(config, attrs)
+            .font
+            .first()
+            .map(|f| f.family == "RuleFired")
+            .unwrap_or(false)
+    }
+
+    fn both_attributes(dim_last: bool) -> CellAttributes {
+        let mut attrs = CellAttributes::default();
+        if dim_last {
+            attrs.apply_sgr_intensity(Intensity::Bold);
+            attrs.apply_sgr_intensity(Intensity::Half);
+        } else {
+            attrs.apply_sgr_intensity(Intensity::Half);
+            attrs.apply_sgr_intensity(Intensity::Bold);
+        }
+        attrs
+    }
+
+    #[test]
+    fn bold_condition_matches_the_bold_attribute_in_either_order() {
+        let config = config_with_rule(marked_rule(Some(true), None));
+        assert!(rule_fired(&config, &both_attributes(true)));
+        assert!(rule_fired(&config, &both_attributes(false)));
+    }
+
+    #[test]
+    fn dim_condition_matches_the_dim_attribute_in_either_order() {
+        let config = config_with_rule(marked_rule(None, Some(true)));
+        assert!(rule_fired(&config, &both_attributes(true)));
+        assert!(rule_fired(&config, &both_attributes(false)));
+    }
+
+    #[test]
+    fn both_conditions_together_require_both_attributes() {
+        let config = config_with_rule(marked_rule(Some(true), Some(true)));
+        assert!(rule_fired(&config, &both_attributes(true)));
+        assert!(rule_fired(&config, &both_attributes(false)));
+        assert!(!rule_fired(&config, &cell(Intensity::Bold, false)));
+        assert!(!rule_fired(&config, &cell(Intensity::Half, false)));
+    }
+
+    #[test]
+    fn negative_spellings_match_the_absence_of_an_attribute() {
+        let config = config_with_rule(marked_rule(Some(false), Some(false)));
+        assert!(rule_fired(&config, &cell(Intensity::Normal, false)));
+        assert!(!rule_fired(&config, &both_attributes(true)));
+        assert!(!rule_fired(&config, &cell(Intensity::Bold, false)));
+        assert!(!rule_fired(&config, &cell(Intensity::Half, false)));
+    }
+
+    #[test]
+    fn bright_only_rewrite_applies_to_the_bold_condition() {
+        let mut attrs = cell(Intensity::Bold, false);
+        attrs.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+
+        let mut positive = config_with_rule(marked_rule(Some(true), None));
+        positive.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+        assert!(
+            !rule_fired(&positive, &attrs),
+            "BrightOnly suppresses the bold attribute for matching"
+        );
+
+        let mut negative = config_with_rule(marked_rule(Some(false), None));
+        negative.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+        assert!(
+            rule_fired(&negative, &attrs),
+            "and so the negative spelling matches instead"
+        );
+    }
+
+    #[test]
+    fn no_other_brightening_setting_suppresses_the_bold_condition() {
+        let mut attrs = cell(Intensity::Bold, false);
+        attrs.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+
+        for brightening in [BoldBrightening::No, BoldBrightening::BrightAndBold] {
+            let mut config = config_with_rule(marked_rule(Some(true), None));
+            config.bold_brightens_ansi_colors = brightening;
+            assert!(
+                rule_fired(&config, &attrs),
+                "with bold_brightens_ansi_colors = {brightening:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rewrite_leaves_dim_alone() {
+        let mut config = config_with_rule(marked_rule(None, Some(true)));
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+
+        let fg = |mut attrs: CellAttributes| {
+            attrs.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+            attrs
+        };
+
+        // Both attributes, bold most recent: bold is suppressed for matching
+        // and the colour brightened, but `dim = true` still fires.
+        assert!(rule_fired(&config, &fg(both_attributes(false))));
+
+        // Both attributes, dim most recent.
+        assert!(rule_fired(&config, &fg(both_attributes(true))));
+
+        // Dim alone also fires.
+        assert!(rule_fired(&config, &fg(cell(Intensity::Half, false))));
+    }
+
+    #[test]
+    fn a_not_dim_rule_does_not_fire_on_suppressed_bold_dim_text() {
+        let mut config = config_with_rule(marked_rule(Some(false), Some(false)));
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+
+        let mut attrs = both_attributes(false);
+        attrs.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+
+        assert!(!rule_fired(&config, &attrs));
+    }
+
+    #[test]
+    fn the_rewrite_does_not_apply_off_the_standard_palette() {
+        let mut attrs = cell(Intensity::Bold, false);
+        attrs.set_foreground(ColorAttribute::PaletteIndex(9));
+
+        let mut config = config_with_rule(marked_rule(Some(true), None));
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+        assert!(rule_fired(&config, &attrs));
+    }
+
+    #[test]
+    fn a_rule_may_mix_the_old_vocabulary_with_the_new() {
+        // `intensity: Bold` with `dim: true` asks for two things that cannot
+        // both hold once `dim` means "Half arrived last".
+        let mut contradictory = marked_rule(None, Some(true));
+        contradictory.intensity = Some(Intensity::Bold);
+        let config = config_with_tracking(contradictory, false);
+        assert!(!rule_fired(&config, &both_attributes(false)));
+        assert!(!rule_fired(&config, &both_attributes(true)));
+
+        // The agreeing pairing fires exactly where either half alone would.
+        let mut agreeing = marked_rule(None, Some(true));
+        agreeing.intensity = Some(Intensity::Half);
+        let config = config_with_tracking(agreeing, false);
+        // Dim arrived last, so intensity() reads Half and `dim` aliases it.
+        assert!(rule_fired(&config, &both_attributes(true)));
+        // Bold arrived last, so neither half holds.
+        assert!(!rule_fired(&config, &both_attributes(false)));
+    }
+
+    fn faded_config() -> Config {
+        let mut config = Config::default();
+        config.track_bold_and_dim_separately = true;
+        config.dim_opacity = Some(0.5);
+        config.compute_extra_defaults(None).0
+    }
+
+    #[test]
+    fn weight_follows_bold_alone_under_separate_tracking() {
+        let config = faded_config();
+        let m = |attrs: &CellAttributes| weight_and_style(match_style(&config, attrs));
+
+        // The four states without dim keep the default weights.
+        assert_eq!(m(&cell(Intensity::Normal, false)), (400, FontStyle::Normal));
+        assert_eq!(m(&cell(Intensity::Normal, true)), (400, FontStyle::Italic));
+        assert_eq!(m(&cell(Intensity::Bold, false)), (800, FontStyle::Normal));
+        assert_eq!(m(&cell(Intensity::Bold, true)), (800, FontStyle::Italic));
+
+        // Dim without bold loses the lighter weight; the fade expresses it.
+        assert_eq!(m(&cell(Intensity::Half, false)), (400, FontStyle::Normal));
+        assert_eq!(m(&cell(Intensity::Half, true)), (400, FontStyle::Italic));
+
+        // Bold and dim together draw bold, in either arrival order.
+        let mut both = both_attributes(true);
+        assert_eq!(m(&both), (800, FontStyle::Normal));
+        both = both_attributes(false);
+        assert_eq!(m(&both), (800, FontStyle::Normal));
+
+        let mut both_italic = both_attributes(true);
+        both_italic.set_italic(true);
+        assert_eq!(m(&both_italic), (800, FontStyle::Italic));
+        let mut both_italic = both_attributes(false);
+        both_italic.set_italic(true);
+        assert_eq!(m(&both_italic), (800, FontStyle::Italic));
+    }
+
+    #[test]
+    fn plain_text_still_falls_through_when_faded() {
+        let config = faded_config();
+        let style = match_style(&config, &cell(Intensity::Normal, false));
+        assert!(
+            std::ptr::eq(style, &config.font),
+            "plain non-italic text must reach the base font, not a rule"
+        );
+    }
+
+    #[test]
+    fn unified_tracking_with_a_fade_retires_only_the_lighter_weight() {
+        let mut config = Config::default();
+        config.dim_opacity = Some(0.5);
+        let config = config.compute_extra_defaults(None).0;
+        assert!(!config.track_bold_and_dim_separately);
+
+        let m =
+            |intensity, italic| weight_and_style(match_style(&config, &cell(intensity, italic)));
+
+        // The four states without dim keep the default weights.
+        assert_eq!(m(Intensity::Normal, false), (400, FontStyle::Normal));
+        assert_eq!(m(Intensity::Normal, true), (400, FontStyle::Italic));
+        assert_eq!(m(Intensity::Bold, false), (800, FontStyle::Normal));
+        assert_eq!(m(Intensity::Bold, true), (800, FontStyle::Italic));
+
+        // Dim loses the lighter weight; dim italic keeps its italic.
+        assert_eq!(m(Intensity::Half, false), (400, FontStyle::Normal));
+        assert_eq!(m(Intensity::Half, true), (400, FontStyle::Italic));
+
+        // Identity, not equality: dim non-italic text matches no rule at all.
+        assert!(std::ptr::eq(
+            match_style(&config, &cell(Intensity::Half, false)),
+            &config.font
+        ));
+    }
+
+    #[test]
+    fn bright_only_keys_on_the_bold_attribute_when_faded() {
+        let mut config = faded_config();
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+
+        for dim_last in [true, false] {
+            let mut attrs = both_attributes(dim_last);
+            attrs.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+            assert_eq!(
+                weight_and_style(match_style(&config, &attrs)),
+                (400, FontStyle::Normal),
+                "bold weight is suppressed regardless of arrival order (dim_last = {dim_last})"
+            );
+        }
+    }
+
+    #[test]
+    fn bright_only_keys_on_recency_when_not_faded() {
+        let mut config = base_config();
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+
+        let mut dim_last = both_attributes(true);
+        dim_last.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+        // intensity() reads Half, so the rewrite does not fire and the
+        // Half rule matches: the lighter weight.
+        assert_eq!(
+            weight_and_style(match_style(&config, &dim_last)),
+            (100, FontStyle::Normal)
+        );
+
+        let mut bold_last = both_attributes(false);
+        bold_last.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+        // intensity() reads Bold, so the rewrite fires and weight is
+        // suppressed.
+        assert_eq!(
+            weight_and_style(match_style(&config, &bold_last)),
+            (400, FontStyle::Normal)
+        );
+    }
+
+    #[test]
+    fn a_user_rule_still_beats_the_restated_built_ins() {
+        let mut config = Config::default();
+        config.track_bold_and_dim_separately = true;
+        config.dim_opacity = Some(0.5);
+        config.font_rules.push(marked_rule(Some(true), Some(true)));
+        let config = config.compute_extra_defaults(None).0;
+
+        assert!(rule_fired(&config, &both_attributes(true)));
+        assert!(rule_fired(&config, &both_attributes(false)));
+    }
+
+    #[test]
+    fn bright_only_selects_plain_italic_when_faded() {
+        let mut config = faded_config();
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightOnly;
+
+        let red_italic = |mut attrs: CellAttributes| {
+            attrs.set_italic(true);
+            attrs.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+            attrs
+        };
+
+        for dim_last in [true, false] {
+            assert_eq!(
+                weight_and_style(match_style(&config, &red_italic(both_attributes(dim_last)))),
+                (400, FontStyle::Italic),
+                "plain italic, not bold italic (dim_last = {dim_last})"
+            );
+        }
+
+        // The same row without dim.
+        assert_eq!(
+            weight_and_style(match_style(
+                &config,
+                &red_italic(cell(Intensity::Bold, false))
+            )),
+            (400, FontStyle::Italic)
+        );
+    }
+
+    #[test]
+    fn bright_and_bold_keeps_the_bold_font_when_faded() {
+        let mut config = faded_config();
+        config.bold_brightens_ansi_colors = BoldBrightening::BrightAndBold;
+
+        for dim_last in [true, false] {
+            let mut attrs = both_attributes(dim_last);
+            attrs.set_foreground(ColorAttribute::PaletteIndex(STANDARD_PALETTE_RED));
+
+            assert_eq!(
+                weight_and_style(match_style(&config, &attrs)),
+                (800, FontStyle::Normal),
+                "the bold rule fires (dim_last = {dim_last})"
+            );
+
+            attrs.set_italic(true);
+            assert_eq!(
+                weight_and_style(match_style(&config, &attrs)),
+                (800, FontStyle::Italic),
+                "the bold-italic rule fires (dim_last = {dim_last})"
+            );
+        }
+    }
+
+    #[test]
+    fn the_conditions_alias_the_derived_value_under_unified_tracking() {
+        let dim_last = both_attributes(true);
+        let config = config_with_tracking(marked_rule(None, Some(true)), false);
+
+        // dim arrived last, so unified tracking calls this dim.
+        assert!(
+            rule_fired(&config, &dim_last),
+            "dim = true fires where intensity = Half would"
+        );
+
+        let bold_last = both_attributes(false);
+        assert!(
+            !rule_fired(&config, &bold_last),
+            "bold arrived last, so unified tracking does not call this dim"
+        );
+    }
+
+    #[test]
+    fn the_bold_condition_aliases_the_derived_value_under_unified_tracking() {
+        let config = config_with_tracking(marked_rule(Some(true), None), false);
+
+        // Bold arrived last, so unified tracking calls this bold.
+        assert!(
+            rule_fired(&config, &both_attributes(false)),
+            "bold = true fires where intensity = Bold would"
+        );
+
+        // Dim arrived last. The bold record is still set, so this is the
+        // assertion that separates the derived value from the record.
+        assert!(
+            !rule_fired(&config, &both_attributes(true)),
+            "dim arrived last, so unified tracking does not call this bold"
+        );
+    }
+
+    #[test]
+    fn the_conditions_read_the_records_under_separate_tracking() {
+        let config = config_with_tracking(marked_rule(None, Some(true)), true);
+
+        for (label, first, second) in [
+            ("dim last", Intensity::Bold, Intensity::Half),
+            ("bold last", Intensity::Half, Intensity::Bold),
+        ] {
+            let mut attrs = CellAttributes::default();
+            attrs.apply_sgr_intensity(first);
+            attrs.apply_sgr_intensity(second);
+            assert!(
+                rule_fired(&config, &attrs),
+                "{label}: separate tracking reads the record, not the order"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "states `intensity`")]
+    fn an_intensity_rule_under_separate_tracking_trips_the_guard() {
+        let mut config = Config::default();
+        config.track_bold_and_dim_separately = true;
+        let mut rule = marked_rule(None, None);
+        rule.intensity = Some(Intensity::Half);
+        // Not run through `compute_extra_defaults`, which is what would remove
+        // this rule.
+        config.font_rules.push(rule);
+
+        let _ = match_style(&config, &cell(Intensity::Half, false));
     }
 }

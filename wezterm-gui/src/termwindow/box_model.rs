@@ -954,7 +954,7 @@ impl super::TermWindow {
         match &colors.text {
             InheritableColor::Inherited => match inherited_colors {
                 Some(colors) => self.resolve_text(colors, None),
-                None => LinearRgba::TRANSPARENT.into(),
+                None => LinearRgba::with_components(0., 0., 0., 1.).into(),
             },
             InheritableColor::Color(color) => (*color).into(),
             InheritableColor::Animated {

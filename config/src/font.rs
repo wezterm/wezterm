@@ -631,7 +631,7 @@ impl TextStyle {
 /// The above is translated as: "if the `CellAttributes` have the italic bit
 /// set, then use the italic style of font rather than the default", and
 /// stop processing further font rules.
-#[derive(Debug, Default, Clone, FromDynamic, ToDynamic)]
+#[derive(Debug, Default, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct StyleRule {
     /// If present, this rule matches when CellAttributes::intensity holds
     /// a value that matches this rule.  Valid values are "Bold", "Normal",
@@ -656,6 +656,18 @@ pub struct StyleRule {
     /// If present, this rule matches when CellAttributes::invisible holds
     /// a value that matches this rule.
     pub invisible: Option<bool>,
+    /// If present, this rule matches when `Config::is_bold` holds for the
+    /// cell and this value is true, or when it does not hold and this value
+    /// is false. That is the bold attribute on its own under
+    /// `track_bold_and_dim_separately`, and otherwise `intensity` reading
+    /// `Bold`.
+    pub bold: Option<bool>,
+    /// If present, this rule matches when `Config::is_dim` holds for the
+    /// cell and this value is true, or when it does not hold and this value
+    /// is false. That is the dim attribute on its own under
+    /// `track_bold_and_dim_separately`, and otherwise `intensity` reading
+    /// `Half`.
+    pub dim: Option<bool>,
 
     /// When this rule matches, `font` specifies the styling to be used.
     pub font: TextStyle,
@@ -731,5 +743,17 @@ mod test {
             let style = style.reduce_first_font_to_family();
             assert_eq!(style.font[0].family, "Inconsolata");
         }
+    }
+
+    #[test]
+    fn synthesized_weight_steps() {
+        assert_eq!(FontWeight::REGULAR.bolder(), FontWeight::EXTRABOLD);
+        assert_eq!(FontWeight::REGULAR.lighter(), FontWeight::THIN);
+    }
+
+    #[test]
+    fn lighter_clamps_instead_of_wrapping() {
+        assert!(FontWeight::THIN.to_opentype_weight() < FontWeight::WEIGHT_STEP_LIGHTER);
+        assert_eq!(FontWeight::THIN.lighter().to_opentype_weight(), 0);
     }
 }

@@ -111,7 +111,7 @@ vec4 to_srgb(vec4 linearRGB)
 }
 
 void main() {
-  vec4 fg_color = mix(o_fg_color, o_fg_color_alt, o_fg_color_mix);
+  vec4 fg_color = mix(o_fg_color, o_fg_color_alt, clamp(o_fg_color_mix, 0.0, 1.0));
   if (o_has_color == 3.0) {
     // Solid color block
     color = fg_color;
@@ -148,7 +148,13 @@ void main() {
     // and we need to tint with the fg_color
     color = fg_color;
     if (!subpixel_aa) {
-      color.a = colorMask.a;
+      color.a *= colorMask.a;
+    } else {
+      // The dual-source blend takes colorMask as the source factor for the
+      // colour equation, where color.a plays no part, so the fade has to go
+      // through the mask.
+      colorMask *= fg_color.a;
+      color.a = 1.0;
     }
     color = apply_hsv(color, foreground_text_hsb);
   }

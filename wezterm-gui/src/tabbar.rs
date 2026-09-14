@@ -763,7 +763,7 @@ pub fn parse_status_text(text: &str, default_cell: CellAttributes) -> Line {
                     CSI::Sgr(sgr) => match sgr {
                         Sgr::Reset => pen = default_cell.clone(),
                         Sgr::Intensity(i) => {
-                            pen.set_intensity(i);
+                            pen.apply_sgr_intensity(i);
                         }
                         Sgr::Underline(u) => {
                             pen.set_underline(u);
@@ -823,4 +823,37 @@ pub fn parse_status_text(text: &str, default_cell: CellAttributes) -> Line {
     });
     flush_print(&mut print_buffer, &mut cells, &pen);
     Line::from_cells(cells, SEQ_ZERO)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use termwiz::cell::Intensity;
+
+    fn status_attrs(text: &str) -> CellAttributes {
+        parse_status_text(text, CellAttributes::default())
+            .visible_cells()
+            .next()
+            .expect("a cell was printed")
+            .attrs()
+            .clone()
+    }
+
+    #[test]
+    fn sgr_bold_then_dim_keeps_both() {
+        let attrs = status_attrs("\x1b[1m\x1b[2mX");
+
+        assert!(attrs.bold(), "SGR 1 followed by SGR 2 must keep bold");
+        assert!(attrs.dim());
+        assert_eq!(attrs.intensity(), Intensity::Half, "dim arrived last");
+    }
+
+    #[test]
+    fn sgr_dim_then_bold_keeps_both() {
+        let attrs = status_attrs("\x1b[2m\x1b[1mX");
+
+        assert!(attrs.bold());
+        assert!(attrs.dim(), "SGR 2 followed by SGR 1 must keep dim");
+        assert_eq!(attrs.intensity(), Intensity::Bold, "bold arrived last");
+    }
 }

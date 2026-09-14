@@ -30,12 +30,25 @@ The following fields are matcher fields:
 |Name      |Associated Attribute|Possible Values|
 |----------|--------------------|---------------|
 |italic    |italic              |`true` (italic) or `false` (not italic)|
-|intensity |bold/bright or dim/half-bright|`"Normal"` (neither bold nor dim), `"Bold"`, `"Half"`|
+|bold      |bold                |`true` (bold) or `false` (not bold) {{since('nightly', inline=True)}}|
+|dim       |dim/half-bright     |`true` (dim) or `false` (not dim) {{since('nightly', inline=True)}}|
+|intensity |whichever of bold and dim arrived most recently|`"Normal"` (neither bold nor dim), `"Bold"`, `"Half"` (dim)|
 |underline |underline           | `"None"` (not underlined), `"Single"` (single underline), `"Double"` (double underline)|
 |blink     |blinking            | `"None"` (not blinking), `"Rapid"` (regular rapid blinking), `"Slow"` (slow blinking)|
 |reverse   |reverse/inverse     | `true` (reversed) or `false` (not reversed)|
 |strikethrough|strikethrough    | `true` (struck-through) or `false` (not struck-through)|
 |invisible |invisible           | `true` (invisible) or `false` (not invisible)|
+
+!!! warning
+    `intensity` is a legacy matcher that can't express bold-dim text. Rules using
+    this matcher are ignored when [track_bold_and_dim_separately](track_bold_and_dim_separately.md)
+    is `true`. Use `bold` and `dim` instead.
+
+!!! note
+    Text can be bold and dim at the same time only when
+    [track_bold_and_dim_separately](track_bold_and_dim_separately.md)
+    is `true`. Rules that require `bold=true, dim=true` will not work
+    until you enable separate tracking.
 
 If a matcher field is omitted, then the associated attribute has no impact
 on the match: the rule *doesn't care about* that attribute and will match based
@@ -57,6 +70,17 @@ The way that `font_rules` are processed is:
    * No further `font_rules` will be considered: the matching is complete
 5. If none of the rules you specify matched, then a set of default rules based on your base `font` will be used in the same way as above.
 
+Which set you get depends on whether dim text is drawn faded, which
+[dim_opacity](dim_opacity.md) decides:
+
+|`dim_opacity`|Default rules|
+|-------------|-------------|
+|`1.0`, the default|Bold text uses the heavier weight, dim uses lighter weight. Under [track_bold_and_dim_separately](track_bold_and_dim_separately.md), bold-dim uses normal weight.|
+|Below `1.0` {{since('nightly', inline=True)}}|Nothing binds `dim`, because the fade expresses it. Bold text uses the heavier weight.|
+
+Run `wezterm ls-fonts` to print the set your configuration is actually using; see
+[Debugging Font Rules](#debugging-font-rules) below.
+
 Here's an example from my configuration file, which I use with a variant of
 `Operator Mono` that is patched to add ligatures.  This particular font has
 font-weights that are either too bold or too light for the default rules to
@@ -68,7 +92,7 @@ config.font_rules = {
   -- For Bold-but-not-italic text, use this relatively bold font, and override
   -- its color to a tomato-red color to make bold text really stand out.
   {
-    intensity = 'Bold',
+    bold = true,
     italic = false,
     font = wezterm.font_with_fallback(
       'Operator Mono SSm Lig',
@@ -82,7 +106,7 @@ config.font_rules = {
 
   -- Bold-and-italic
   {
-    intensity = 'Bold',
+    bold = true,
     italic = true,
     font = wezterm.font_with_fallback {
       family = 'Operator Mono SSm Lig',
@@ -90,9 +114,10 @@ config.font_rules = {
     },
   },
 
-  -- normal-intensity-and-italic
+  -- neither-bold-nor-dim, and italic
   {
-    intensity = 'Normal',
+    bold = false,
+    dim = false,
     italic = true,
     font = wezterm.font_with_fallback {
       family = 'Operator Mono SSm Lig',
@@ -101,9 +126,9 @@ config.font_rules = {
     },
   },
 
-  -- half-intensity-and-italic (half-bright or dim); use a lighter weight font
+  -- dim (half-bright) and italic; use a lighter weight font
   {
-    intensity = 'Half',
+    dim = true,
     italic = true,
     font = wezterm.font_with_fallback {
       family = 'Operator Mono SSm Lig',
@@ -112,9 +137,9 @@ config.font_rules = {
     },
   },
 
-  -- half-intensity-and-not-italic
+  -- dim and not italic
   {
-    intensity = 'Half',
+    dim = true,
     italic = false,
     font = wezterm.font_with_fallback {
       family = 'Operator Mono SSm Lig',
@@ -131,7 +156,7 @@ config.font = wezterm.font { family = 'FiraCode' }
 
 config.font_rules = {
   {
-    intensity = 'Bold',
+    bold = true,
     italic = true,
     font = wezterm.font {
       family = 'VictorMono',
@@ -141,7 +166,7 @@ config.font_rules = {
   },
   {
     italic = true,
-    intensity = 'Half',
+    dim = true,
     font = wezterm.font {
       family = 'VictorMono',
       weight = 'DemiBold',
@@ -150,7 +175,8 @@ config.font_rules = {
   },
   {
     italic = true,
-    intensity = 'Normal',
+    bold = false,
+    dim = false,
     font = wezterm.font {
       family = 'VictorMono',
       style = 'Italic',
@@ -240,4 +266,3 @@ wezterm.font_with_fallback({
   "JetBrains Mono",
 })
 ```
-

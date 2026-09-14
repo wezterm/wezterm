@@ -88,20 +88,38 @@ impl TerminfoRenderer {
                 // The SetAttributes capability can only handle single underline and slow blink.
                 if let Some(sgr) = sgr {
                     sgr.expand()
-                        .bold(attr.intensity() == Intensity::Bold)
-                        .dim(attr.intensity() == Intensity::Half)
+                        .bold(attr.bold())
+                        .dim(attr.dim())
                         .underline(attr.underline() == Underline::Single)
                         .blink(attr.blink() == Blink::Slow)
                         .reverse(attr.reverse())
                         .invisible(attr.invisible())
                         .to(out.by_ref())?;
+
+                    // The sgr string pins the order of bold and dim. Terminals that don't track
+                    // boldness and dimness separately need them arriving in the same order they
+                    // were emitted in, so we re-emit whichever arrived last to guarantee that
+                    // it sits last in the output.
+                    if attr.bold() && attr.dim() {
+                        if attr.dim_is_most_recent() {
+                            attr_on!(EnterDimMode, Sgr::Intensity(Intensity::Half));
+                        } else {
+                            attr_on!(EnterBoldMode, Sgr::Intensity(Intensity::Bold));
+                        }
+                    }
                 } else {
                     attr_on!(ExitAttributeMode, Sgr::Reset);
 
-                    match attr.intensity() {
-                        Intensity::Bold => attr_on!(EnterBoldMode, Sgr::Intensity(Intensity::Bold)),
-                        Intensity::Half => attr_on!(EnterDimMode, Sgr::Intensity(Intensity::Half)),
-                        _ => {}
+                    if attr.dim_is_most_recent() {
+                        attr_on!(EnterBoldMode, Sgr::Intensity(Intensity::Bold));
+                        attr_on!(EnterDimMode, Sgr::Intensity(Intensity::Half));
+                    } else {
+                        if attr.dim() {
+                            attr_on!(EnterDimMode, Sgr::Intensity(Intensity::Half));
+                        }
+                        if attr.bold() {
+                            attr_on!(EnterBoldMode, Sgr::Intensity(Intensity::Bold));
+                        }
                     }
 
                     if attr.underline() == Underline::Single {
@@ -1327,5 +1345,250 @@ mod test {
                 Action::Print('A'),
             ]
         );
+    }
+
+    fn bold_dim_cell_attrs() -> CellAttributes {
+        let mut attrs = CellAttributes::default();
+        attrs
+            .apply_sgr_intensity(Intensity::Bold)
+            .apply_sgr_intensity(Intensity::Half);
+        attrs
+    }
+
+    fn dim_bold_cell_attrs() -> CellAttributes {
+        let mut attrs = CellAttributes::default();
+        attrs
+            .apply_sgr_intensity(Intensity::Half)
+            .apply_sgr_intensity(Intensity::Bold);
+        attrs
+    }
+
+    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    /// The bundled xterm entry happens to write bold before dim in its `sgr`
+    /// string. Terminfo does not require that order, so this builds the same
+    /// entry with the two conditionals swapped. Both are the same length, so
+    /// exchanging them in place leaves every offset in the compiled entry
+    /// valid.
+    fn xterm_terminfo_sgr_dim_first() -> Capabilities {
+        const BOLD: &[u8] = b"%?%p6%t;1%;";
+        const DIM: &[u8] = b"%?%p5%t;2%;";
+
+        let mut data = include_bytes!("../../data/xterm-256color").to_vec();
+        let at = find_subslice(&data, BOLD).expect("bundled sgr string writes bold");
+        assert_eq!(
+            &data[at + BOLD.len()..at + BOLD.len() + DIM.len()],
+            DIM,
+            "expected the dim conditional to directly follow the bold one"
+        );
+
+        data[at..at + DIM.len()].copy_from_slice(DIM);
+        data[at + DIM.len()..at + DIM.len() + BOLD.len()].copy_from_slice(BOLD);
+
+        Capabilities::new_with_hints(ProbeHints::default().terminfo_db(Some(
+            terminfo::Database::from_buffer(data.as_slice()).unwrap(),
+        )))
+        .unwrap()
+    }
+
+    fn actions_for(caps: Capabilities, attrs: CellAttributes) -> Vec<Action> {
+        let mut out = FakeTerm::new(caps);
+        out.render(&[Change::AllAttributes(attrs), Change::Text("foo".into())])
+            .unwrap();
+        out.parse()
+    }
+
+    #[test]
+    fn bold_and_dim_emit_both_codes_via_capability() {
+        let actions = actions_for(xterm_terminfo(), bold_dim_cell_attrs());
+        assert!(
+            actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(Intensity::Bold)))),
+            "bold was not emitted: {:?}",
+            actions
+        );
+        assert!(
+            actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(Intensity::Half)))),
+            "dim was not emitted: {:?}",
+            actions
+        );
+    }
+
+    #[test]
+    fn bold_and_dim_emit_both_codes_via_fallback() {
+        let actions = actions_for(no_terminfo_all_enabled(), bold_dim_cell_attrs());
+        assert!(
+            actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(Intensity::Bold)))),
+            "bold was not emitted: {:?}",
+            actions
+        );
+        assert!(
+            actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(Intensity::Half)))),
+            "dim was not emitted: {:?}",
+            actions
+        );
+    }
+
+    fn replay_intensity(actions: &[Action]) -> CellAttributes {
+        let mut attrs = CellAttributes::default();
+        for action in actions {
+            match action {
+                Action::CSI(CSI::Sgr(Sgr::Reset)) => attrs = CellAttributes::default(),
+                Action::CSI(CSI::Sgr(Sgr::Intensity(value))) => {
+                    attrs.apply_sgr_intensity(*value);
+                }
+                _ => {}
+            }
+        }
+        attrs
+    }
+
+    #[test]
+    fn a_round_trip_preserves_both_attributes() {
+        for (name, caps) in [
+            ("capability", xterm_terminfo()),
+            ("fallback", no_terminfo_all_enabled()),
+        ] {
+            let actions = actions_for(caps, bold_dim_cell_attrs());
+            let round_tripped = replay_intensity(&actions);
+
+            assert!(
+                round_tripped.bold(),
+                "bold did not survive the {} path: {:?}",
+                name,
+                actions
+            );
+            assert!(
+                round_tripped.dim(),
+                "dim did not survive the {} path: {:?}",
+                name,
+                actions
+            );
+        }
+    }
+
+    #[test]
+    fn a_round_trip_preserves_which_attribute_arrived_last() {
+        for (path, caps) in [
+            ("capability", xterm_terminfo()),
+            ("fallback", no_terminfo_all_enabled()),
+        ] {
+            for (order, attrs) in [
+                ("dim last", bold_dim_cell_attrs()),
+                ("bold last", dim_bold_cell_attrs()),
+            ] {
+                let expected = attrs.intensity();
+                let actions = actions_for(caps.clone(), attrs);
+                let round_tripped = replay_intensity(&actions);
+
+                assert_eq!(
+                    round_tripped.intensity(),
+                    expected,
+                    "{} did not survive the {} path: {:?}",
+                    order,
+                    path,
+                    actions
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_round_trip_preserves_arrival_order_when_sgr_writes_dim_first() {
+        for (order, attrs) in [
+            ("dim last", bold_dim_cell_attrs()),
+            ("bold last", dim_bold_cell_attrs()),
+        ] {
+            let expected = attrs.intensity();
+            let actions = actions_for(xterm_terminfo_sgr_dim_first(), attrs);
+            let round_tripped = replay_intensity(&actions);
+
+            assert_eq!(
+                round_tripped.intensity(),
+                expected,
+                "{} did not survive a terminal whose sgr string writes dim \
+                 before bold: {:?}",
+                order,
+                actions
+            );
+        }
+    }
+
+    fn intensity_codes(actions: &[Action]) -> Vec<Intensity> {
+        actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::CSI(CSI::Sgr(Sgr::Intensity(value))) => Some(*value),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_fallback_path_emits_each_intensity_code_once() {
+        for (order, attrs) in [
+            ("dim last", bold_dim_cell_attrs()),
+            ("bold last", dim_bold_cell_attrs()),
+        ] {
+            let actions = actions_for(no_terminfo_all_enabled(), attrs);
+            assert_eq!(
+                intensity_codes(&actions).len(),
+                2,
+                "{} should emit bold and dim once each: {:?}",
+                order,
+                actions
+            );
+        }
+    }
+
+    #[test]
+    fn the_capability_path_restates_one_code() {
+        for (order, attrs) in [
+            ("dim last", bold_dim_cell_attrs()),
+            ("bold last", dim_bold_cell_attrs()),
+        ] {
+            let actions = actions_for(xterm_terminfo(), attrs);
+            assert_eq!(
+                intensity_codes(&actions).len(),
+                3,
+                "{} should restate exactly one code after the sgr string: {:?}",
+                order,
+                actions
+            );
+        }
+    }
+
+    #[test]
+    fn a_cell_with_one_attribute_still_emits_one_code() {
+        for (name, caps) in [
+            ("capability", xterm_terminfo()),
+            ("fallback", no_terminfo_all_enabled()),
+        ] {
+            for (present, absent) in [
+                (Intensity::Bold, Intensity::Half),
+                (Intensity::Half, Intensity::Bold),
+            ] {
+                let mut attrs = CellAttributes::default();
+                attrs.set_intensity(present);
+
+                let actions = actions_for(caps.clone(), attrs);
+                assert!(
+                    actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(present)))),
+                    "{:?} was not emitted on the {} path: {:?}",
+                    present,
+                    name,
+                    actions
+                );
+                assert!(
+                    !actions.contains(&Action::CSI(CSI::Sgr(Sgr::Intensity(absent)))),
+                    "{:?} must not be emitted on the {} path for a cell that does \
+                     not carry it: {:?}",
+                    absent,
+                    name,
+                    actions
+                );
+            }
+        }
     }
 }

@@ -80,7 +80,7 @@ fn vs_main(
     out.tex = model.tex;
     out.hsv = model.hsv;
     out.has_color = model.has_color;
-    out.fg_color = mix(model.fg_color, model.alt_color, model.mix_value);
+    out.fg_color = mix(model.fg_color, model.alt_color, clamp(model.mix_value, 0.0, 1.0));
     out.clip_position = uniforms.projection * vec4<f32>(model.position, 0.0, 1.0);
     return out;
 }
@@ -114,7 +114,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // the texture is the alpha channel/color mask
     // and we need to tint with the fg_color
     color = in.fg_color;
-    color.a = nearest_tex.a;
+    color.a *= nearest_tex.a;
     hsv *= uniforms.foreground_text_hsb;
   }
 

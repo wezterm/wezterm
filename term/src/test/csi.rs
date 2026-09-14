@@ -1,4 +1,8 @@
 use super::*;
+// Named explicitly: the parent module's alias arrives by glob and would lose
+// to the std prelude's `assert_eq!`.
+use k9::assert_equal as assert_eq;
+use wezterm_escape_parser::csi::Intensity;
 
 /// In this issue, the `CSI 2 P` sequence incorrectly removed two
 /// cells from the line, leaving them effectively blank, when those
@@ -23,6 +27,8 @@ fn test_789() {
                         attrs: CellAttributes {
                             attributes: 0,
                             intensity: Normal,
+                            bold: false,
+                            dim: false,
                             underline: None,
                             blink: None,
                             italic: false,
@@ -45,6 +51,8 @@ fn test_789() {
                         attrs: CellAttributes {
                             attributes: 0,
                             intensity: Normal,
+                            bold: false,
+                            dim: false,
                             underline: None,
                             blink: None,
                             italic: false,
@@ -67,6 +75,8 @@ fn test_789() {
                         attrs: CellAttributes {
                             attributes: 0,
                             intensity: Normal,
+                            bold: false,
+                            dim: false,
                             underline: None,
                             blink: None,
                             italic: false,
@@ -89,6 +99,8 @@ fn test_789() {
                         attrs: CellAttributes {
                             attributes: 0,
                             intensity: Normal,
+                            bold: false,
+                            dim: false,
                             underline: None,
                             blink: None,
                             italic: false,
@@ -111,6 +123,8 @@ fn test_789() {
                         attrs: CellAttributes {
                             attributes: 0,
                             intensity: Normal,
+                            bold: false,
+                            dim: false,
                             underline: None,
                             blink: None,
                             italic: false,
@@ -133,6 +147,8 @@ fn test_789() {
                         attrs: CellAttributes {
                             attributes: 0,
                             intensity: Normal,
+                            bold: false,
+                            dim: false,
                             underline: None,
                             blink: None,
                             italic: false,
@@ -155,6 +171,8 @@ fn test_789() {
                         attrs: CellAttributes {
                             attributes: 0,
                             intensity: Normal,
+                            bold: false,
+                            dim: false,
                             underline: None,
                             blink: None,
                             italic: false,
@@ -177,6 +195,8 @@ fn test_789() {
                         attrs: CellAttributes {
                             attributes: 0,
                             intensity: Normal,
+                            bold: false,
+                            dim: false,
                             underline: None,
                             blink: None,
                             italic: false,
@@ -400,4 +420,57 @@ fn test_ed_erase_scrollback() {
     assert_all_contents(&term, file!(), line!(), &["111", "222", "a"]);
     term.print("b");
     assert_all_contents(&term, file!(), line!(), &["111", "222", "ab"]);
+}
+
+#[test]
+fn sgr_bold_then_dim_keeps_both() {
+    let mut term = TestTerm::new(1, 3, 0);
+    term.print("\x1b[1m\x1b[2mX");
+
+    let lines = term.screen().visible_lines();
+    let attrs = lines[0]
+        .visible_cells()
+        .next()
+        .expect("a cell was printed")
+        .attrs()
+        .clone();
+
+    assert!(attrs.bold(), "SGR 1 followed by SGR 2 must keep bold");
+    assert!(attrs.dim());
+    assert_eq!(attrs.intensity(), Intensity::Half, "dim arrived last");
+}
+
+#[test]
+fn sgr_dim_then_bold_keeps_both() {
+    let mut term = TestTerm::new(1, 3, 0);
+    term.print("\x1b[2m\x1b[1mX");
+
+    let lines = term.screen().visible_lines();
+    let attrs = lines[0]
+        .visible_cells()
+        .next()
+        .expect("a cell was printed")
+        .attrs()
+        .clone();
+
+    assert!(attrs.bold());
+    assert!(attrs.dim(), "SGR 2 followed by SGR 1 must keep dim");
+    assert_eq!(attrs.intensity(), Intensity::Bold, "bold arrived last");
+}
+
+#[test]
+fn sgr_22_clears_both() {
+    let mut term = TestTerm::new(1, 3, 0);
+    term.print("\x1b[1m\x1b[2m\x1b[22mX");
+
+    let lines = term.screen().visible_lines();
+    let attrs = lines[0]
+        .visible_cells()
+        .next()
+        .expect("a cell was printed")
+        .attrs()
+        .clone();
+
+    assert!(!attrs.bold());
+    assert!(!attrs.dim());
 }

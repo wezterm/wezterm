@@ -841,10 +841,31 @@ fn main() {
 }
 
 fn maybe_show_configuration_error_window() {
-    let warnings = config::configuration_warnings_and_errors();
+    let warnings = config::take_startup_warnings_for_display();
     if !warnings.is_empty() {
         let err = warnings.join("\n");
         mux::connui::show_configuration_error_message(&err);
+    }
+}
+
+#[cfg(test)]
+mod startup_handover_test {
+    /// The config crate's own test calls the marker directly; this is the
+    /// wiring it cannot reach.
+    #[test]
+    fn the_startup_path_hands_reporting_over_to_reload() {
+        assert!(
+            !config::startup_warnings_shown(),
+            "nothing else in this process may flip the switch, or this test \
+             proves nothing"
+        );
+
+        super::maybe_show_configuration_error_window();
+
+        assert!(
+            config::startup_warnings_shown(),
+            "without the handover, no reload in a GUI process ever reports"
+        );
     }
 }
 
@@ -856,6 +877,149 @@ fn run_show_keys(config: config::ConfigHandle, cmd: &ShowKeysCommand) -> anyhow:
         map.show_keys();
     }
     Ok(())
+}
+
+/// Format description for a style rule condition (`When ...`).
+fn describe_rule_conditions(rule: &config::StyleRule) -> String {
+    let mut condition = "When".to_string();
+    if let Some(intensity) = &rule.intensity {
+        condition.push_str(&format!(" Intensity={:?}", intensity));
+    }
+    if let Some(bold) = &rule.bold {
+        condition.push_str(&format!(" Bold={:?}", bold));
+    }
+    if let Some(dim) = &rule.dim {
+        condition.push_str(&format!(" Dim={:?}", dim));
+    }
+    if let Some(underline) = &rule.underline {
+        condition.push_str(&format!(" Underline={:?}", underline));
+    }
+    if let Some(italic) = &rule.italic {
+        condition.push_str(&format!(" Italic={:?}", italic));
+    }
+    if let Some(blink) = &rule.blink {
+        condition.push_str(&format!(" Blink={:?}", blink));
+    }
+    if let Some(rev) = &rule.reverse {
+        condition.push_str(&format!(" Reverse={:?}", rev));
+    }
+    if let Some(strikethrough) = &rule.strikethrough {
+        condition.push_str(&format!(" Strikethrough={:?}", strikethrough));
+    }
+    if let Some(invisible) = &rule.invisible {
+        condition.push_str(&format!(" Invisible={:?}", invisible));
+    }
+    condition
+}
+
+#[cfg(test)]
+mod ls_fonts_test {
+    use super::describe_rule_conditions;
+    use config::{Config, StyleRule};
+
+    fn builtin_conditions(config: Config) -> Vec<String> {
+        config
+            .compute_extra_defaults(None)
+            .0
+            .font_rules
+            .iter()
+            .map(describe_rule_conditions)
+            .collect()
+    }
+
+    #[test]
+    fn two_rules_differing_only_in_bold_do_not_print_identically() {
+        let bold = StyleRule {
+            bold: Some(true),
+            italic: Some(true),
+            ..Default::default()
+        };
+        let not_bold = StyleRule {
+            bold: Some(false),
+            ..bold.clone()
+        };
+        assert_ne!(
+            describe_rule_conditions(&bold),
+            describe_rule_conditions(&not_bold)
+        );
+    }
+
+    #[test]
+    fn two_rules_differing_only_in_dim_do_not_print_identically() {
+        let dim = StyleRule {
+            dim: Some(true),
+            italic: Some(true),
+            ..Default::default()
+        };
+        let not_dim = StyleRule {
+            dim: Some(false),
+            ..dim.clone()
+        };
+        assert_ne!(
+            describe_rule_conditions(&dim),
+            describe_rule_conditions(&not_dim)
+        );
+    }
+
+    #[test]
+    fn the_description_names_the_conditions_a_rule_states() {
+        assert_eq!(
+            describe_rule_conditions(&StyleRule {
+                bold: Some(true),
+                dim: Some(false),
+                italic: Some(true),
+                ..Default::default()
+            }),
+            "When Bold=true Dim=false Italic=true"
+        );
+
+        assert_eq!(
+            describe_rule_conditions(&StyleRule {
+                dim: Some(true),
+                ..Default::default()
+            }),
+            "When Dim=true"
+        );
+    }
+
+    #[test]
+    fn the_builtin_rules_print_their_conditions() {
+        let no_fade = vec![
+            "When Bold=false Dim=true Italic=true",
+            "When Bold=false Dim=true Italic=false",
+            "When Bold=true Dim=false Italic=true",
+            "When Bold=true Dim=false Italic=false",
+            "When Italic=true",
+        ];
+        let faded = vec![
+            "When Bold=true Italic=true",
+            "When Bold=true Italic=false",
+            "When Italic=true",
+        ];
+
+        assert_eq!(builtin_conditions(Config::default()), no_fade);
+
+        let mut explicit_no_fade = Config::default();
+        explicit_no_fade.track_bold_and_dim_separately = true;
+        explicit_no_fade.dim_opacity = Some(1.0);
+        assert_eq!(
+            builtin_conditions(explicit_no_fade),
+            no_fade,
+            "the fade is what picks the set, not the tracking mode"
+        );
+
+        let mut opacity_only = Config::default();
+        opacity_only.dim_opacity = Some(0.4);
+        assert_eq!(builtin_conditions(opacity_only), faded);
+
+        let mut separate = Config::default();
+        separate.track_bold_and_dim_separately = true;
+        assert_eq!(
+            builtin_conditions(separate),
+            faded,
+            "separate tracking derives an opacity below 1.0, so it lands here"
+        );
+    }
 }
 
 pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyhow::Result<()> {
@@ -1080,30 +1244,7 @@ pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyho
     for rule in &config.font_rules {
         println!();
 
-        let mut condition = "When".to_string();
-        if let Some(intensity) = &rule.intensity {
-            condition.push_str(&format!(" Intensity={:?}", intensity));
-        }
-        if let Some(underline) = &rule.underline {
-            condition.push_str(&format!(" Underline={:?}", underline));
-        }
-        if let Some(italic) = &rule.italic {
-            condition.push_str(&format!(" Italic={:?}", italic));
-        }
-        if let Some(blink) = &rule.blink {
-            condition.push_str(&format!(" Blink={:?}", blink));
-        }
-        if let Some(rev) = &rule.reverse {
-            condition.push_str(&format!(" Reverse={:?}", rev));
-        }
-        if let Some(strikethrough) = &rule.strikethrough {
-            condition.push_str(&format!(" Strikethrough={:?}", strikethrough));
-        }
-        if let Some(invisible) = &rule.invisible {
-            condition.push_str(&format!(" Invisible={:?}", invisible));
-        }
-
-        println!("{}:", condition);
+        println!("{}:", describe_rule_conditions(rule));
         let font = font_config.resolve_font(&rule.font)?;
         println!("{}", ParsedFont::lua_fallback(&font.clone_handles()));
         println!();

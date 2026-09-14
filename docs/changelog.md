@@ -22,6 +22,21 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* Settings for foreground colors now honor alpha channel. Before this change,
+  foreground colors set to `"transparent"`, `"none"`, or `"clear"` rendered
+  as black, and foreground colors that were assigned an opacity value silently
+  ignored it. If some of your text or UI elements disappeared, make sure your
+  config doesn't set their color to be transparent.
+* The alpha in wezterm's custom RGBA escape sequences now takes effect too:
+  [CSI 38:6](escape-sequences.md#csi-386-foreground-color-rgba),
+  [CSI 58:6](escape-sequences.md#csi-586-underline-color-rgba) and OSC 10 no
+  longer discard it, so an alpha of `0` on the foreground draws no text.
+* The multiplexer wire protocol version has increased to accomodate separate tracking
+  of bold and dim attributes. Update wezterm on your remote hosts before
+  connecting to them!
+* Configuration warnings are now shown when the configuration is reloaded, not
+  only when wezterm starts. Warnings are shown only if they've changed since
+  the last reload.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.
@@ -77,6 +92,12 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* New [track_bold_and_dim_separately](config/lua/config/track_bold_and_dim_separately.md)
+  option allows styling text that is both bold and dim, new
+  [dim_opacity](config/lua/config/dim_opacity.md) option draws dim text faded, and
+  new `bold` and `dim` [font_rules](config/lua/config/font_rules.md) conditions name
+  either attribute directly. Nothing renders differently until you set one of
+  the two options.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
@@ -160,6 +181,10 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Blinking text and blinking cursor not respecting translucent backgrounds.
+* The check for foreground and background color being equal didn't account for
+  translucency, resulting in opaque text not being visible on translucent
+  background when text's RGB components match background's RGB components.
 * macOS: Fix window border when opacity<1 and shadow enabled.
   Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
@@ -2564,5 +2589,3 @@ font_hinting = "Full" # None, Vertical, VerticalSubpixel, Full
 * `wezterm imgcat /some/image.png` to display images inline in the terminal using the iTerm2 image protocol
 * IME support on macOS and Windows systems
 * Automatic fallback to software rendering if no GPU is available (eg: certain types of remote desktop sessions)
-
-
