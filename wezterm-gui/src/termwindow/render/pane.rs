@@ -602,7 +602,8 @@ impl crate::TermWindow {
         let (padding_left, padding_top) = self.padding_left_top();
         let border = self.get_os_border();
         let tab_bar_height = if self.show_tab_bar {
-            self.tab_bar_pixel_height().context("tab_bar_pixel_height")?
+            self.tab_bar_pixel_height()
+                .context("tab_bar_pixel_height")?
         } else {
             0.
         };
@@ -612,13 +613,9 @@ impl crate::TermWindow {
             (tab_bar_height, 0.0)
         };
 
-        let left_pixel_x = padding_left
-            + border.left.get() as f32
-            + (pos.left as f32 * cell_width);
-        let top_pixel_y = top_bar_height
-            + padding_top
-            + border.top.get() as f32
-            + (pos.top as f32 * cell_height);
+        let left_pixel_x = padding_left + border.left.get() as f32 + (pos.left as f32 * cell_width);
+        let top_pixel_y =
+            top_bar_height + padding_top + border.top.get() as f32 + (pos.top as f32 * cell_height);
 
         let viewport_top = current_viewport.unwrap_or(dims.physical_top);
         let rel_row = cursor.y - viewport_top;
@@ -627,11 +624,13 @@ impl crate::TermWindow {
             return Ok(());
         }
 
-        let shape = self.config.default_cursor_style.effective_shape(cursor.shape);
+        let shape = self
+            .config
+            .default_cursor_style
+            .effective_shape(cursor.shape);
         let (cursor_w, cursor_h, offset_y) = match shape {
-            termwiz::surface::CursorShape::BlinkingBar | termwiz::surface::CursorShape::SteadyBar => {
-                (2.5f32, cell_height, 0.0)
-            }
+            termwiz::surface::CursorShape::BlinkingBar
+            | termwiz::surface::CursorShape::SteadyBar => (2.5f32, cell_height, 0.0),
             termwiz::surface::CursorShape::BlinkingUnderline
             | termwiz::surface::CursorShape::SteadyUnderline => {
                 let thickness = 2.5f32;
@@ -649,6 +648,8 @@ impl crate::TermWindow {
         let decay = self.config.cursor_trail_decay as f32;
         let now = Instant::now();
 
+        let max_snap_distance = (cell_width * 40.0).max(cell_height * 20.0);
+
         let (still_animating, trail_nodes, corners) = {
             let mut trails = self.cursor_trail.borrow_mut();
             let trail_state = trails
@@ -660,7 +661,7 @@ impl crate::TermWindow {
                 target_y,
                 target_x + cursor_w,
                 target_y + cursor_h,
-                false,
+                max_snap_distance,
             );
 
             let animating = trail_state.tick(now, decay);
@@ -672,14 +673,16 @@ impl crate::TermWindow {
         };
 
         if still_animating {
-            self.update_next_frame_time(Some(now + std::time::Duration::from_millis(8)));
+            let fps = (self.config.animation_fps as u64).max(1);
+            let interval_ms = (1000 / fps).max(1);
+            self.update_next_frame_time(Some(now + std::time::Duration::from_millis(interval_ms)));
         }
 
         let cursor_color = palette.cursor_bg.to_linear();
         let gl_state = self.render_state.as_ref().unwrap();
         let filled_box = gl_state.util_sprites.filled_box.texture_coords();
 
-        // 1. Draw decaying trail comet nodes
+        // Render decaying historical trail segments
         let max_age = decay * 1.5;
         for node in trail_nodes {
             let age = now.duration_since(node.time).as_secs_f32();
@@ -701,7 +704,7 @@ impl crate::TermWindow {
             }
         }
 
-        // 2. Draw the liquid gliding/stretched cursor quad
+        // Render the deformed cursor quad
         let (c_x, c_y) = corners;
         let tl = [c_x[0] - left_offset, c_y[0] - top_offset];
         let tr = [c_x[1] - left_offset, c_y[1] - top_offset];
@@ -733,7 +736,6 @@ impl crate::TermWindow {
 
         Ok(())
     }
-
 
     pub fn build_pane(&mut self, pos: &PositionedPane) -> anyhow::Result<ComputedElement> {
         // First compute the bounds for the pane background

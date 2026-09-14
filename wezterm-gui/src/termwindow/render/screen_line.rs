@@ -350,7 +350,7 @@ impl crate::TermWindow {
 
             if let Some(shape) = cursor_shape {
                 if params.config.cursor_trail && params.is_active {
-                    // Suppressed here; animated smoothly in paint_pane on layer 2!
+                    // Rendered in paint_pane on layer 2 for smooth sub-cell animation
                 } else {
                     let cursor_layer = match shape {
                         CursorShape::BlinkingBar | CursorShape::SteadyBar => 2,
@@ -382,8 +382,9 @@ impl crate::TermWindow {
 
                         if let Some(sprite) = &glyph.texture {
                             let width = sprite.coords.size.width as f32 * glyph.scale as f32;
-                            let height =
-                                sprite.coords.size.height as f32 * glyph.scale as f32 * height_scale;
+                            let height = sprite.coords.size.height as f32
+                                * glyph.scale as f32
+                                * height_scale;
 
                             let pos_y = pos_y
                                 + cell_height

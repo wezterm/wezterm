@@ -73,11 +73,11 @@ pub mod background;
 pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
+pub mod cursortrail;
 pub mod keyevent;
 pub mod modal;
 mod mouseevent;
 pub mod palette;
-pub mod cursortrail;
 pub mod paneselect;
 mod prevcursor;
 pub mod render;
@@ -407,7 +407,7 @@ pub struct TermWindow {
     window_drag_position: Option<MouseEvent>,
     current_mouse_event: Option<MouseEvent>,
     prev_cursor: PrevCursorPos,
-    pub(crate) cursor_trail: RefCell<HashMap<PaneId, CursorTrailState>>,
+    cursor_trail: RefCell<HashMap<PaneId, CursorTrailState>>,
     last_scroll_info: RenderableDimensions,
 
     tab_state: RefCell<HashMap<TabId, TabState>>,
