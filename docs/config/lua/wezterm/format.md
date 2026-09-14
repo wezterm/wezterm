@@ -57,6 +57,12 @@ Possible values for the `FormatItem` elements are:
 * `{Background={Color="blue"}}` - set the background color to a named color or rgb value as per `Foreground` above.
 * `"ResetAttributes"` - reset all attributes to default. {{since('20220807-113146-c2fee766', inline=True)}}
 
+Explicit attributes override the style of the text where the formatted string is
+used. For example, `{Attribute={Italic=false}}` disables italics even when the
+tab bar's hover style enables them. Attributes that you omit retain their
+surrounding style. In the tab bar, `ResetAttributes` restores that style, so put
+any overrides after the reset.
+
 This example shows how to use arbitrary escape sequences to change the underline color:
 
 ```lua
