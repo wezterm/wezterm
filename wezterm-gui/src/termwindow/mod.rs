@@ -1200,6 +1200,11 @@ impl TermWindow {
                 self.cancel_overlay_for_tab(tab_id, pane_id);
             }
             TermWindowNotif::MuxNotification(n) => match n {
+                MuxNotification::TmuxCommandPrompt { pane_id, domain_id } => {
+                    if self.window_contains_pane(pane_id) {
+                        self.show_tmux_command_prompt(pane_id, domain_id);
+                    }
+                }
                 MuxNotification::Alert {
                     alert: Alert::SetUserVar { name, value },
                     pane_id,
@@ -1471,7 +1476,8 @@ impl TermWindow {
             }
             | MuxNotification::PaneFocused(pane_id)
             | MuxNotification::PaneRemoved(pane_id)
-            | MuxNotification::PaneOutput(pane_id) => {
+            | MuxNotification::PaneOutput(pane_id)
+            | MuxNotification::TmuxCommandPrompt { pane_id, .. } => {
                 // Check window validity and propagate to the window event handler
                 // that will do the full pane visibility check.
                 let mux = Mux::get();
@@ -2323,6 +2329,31 @@ impl TermWindow {
         });
         self.assign_overlay(tab.tab_id(), overlay);
         promise::spawn::spawn(future).detach();
+    }
+
+    fn show_tmux_command_prompt(&mut self, pane_id: PaneId, domain_id: mux::domain::DomainId) {
+        let mux = Mux::get();
+        let pane = match mux.get_pane(pane_id) {
+            Some(pane) => pane,
+            None => return,
+        };
+
+        let (overlay, future) = start_overlay_pane(self, &pane, move |_pane_id, term| {
+            crate::overlay::prompt::show_tmux_command_prompt(term)
+        });
+        self.assign_overlay_for_pane(pane_id, overlay);
+        promise::spawn::spawn(async move {
+            if let Some(command) = future.await? {
+                let mux = Mux::get();
+                if let Some(domain) = mux.get_domain(domain_id) {
+                    if let Some(tmux) = domain.downcast_ref::<mux::tmux::TmuxDomain>() {
+                        tmux.enqueue_user_command(command);
+                    }
+                }
+            }
+            anyhow::Result::<()>::Ok(())
+        })
+        .detach();
     }
 
     fn show_confirmation(&mut self, args: &Confirmation) {

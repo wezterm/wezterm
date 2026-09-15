@@ -82,6 +82,10 @@ pub enum MuxNotification {
         window_id: WindowId,
     },
     PaneFocused(PaneId),
+    TmuxCommandPrompt {
+        pane_id: PaneId,
+        domain_id: DomainId,
+    },
     TabResized(TabId),
     TabTitleChanged {
         tab_id: TabId,
@@ -159,6 +163,19 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                 break;
             }
             Ok(size) => {
+                let force_tmux_exit = pane
+                    .upgrade()
+                    .map(|pane| pane.take_tmux_force_exit_requested())
+                    .unwrap_or(false);
+                let expect_tmux_exit = pane
+                    .upgrade()
+                    .map(|pane| pane.take_tmux_exit_requested())
+                    .unwrap_or(false);
+                if force_tmux_exit {
+                    parser.force_tmux_exit();
+                } else if expect_tmux_exit {
+                    parser.expect_tmux_exit();
+                }
                 parser.parse(&buf[0..size], |action| {
                     let mut flush = false;
                     match &action {

@@ -1,18 +1,18 @@
-use crate::activity::Activity;
 use crate::domain::{alloc_domain_id, Domain, DomainId, DomainState, SplitSource};
 use crate::pane::{Pane, PaneId};
 use crate::tab::{SplitRequest, Tab, TabId};
 use crate::tmux_commands::{
-    ListAllPanes, ListAllWindows, ListCommands, NewWindow, SplitPane, TmuxCommand,
+    ListAllPanes, ListAllWindows, ListCommands, NewWindow, RawTmuxCommand, SplitPane, TmuxCommand,
 };
 use crate::window::WindowId;
-use crate::{Mux, MuxWindowBuilder};
+use crate::{Mux, MuxNotification, MuxWindowBuilder};
 use async_trait::async_trait;
 use filedescriptor::FileDescriptor;
 use parking_lot::{Condvar, Mutex};
 use portable_pty::CommandBuilder;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use termwiz::tmux_cc::*;
 use wezterm_term::TerminalSize;
@@ -72,9 +72,14 @@ pub(crate) struct TmuxDomainState {
     pub gui_tabs: Mutex<HashMap<TmuxWindowId, TmuxTab>>,
     pub remote_panes: Mutex<HashMap<TmuxPaneId, RefTmuxRemotePane>>,
     pub tmux_session: Mutex<Option<TmuxSessionId>>,
+    pub active_window: Mutex<Option<TmuxWindowId>>,
+    pub activating_window: Mutex<Option<TmuxWindowId>>,
+    protocol_logging: AtomicBool,
+    force_quit: AtomicBool,
     pub support_commands: Mutex<HashMap<String, String>>,
     pub attach_state: Mutex<AttachState>,
     pending_splits: Mutex<VecDeque<promise::Promise<TmuxPaneId>>>,
+    pub pending_windows: Mutex<VecDeque<promise::Promise<TmuxWindowId>>>,
     pub backlog: Mutex<HashMap<TmuxPaneId, Vec<u8>>>,
 }
 
@@ -82,8 +87,83 @@ pub struct TmuxDomain {
     pub(crate) inner: Arc<TmuxDomainState>,
 }
 
+impl TmuxDomain {
+    pub fn enqueue_user_command(&self, command: String) {
+        self.inner.enqueue_user_command(command);
+    }
+}
+
 impl TmuxDomainState {
+    pub fn detach_client(&self) -> anyhow::Result<()> {
+        let pane = Mux::get()
+            .get_pane(self.pane_id)
+            .ok_or_else(|| anyhow::anyhow!("tmux gateway pane {} was removed", self.pane_id))?;
+        pane.writer().write_all(b"detach-client\n")?;
+        Ok(())
+    }
+
+    pub fn force_quit(&self) {
+        if self.force_quit.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        self.cmd_queue.lock().clear();
+        *self.state.lock() = State::Exit;
+        for pane in self.remote_panes.lock().values() {
+            let pane = pane.lock();
+            let (lock, condvar) = &*pane.active_lock;
+            *lock.lock() = true;
+            condvar.notify_all();
+        }
+
+        Mux::get().domain_was_detached(self.domain_id);
+    }
+
+    pub fn toggle_protocol_logging(&self) -> bool {
+        let enabled = !self.protocol_logging.load(Ordering::SeqCst);
+        self.protocol_logging.store(enabled, Ordering::SeqCst);
+        crate::localpane::emit_output_for_pane(
+            self.pane_id,
+            if enabled {
+                "\r\ntmux logging enabled\r\n"
+            } else {
+                "\r\ntmux logging disabled\r\n"
+            },
+        );
+        enabled
+    }
+
+    pub fn log_protocol_line(&self, direction: &str, line: &str) {
+        if self.protocol_logging.load(Ordering::SeqCst) {
+            crate::localpane::emit_output_for_pane(
+                self.pane_id,
+                &format!("{direction} {}\r\n", line.trim_end_matches(['\r', '\n'])),
+            );
+        }
+    }
+
+    pub fn enqueue_user_command(&self, command: String) {
+        let command = command.trim().to_string();
+        if command.is_empty() || self.force_quit.load(Ordering::SeqCst) {
+            return;
+        }
+        self.cmd_queue
+            .lock()
+            .push_back(Box::new(RawTmuxCommand::new(command)));
+        Self::schedule_send_next_command(self.domain_id);
+    }
+
+    pub fn request_command_prompt(&self) {
+        Mux::get().notify(MuxNotification::TmuxCommandPrompt {
+            pane_id: self.pane_id,
+            domain_id: self.domain_id,
+        });
+    }
+
     pub fn advance(&self, events: Box<Vec<Event>>) {
+        if self.force_quit.load(Ordering::SeqCst) {
+            return;
+        }
         for event in events.iter() {
             let state = *self.state.lock();
             log::debug!("tmux: {:?} in state {:?}", event, state);
@@ -179,6 +259,11 @@ impl TmuxDomainState {
                     self.subscribe_notification();
                     log::info!("tmux session changed:{}", session);
                 }
+                Event::SessionWindowChanged { session, window } => {
+                    if Some(*session) == *self.tmux_session.lock() {
+                        self.activate_tmux_window(*window);
+                    }
+                }
                 Event::WindowAdd { window } => {
                     // Only handle the new tab, the first empty window handled by sync_window_state
                     if !self.gui_window.lock().is_none() {
@@ -248,6 +333,7 @@ impl TmuxDomainState {
                 continue;
             }
             log::debug!("sending cmd {:?}", cmd);
+            self.log_protocol_line(">", cmd.trim_end_matches(['\r', '\n']));
             let mux = Mux::get();
             if let Some(pane) = mux.get_pane(self.pane_id) {
                 let mut writer = pane.writer();
@@ -275,19 +361,10 @@ impl TmuxDomainState {
     pub fn create_gui_window(&self) {
         if self.gui_window.lock().is_none() {
             let mux = Mux::get();
-            let window_builder =
-                if let Some((_domain, window_id, _tab)) = mux.resolve_pane_id(self.pane_id) {
-                    MuxWindowBuilder {
-                        window_id,
-                        activity: Some(Activity::new()),
-                        notified: false,
-                    }
-                } else {
-                    mux.new_empty_window(
-                        None, /* TODO: pass session here */
-                        None, /* position */
-                    )
-                };
+            let window_builder = mux.new_empty_window(
+                None, /* TODO: pass session here */
+                None, /* position */
+            );
 
             log::info!("Tmux create window id {}", window_builder.window_id);
             {
@@ -302,6 +379,24 @@ impl TmuxDomainState {
         let mut cmd_queue = self.cmd_queue.as_ref().lock();
         cmd_queue.push_back(Box::new(NewWindow));
         TmuxDomainState::schedule_send_next_command(self.domain_id);
+    }
+
+    pub fn activate_tmux_window(&self, tmux_window_id: TmuxWindowId) {
+        *self.active_window.lock() = Some(tmux_window_id);
+
+        let tab_id = match self.gui_tabs.lock().get(&tmux_window_id) {
+            Some(tab) => tab.tab_id,
+            None => return,
+        };
+        let gui_window_id = match self.gui_window.lock().as_ref() {
+            Some(window) => **window,
+            None => return,
+        };
+        if let Some(mut window) = Mux::get().get_window_mut(gui_window_id) {
+            if let Some(idx) = window.get_tab_idx_for_id(tab_id) {
+                window.remember_and_set_active_tab_idx(idx);
+            }
+        }
     }
 
     /// split the tmux pane
@@ -346,9 +441,14 @@ impl TmuxDomain {
             gui_tabs: Mutex::new(HashMap::default()),
             remote_panes: Mutex::new(HashMap::default()),
             tmux_session: Mutex::new(None),
+            active_window: Mutex::new(None),
+            activating_window: Mutex::new(None),
+            protocol_logging: AtomicBool::new(false),
+            force_quit: AtomicBool::new(false),
             support_commands: Mutex::new(HashMap::default()),
             attach_state: Mutex::new(AttachState::Init),
             pending_splits: Mutex::new(VecDeque::default()),
+            pending_windows: Mutex::new(VecDeque::default()),
             backlog: Mutex::new(HashMap::default()),
         });
 
@@ -369,11 +469,25 @@ impl Domain for TmuxDomain {
         _command_dir: Option<String>,
         _window: WindowId,
     ) -> anyhow::Result<Arc<Tab>> {
+        let mut promise = promise::Promise::new();
+        let future = promise
+            .get_future()
+            .ok_or_else(|| anyhow::anyhow!("failed to create new-window waiter"))?;
+        self.inner.pending_windows.lock().push_back(promise);
         self.inner.create_tmux_window();
-        // This is intention, we would not return a Tab, since we don't have now!
-        // We use create_tmux_window to create back end tmux window, then the
-        // Tmux WindowAdd event will triage us to do the rest things.
-        anyhow::bail!("Intention: we use tmux command to do so");
+        let window_id = future.await?;
+        smol::Timer::after(std::time::Duration::from_millis(150)).await;
+        *self.inner.activating_window.lock() = None;
+        let tab_id = {
+            let gui_tabs = self.inner.gui_tabs.lock();
+            gui_tabs
+                .get(&window_id)
+                .map(|t| t.tab_id)
+                .ok_or_else(|| anyhow::anyhow!("tmux window {window_id} was not attached"))?
+        };
+        Mux::get()
+            .get_tab(tab_id)
+            .ok_or_else(|| anyhow::anyhow!("missing tab after new-window"))
     }
 
     async fn split_pane(

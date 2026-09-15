@@ -1,11 +1,12 @@
 use crate::tmux::{RefTmuxRemotePane, TmuxCmdQueue, TmuxDomainState};
-use crate::tmux_commands::{Resize, SendKeys};
+use crate::tmux_commands::{KillPane, Resize, SendKeys};
 use crate::DomainId;
 use filedescriptor::FileDescriptor;
 use parking_lot::{Condvar, Mutex};
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty};
 use std::io::{Read, Write};
 use std::sync::Arc;
+use termwiz::tmux_cc::TmuxPaneId;
 
 /// A local tmux pane(tab) based on a tmux pty
 #[derive(Debug)]
@@ -22,20 +23,38 @@ struct TmuxPtyWriter {
     cmd_queue: Arc<Mutex<TmuxCmdQueue>>,
 }
 
+fn enqueue_send_keys(
+    domain_id: DomainId,
+    cmd_queue: &Arc<Mutex<TmuxCmdQueue>>,
+    pane_id: TmuxPaneId,
+    buf: &[u8],
+) -> std::io::Result<usize> {
+    if buf.is_empty() {
+        return Ok(0);
+    }
+    log::trace!("pane:{}, content:{:?}", &pane_id, buf);
+    cmd_queue.lock().push_back(Box::new(SendKeys {
+        pane: pane_id,
+        keys: buf.to_vec(),
+    }));
+    TmuxDomainState::schedule_send_next_command(domain_id);
+    Ok(buf.len())
+}
+
+fn enqueue_kill_pane(
+    domain_id: DomainId,
+    cmd_queue: &Arc<Mutex<TmuxCmdQueue>>,
+    pane_id: TmuxPaneId,
+) -> std::io::Result<()> {
+    cmd_queue.lock().push_back(Box::new(KillPane { pane_id }));
+    TmuxDomainState::schedule_send_next_command(domain_id);
+    Ok(())
+}
+
 impl Write for TmuxPtyWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let pane_id = {
-            let pane_lock = self.master_pane.lock();
-            pane_lock.pane_id
-        };
-        log::trace!("pane:{}, content:{:?}", &pane_id, buf);
-        let mut cmd_queue = self.cmd_queue.lock();
-        cmd_queue.push_back(Box::new(SendKeys {
-            pane: pane_id,
-            keys: buf.to_vec(),
-        }));
-        TmuxDomainState::schedule_send_next_command(self.domain_id);
-        Ok(0)
+        let pane_id = self.master_pane.lock().pane_id;
+        enqueue_send_keys(self.domain_id, &self.cmd_queue, pane_id, buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -45,18 +64,8 @@ impl Write for TmuxPtyWriter {
 
 impl Write for TmuxPty {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let pane_id = {
-            let pane_lock = self.master_pane.lock();
-            pane_lock.pane_id
-        };
-        log::trace!("pane:{}, content:{:?}", &pane_id, buf);
-        let mut cmd_queue = self.cmd_queue.lock();
-        cmd_queue.push_back(Box::new(SendKeys {
-            pane: pane_id,
-            keys: buf.to_vec(),
-        }));
-        TmuxDomainState::schedule_send_next_command(self.domain_id);
-        Ok(0)
+        let pane_id = self.master_pane.lock().pane_id;
+        enqueue_send_keys(self.domain_id, &self.cmd_queue, pane_id, buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -67,6 +76,9 @@ impl Write for TmuxPty {
 #[derive(Clone, Debug)]
 pub(crate) struct TmuxChild {
     pub active_lock: Arc<(Mutex<bool>, Condvar)>,
+    pub domain_id: DomainId,
+    pub pane_id: TmuxPaneId,
+    pub cmd_queue: Arc<Mutex<TmuxCmdQueue>>,
 }
 
 impl Child for TmuxChild {
@@ -94,14 +106,15 @@ impl Child for TmuxChild {
 }
 
 #[derive(Clone, Debug)]
-struct TmuxChildKiller {}
+struct TmuxChildKiller {
+    domain_id: DomainId,
+    pane_id: TmuxPaneId,
+    cmd_queue: Arc<Mutex<TmuxCmdQueue>>,
+}
 
 impl ChildKiller for TmuxChildKiller {
     fn kill(&mut self) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "TmuxChildKiller: kill not implemented!",
-        ))
+        enqueue_kill_pane(self.domain_id, &self.cmd_queue, self.pane_id)
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
@@ -111,14 +124,15 @@ impl ChildKiller for TmuxChildKiller {
 
 impl ChildKiller for TmuxChild {
     fn kill(&mut self) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "TmuxPty: kill not implemented!",
-        ))
+        enqueue_kill_pane(self.domain_id, &self.cmd_queue, self.pane_id)
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
-        Box::new(TmuxChildKiller {})
+        Box::new(TmuxChildKiller {
+            domain_id: self.domain_id,
+            pane_id: self.pane_id,
+            cmd_queue: self.cmd_queue.clone(),
+        })
     }
 }
 
