@@ -50,7 +50,11 @@ pub use wezterm_escape_parser::csi::MouseButtons;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputEvent {
     Key(KeyEvent),
+    /// A mouse event with cell coordinates. See [`InputParser`] for the
+    /// limitations when parsing SGR pixel mouse reports.
     Mouse(MouseEvent),
+    /// A mouse event with pixel coordinates. [`InputParser::parse`] does not
+    /// produce this variant from SGR mouse reports; see [`InputParser`].
     PixelMouse(PixelMouseEvent),
     /// Detected that the user has resized the terminal
     Resized {
@@ -64,6 +68,14 @@ pub enum InputEvent {
     Wake,
 }
 
+/// A mouse event whose `x` and `y` coordinates normally identify a column and
+/// row in terminal cells.
+///
+/// [`InputParser::parse`] preserves the coordinates from SGR mouse reports
+/// without converting their units or origin. SGR coordinates are one-based,
+/// while native Windows console input uses zero-based coordinates. If SGR
+/// pixel mode is enabled, `x` and `y` contain pixel coordinates instead; see
+/// [`InputParser`] for details.
 #[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MouseEvent {
@@ -73,6 +85,11 @@ pub struct MouseEvent {
     pub modifiers: Modifiers,
 }
 
+/// A mouse event whose `x_pixels` and `y_pixels` coordinates are measured in
+/// pixels rather than terminal cells.
+///
+/// [`InputParser::parse`] does not produce this type from SGR mouse reports,
+/// because it cannot distinguish cell and pixel coordinates. See [`InputParser`].
 #[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PixelMouseEvent {
@@ -624,6 +641,19 @@ enum InputState {
     Pasting(usize),
 }
 
+/// Parses input received from a terminal.
+///
+/// # SGR mouse coordinates
+///
+/// SGR cell mode (1006) and SGR pixel mode (1016) use the same mouse report
+/// format: `CSI < b ; x ; y M` (press or motion) or `CSI < b ; x ; y m`
+/// (release). The report itself does not identify the coordinate units.
+///
+/// This parser does not track the terminal's DEC private mouse modes. When
+/// parsing bytes, it reports both formats as [`InputEvent::Mouse`], preserving
+/// the coordinate values, rather than producing [`InputEvent::PixelMouse`].
+/// Applications that enable pixel mode (`CSI ? 1016 h`) must interpret the
+/// resulting [`MouseEvent::x`] and [`MouseEvent::y`] as pixels themselves.
 #[derive(Debug)]
 pub struct InputParser {
     key_map: KeyMap<InputEvent>,
