@@ -663,8 +663,8 @@ pub struct Config {
     #[dynamic(default = "default_cursor_trail")]
     pub cursor_trail: bool,
 
-    /// Decay time in seconds for the cursor trail (e.g. 0.15 for 150ms).
-    /// Defaults to 0.15.
+    /// Decay time in seconds for the cursor trail (e.g. 0.30 for 300ms).
+    /// Defaults to 0.30.
     #[dynamic(default = "default_cursor_trail_decay")]
     pub cursor_trail_decay: f64,
 
