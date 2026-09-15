@@ -7,7 +7,7 @@ tags:
 
 {{since('nightly')}}
 
-Setting this value will cause wezterm to replace the the value of the
+Setting this value will cause wezterm to replace the value of the
 `SSH_AUTH_SOCK` environment when it first starts up, and to use this value for
 the auth socket registered with the multiplexer server (visible via `wezterm
 cli list-clients`).

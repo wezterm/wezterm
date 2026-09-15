@@ -31,7 +31,7 @@ use termwiz::escape::{Action, CSI};
 use thiserror::*;
 use wezterm_term::{Clipboard, ClipboardSelection, DownloadHandler, TerminalSize};
 #[cfg(windows)]
-use winapi::um::winsock2::{SOL_SOCKET, SO_RCVBUF, SO_SNDBUF};
+use windows_sys::Win32::Networking::WinSock::{SOL_SOCKET, SO_RCVBUF, SO_SNDBUF};
 
 pub mod activity;
 pub mod client;
@@ -97,7 +97,7 @@ pub enum MuxNotification {
     },
 }
 
-static SUB_ID: AtomicUsize = AtomicUsize::new(0);
+static LAST_SUBSCRIBER_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub struct Mux {
     tabs: RwLock<HashMap<TabId, Arc<Tab>>>,
@@ -137,6 +137,8 @@ fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: V
     histogram!("send_actions_to_mux.rate").record(1.);
 }
 
+/// This is the parsing loop for the given pane.
+/// It reads all data sent to `rx` (from pane PTY) and handles all terminal events for this pane.
 fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
     let mut buf = vec![0; configuration().mux_output_parser_buffer_size];
     let mut parser = termwiz::escape::parser::Parser::new();
@@ -163,21 +165,23 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                         Action::CSI(CSI::Mode(Mode::SetDecPrivateMode(DecPrivateMode::Code(
                             DecPrivateModeCode::SynchronizedOutput,
                         )))) => {
+                            // Synchronized output frame started:
+                            // => We hold off ~all actions that applies changes to the terminal.
                             hold = true;
 
-                            // Flush prior actions
-                            if !actions.is_empty() {
-                                send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
-                                action_size = 0;
-                            }
+                            // => We also flush prior actions
+                            flush = true;
                         }
                         Action::CSI(CSI::Mode(Mode::ResetDecPrivateMode(
                             DecPrivateMode::Code(DecPrivateModeCode::SynchronizedOutput),
                         ))) => {
+                            // Synchronized output frame ended:
+                            // => We flush out all pending actions to the terminal.
                             hold = false;
                             flush = true;
                         }
                         Action::CSI(CSI::Device(dev)) if matches!(**dev, Device::SoftReset) => {
+                            // Soft reset requested
                             hold = false;
                             flush = true;
                         }
@@ -307,6 +311,7 @@ fn read_from_pane_pty(
         }
     };
 
+    // Spawn parser thread for this pane
     std::thread::spawn({
         let dead = Arc::clone(&dead);
         move || parse_buffered_data(pane, &dead, rx)
@@ -316,6 +321,8 @@ fn read_from_pane_pty(
         tx.write_all(banner.as_bytes()).ok();
     }
 
+    // Loop until the pane or the main mux thread is dead.
+    // Read data from the pane pty and send it to the parser thread via tx/rx.
     while !dead.load(Ordering::Relaxed) {
         match reader.read(&mut buf) {
             Ok(size) if size == 0 => {
@@ -329,9 +336,10 @@ fn read_from_pane_pty(
             Ok(size) => {
                 histogram!("read_from_pane_pty.bytes.rate").record(size as f64);
                 log::trace!("read_pty pane {pane_id} read {size} bytes");
+                // Send received data to this pane parser thread.
                 if let Err(err) = tx.write_all(&buf[..size]) {
                     error!(
-                        "read_pty failed to write to parser: pane {} {:?}",
+                        "read_pty failed to write to parser for pane {}: {:?}",
                         pane_id, err
                     );
                     break;
@@ -468,7 +476,7 @@ impl Mux {
         let mut count = HashMap::new();
         for window in self.windows.read().values() {
             let workspace = window.get_workspace();
-            for tab in window.iter() {
+            for tab in window.iter_tabs() {
                 *count.entry(workspace.to_string()).or_insert(0) += match tab.count_panes() {
                     Some(n) => n,
                     None => {
@@ -549,9 +557,9 @@ impl Mux {
                 .get_window_mut(window_id)
                 .ok_or_else(|| anyhow::anyhow!("window_id {window_id} not found"))?;
             let tab_idx = win
-                .idx_by_id(tab_id)
+                .get_tab_idx_for_id(tab_id)
                 .ok_or_else(|| anyhow::anyhow!("tab {tab_id} not in {window_id}"))?;
-            win.save_and_then_set_active(tab_idx);
+            win.remember_and_set_active_tab_idx(tab_idx);
         }
 
         // Focus/activate the pane locally
@@ -693,7 +701,7 @@ impl Mux {
     where
         F: Fn(MuxNotification) -> bool + 'static + Send + Sync,
     {
-        let sub_id = SUB_ID.fetch_add(1, Ordering::Relaxed);
+        let sub_id = LAST_SUBSCRIBER_ID.fetch_add(1, Ordering::Relaxed);
         self.subscribers
             .write()
             .insert(sub_id, Box::new(subscriber));
@@ -831,7 +839,7 @@ impl Mux {
 
         if let Some(mut windows) = self.windows.try_write() {
             for w in windows.values_mut() {
-                w.remove_by_id(tab_id);
+                w.remove_tab_id(tab_id);
             }
         }
 
@@ -855,7 +863,7 @@ impl Mux {
         if let Some(window) = window {
             // Gather all the domains referenced by this window
             let mut domains_of_window = HashSet::new();
-            for tab in window.iter() {
+            for tab in window.iter_tabs() {
                 for pane in tab.iter_panes_ignoring_zoom() {
                     domains_of_window.insert(pane.pane.domain_id());
                 }
@@ -875,7 +883,7 @@ impl Mux {
                 }
             }
 
-            for tab in window.iter() {
+            for tab in window.iter_tabs() {
                 self.remove_tab_internal(tab.tab_id());
             }
             self.notify(MuxNotification::WindowRemoved(window_id));
@@ -974,7 +982,7 @@ impl Mux {
 
     pub fn get_active_tab_for_window(&self, window_id: WindowId) -> Option<Arc<Tab>> {
         let window = self.get_window(window_id)?;
-        window.get_active().map(Arc::clone)
+        window.get_active_tab().map(Arc::clone)
     }
 
     pub fn new_empty_window(
@@ -998,16 +1006,17 @@ impl Mux {
             let mut window = self
                 .get_window_mut(window_id)
                 .ok_or_else(|| anyhow!("add_tab_to_window: no such window_id {}", window_id))?;
-            window.push(tab);
+            window.push_tab(tab);
         }
         self.recompute_pane_count();
         self.notify(MuxNotification::TabAddedToWindow { tab_id, window_id });
         Ok(())
     }
 
+    /// Returns the ID of the window containing the given tab ID, if any.
     pub fn window_containing_tab(&self, tab_id: TabId) -> Option<WindowId> {
         for w in self.windows.read().values() {
-            for t in w.iter() {
+            for t in w.iter_tabs() {
                 if t.tab_id() == tab_id {
                     return Some(w.window_id());
                 }
@@ -1094,7 +1103,7 @@ impl Mux {
         {
             let mut windows = self.windows.write();
             for (_, win) in windows.iter_mut() {
-                for tab in win.iter() {
+                for tab in win.iter_tabs() {
                     tab.kill_panes_in_domain(domain);
                 }
             }
@@ -1277,7 +1286,7 @@ impl Mux {
                 .get_window_mut(window_id)
                 .ok_or_else(|| anyhow!("window_id {} not found on this server", window_id))?;
             let tab = window
-                .get_active()
+                .get_active_tab()
                 .ok_or_else(|| anyhow!("window {} has no tabs", window_id))?;
             let size = tab.get_size();
 
@@ -1327,7 +1336,7 @@ impl Mux {
                 .get_window_mut(window_id)
                 .ok_or_else(|| anyhow!("window_id {} not found on this server", window_id))?;
             let tab = window
-                .get_active()
+                .get_active_tab()
                 .ok_or_else(|| anyhow!("window {} has no tabs", window_id))?;
             let pane = tab
                 .get_active_pane()
@@ -1391,8 +1400,8 @@ impl Mux {
         let mut window = self
             .get_window_mut(window_id)
             .ok_or_else(|| anyhow!("no such window!?"))?;
-        if let Some(idx) = window.idx_by_id(tab.tab_id()) {
-            window.save_and_then_set_active(idx);
+        if let Some(idx) = window.get_tab_idx_for_id(tab.tab_id()) {
+            window.remember_and_set_active_tab_idx(idx);
         }
 
         Ok((tab, pane, window_id))

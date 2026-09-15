@@ -544,8 +544,7 @@ impl crate::TermWindow {
 
                 let fg_color = self.ensure_min_contrast(fg_color, bg_color);
 
-                // interpolate between the background color
-                // and the the target color
+                // interpolate between the background color and the target color
                 let bg_color_alt = params
                     .config
                     .resolved_palette
