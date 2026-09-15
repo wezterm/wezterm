@@ -136,9 +136,9 @@ impl CursorTrailState {
             max_dot = max_dot.max(d);
         }
 
-        // Fast decay for leading edge, slower decay for trailing edge (matching Kitty)
-        let decay_fast = (decay_secs * 0.25).clamp(0.04, 0.12);
-        let decay_slow = decay_secs.max(0.15);
+        // Fast decay for leading edge (~0.08s), slower decay for trailing edge (~0.42s) for long, fluid trail
+        let decay_slow = decay_secs.max(0.42);
+        let decay_fast = (decay_slow * 0.22).clamp(0.06, 0.12);
 
         let mut max_diff = 0.0f32;
 
@@ -160,25 +160,19 @@ impl CursorTrailState {
             self.corner_y[i] += dy[i] * step;
         }
 
-        if max_diff > 0.4 {
-            self.opacity = (self.opacity + dt / 0.04).min(1.0);
+        if max_diff > 0.25 {
+            self.opacity = 1.0;
             self.is_animating = true;
             true
         } else {
-            // Reached target
+            // Smoothly reached target
             for i in 0..4 {
                 self.corner_x[i] = targets[i].0;
                 self.corner_y[i] = targets[i].1;
             }
-            self.opacity = (self.opacity - dt / decay_slow).max(0.0);
-            if self.opacity > 0.01 {
-                self.is_animating = true;
-                true
-            } else {
-                self.opacity = 0.0;
-                self.is_animating = false;
-                false
-            }
+            self.opacity = 0.0;
+            self.is_animating = false;
+            false
         }
     }
 }

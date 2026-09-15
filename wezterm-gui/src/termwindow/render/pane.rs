@@ -639,7 +639,7 @@ impl crate::TermWindow {
 
         let max_snap_distance = (cell_width * 200.0).max(cell_height * 60.0);
 
-        let (still_animating, corners_x, corners_y, trail_opacity) = {
+        let (still_animating, corners_x, corners_y, _trail_opacity) = {
             let mut trails = self.cursor_trail.borrow_mut();
             let trail_state = trails
                 .entry(pos.pane.pane_id())
@@ -663,7 +663,7 @@ impl crate::TermWindow {
 
         // 1. Render the single continuous stretched trail quad (Kitty's trail architecture)
         // Corner 0: top-right, 1: bottom-right, 2: bottom-left, 3: top-left
-        if trail_opacity > 0.01 {
+        if still_animating {
             let top_left = (corners_x[3] - left_offset, corners_y[3] - top_offset);
             let top_right = (corners_x[0] - left_offset, corners_y[0] - top_offset);
             let bot_left = (corners_x[2] - left_offset, corners_y[2] - top_offset);
@@ -673,7 +673,7 @@ impl crate::TermWindow {
                 quad.set_quad_corners(top_left, top_right, bot_left, bot_right);
                 quad.set_texture(filled_box);
                 quad.set_is_background();
-                quad.set_fg_color(cursor_color.mul_alpha(trail_opacity * 0.70));
+                quad.set_fg_color(cursor_color.mul_alpha(0.70));
                 quad.set_hsv(None);
             }
         }
