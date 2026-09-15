@@ -62,7 +62,7 @@ A layer is a lua table with the following fields:
 * `hsb` - a hue, saturation, brightness transformation that can be used to adjust those attributes of the layer. See [foreground_text_hsb](foreground_text_hsb.md) for more information about this kind of transform.
 * `height` - controls the height of the image. The following values are accepted:
     * `"Cover"` (this is the default) - Scales the image, preserving aspect ratio, to the smallest possible size to fill the viewport, leaving no empty space.  If the aspect ratio of the viewport differs from the image, the image is cropped.
-    * `"Contain"` - Scales the image as large as possible without cropping or stretching. If the viewport is larger than the image, tiles the image unless `repeat_y` is set to `"NoRepeat"`.
+    * `"Contain"` - Scales the image as large as possible without cropping or stretching. If the viewport is larger than the image, tiles the image unless `repeat_y` is set to `"NoRepeat"`. Additionally, it can take an argument after a comma that affects the size of the box to contain the image in (e.g. `"Contain,50%"` will constrain the image to half of the viewport's height).
     * `123` - specifies a height of `123` pixels
     * `"50%"` - specifies a size of `50%` of the viewport height
     * `"2cell"` - specifies a size equivalent to `2` rows
