@@ -673,7 +673,7 @@ impl crate::TermWindow {
                 quad.set_quad_corners(top_left, top_right, bot_left, bot_right);
                 quad.set_texture(filled_box);
                 quad.set_is_background();
-                quad.set_fg_color(cursor_color.mul_alpha(0.70));
+                quad.set_fg_color(cursor_color);
                 quad.set_hsv(None);
             }
         }
@@ -686,15 +686,9 @@ impl crate::TermWindow {
 
         let focused = self.focused.is_some();
         let cursor_alpha = if !focused {
-            0.4 // Clean dimming when unfocused
-        } else if !still_animating && self.config.cursor_blink_rate != 0 {
-            let mut color_ease = self.cursor_blink_state.borrow_mut();
-            color_ease.update_start(self.prev_cursor.last_cursor_movement());
-            let (intensity, next) = color_ease.intensity_continuous();
-            self.update_next_frame_time(Some(next));
-            1.0 - intensity * 0.75
+            0.6 // Clean dimming when unfocused
         } else {
-            1.0 // Fully bright solid brick rectangle while in motion
+            1.0 // Strictly 100% solid brick rectangle with no translucency
         };
 
         if let Ok(mut quad) = layers.allocate(0) {

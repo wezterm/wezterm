@@ -136,9 +136,10 @@ impl CursorTrailState {
             max_dot = max_dot.max(d);
         }
 
-        // Fast decay for leading edge (~0.08s), slower decay for trailing edge (~0.42s) for long, fluid trail
-        let decay_slow = decay_secs.max(0.42);
-        let decay_fast = (decay_slow * 0.22).clamp(0.06, 0.12);
+        // Match Kitty's default physics (decay_fast = 0.10, decay_slow = 0.40)
+        // while respecting user's cursor_trail_decay config.
+        let decay_slow = if decay_secs > 0.01 { decay_secs } else { 0.40 };
+        let decay_fast = (decay_slow * 0.25).clamp(0.02, 0.20);
 
         let mut max_diff = 0.0f32;
 
