@@ -126,6 +126,10 @@ impl KeyRepeatState {
                     };
 
                     let mut inner = handle.borrow_mut();
+                    if inner.window.is_none() {
+                        log::warn!("key repetition cancelled because window has been closed");
+                        return;
+                    }
 
                     if inner.key_repeat.as_ref().map(|(_, k)| Arc::as_ptr(k))
                         != Some(Arc::as_ptr(&state))
