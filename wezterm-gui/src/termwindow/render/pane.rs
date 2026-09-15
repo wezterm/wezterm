@@ -639,24 +639,20 @@ impl crate::TermWindow {
 
         let max_snap_distance = (cell_width * 200.0).max(cell_height * 60.0);
 
-        let (still_animating, stream_segments, current_pos, last_rec_pos) = {
+        let (still_animating, corners_x, corners_y, trail_opacity) = {
             let mut trails = self.cursor_trail.borrow_mut();
             let trail_state = trails
                 .entry(pos.pane.pane_id())
                 .or_insert_with(CursorTrailState::new);
 
-            trail_state.set_target(target_x, target_y, max_snap_distance);
+            trail_state.set_target(target_x, target_y, cell_width, cell_height, max_snap_distance);
 
-            let animating = trail_state.tick(now, decay);
-            let segments: Vec<crate::termwindow::cursortrail::StreamSegment> =
-                trail_state.stream.iter().copied().collect();
-            let curr = (trail_state.current_x, trail_state.current_y);
-            let last_rec = (trail_state.last_record_x, trail_state.last_record_y);
-            (animating, segments, curr, last_rec)
+            let animating = trail_state.tick(now, decay, cell_width, cell_height);
+            (animating, trail_state.corner_x, trail_state.corner_y, trail_state.opacity)
         };
 
         if still_animating {
-            let max_fps = (self.config.max_fps as u64).max(120);
+            let max_fps = (self.config.max_fps as u64).max(60);
             let interval = std::time::Duration::from_nanos(1_000_000_000 / max_fps);
             self.update_next_frame_time(Some(now + interval));
         }
@@ -665,72 +661,26 @@ impl crate::TermWindow {
         let gl_state = self.render_state.as_ref().unwrap();
         let filled_box = gl_state.util_sprites.filled_box.texture_coords();
 
-        let (current_x, current_y) = current_pos;
-        let (last_record_x, last_record_y) = last_rec_pos;
-        let life_secs = decay.max(0.08);
-
-        // Helper to emit non-overlapping contiguous quads on Layer 0 (background layer)
-        // Layer 0 guarantees zero fringing and keeps text glyphs on Layer 1 sharp and crisp.
-        let mut render_stream_quad = |x0: f32, y0: f32, x1: f32, y1: f32, alpha: f32| {
-            if alpha <= 0.005 {
-                return;
-            }
-            let dx = x1 - x0;
-            let dy = y1 - y0;
-            if dx.abs() < 0.05 && dy.abs() < 0.05 {
-                return;
-            }
-
-            let (min_x, min_y, max_x, max_y) = if dx.abs() >= dy.abs() {
-                let (lx, rx) = if dx > 0.0 {
-                    (x0, x1)
-                } else {
-                    (x1 + cell_width, x0 + cell_width)
-                };
-                let ty = y0.min(y1);
-                (lx, ty, rx, ty + cell_height)
-            } else {
-                let (ty, by) = if dy > 0.0 {
-                    (y0, y1)
-                } else {
-                    (y1 + cell_height, y0 + cell_height)
-                };
-                let lx = x0.min(x1);
-                (lx, ty, lx + cell_width, by)
-            };
-
-            let left = min_x - left_offset;
-            let top = min_y - top_offset;
-            let right = max_x - left_offset;
-            let bottom = max_y - top_offset;
+        // 1. Render the single continuous stretched trail quad (Kitty's trail architecture)
+        // Corner 0: top-right, 1: bottom-right, 2: bottom-left, 3: top-left
+        if trail_opacity > 0.01 {
+            let top_left = (corners_x[3] - left_offset, corners_y[3] - top_offset);
+            let top_right = (corners_x[0] - left_offset, corners_y[0] - top_offset);
+            let bot_left = (corners_x[2] - left_offset, corners_y[2] - top_offset);
+            let bot_right = (corners_x[1] - left_offset, corners_y[1] - top_offset);
 
             if let Ok(mut quad) = layers.allocate(0) {
-                quad.set_position(left, top, right, bottom);
+                quad.set_quad_corners(top_left, top_right, bot_left, bot_right);
                 quad.set_texture(filled_box);
                 quad.set_is_background();
-                quad.set_fg_color(cursor_color.mul_alpha(alpha));
+                quad.set_fg_color(cursor_color.mul_alpha(trail_opacity * 0.70));
                 quad.set_hsv(None);
             }
-        };
-
-        // Render leading sub-frame delta between last recorded waypoint and current cursor position
-        if (current_x - last_record_x).hypot(current_y - last_record_y) >= 0.1 {
-            render_stream_quad(last_record_x, last_record_y, current_x, current_y, 0.85);
         }
 
-        // Render continuous light stream segments (Tron cycles light ribbon)
-        for seg in stream_segments.iter() {
-            let age = now.duration_since(seg.time).as_secs_f32();
-            if age < life_secs {
-                let progress = (1.0 - (age / life_secs)).clamp(0.0, 1.0);
-                let stream_alpha = (progress.powf(1.1) * 0.85).clamp(0.02, 0.85);
-                render_stream_quad(seg.x0, seg.y0, seg.x1, seg.y1, stream_alpha);
-            }
-        }
-
-        // Render the active solid brick rectangle cursor (full cell width x height)
-        let cursor_left = current_x - left_offset;
-        let cursor_top = current_y - top_offset;
+        // 2. Render the active solid brick rectangle cursor (full cell width x height)
+        let cursor_left = target_x - left_offset;
+        let cursor_top = target_y - top_offset;
         let cursor_right = cursor_left + cursor_w;
         let cursor_bottom = cursor_top + cursor_h;
 

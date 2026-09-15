@@ -1,28 +1,20 @@
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
-
-#[derive(Clone, Copy, Debug)]
-pub struct StreamSegment {
-    pub x0: f32,
-    pub y0: f32,
-    pub x1: f32,
-    pub y1: f32,
-    pub time: Instant,
-}
+use std::time::Instant;
 
 #[derive(Clone, Debug)]
 pub struct CursorTrailState {
-    pub current_x: f32,
-    pub current_y: f32,
+    /// 4 animated corners of the single continuous trail quad (matching Kitty's architecture):
+    /// 0: top-right, 1: bottom-right, 2: bottom-left, 3: top-left
+    pub corner_x: [f32; 4],
+    pub corner_y: [f32; 4],
+
+    /// Current target cursor position
     pub target_x: f32,
     pub target_y: f32,
 
-    pub stream: VecDeque<StreamSegment>,
-
-    pub last_record_x: f32,
-    pub last_record_y: f32,
-    last_update: Instant,
+    pub opacity: f32,
     pub is_animating: bool,
+
+    last_update: Instant,
     initialized: bool,
 }
 
@@ -35,15 +27,13 @@ impl Default for CursorTrailState {
 impl CursorTrailState {
     pub fn new() -> Self {
         Self {
-            current_x: 0.0,
-            current_y: 0.0,
+            corner_x: [0.0; 4],
+            corner_y: [0.0; 4],
             target_x: 0.0,
             target_y: 0.0,
-            stream: VecDeque::new(),
-            last_record_x: 0.0,
-            last_record_y: 0.0,
-            last_update: Instant::now(),
+            opacity: 0.0,
             is_animating: false,
+            last_update: Instant::now(),
             initialized: false,
         }
     }
@@ -52,18 +42,21 @@ impl CursorTrailState {
         &mut self,
         target_x: f32,
         target_y: f32,
+        cell_w: f32,
+        cell_h: f32,
         max_snap_distance: f32,
     ) {
+        let target_r = target_x + cell_w;
+        let target_b = target_y + cell_h;
+
         if !self.initialized {
-            self.current_x = target_x;
-            self.current_y = target_y;
             self.target_x = target_x;
             self.target_y = target_y;
-            self.last_record_x = target_x;
-            self.last_record_y = target_y;
-            self.stream.clear();
-            self.initialized = true;
+            self.corner_x = [target_r, target_r, target_x, target_x];
+            self.corner_y = [target_y, target_b, target_b, target_y];
+            self.opacity = 0.0;
             self.is_animating = false;
+            self.initialized = true;
             self.last_update = Instant::now();
             return;
         }
@@ -71,29 +64,33 @@ impl CursorTrailState {
         let dist_x = (self.target_x - target_x).abs();
         let dist_y = (self.target_y - target_y).abs();
 
-        // Snap immediately across large distances (screen clears, full-page scrolls)
         if dist_x > max_snap_distance || dist_y > max_snap_distance {
-            self.current_x = target_x;
-            self.current_y = target_y;
             self.target_x = target_x;
             self.target_y = target_y;
-            self.last_record_x = target_x;
-            self.last_record_y = target_y;
-            self.stream.clear();
+            self.corner_x = [target_r, target_r, target_x, target_x];
+            self.corner_y = [target_y, target_b, target_b, target_y];
+            self.opacity = 0.0;
             self.is_animating = false;
             self.last_update = Instant::now();
             return;
         }
 
-        if (self.target_x - target_x).abs() > 0.2 || (self.target_y - target_y).abs() > 0.2 {
+        if dist_x > 0.1 || dist_y > 0.1 {
             self.target_x = target_x;
             self.target_y = target_y;
             self.is_animating = true;
         }
     }
 
-    /// Advance physics and update continuous stream trail. Returns true if animation is active.
-    pub fn tick(&mut self, now: Instant, decay_secs: f32) -> bool {
+    /// Advance physics: the 4 corners of the single continuous quad move toward cursor targets.
+    /// Leading corners move with decay_fast; trailing corners move with decay_slow (matching Kitty).
+    pub fn tick(
+        &mut self,
+        now: Instant,
+        decay_secs: f32,
+        cell_w: f32,
+        cell_h: f32,
+    ) -> bool {
         if !self.initialized {
             return false;
         }
@@ -104,60 +101,84 @@ impl CursorTrailState {
             .clamp(0.001, 0.05);
         self.last_update = now;
 
-        let dist_x = self.target_x - self.current_x;
-        let dist_y = self.target_y - self.current_y;
-        let dist = (dist_x * dist_x + dist_y * dist_y).sqrt();
+        let target_r = self.target_x + cell_w;
+        let target_b = self.target_y + cell_h;
+        let targets = [
+            (target_r, self.target_y),      // 0: top-right
+            (target_r, target_b),           // 1: bottom-right
+            (self.target_x, target_b),      // 2: bottom-left
+            (self.target_x, self.target_y), // 3: top-left
+        ];
 
-        if dist > 0.2 {
-            // Fluid Tron gliding ease with snappy responsiveness
-            let speed = 32.0;
-            let step = 1.0 - (-speed * dt).exp();
-            self.current_x += dist_x * step;
-            self.current_y += dist_y * step;
-        } else {
-            self.current_x = self.target_x;
-            self.current_y = self.target_y;
-        }
+        let cursor_center_x = self.target_x + cell_w * 0.5;
+        let cursor_center_y = self.target_y + cell_h * 0.5;
+        let cursor_diag_2 = (cell_w * cell_w + cell_h * cell_h).sqrt() * 0.5;
 
-        // Record continuous stream segments without gaps
-        let moved = ((self.current_x - self.last_record_x).powi(2)
-            + (self.current_y - self.last_record_y).powi(2))
-        .sqrt();
+        let mut dx = [0.0f32; 4];
+        let mut dy = [0.0f32; 4];
+        let mut dot = [0.0f32; 4];
+        let mut min_dot = f32::MAX;
+        let mut max_dot = f32::MIN;
 
-        let at_target = (self.current_x - self.target_x).abs() < 0.1
-            && (self.current_y - self.target_y).abs() < 0.1;
-
-        if moved >= 0.5 || (moved >= 0.1 && at_target) {
-            self.stream.push_front(StreamSegment {
-                x0: self.last_record_x,
-                y0: self.last_record_y,
-                x1: self.current_x,
-                y1: self.current_y,
-                time: now,
-            });
-            self.last_record_x = self.current_x;
-            self.last_record_y = self.current_y;
-
-            while self.stream.len() > 128 {
-                self.stream.pop_back();
+        for i in 0..4 {
+            dx[i] = targets[i].0 - self.corner_x[i];
+            dy[i] = targets[i].1 - self.corner_y[i];
+            let d_norm = (dx[i] * dx[i] + dy[i] * dy[i]).sqrt();
+            if d_norm < 1e-4 {
+                dot[i] = 0.0;
+                continue;
             }
+            let to_corner_x = targets[i].0 - cursor_center_x;
+            let to_corner_y = targets[i].1 - cursor_center_y;
+            let d = (dx[i] * to_corner_x + dy[i] * to_corner_y) / (cursor_diag_2 * d_norm);
+            dot[i] = d;
+            min_dot = min_dot.min(d);
+            max_dot = max_dot.max(d);
         }
 
-        // Prune old stream segments past decay duration
-        let lifetime = Duration::from_secs_f32(decay_secs.max(0.08));
-        self.stream
-            .retain(|seg| now.duration_since(seg.time) < lifetime);
+        // Fast decay for leading edge, slower decay for trailing edge (matching Kitty)
+        let decay_fast = (decay_secs * 0.25).clamp(0.04, 0.12);
+        let decay_slow = decay_secs.max(0.15);
 
-        if at_target && self.stream.is_empty() {
-            self.current_x = self.target_x;
-            self.current_y = self.target_y;
-            self.last_record_x = self.target_x;
-            self.last_record_y = self.target_y;
-            self.is_animating = false;
-            false
-        } else {
+        let mut max_diff = 0.0f32;
+
+        for i in 0..4 {
+            let d_norm = (dx[i] * dx[i] + dy[i] * dy[i]).sqrt();
+            max_diff = max_diff.max(d_norm);
+
+            if d_norm < 1e-4 || min_dot == f32::MAX {
+                continue;
+            }
+            let decay = if (max_dot - min_dot).abs() < 1e-5 {
+                decay_slow
+            } else {
+                decay_slow + (decay_fast - decay_slow) * ((dot[i] - min_dot) / (max_dot - min_dot))
+            };
+            // Exponential ease matching Kitty's 1.0 - exp2(-10.0 * dt / decay)
+            let step = 1.0 - (-10.0 * dt / decay).exp2();
+            self.corner_x[i] += dx[i] * step;
+            self.corner_y[i] += dy[i] * step;
+        }
+
+        if max_diff > 0.4 {
+            self.opacity = (self.opacity + dt / 0.04).min(1.0);
             self.is_animating = true;
             true
+        } else {
+            // Reached target
+            for i in 0..4 {
+                self.corner_x[i] = targets[i].0;
+                self.corner_y[i] = targets[i].1;
+            }
+            self.opacity = (self.opacity - dt / decay_slow).max(0.0);
+            if self.opacity > 0.01 {
+                self.is_animating = true;
+                true
+            } else {
+                self.opacity = 0.0;
+                self.is_animating = false;
+                false
+            }
         }
     }
 }
