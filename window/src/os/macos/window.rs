@@ -2124,7 +2124,9 @@ impl WindowView {
             } else {
                 DeadKeyStatus::Composing(s.to_string())
             };
-            inner.events.dispatch(WindowEvent::AdviseDeadKeyStatus(status));
+            inner
+                .events
+                .dispatch(WindowEvent::AdviseDeadKeyStatus(status));
 
             inner.ime_last_event.take();
             inner.ime_state = ImeDisposition::Acted;

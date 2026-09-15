@@ -756,9 +756,8 @@ impl crate::TermWindow {
 
             let mut compose_attrs = CellAttributes::blank();
             if let Some(fg) = &params.config.resolved_palette.compose_fg {
-                compose_attrs.set_foreground(ColorAttribute::TrueColorWithDefaultFallback(
-                    (*fg).into(),
-                ));
+                compose_attrs
+                    .set_foreground(ColorAttribute::TrueColorWithDefaultFallback((*fg).into()));
             }
 
             line.overlay_text_with_attribute(*cursor_x, &composing, compose_attrs, seqno);
