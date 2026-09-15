@@ -637,9 +637,9 @@ impl crate::TermWindow {
         let decay = self.config.cursor_trail_decay as f32;
         let now = Instant::now();
 
-        let max_snap_distance = (cell_width * 40.0).max(cell_height * 20.0);
+        let max_snap_distance = (cell_width * 200.0).max(cell_height * 60.0);
 
-        let (still_animating, stream_segments, current_pos) = {
+        let (still_animating, stream_segments, current_pos, last_rec_pos) = {
             let mut trails = self.cursor_trail.borrow_mut();
             let trail_state = trails
                 .entry(pos.pane.pane_id())
@@ -647,17 +647,18 @@ impl crate::TermWindow {
 
             trail_state.set_target(target_x, target_y, max_snap_distance);
 
-            let animating = trail_state.tick(now, decay, cell_width, cell_height);
+            let animating = trail_state.tick(now, decay);
             let segments: Vec<crate::termwindow::cursortrail::StreamSegment> =
                 trail_state.stream.iter().copied().collect();
             let curr = (trail_state.current_x, trail_state.current_y);
-            (animating, segments, curr)
+            let last_rec = (trail_state.last_record_x, trail_state.last_record_y);
+            (animating, segments, curr, last_rec)
         };
 
         if still_animating {
-            let fps = (self.config.animation_fps as u64).max(1);
-            let interval_ms = (1000 / fps).max(1);
-            self.update_next_frame_time(Some(now + std::time::Duration::from_millis(interval_ms)));
+            let max_fps = (self.config.max_fps as u64).max(120);
+            let interval = std::time::Duration::from_nanos(1_000_000_000 / max_fps);
+            self.update_next_frame_time(Some(now + interval));
         }
 
         let cursor_color = palette.cursor_bg.to_linear();
@@ -665,71 +666,91 @@ impl crate::TermWindow {
         let filled_box = gl_state.util_sprites.filled_box.texture_coords();
 
         let (current_x, current_y) = current_pos;
-        let life_secs = decay.max(0.1);
+        let (last_record_x, last_record_y) = last_rec_pos;
+        let life_secs = decay.max(0.08);
+
+        // Helper to emit non-overlapping contiguous quads on Layer 0 (background layer)
+        // Layer 0 guarantees zero fringing and keeps text glyphs on Layer 1 sharp and crisp.
+        let mut render_stream_quad = |x0: f32, y0: f32, x1: f32, y1: f32, alpha: f32| {
+            if alpha <= 0.005 {
+                return;
+            }
+            let dx = x1 - x0;
+            let dy = y1 - y0;
+            if dx.abs() < 0.05 && dy.abs() < 0.05 {
+                return;
+            }
+
+            let (min_x, min_y, max_x, max_y) = if dx.abs() >= dy.abs() {
+                let (lx, rx) = if dx > 0.0 {
+                    (x0, x1)
+                } else {
+                    (x1 + cell_width, x0 + cell_width)
+                };
+                let ty = y0.min(y1);
+                (lx, ty, rx, ty + cell_height)
+            } else {
+                let (ty, by) = if dy > 0.0 {
+                    (y0, y1)
+                } else {
+                    (y1 + cell_height, y0 + cell_height)
+                };
+                let lx = x0.min(x1);
+                (lx, ty, lx + cell_width, by)
+            };
+
+            let left = min_x - left_offset;
+            let top = min_y - top_offset;
+            let right = max_x - left_offset;
+            let bottom = max_y - top_offset;
+
+            if let Ok(mut quad) = layers.allocate(0) {
+                quad.set_position(left, top, right, bottom);
+                quad.set_texture(filled_box);
+                quad.set_is_background();
+                quad.set_fg_color(cursor_color.mul_alpha(alpha));
+                quad.set_hsv(None);
+            }
+        };
+
+        // Render leading sub-frame delta between last recorded waypoint and current cursor position
+        if (current_x - last_record_x).hypot(current_y - last_record_y) >= 0.1 {
+            render_stream_quad(last_record_x, last_record_y, current_x, current_y, 0.85);
+        }
 
         // Render continuous light stream segments (Tron cycles light ribbon)
         for seg in stream_segments.iter() {
             let age = now.duration_since(seg.time).as_secs_f32();
             if age < life_secs {
                 let progress = (1.0 - (age / life_secs)).clamp(0.0, 1.0);
-                let stream_alpha = (progress.powf(1.1) * 0.85).clamp(0.04, 0.85);
-                let seg_color = cursor_color.mul_alpha(stream_alpha);
-
-                let left = seg.x0.min(seg.x1) - left_offset;
-                let right = (seg.x0 + seg.width).max(seg.x1 + seg.width) - left_offset;
-                let top = seg.y0.min(seg.y1) - top_offset;
-                let bottom = (seg.y0 + seg.height).max(seg.y1 + seg.height) - top_offset;
-
-                if let Ok(mut quad) = layers.allocate(2) {
-                    quad.set_position(left, top, right, bottom);
-                    quad.set_texture(filled_box);
-                    quad.set_is_background();
-                    quad.set_fg_color(seg_color);
-                    quad.set_hsv(None);
-                }
+                let stream_alpha = (progress.powf(1.1) * 0.85).clamp(0.02, 0.85);
+                render_stream_quad(seg.x0, seg.y0, seg.x1, seg.y1, stream_alpha);
             }
         }
 
-        // Bridge current cursor with latest stream point to maintain unbroken stream continuity
-        if let Some(first) = stream_segments.first() {
-            let left = current_x.min(first.x1) - left_offset;
-            let right = (current_x + cell_width).max(first.x1 + cell_width) - left_offset;
-            let top = current_y.min(first.y1) - top_offset;
-            let bottom = (current_y + cell_height).max(first.y1 + cell_height) - top_offset;
-
-            if let Ok(mut quad) = layers.allocate(2) {
-                quad.set_position(left, top, right, bottom);
-                quad.set_texture(filled_box);
-                quad.set_is_background();
-                quad.set_fg_color(cursor_color.mul_alpha(0.85));
-                quad.set_hsv(None);
-            }
-        }
-
-        // Render the active brick rectangle cursor
+        // Render the active solid brick rectangle cursor (full cell width x height)
         let cursor_left = current_x - left_offset;
         let cursor_top = current_y - top_offset;
         let cursor_right = cursor_left + cursor_w;
         let cursor_bottom = cursor_top + cursor_h;
 
-        if let Ok(mut quad) = layers.allocate(2) {
+        let focused = self.focused.is_some();
+        let cursor_alpha = if !focused {
+            0.4 // Clean dimming when unfocused
+        } else if !still_animating && self.config.cursor_blink_rate != 0 {
+            let mut color_ease = self.cursor_blink_state.borrow_mut();
+            color_ease.update_start(self.prev_cursor.last_cursor_movement());
+            let (intensity, next) = color_ease.intensity_continuous();
+            self.update_next_frame_time(Some(next));
+            1.0 - intensity * 0.75
+        } else {
+            1.0 // Fully bright solid brick rectangle while in motion
+        };
+
+        if let Ok(mut quad) = layers.allocate(0) {
             quad.set_position(cursor_left, cursor_top, cursor_right, cursor_bottom);
             quad.set_texture(filled_box);
             quad.set_is_background();
-
-            let cursor_alpha = if !still_animating
-                && self.config.cursor_blink_rate != 0
-                && self.focused.is_some()
-            {
-                let mut color_ease = self.cursor_blink_state.borrow_mut();
-                color_ease.update_start(self.prev_cursor.last_cursor_movement());
-                let (intensity, next) = color_ease.intensity_continuous();
-                self.update_next_frame_time(Some(next));
-                1.0 - intensity * 0.75
-            } else {
-                1.0 // Fully bright solid brick rectangle while in motion
-            };
-
             quad.set_fg_color(cursor_color.mul_alpha(cursor_alpha));
             quad.set_hsv(None);
         }

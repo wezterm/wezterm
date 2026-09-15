@@ -7,8 +7,6 @@ pub struct StreamSegment {
     pub y0: f32,
     pub x1: f32,
     pub y1: f32,
-    pub width: f32,
-    pub height: f32,
     pub time: Instant,
 }
 
@@ -21,8 +19,8 @@ pub struct CursorTrailState {
 
     pub stream: VecDeque<StreamSegment>,
 
-    last_record_x: f32,
-    last_record_y: f32,
+    pub last_record_x: f32,
+    pub last_record_y: f32,
     last_update: Instant,
     pub is_animating: bool,
     initialized: bool,
@@ -95,13 +93,7 @@ impl CursorTrailState {
     }
 
     /// Advance physics and update continuous stream trail. Returns true if animation is active.
-    pub fn tick(
-        &mut self,
-        now: Instant,
-        decay_secs: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> bool {
+    pub fn tick(&mut self, now: Instant, decay_secs: f32) -> bool {
         if !self.initialized {
             return false;
         }
@@ -116,9 +108,9 @@ impl CursorTrailState {
         let dist_y = self.target_y - self.current_y;
         let dist = (dist_x * dist_x + dist_y * dist_y).sqrt();
 
-        if dist > 0.25 {
-            // Fluid Tron gliding ease
-            let speed = 26.0;
+        if dist > 0.2 {
+            // Fluid Tron gliding ease with snappy responsiveness
+            let speed = 32.0;
             let step = 1.0 - (-speed * dt).exp();
             self.current_x += dist_x * step;
             self.current_y += dist_y * step;
@@ -132,33 +124,31 @@ impl CursorTrailState {
             + (self.current_y - self.last_record_y).powi(2))
         .sqrt();
 
-        if moved >= 1.0 {
+        let at_target = (self.current_x - self.target_x).abs() < 0.1
+            && (self.current_y - self.target_y).abs() < 0.1;
+
+        if moved >= 0.5 || (moved >= 0.1 && at_target) {
             self.stream.push_front(StreamSegment {
                 x0: self.last_record_x,
                 y0: self.last_record_y,
                 x1: self.current_x,
                 y1: self.current_y,
-                width: cell_width,
-                height: cell_height,
                 time: now,
             });
             self.last_record_x = self.current_x;
             self.last_record_y = self.current_y;
 
-            while self.stream.len() > 64 {
+            while self.stream.len() > 128 {
                 self.stream.pop_back();
             }
         }
 
         // Prune old stream segments past decay duration
-        let lifetime = Duration::from_secs_f32(decay_secs.max(0.1));
+        let lifetime = Duration::from_secs_f32(decay_secs.max(0.08));
         self.stream
             .retain(|seg| now.duration_since(seg.time) < lifetime);
 
-        if (self.current_x - self.target_x).abs() < 0.3
-            && (self.current_y - self.target_y).abs() < 0.3
-            && self.stream.is_empty()
-        {
+        if at_target && self.stream.is_empty() {
             self.current_x = self.target_x;
             self.current_y = self.target_y;
             self.last_record_x = self.target_x;
