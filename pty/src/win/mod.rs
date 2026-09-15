@@ -12,7 +12,7 @@ use windows_sys::Win32::System::Threading::{
 
 pub mod conpty;
 mod procthreadattr;
-mod psuedocon;
+mod pseudocon;
 
 use filedescriptor::OwnedHandle;
 

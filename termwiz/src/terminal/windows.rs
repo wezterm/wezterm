@@ -758,7 +758,7 @@ impl Terminal for WindowsTerminal {
         })
     }
 
-    fn probe_capabilities(&mut self) -> Option<ProbeCapabilities> {
+    fn probe_capabilities(&mut self) -> Option<ProbeCapabilities<'_>> {
         Some(ProbeCapabilities::new(
             &mut self.input_handle,
             &mut self.output_handle,
