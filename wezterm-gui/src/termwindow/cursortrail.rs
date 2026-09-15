@@ -84,13 +84,7 @@ impl CursorTrailState {
 
     /// Advance physics: the 4 corners of the single continuous quad move toward cursor targets.
     /// Leading corners move with decay_fast; trailing corners move with decay_slow (matching Kitty).
-    pub fn tick(
-        &mut self,
-        now: Instant,
-        decay_secs: f32,
-        cell_w: f32,
-        cell_h: f32,
-    ) -> bool {
+    pub fn tick(&mut self, now: Instant, decay_secs: f32, cell_w: f32, cell_h: f32) -> bool {
         if !self.initialized {
             return false;
         }

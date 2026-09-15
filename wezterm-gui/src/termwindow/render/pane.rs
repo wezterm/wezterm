@@ -645,10 +645,21 @@ impl crate::TermWindow {
                 .entry(pos.pane.pane_id())
                 .or_insert_with(CursorTrailState::new);
 
-            trail_state.set_target(target_x, target_y, cell_width, cell_height, max_snap_distance);
+            trail_state.set_target(
+                target_x,
+                target_y,
+                cell_width,
+                cell_height,
+                max_snap_distance,
+            );
 
             let animating = trail_state.tick(now, decay, cell_width, cell_height);
-            (animating, trail_state.corner_x, trail_state.corner_y, trail_state.opacity)
+            (
+                animating,
+                trail_state.corner_x,
+                trail_state.corner_y,
+                trail_state.opacity,
+            )
         };
 
         if still_animating {
