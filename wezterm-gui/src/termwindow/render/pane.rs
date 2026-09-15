@@ -624,23 +624,12 @@ impl crate::TermWindow {
             return Ok(());
         }
 
-        let shape = self
-            .config
-            .default_cursor_style
-            .effective_shape(cursor.shape);
-        let (cursor_w, cursor_h, offset_y) = match shape {
-            termwiz::surface::CursorShape::BlinkingBar
-            | termwiz::surface::CursorShape::SteadyBar => (2.5f32, cell_height, 0.0),
-            termwiz::surface::CursorShape::BlinkingUnderline
-            | termwiz::surface::CursorShape::SteadyUnderline => {
-                let thickness = 2.5f32;
-                (cell_width, thickness, cell_height - thickness)
-            }
-            _ => (cell_width, cell_height, 0.0),
-        };
+        // The cursor always renders in brick rectangle mode (full cell)
+        let cursor_w = cell_width;
+        let cursor_h = cell_height;
 
         let target_x = left_pixel_x + (cursor.x as f32 * cell_width);
-        let target_y = top_pixel_y + (rel_row as f32 * cell_height) + offset_y;
+        let target_y = top_pixel_y + (rel_row as f32 * cell_height);
 
         let left_offset = self.dimensions.pixel_width as f32 / 2.0;
         let top_offset = self.dimensions.pixel_height as f32 / 2.0;
@@ -650,26 +639,19 @@ impl crate::TermWindow {
 
         let max_snap_distance = (cell_width * 40.0).max(cell_height * 20.0);
 
-        let (still_animating, trail_nodes, corners) = {
+        let (still_animating, stream_segments, current_pos) = {
             let mut trails = self.cursor_trail.borrow_mut();
             let trail_state = trails
                 .entry(pos.pane.pane_id())
                 .or_insert_with(CursorTrailState::new);
 
-            trail_state.set_target(
-                target_x,
-                target_y,
-                target_x + cursor_w,
-                target_y + cursor_h,
-                max_snap_distance,
-            );
+            trail_state.set_target(target_x, target_y, max_snap_distance);
 
-            let animating = trail_state.tick(now, decay);
-            let nodes: Vec<crate::termwindow::cursortrail::TrailNode> =
-                trail_state.trail.iter().copied().collect();
-            let c_x = trail_state.corner_x;
-            let c_y = trail_state.corner_y;
-            (animating, nodes, (c_x, c_y))
+            let animating = trail_state.tick(now, decay, cell_width, cell_height);
+            let segments: Vec<crate::termwindow::cursortrail::StreamSegment> =
+                trail_state.stream.iter().copied().collect();
+            let curr = (trail_state.current_x, trail_state.current_y);
+            (animating, segments, curr)
         };
 
         if still_animating {
@@ -682,20 +664,24 @@ impl crate::TermWindow {
         let gl_state = self.render_state.as_ref().unwrap();
         let filled_box = gl_state.util_sprites.filled_box.texture_coords();
 
-        // Render decaying historical trail segments
-        let max_age = decay * 1.5;
-        for node in trail_nodes {
-            let age = now.duration_since(node.time).as_secs_f32();
-            if age < max_age {
-                let alpha_ratio = (1.0 - (age / max_age)).clamp(0.0, 1.0);
-                let seg_color = cursor_color.mul_alpha(alpha_ratio * 0.35);
+        let (current_x, current_y) = current_pos;
+        let life_secs = decay.max(0.1);
+
+        // Render continuous light stream segments (Tron cycles light ribbon)
+        for seg in stream_segments.iter() {
+            let age = now.duration_since(seg.time).as_secs_f32();
+            if age < life_secs {
+                let progress = (1.0 - (age / life_secs)).clamp(0.0, 1.0);
+                let stream_alpha = (progress.powf(1.1) * 0.85).clamp(0.04, 0.85);
+                let seg_color = cursor_color.mul_alpha(stream_alpha);
+
+                let left = seg.x0.min(seg.x1) - left_offset;
+                let right = (seg.x0 + seg.width).max(seg.x1 + seg.width) - left_offset;
+                let top = seg.y0.min(seg.y1) - top_offset;
+                let bottom = (seg.y0 + seg.height).max(seg.y1 + seg.height) - top_offset;
+
                 if let Ok(mut quad) = layers.allocate(2) {
-                    quad.set_position(
-                        node.left - left_offset,
-                        node.top - top_offset,
-                        node.right - left_offset,
-                        node.bottom - top_offset,
-                    );
+                    quad.set_position(left, top, right, bottom);
                     quad.set_texture(filled_box);
                     quad.set_is_background();
                     quad.set_fg_color(seg_color);
@@ -704,20 +690,34 @@ impl crate::TermWindow {
             }
         }
 
-        // Render the deformed cursor quad
-        let (c_x, c_y) = corners;
-        let tl = [c_x[0] - left_offset, c_y[0] - top_offset];
-        let tr = [c_x[1] - left_offset, c_y[1] - top_offset];
-        let br = [c_x[2] - left_offset, c_y[2] - top_offset];
-        let bl = [c_x[3] - left_offset, c_y[3] - top_offset];
+        // Bridge current cursor with latest stream point to maintain unbroken stream continuity
+        if let Some(first) = stream_segments.first() {
+            let left = current_x.min(first.x1) - left_offset;
+            let right = (current_x + cell_width).max(first.x1 + cell_width) - left_offset;
+            let top = current_y.min(first.y1) - top_offset;
+            let bottom = (current_y + cell_height).max(first.y1 + cell_height) - top_offset;
+
+            if let Ok(mut quad) = layers.allocate(2) {
+                quad.set_position(left, top, right, bottom);
+                quad.set_texture(filled_box);
+                quad.set_is_background();
+                quad.set_fg_color(cursor_color.mul_alpha(0.85));
+                quad.set_hsv(None);
+            }
+        }
+
+        // Render the active brick rectangle cursor
+        let cursor_left = current_x - left_offset;
+        let cursor_top = current_y - top_offset;
+        let cursor_right = cursor_left + cursor_w;
+        let cursor_bottom = cursor_top + cursor_h;
 
         if let Ok(mut quad) = layers.allocate(2) {
-            quad.set_corners(tl, tr, br, bl);
+            quad.set_position(cursor_left, cursor_top, cursor_right, cursor_bottom);
             quad.set_texture(filled_box);
             quad.set_is_background();
 
             let cursor_alpha = if !still_animating
-                && shape.is_blinking()
                 && self.config.cursor_blink_rate != 0
                 && self.focused.is_some()
             {
@@ -727,7 +727,7 @@ impl crate::TermWindow {
                 self.update_next_frame_time(Some(next));
                 1.0 - intensity * 0.75
             } else {
-                0.85
+                1.0 // Fully bright solid brick rectangle while in motion
             };
 
             quad.set_fg_color(cursor_color.mul_alpha(cursor_alpha));

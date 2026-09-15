@@ -1703,7 +1703,7 @@ fn default_cursor_trail() -> bool {
 }
 
 fn default_cursor_trail_decay() -> f64 {
-    0.15
+    0.30
 }
 
 fn default_text_blink_rate() -> u64 {

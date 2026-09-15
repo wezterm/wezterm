@@ -1,32 +1,28 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-const CORNER_TL: usize = 0;
-const CORNER_TR: usize = 1;
-const CORNER_BR: usize = 2;
-const CORNER_BL: usize = 3;
-
 #[derive(Clone, Copy, Debug)]
-pub struct TrailNode {
-    pub left: f32,
-    pub top: f32,
-    pub right: f32,
-    pub bottom: f32,
+pub struct StreamSegment {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub width: f32,
+    pub height: f32,
     pub time: Instant,
 }
 
 #[derive(Clone, Debug)]
 pub struct CursorTrailState {
-    pub target_left: f32,
-    pub target_top: f32,
-    pub target_right: f32,
-    pub target_bottom: f32,
+    pub current_x: f32,
+    pub current_y: f32,
+    pub target_x: f32,
+    pub target_y: f32,
 
-    pub trail: VecDeque<TrailNode>,
+    pub stream: VecDeque<StreamSegment>,
 
-    pub corner_x: [f32; 4],
-    pub corner_y: [f32; 4],
-
+    last_record_x: f32,
+    last_record_y: f32,
     last_update: Instant,
     pub is_animating: bool,
     initialized: bool,
@@ -41,13 +37,13 @@ impl Default for CursorTrailState {
 impl CursorTrailState {
     pub fn new() -> Self {
         Self {
-            target_left: 0.0,
-            target_top: 0.0,
-            target_right: 0.0,
-            target_bottom: 0.0,
-            trail: VecDeque::new(),
-            corner_x: [0.0; 4],
-            corner_y: [0.0; 4],
+            current_x: 0.0,
+            current_y: 0.0,
+            target_x: 0.0,
+            target_y: 0.0,
+            stream: VecDeque::new(),
+            last_record_x: 0.0,
+            last_record_y: 0.0,
             last_update: Instant::now(),
             is_animating: false,
             initialized: false,
@@ -56,76 +52,56 @@ impl CursorTrailState {
 
     pub fn set_target(
         &mut self,
-        left: f32,
-        top: f32,
-        right: f32,
-        bottom: f32,
+        target_x: f32,
+        target_y: f32,
         max_snap_distance: f32,
     ) {
         if !self.initialized {
-            self.target_left = left;
-            self.target_top = top;
-            self.target_right = right;
-            self.target_bottom = bottom;
-            self.corner_x = [left, right, right, left];
-            self.corner_y = [top, top, bottom, bottom];
-            self.trail.clear();
+            self.current_x = target_x;
+            self.current_y = target_y;
+            self.target_x = target_x;
+            self.target_y = target_y;
+            self.last_record_x = target_x;
+            self.last_record_y = target_y;
+            self.stream.clear();
             self.initialized = true;
             self.is_animating = false;
             self.last_update = Instant::now();
             return;
         }
 
-        if (self.target_left - left).abs() <= 0.1
-            && (self.target_top - top).abs() <= 0.1
-            && (self.target_right - right).abs() <= 0.1
-            && (self.target_bottom - bottom).abs() <= 0.1
-        {
-            return;
-        }
+        let dist_x = (self.target_x - target_x).abs();
+        let dist_y = (self.target_y - target_y).abs();
 
-        let dist_x = (self.target_left - left).abs();
-        let dist_y = (self.target_top - top).abs();
-
-        // Snap immediately on large jumps (such as screen clears or page scrolling)
+        // Snap immediately across large distances (screen clears, full-page scrolls)
         if dist_x > max_snap_distance || dist_y > max_snap_distance {
-            self.target_left = left;
-            self.target_top = top;
-            self.target_right = right;
-            self.target_bottom = bottom;
-            self.corner_x = [left, right, right, left];
-            self.corner_y = [top, top, bottom, bottom];
-            self.trail.clear();
+            self.current_x = target_x;
+            self.current_y = target_y;
+            self.target_x = target_x;
+            self.target_y = target_y;
+            self.last_record_x = target_x;
+            self.last_record_y = target_y;
+            self.stream.clear();
             self.is_animating = false;
             self.last_update = Instant::now();
             return;
         }
 
-        let min_x = self.corner_x[CORNER_TL].min(self.corner_x[CORNER_BL]);
-        let max_x = self.corner_x[CORNER_TR].max(self.corner_x[CORNER_BR]);
-        let min_y = self.corner_y[CORNER_TL].min(self.corner_y[CORNER_TR]);
-        let max_y = self.corner_y[CORNER_BL].max(self.corner_y[CORNER_BR]);
-
-        self.trail.push_back(TrailNode {
-            left: min_x,
-            top: min_y,
-            right: max_x,
-            bottom: max_y,
-            time: Instant::now(),
-        });
-        while self.trail.len() > 8 {
-            self.trail.pop_front();
+        if (self.target_x - target_x).abs() > 0.2 || (self.target_y - target_y).abs() > 0.2 {
+            self.target_x = target_x;
+            self.target_y = target_y;
+            self.is_animating = true;
         }
-
-        self.target_left = left;
-        self.target_top = top;
-        self.target_right = right;
-        self.target_bottom = bottom;
-        self.is_animating = true;
     }
 
-    /// Advance physics by delta time. Returns true if animation is still active.
-    pub fn tick(&mut self, now: Instant, decay_secs: f32) -> bool {
+    /// Advance physics and update continuous stream trail. Returns true if animation is active.
+    pub fn tick(
+        &mut self,
+        now: Instant,
+        decay_secs: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> bool {
         if !self.initialized {
             return false;
         }
@@ -136,78 +112,57 @@ impl CursorTrailState {
             .clamp(0.001, 0.05);
         self.last_update = now;
 
-        let target_x = [
-            self.target_left,
-            self.target_right,
-            self.target_right,
-            self.target_left,
-        ];
-        let target_y = [
-            self.target_top,
-            self.target_top,
-            self.target_bottom,
-            self.target_bottom,
-        ];
+        let dist_x = self.target_x - self.current_x;
+        let dist_y = self.target_y - self.current_y;
+        let dist = (dist_x * dist_x + dist_y * dist_y).sqrt();
 
-        let decay_fast = (decay_secs * 0.45).max(0.03);
-        let decay_slow = decay_secs.max(0.09);
-
-        let target_cx = (self.target_left + self.target_right) * 0.5;
-        let target_cy = (self.target_top + self.target_bottom) * 0.5;
-        let current_cx =
-            (self.corner_x[0] + self.corner_x[1] + self.corner_x[2] + self.corner_x[3]) * 0.25;
-        let current_cy =
-            (self.corner_y[0] + self.corner_y[1] + self.corner_y[2] + self.corner_y[3]) * 0.25;
-
-        let motion_dx = target_cx - current_cx;
-        let motion_dy = target_cy - current_cy;
-        let motion_len = (motion_dx * motion_dx + motion_dy * motion_dy).sqrt();
-
-        // Move corners with directional exponential decay
-        for i in 0..4 {
-            let dx = target_x[i] - self.corner_x[i];
-            let dy = target_y[i] - self.corner_y[i];
-            let dist = (dx * dx + dy * dy).sqrt();
-
-            if dist < 0.25 {
-                self.corner_x[i] = target_x[i];
-                self.corner_y[i] = target_y[i];
-                continue;
-            }
-
-            let decay = if motion_len > 1.0 && dist > 1.0 {
-                let dot = (dx * motion_dx + dy * motion_dy) / (dist * motion_len);
-                if dot > 0.0 {
-                    decay_fast
-                } else {
-                    decay_slow
-                }
-            } else {
-                decay_fast
-            };
-
-            let step = 1.0 - (-10.0 * dt / decay).exp2();
-            self.corner_x[i] += dx * step;
-            self.corner_y[i] += dy * step;
+        if dist > 0.25 {
+            // Fluid Tron gliding ease
+            let speed = 26.0;
+            let step = 1.0 - (-speed * dt).exp();
+            self.current_x += dist_x * step;
+            self.current_y += dist_y * step;
+        } else {
+            self.current_x = self.target_x;
+            self.current_y = self.target_y;
         }
 
-        let trail_lifetime = Duration::from_secs_f32(decay_slow * 1.6);
-        self.trail
-            .retain(|pt| now.duration_since(pt.time) < trail_lifetime);
+        // Record continuous stream segments without gaps
+        let moved = ((self.current_x - self.last_record_x).powi(2)
+            + (self.current_y - self.last_record_y).powi(2))
+        .sqrt();
 
-        let mut all_arrived = true;
-        for i in 0..4 {
-            if (self.corner_x[i] - target_x[i]).abs() >= 0.4
-                || (self.corner_y[i] - target_y[i]).abs() >= 0.4
-            {
-                all_arrived = false;
-                break;
+        if moved >= 1.0 {
+            self.stream.push_front(StreamSegment {
+                x0: self.last_record_x,
+                y0: self.last_record_y,
+                x1: self.current_x,
+                y1: self.current_y,
+                width: cell_width,
+                height: cell_height,
+                time: now,
+            });
+            self.last_record_x = self.current_x;
+            self.last_record_y = self.current_y;
+
+            while self.stream.len() > 64 {
+                self.stream.pop_back();
             }
         }
 
-        if all_arrived && self.trail.is_empty() {
-            self.corner_x = target_x;
-            self.corner_y = target_y;
+        // Prune old stream segments past decay duration
+        let lifetime = Duration::from_secs_f32(decay_secs.max(0.1));
+        self.stream
+            .retain(|seg| now.duration_since(seg.time) < lifetime);
+
+        if (self.current_x - self.target_x).abs() < 0.3
+            && (self.current_y - self.target_y).abs() < 0.3
+            && self.stream.is_empty()
+        {
+            self.current_x = self.target_x;
+            self.current_y = self.target_y;
+            self.last_record_x = self.target_x;
+            self.last_record_y = self.target_y;
             self.is_animating = false;
             false
         } else {

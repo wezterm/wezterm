@@ -105,13 +105,6 @@ pub trait QuadTrait {
 
     fn set_hsv(&mut self, hsv: Option<HsbTransform>);
     fn set_position(&mut self, left: f32, top: f32, right: f32, bottom: f32);
-    fn set_corners(
-        &mut self,
-        top_left: [f32; 2],
-        top_right: [f32; 2],
-        bot_right: [f32; 2],
-        bot_left: [f32; 2],
-    );
 }
 
 pub enum QuadImpl<'a> {
@@ -159,19 +152,6 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_position(left, top, right, bottom),
             Self::Boxed(q) => q.set_position(left, top, right, bottom),
-        }
-    }
-
-    fn set_corners(
-        &mut self,
-        top_left: [f32; 2],
-        top_right: [f32; 2],
-        bot_right: [f32; 2],
-        bot_left: [f32; 2],
-    ) {
-        match self {
-            Self::Vert(q) => q.set_corners(top_left, top_right, bot_right, bot_left),
-            Self::Boxed(q) => q.set_corners(top_left, top_right, bot_right, bot_left),
         }
     }
 }
@@ -224,19 +204,6 @@ impl<'a> QuadTrait for Quad<'a> {
         self.vert[V_TOP_RIGHT].position = [right, top];
         self.vert[V_BOT_LEFT].position = [left, bottom];
         self.vert[V_BOT_RIGHT].position = [right, bottom];
-    }
-
-    fn set_corners(
-        &mut self,
-        top_left: [f32; 2],
-        top_right: [f32; 2],
-        bot_right: [f32; 2],
-        bot_left: [f32; 2],
-    ) {
-        self.vert[V_TOP_LEFT].position = top_left;
-        self.vert[V_TOP_RIGHT].position = top_right;
-        self.vert[V_BOT_RIGHT].position = bot_right;
-        self.vert[V_BOT_LEFT].position = bot_left;
     }
 }
 
@@ -291,20 +258,6 @@ impl QuadTrait for BoxedQuad {
 
     fn set_position(&mut self, left: f32, top: f32, right: f32, bottom: f32) {
         self.position = (left, top, right, bottom);
-    }
-
-    fn set_corners(
-        &mut self,
-        top_left: [f32; 2],
-        top_right: [f32; 2],
-        bot_right: [f32; 2],
-        bot_left: [f32; 2],
-    ) {
-        let min_x = top_left[0].min(bot_left[0]);
-        let min_y = top_left[1].min(top_right[1]);
-        let max_x = top_right[0].max(bot_right[0]);
-        let max_y = bot_left[1].max(bot_right[1]);
-        self.position = (min_x, min_y, max_x, max_y);
     }
 }
 
