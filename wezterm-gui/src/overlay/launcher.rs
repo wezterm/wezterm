@@ -8,7 +8,7 @@
 use crate::commands::derive_command_from_key_assignment;
 use crate::inputmap::InputMap;
 use crate::overlay::quickselect;
-use crate::overlay::selector::{matcher_pattern, matcher_score};
+use crate::overlay::selector::{apply_filter_edit, matcher_pattern, matcher_score};
 use crate::termwindow::TermWindowNotif;
 use config::configuration;
 use config::keyassignment::{KeyAssignment, SpawnCommand, SpawnTabDomain};
@@ -573,12 +573,16 @@ impl LauncherState {
                 }) => {
                     break;
                 }
+                // Handle any other `Char` input as a filter edit action or report as unhandled.
+                // Keep this catch-all last among the `Char` arms.
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Char(c),
-                    ..
+                    modifiers,
                 }) if self.filtering => {
-                    self.filter_term.push(c);
-                    self.update_filter();
+                    if let Some(filter_term) = apply_filter_edit(c, modifiers, &self.filter_term) {
+                        self.filter_term = filter_term;
+                        self.update_filter();
+                    }
                 }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::UpArrow,
