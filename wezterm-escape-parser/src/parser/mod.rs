@@ -61,6 +61,30 @@ struct ParseState {
     tmux_st_escape_pending: bool,
 }
 
+#[cfg(feature = "tmux_cc")]
+fn is_tmux_exit_line(line: &[u8]) -> bool {
+    let line = match line.strip_suffix(b"\r") {
+        Some(stripped) => stripped,
+        None => line,
+    };
+    line == b"%exit" || line.starts_with(b"%exit ")
+}
+
+/// Byte offset after the `%exit` line, if that notification is present.
+#[cfg(feature = "tmux_cc")]
+fn offset_after_tmux_exit_line(bytes: &[u8]) -> Option<usize> {
+    let mut line_start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            if is_tmux_exit_line(&bytes[line_start..i]) {
+                return Some(i + 1);
+            }
+            line_start = i + 1;
+        }
+    }
+    None
+}
+
 /// The `Parser` struct holds the state machine that is used to decode
 /// a sequence of bytes.  The byte sequence can be streaming into the
 /// state machine.
@@ -130,8 +154,9 @@ impl Parser {
                 self.state_machine.parse(bytes, &mut perform);
                 return;
             }
-            if self.state.borrow().tmux_exiting {
-                if self.state.borrow().tmux_st_escape_pending && bytes.first() == Some(&b'\\') {
+            // ST (ESC \) ends DCS even if the client never sent %exit. HTM
+            // drops a queued %exit when htmd closes the socket, then writes ST.
+            if self.state.borrow().tmux_st_escape_pending && bytes.first() == Some(&b'\\') {
                     let mut parser_state = self.state.borrow_mut();
                     parser_state.tmux_state = None;
                     parser_state.tmux_exiting = false;
@@ -150,10 +175,7 @@ impl Parser {
                     callback(Action::DeviceControl(DeviceControlMode::Data(b'\x1b')));
                     let _ = self.advance_tmux_bytes(b"\x1b");
                 }
-                let st_offset = bytes
-                    .windows(2)
-                    .position(|pair| pair == b"\x1b\\")
-                    .or_else(|| bytes.iter().position(|&byte| byte == 0x9c));
+                let st_offset = bytes.windows(2).position(|pair| pair == b"\x1b\\");
                 if let Some(st_offset) = st_offset {
                     let protocol = &bytes[..st_offset];
                     for &byte in protocol {
@@ -193,21 +215,38 @@ impl Parser {
                     self.state.borrow_mut().tmux_st_escape_pending = true;
                     return;
                 }
-            }
             for &byte in bytes {
                 callback(Action::DeviceControl(DeviceControlMode::Data(byte)));
             }
             match self.advance_tmux_bytes(bytes) {
                 Ok(tmux_events) => {
-                    if tmux_events
+                    let saw_exit = tmux_events
                         .iter()
-                        .any(|event| matches!(event, Event::Exit { .. }))
-                    {
-                        self.state.borrow_mut().tmux_exiting = true;
-                    }
+                        .any(|event| matches!(event, Event::Exit { .. }));
                     callback(Action::DeviceControl(DeviceControlMode::TmuxEvents(
                         Box::new(tmux_events),
                     )));
+                    if saw_exit {
+                        // Ghostty/iTerm2 leave control mode on %exit immediately
+                        // rather than waiting for a trailing ST. HTM may drop
+                        // ST or deliver it only after the client process is gone.
+                        let rest = offset_after_tmux_exit_line(bytes)
+                            .map(|end| &bytes[end..])
+                            .unwrap_or(&b""[..]);
+                        let mut parser_state = self.state.borrow_mut();
+                        parser_state.tmux_state = None;
+                        parser_state.tmux_exiting = false;
+                        parser_state.tmux_force_exit = false;
+                        parser_state.tmux_st_escape_pending = false;
+                        let mut perform = Performer {
+                            callback: &mut callback,
+                            state: &mut parser_state,
+                        };
+                        self.state_machine.parse(b"\x1b\\", &mut perform);
+                        if !rest.is_empty() {
+                            self.state_machine.parse(rest, &mut perform);
+                        }
+                    }
                 }
                 Err(err_buf) => {
                     // capture bytes cannot be parsed
@@ -393,24 +432,32 @@ impl<'a, F: FnMut(Action)> VTActor for Performer<'a, F> {
             tcap.push(data);
         } else {
             #[cfg(feature = "tmux_cc")]
-            if let Some(tmux_state) = &self.state.tmux_state {
+            if self.state.tmux_state.is_some() {
                 // Preserve the exact control stream for terminal-emulator
                 // protocol logging while continuing to emit parsed events.
                 (self.callback)(Action::DeviceControl(DeviceControlMode::Data(data)));
-                let mut tmux_parser = tmux_state.borrow_mut();
-                match tmux_parser.advance_byte(data) {
+                let parsed = {
+                    let tmux_state = self.state.tmux_state.as_ref().unwrap();
+                    let mut tmux_parser = tmux_state.borrow_mut();
+                    tmux_parser.advance_byte(data)
+                };
+                match parsed {
                     Ok(optional_events) => {
                         if let Some(tmux_event) = optional_events {
-                            if matches!(&tmux_event, Event::Exit { .. }) {
-                                self.state.tmux_exiting = true;
-                            }
+                            let is_exit = matches!(&tmux_event, Event::Exit { .. });
                             (self.callback)(Action::DeviceControl(DeviceControlMode::TmuxEvents(
                                 Box::new(vec![tmux_event]),
                             )));
+                            if is_exit {
+                                self.state.tmux_state = None;
+                                self.state.tmux_exiting = false;
+                                self.state.tmux_force_exit = false;
+                                self.state.tmux_st_escape_pending = false;
+                                (self.callback)(Action::DeviceControl(DeviceControlMode::Exit));
+                            }
                         }
                     }
                     Err(_) => {
-                        drop(tmux_parser);
                         self.state.tmux_state = None; // drop tmux state
                         self.state.tmux_exiting = false;
                         self.state.tmux_force_exit = false;
@@ -538,6 +585,53 @@ mod test {
             }
         });
         assert!(saw_exit);
+    }
+
+    #[cfg(feature = "tmux_cc")]
+    #[test]
+    fn tmux_control_st_without_percent_exit_resumes_shell() {
+        let mut parser = Parser::new();
+        let mut saw_exit = false;
+        let mut text = String::new();
+        parser.parse(b"\x1bP1000p%sessions-changed\n", |_| {});
+        parser.parse(b"\x1b\\shell", |action| match action {
+            Action::DeviceControl(DeviceControlMode::Exit) => saw_exit = true,
+            Action::Print(character) => text.push(character),
+            _ => {}
+        });
+        assert!(saw_exit);
+        assert_eq!(text, "shell");
+    }
+
+    #[cfg(feature = "tmux_cc")]
+    #[test]
+    fn tmux_control_percent_exit_without_st_resumes_shell() {
+        let mut parser = Parser::new();
+        let mut saw_exit = false;
+        let mut text = String::new();
+        parser.parse(b"\x1bP1000p%sessions-changed\n", |_| {});
+        parser.parse(b"%exit\nshell", |action| match action {
+            Action::DeviceControl(DeviceControlMode::Exit) => saw_exit = true,
+            Action::Print(character) => text.push(character),
+            _ => {}
+        });
+        assert!(saw_exit);
+        assert_eq!(text, "shell");
+    }
+
+    #[cfg(feature = "tmux_cc")]
+    #[test]
+    fn tmux_control_utf8_output_is_not_c1_st() {
+        // tmux %output octal-escapes ➜ (e2 9e 9c). Those ASCII bytes must not
+        // be treated as C1 ST (0x9c).
+        let mut parser = Parser::new();
+        let mut saw_exit = false;
+        parser.parse(b"\x1bP1000p%output %0 \\342\\236\\234\n", |action| {
+            if matches!(action, Action::DeviceControl(DeviceControlMode::Exit)) {
+                saw_exit = true;
+            }
+        });
+        assert!(!saw_exit);
     }
 
     #[cfg(feature = "tmux_cc")]

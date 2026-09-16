@@ -958,6 +958,7 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
             }
             DeviceControlMode::Exit => {
                 if let Some(tmux) = self.tmux_domain.take() {
+                    log::info!("tmux -CC mode ended");
                     let pane_id = self.pane_id;
                     promise::spawn::spawn_into_main_thread(async move {
                         let mux = Mux::get();

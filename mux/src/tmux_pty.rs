@@ -6,7 +6,8 @@ use parking_lot::{Condvar, Mutex};
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty};
 use std::io::{Read, Write};
 use std::sync::Arc;
-use termwiz::tmux_cc::TmuxPaneId;
+use std::time::{Duration, Instant};
+use termwiz::tmux_cc::{TmuxPaneId, TmuxWindowId};
 
 /// A local tmux pane(tab) based on a tmux pty
 #[derive(Debug)]
@@ -45,7 +46,21 @@ fn enqueue_kill_pane(
     domain_id: DomainId,
     cmd_queue: &Arc<Mutex<TmuxCmdQueue>>,
     pane_id: TmuxPaneId,
+    window_id: TmuxWindowId,
+    last_kill_pane: &Arc<Mutex<Option<(TmuxWindowId, Instant)>>>,
 ) -> std::io::Result<()> {
+    let now = Instant::now();
+    let mut last = last_kill_pane.lock();
+    if let Some((wid, at)) = *last {
+        if wid == window_id && now.saturating_duration_since(at) < Duration::from_millis(80) {
+            log::debug!(
+                "skipping kill-pane %{pane_id} in @{window_id} (sibling close within 80ms)"
+            );
+            return Ok(());
+        }
+    }
+    *last = Some((window_id, now));
+    drop(last);
     cmd_queue.lock().push_back(Box::new(KillPane { pane_id }));
     TmuxDomainState::schedule_send_next_command(domain_id);
     Ok(())
@@ -78,7 +93,9 @@ pub(crate) struct TmuxChild {
     pub active_lock: Arc<(Mutex<bool>, Condvar)>,
     pub domain_id: DomainId,
     pub pane_id: TmuxPaneId,
+    pub window_id: TmuxWindowId,
     pub cmd_queue: Arc<Mutex<TmuxCmdQueue>>,
+    pub last_kill_pane: Arc<Mutex<Option<(TmuxWindowId, Instant)>>>,
 }
 
 impl Child for TmuxChild {
@@ -109,12 +126,20 @@ impl Child for TmuxChild {
 struct TmuxChildKiller {
     domain_id: DomainId,
     pane_id: TmuxPaneId,
+    window_id: TmuxWindowId,
     cmd_queue: Arc<Mutex<TmuxCmdQueue>>,
+    last_kill_pane: Arc<Mutex<Option<(TmuxWindowId, Instant)>>>,
 }
 
 impl ChildKiller for TmuxChildKiller {
     fn kill(&mut self) -> std::io::Result<()> {
-        enqueue_kill_pane(self.domain_id, &self.cmd_queue, self.pane_id)
+        enqueue_kill_pane(
+            self.domain_id,
+            &self.cmd_queue,
+            self.pane_id,
+            self.window_id,
+            &self.last_kill_pane,
+        )
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
@@ -124,14 +149,22 @@ impl ChildKiller for TmuxChildKiller {
 
 impl ChildKiller for TmuxChild {
     fn kill(&mut self) -> std::io::Result<()> {
-        enqueue_kill_pane(self.domain_id, &self.cmd_queue, self.pane_id)
+        enqueue_kill_pane(
+            self.domain_id,
+            &self.cmd_queue,
+            self.pane_id,
+            self.window_id,
+            &self.last_kill_pane,
+        )
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
         Box::new(TmuxChildKiller {
             domain_id: self.domain_id,
             pane_id: self.pane_id,
+            window_id: self.window_id,
             cmd_queue: self.cmd_queue.clone(),
+            last_kill_pane: self.last_kill_pane.clone(),
         })
     }
 }

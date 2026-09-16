@@ -192,6 +192,9 @@ impl TmuxDomainState {
         let mux = Mux::get();
         mux.remove_tab(tab.tab_id);
         gui_tabs.remove(&window_id);
+        drop(gui_tabs);
+        self.forget_window_affinity(window_id);
+        self.queue_save_affinities();
 
         Ok(())
     }
@@ -250,7 +253,9 @@ impl TmuxDomainState {
             active_lock: active_lock.clone(),
             domain_id: self.domain_id,
             pane_id: pane.pane_id,
+            window_id: pane.window_id,
             cmd_queue: self.cmd_queue.clone(),
+            last_kill_pane: self.last_kill_pane.clone(),
         };
 
         let terminal = wezterm_term::Terminal::new(
@@ -402,15 +407,6 @@ impl TmuxDomainState {
             return Ok(());
         };
         let mux = Mux::get();
-
-        self.create_gui_window();
-        let mut gui_window = self.gui_window.lock();
-        let gui_window_id = match gui_window.as_mut() {
-            Some(x) => x,
-            None => {
-                anyhow::bail!("No tmux gui created");
-            }
-        };
         let mut added_windows = vec![];
 
         for window in windows.iter() {
@@ -420,6 +416,8 @@ impl TmuxDomainState {
             if self.check_window_attached(window.window_id) {
                 continue;
             }
+
+            let gui_window_id = self.resolve_gui_window_for(window.window_id);
 
             let size = TerminalSize {
                 rows: window.window_height as usize,
@@ -540,11 +538,12 @@ impl TmuxDomainState {
             if new_window {
                 *self.activating_window.lock() = Some(window.window_id);
             }
-            mux.add_tab_to_window(&tab, **gui_window_id)?;
-            gui_window_id.notify();
+            mux.add_tab_to_window(&tab, gui_window_id)?;
+            self.notify_gui_window(gui_window_id);
+            self.record_window_affinity(window.window_id, gui_window_id);
             added_windows.push(window.window_id);
             if new_window || *self.active_window.lock() == Some(window.window_id) {
-                if let Some(mut mux_window) = mux.get_window_mut(**gui_window_id) {
+                if let Some(mut mux_window) = mux.get_window_mut(gui_window_id) {
                     if let Some(idx) = mux_window.get_tab_idx_for_id(tab.tab_id()) {
                         mux_window.remember_and_set_active_tab_idx(idx);
                     }
@@ -607,6 +606,7 @@ impl TmuxDomainState {
             self.cmd_queue.lock().push_back(Box::new(AttachDone));
         }
 
+        self.queue_save_affinities();
         TmuxDomainState::schedule_send_next_command(self.domain_id);
 
         for window_id in added_windows {
@@ -1197,9 +1197,8 @@ impl TmuxCommand for ListCommands {
 
         let mut cmd_queue = tmux_domain.inner.cmd_queue.as_ref().lock();
         if let Some(session) = *tmux_domain.inner.tmux_session.lock() {
-            cmd_queue.push_back(Box::new(ListAllWindows {
+            cmd_queue.push_back(Box::new(ShowAffinities {
                 session_id: session,
-                window_id: None,
             }));
             TmuxDomainState::schedule_send_next_command(domain_id);
         }
@@ -1293,6 +1292,59 @@ impl TmuxCommand for SelectPane {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct ShowAffinities {
+    pub session_id: TmuxSessionId,
+}
+
+impl TmuxCommand for ShowAffinities {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        format!("show -v -q -t ${} @affinities\n", self.session_id)
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        let mux = Mux::get();
+        let domain = match mux.get_domain(domain_id) {
+            Some(d) => d,
+            None => anyhow::bail!("Tmux domain lost"),
+        };
+        let tmux_domain = match domain.downcast_ref::<TmuxDomain>() {
+            Some(t) => t,
+            None => anyhow::bail!("Tmux domain lost"),
+        };
+
+        if !result.error {
+            tmux_domain.inner.apply_saved_affinities(&result.output);
+        }
+
+        let mut cmd_queue = tmux_domain.inner.cmd_queue.as_ref().lock();
+        cmd_queue.push_back(Box::new(ListAllWindows {
+            session_id: self.session_id,
+            window_id: None,
+        }));
+        TmuxDomainState::schedule_send_next_command(domain_id);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SetAffinities {
+    pub payload: String,
+}
+
+impl TmuxCommand for SetAffinities {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        format!("set @affinities \"{}\"\n", self.payload)
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        if result.error {
+            log::warn!("set @affinities in domain={domain_id} failed ({result:#?}); continuing");
+        }
+        Ok(())
+    }
+}
+
 // This is a dummy command which indicates the attaching is done, it prevents the tmux output
 // the unexpected and unnecessary content when syncing with back end in attaching stage.
 #[derive(Debug)]
@@ -1327,11 +1379,25 @@ impl TmuxCommand for AttachDone {
 
 #[cfg(test)]
 mod tests {
-    use super::{RawTmuxCommand, TmuxCommand};
+    use super::{RawTmuxCommand, SetAffinities, ShowAffinities, TmuxCommand};
 
     #[test]
     fn raw_tmux_command_has_one_line_terminator() {
         let command = RawTmuxCommand::new("new-window\r\n".to_string());
         assert_eq!(command.get_command(0), "new-window\n");
+    }
+
+    #[test]
+    fn set_affinities_quotes_payload() {
+        let command = SetAffinities {
+            payload: "0,1 2".to_string(),
+        };
+        assert_eq!(command.get_command(0), "set @affinities \"0,1 2\"\n");
+    }
+
+    #[test]
+    fn show_affinities_targets_session() {
+        let command = ShowAffinities { session_id: 3 };
+        assert_eq!(command.get_command(0), "show -v -q -t $3 @affinities\n");
     }
 }

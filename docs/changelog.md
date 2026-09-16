@@ -77,6 +77,12 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* tmux -CC now persists iTerm2-compatible `@affinities` so tabs and native
+  windows restore across detach/reattach, and `SpawnWindow` opens a new OS
+  window instead of another tab. Control mode ends on `%exit` or ST even when
+  the client omits the other (needed for HTM detach). Gateway L prints
+  iTerm2's `tmux logging on` / `tmux logging off`. A pane close does not
+  immediately kill-pane its split sibling (iTerm2/tmux keep that pane).
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
