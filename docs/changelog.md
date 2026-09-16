@@ -160,6 +160,8 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* A failing `wezterm ls-fonts` or `wezterm show-keys` raised a desktop
+  notification rather than reporting to the terminal it was run from.
 * macOS: Fix window border when opacity<1 and shadow enabled.
   Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256

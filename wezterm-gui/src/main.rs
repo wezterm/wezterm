@@ -133,6 +133,14 @@ enum SubCommand {
     ShowKeys(ShowKeysCommand),
 }
 
+impl SubCommand {
+    /// Subcommands that print their result into the terminal the user ran
+    /// them in.
+    fn runs_in_terminal(&self) -> bool {
+        matches!(self, Self::LsFonts(_) | Self::ShowKeys(_))
+    }
+}
+
 async fn async_run_ssh(opts: SshCommand) -> anyhow::Result<()> {
     let mut ssh_option = HashMap::new();
     if opts.verbose {
@@ -826,6 +834,33 @@ fn terminate_with_error(err: anyhow::Error) -> ! {
     terminate_with_error_message(&err_text)
 }
 
+/// Where a failure gets reported depends on where the user is watching.
+enum Failure {
+    /// A subcommand run in a terminal; stderr is where the user is looking.
+    Cli(anyhow::Error),
+    /// Reachable by starting wezterm from a desktop icon, where nothing is
+    /// watching a terminal and the notification is all that is seen.
+    Gui(anyhow::Error),
+}
+
+impl From<anyhow::Error> for Failure {
+    /// `?` inside `run` defaults to the gui treatment, so a path that has
+    /// not been thought about keeps its notification.
+    fn from(err: anyhow::Error) -> Self {
+        Self::Gui(err)
+    }
+}
+
+impl Failure {
+    fn new(in_terminal: bool, err: anyhow::Error) -> Self {
+        if in_terminal {
+            Self::Cli(err)
+        } else {
+            Self::Gui(err)
+        }
+    }
+}
+
 fn main() {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
@@ -833,8 +868,13 @@ fn main() {
     config::designate_this_as_the_main_thread();
     config::assign_error_callback(mux::connui::show_configuration_error_message);
     notify_on_panic();
-    if let Err(e) = run() {
-        terminate_with_error(e);
+    match run() {
+        Ok(()) => {}
+        Err(Failure::Cli(err)) => {
+            eprintln!("{err:#}");
+            std::process::exit(1);
+        }
+        Err(Failure::Gui(err)) => terminate_with_error(err),
     }
     Mux::shutdown();
     frontend::shutdown();
@@ -1164,7 +1204,7 @@ pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyho
     Ok(())
 }
 
-fn run() -> anyhow::Result<()> {
+fn run() -> Result<(), Failure> {
     // Inform the system of our AppUserModelID.
     // Without this, our toast notifications won't be correctly
     // attributed to our application.
@@ -1179,6 +1219,12 @@ fn run() -> anyhow::Result<()> {
     }
 
     let opts = Opt::parse();
+
+    // Whether the error should be reported to stderr, or to a GUI popup.
+    let in_terminal = opts
+        .cmd
+        .as_ref()
+        .map_or(false, SubCommand::runs_in_terminal);
 
     // This is a bit gross.
     // In order to not to automatically open a standard windows console when
@@ -1213,7 +1259,8 @@ fn run() -> anyhow::Result<()> {
         opts.config_file.as_ref(),
         &opts.config_override,
         opts.skip_config,
-    )?;
+    )
+    .map_err(|err| Failure::new(in_terminal, err))?;
     let config = config::configuration();
     if let Some(value) = &config.default_ssh_auth_sock {
         std::env::set_var("SSH_AUTH_SOCK", value);
@@ -1246,7 +1293,7 @@ fn run() -> anyhow::Result<()> {
         }
     };
 
-    match sub {
+    let result = match sub {
         SubCommand::Start(start) => {
             log::trace!("Using configuration: {:#?}\nopts: {:#?}", config, opts);
             let res = run_terminal_gui(start, None);
@@ -1274,5 +1321,7 @@ fn run() -> anyhow::Result<()> {
         ),
         SubCommand::LsFonts(cmd) => run_ls_fonts(config, &cmd),
         SubCommand::ShowKeys(cmd) => run_show_keys(config, &cmd),
-    }
+    };
+
+    result.map_err(|err| Failure::new(in_terminal, err))
 }
