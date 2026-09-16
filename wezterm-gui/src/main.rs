@@ -889,6 +889,10 @@ fn maybe_show_configuration_error_window() {
 }
 
 fn run_show_keys(config: config::ConfigHandle, cmd: &ShowKeysCommand) -> anyhow::Result<()> {
+    // Without this the defaults would be printed as though they were the
+    // user's, which is worse than printing nothing.
+    config::configuration_result()?;
+
     let map = crate::inputmap::InputMap::new(&config);
     if cmd.lua {
         map.dump_config(cmd.key_table.as_deref());
@@ -901,10 +905,7 @@ fn run_show_keys(config: config::ConfigHandle, cmd: &ShowKeysCommand) -> anyhow:
 pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyhow::Result<()> {
     use wezterm_font::parser::ParsedFont;
 
-    if let Err(err) = config::configuration_result() {
-        log::error!("{}", err);
-        return Ok(());
-    }
+    config::configuration_result()?;
 
     // Disable the normal config error UI window, as we don't have
     // a fully baked GUI environment running

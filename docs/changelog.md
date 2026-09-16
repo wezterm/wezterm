@@ -160,6 +160,9 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* `wezterm ls-fonts` and `wezterm show-keys` exited successfully when the
+  configuration failed to load, and `show-keys` printed the default key table
+  as though it were yours. Both now report the error and exit non-zero.
 * A failing `wezterm ls-fonts` or `wezterm show-keys` raised a desktop
   notification rather than reporting to the terminal it was run from.
 * macOS: Fix window border when opacity<1 and shadow enabled.
