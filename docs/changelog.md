@@ -90,8 +90,8 @@ As features stabilize some brief notes about them will accumulate here.
   and focus changes are ignored while a window is still attaching.
   Thanks to @MisterTea!
 * `tmux -CC` now persists iTerm2-compatible `@affinities` so tabs restore
-  into the same native windows across detach/reattach. Thanks to
-  @MisterTea!
+  into the same native windows across detach/reattach. `SpawnWindow` opens
+  a new OS window instead of another tab. Thanks to @MisterTea!
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.

@@ -77,6 +77,8 @@ pub(crate) struct TmuxDomainState {
     /// iTerm2 `@affinities` groups: each inner vec is the tmux windows in one OS window.
     pub affinities: Mutex<Vec<Vec<TmuxWindowId>>>,
     pub last_affinities: Mutex<Option<String>>,
+    /// Next new tmux window should land in this mux window (Cmd+T vs Cmd+N).
+    pub pending_gui_window: Mutex<Option<WindowId>>,
     /// Next new tmux window should join this window's affinity group (Cmd+T).
     pub pending_affinity: Mutex<Option<TmuxWindowId>>,
     pub gui_tabs: Mutex<HashMap<TmuxWindowId, TmuxTab>>,
@@ -399,6 +401,9 @@ impl TmuxDomainState {
         if let Some(id) = self.tmux_to_gui.lock().get(&tmux_window_id).copied() {
             return id;
         }
+        if let Some(pending) = self.pending_gui_window.lock().take() {
+            return pending;
+        }
         if let Some(aff) = *self.pending_affinity.lock() {
             if let Some(id) = self.tmux_to_gui.lock().get(&aff).copied() {
                 return id;
@@ -571,6 +576,7 @@ impl TmuxDomain {
             tmux_to_gui: Mutex::new(HashMap::default()),
             affinities: Mutex::new(Vec::new()),
             last_affinities: Mutex::new(None),
+            pending_gui_window: Mutex::new(None),
             pending_affinity: Mutex::new(None),
             gui_tabs: Mutex::new(HashMap::default()),
             remote_panes: Mutex::new(HashMap::default()),
@@ -602,8 +608,45 @@ impl Domain for TmuxDomain {
         _size: TerminalSize,
         _command: Option<CommandBuilder>,
         _command_dir: Option<String>,
-        _window: WindowId,
+        window: WindowId,
     ) -> anyhow::Result<Arc<Tab>> {
+        let into_existing = self
+            .inner
+            .tmux_to_gui
+            .lock()
+            .values()
+            .any(|gui_id| *gui_id == window);
+        if into_existing {
+            // SpawnTab: join the mux-active tmux window's OS window so Cmd+T
+            // follows select-window / %session-window-changed even when GUI
+            // key focus is still on another native window (iTerm2/Ghostty).
+            if let Some(active) = *self.inner.active_window.lock() {
+                if let Some(gui) = self.inner.tmux_to_gui.lock().get(&active).copied() {
+                    *self.inner.pending_gui_window.lock() = Some(gui);
+                    *self.inner.pending_affinity.lock() = Some(active);
+                } else {
+                    *self.inner.pending_gui_window.lock() = Some(window);
+                    *self.inner.pending_affinity.lock() = self
+                        .inner
+                        .tmux_to_gui
+                        .lock()
+                        .iter()
+                        .find_map(|(tmux_id, gui_id)| (*gui_id == window).then_some(*tmux_id));
+                }
+            } else {
+                *self.inner.pending_gui_window.lock() = Some(window);
+                *self.inner.pending_affinity.lock() = self
+                    .inner
+                    .tmux_to_gui
+                    .lock()
+                    .iter()
+                    .find_map(|(tmux_id, gui_id)| (*gui_id == window).then_some(*tmux_id));
+            }
+        } else {
+            // SpawnWindow / Cmd+N: empty native window → new affinity group.
+            *self.inner.pending_gui_window.lock() = Some(window);
+            *self.inner.pending_affinity.lock() = None;
+        }
         let mut promise = promise::Promise::new();
         let future = promise
             .get_future()
@@ -611,6 +654,8 @@ impl Domain for TmuxDomain {
         self.inner.pending_windows.lock().push_back(promise);
         self.inner.create_tmux_window();
         let window_id = future.await?;
+        smol::Timer::after(std::time::Duration::from_millis(150)).await;
+        *self.inner.activating_window.lock() = None;
         let tab_id = {
             let gui_tabs = self.inner.gui_tabs.lock();
             gui_tabs
