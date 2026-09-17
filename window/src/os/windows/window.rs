@@ -127,6 +127,9 @@ pub(crate) struct WindowInner {
     config: ConfigHandle,
     paint_throttled: bool,
     invalidated: bool,
+    /// Last cursor rect reported to the IME; used to avoid re-sending the
+    /// same position on every paint (which makes IME candidate windows flicker).
+    last_ime_cursor: Option<Rect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -547,6 +550,7 @@ impl Window {
             config: config.clone(),
             paint_throttled: false,
             invalidated: true,
+            last_ime_cursor: None,
         }));
 
         // Careful: `raw` owns a ref to inner, but there is no Drop impl
@@ -667,6 +671,15 @@ impl WindowInner {
     }
 
     fn set_text_cursor_position(&mut self, cursor: Rect) {
+        // Only notify the IME when the cursor rect actually changed.
+        // Windows IMEs (Google Japanese Input, Microsoft IME) re-create their
+        // candidate window on every ImmSetCandidateWindow /
+        // ImmSetCompositionWindow call, so calling it on every paint makes the
+        // candidate window flicker while composing.
+        if self.last_ime_cursor == Some(cursor) {
+            return;
+        }
+        self.last_ime_cursor = Some(cursor);
         self.set_ime_window_position(cursor);
     }
 
@@ -680,6 +693,7 @@ impl WindowInner {
 
     fn config_did_change(&mut self, config: &ConfigHandle) {
         self.config = config.clone();
+        self.last_ime_cursor = None;
         self.apply_decoration();
     }
 
@@ -2117,6 +2131,8 @@ unsafe fn ime_end_composition(
     // IME was cancelled
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
+    // Make sure the next composition re-sends the cursor position once.
+    inner.last_ime_cursor = None;
 
     if inner.config.ime_preedit_rendering == ImePreeditRendering::System {
         return None;
