@@ -171,6 +171,11 @@ As features stabilize some brief notes about them will accumulate here.
 * `tmux -CC`: closing a pane now sends `kill-pane` instead of failing with
   "kill not implemented". A pane close does not immediately kill-pane its
   split sibling (iTerm2/tmux keep that pane). Thanks to @MisterTea!
+* `tmux -CC`: spawning a tab now waits for tmux `WindowAdd` and returns the
+  new tab instead of immediately erroring. Thanks to @MisterTea!
+* `tmux -CC`: attach no longer aborts when `#{history_limit}` is missing or
+  empty, or when `list-commands` fails; already-attached windows are not
+  duplicated. Thanks to @MisterTea!
 * macOS: Fix window border when opacity<1 and shadow enabled.
   Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
