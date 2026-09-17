@@ -6,6 +6,7 @@ use parking_lot::{Condvar, Mutex};
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty};
 use std::io::{Read, Write};
 use std::sync::Arc;
+use termwiz::tmux_cc::TmuxPaneId;
 
 /// A local tmux pane(tab) based on a tmux pty
 #[derive(Debug)]
@@ -22,20 +23,28 @@ struct TmuxPtyWriter {
     cmd_queue: Arc<Mutex<TmuxCmdQueue>>,
 }
 
+fn enqueue_send_keys(
+    domain_id: DomainId,
+    cmd_queue: &Arc<Mutex<TmuxCmdQueue>>,
+    pane_id: TmuxPaneId,
+    buf: &[u8],
+) -> std::io::Result<usize> {
+    if buf.is_empty() {
+        return Ok(0);
+    }
+    log::trace!("pane:{}, content:{:?}", &pane_id, buf);
+    cmd_queue.lock().push_back(Box::new(SendKeys {
+        pane: pane_id,
+        keys: buf.to_vec(),
+    }));
+    TmuxDomainState::schedule_send_next_command(domain_id);
+    Ok(buf.len())
+}
+
 impl Write for TmuxPtyWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let pane_id = {
-            let pane_lock = self.master_pane.lock();
-            pane_lock.pane_id
-        };
-        log::trace!("pane:{}, content:{:?}", &pane_id, buf);
-        let mut cmd_queue = self.cmd_queue.lock();
-        cmd_queue.push_back(Box::new(SendKeys {
-            pane: pane_id,
-            keys: buf.to_vec(),
-        }));
-        TmuxDomainState::schedule_send_next_command(self.domain_id);
-        Ok(0)
+        let pane_id = self.master_pane.lock().pane_id;
+        enqueue_send_keys(self.domain_id, &self.cmd_queue, pane_id, buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -45,18 +54,8 @@ impl Write for TmuxPtyWriter {
 
 impl Write for TmuxPty {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let pane_id = {
-            let pane_lock = self.master_pane.lock();
-            pane_lock.pane_id
-        };
-        log::trace!("pane:{}, content:{:?}", &pane_id, buf);
-        let mut cmd_queue = self.cmd_queue.lock();
-        cmd_queue.push_back(Box::new(SendKeys {
-            pane: pane_id,
-            keys: buf.to_vec(),
-        }));
-        TmuxDomainState::schedule_send_next_command(self.domain_id);
-        Ok(0)
+        let pane_id = self.master_pane.lock().pane_id;
+        enqueue_send_keys(self.domain_id, &self.cmd_queue, pane_id, buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
