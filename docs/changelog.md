@@ -168,6 +168,9 @@ As features stabilize some brief notes about them will accumulate here.
   queued for `send-keys` instead of `Ok(0)`, so keyboard and paste input
   actually reach the pane. Empty writes are not queued. Thanks to
   @MisterTea! #8003
+* `tmux -CC`: closing a pane now sends `kill-pane` instead of failing with
+  "kill not implemented". A pane close does not immediately kill-pane its
+  split sibling (iTerm2/tmux keep that pane). Thanks to @MisterTea!
 * macOS: Fix window border when opacity<1 and shadow enabled.
   Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256

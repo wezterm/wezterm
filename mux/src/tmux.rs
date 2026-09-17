@@ -76,6 +76,10 @@ pub(crate) struct TmuxDomainState {
     pub attach_state: Mutex<AttachState>,
     pending_splits: Mutex<VecDeque<promise::Promise<TmuxPaneId>>>,
     pub backlog: Mutex<HashMap<TmuxPaneId, Vec<u8>>>,
+    /// CloseCurrentPane can drop a sibling GUI pane and queue a second
+    /// kill-pane for the same tmux window a few milliseconds later. iTerm2
+    /// and tmux keep that remaining pane; suppress the duplicate.
+    pub(crate) last_kill_pane: Arc<Mutex<Option<(TmuxWindowId, std::time::Instant)>>>,
 }
 
 pub struct TmuxDomain {
@@ -350,6 +354,7 @@ impl TmuxDomain {
             attach_state: Mutex::new(AttachState::Init),
             pending_splits: Mutex::new(VecDeque::default()),
             backlog: Mutex::new(HashMap::default()),
+            last_kill_pane: Arc::new(Mutex::new(None)),
         });
 
         Self { inner }

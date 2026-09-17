@@ -1165,6 +1165,12 @@ impl LocalPane {
 
 impl Drop for LocalPane {
     fn drop(&mut self) {
+        if self.pty.lock().is::<crate::tmux_pty::TmuxPty>() {
+            // A tmux pane is a local mirror of a remote process. Dropping a
+            // transient mirror during window synchronization must not kill
+            // the remote pane; explicit Pane::kill still does so.
+            return;
+        }
         // Avoid lingering zombies if we can, but don't block forever.
         // <https://github.com/wezterm/wezterm/issues/558>
         if let ProcessState::Running { signaller, .. } = &mut *self.process.lock() {

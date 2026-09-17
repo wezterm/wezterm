@@ -209,6 +209,11 @@ impl TmuxDomainState {
 
         let child = TmuxChild {
             active_lock: active_lock.clone(),
+            domain_id: self.domain_id,
+            pane_id: pane.pane_id,
+            window_id: pane.window_id,
+            cmd_queue: self.cmd_queue.clone(),
+            last_kill_pane: self.last_kill_pane.clone(),
         };
 
         let terminal = wezterm_term::Terminal::new(
@@ -1118,6 +1123,26 @@ impl TmuxCommand for SplitPane {
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
         if result.error {
             let error = format!("split-window in domain={domain_id} failed: {result:#?}");
+            log::error!("{error}");
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct KillPane {
+    pub pane_id: TmuxPaneId,
+}
+
+impl TmuxCommand for KillPane {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        format!("kill-pane -t %{}\n", self.pane_id)
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        if result.error {
+            let error = format!("kill-pane in domain={domain_id} failed: {result:#?}");
             log::error!("{error}");
             anyhow::bail!("{error}");
         }
