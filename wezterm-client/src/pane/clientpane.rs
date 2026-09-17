@@ -214,7 +214,7 @@ impl ClientPane {
 
                 self.client.expire_stale_mappings();
             }
-            Pdu::PaneFocused(PaneFocused { pane_id }) => {
+            Pdu::PaneFocused(PaneFocused { pane_id, focus_seq }) => {
                 // We get here whenever the pane focus is changed on the
                 // server. That might be due to the user here in the GUI
                 // doing things, or it may be due to a "remote"
@@ -226,9 +226,36 @@ impl ClientPane {
                 // it here.
                 log::trace!("advised of remote pane focus: {pane_id}");
 
+                // Record the server's decision before applying it locally.
+                // `focus_changed(true)` will then see that this remote pane is
+                // already focused and won't echo a SetFocusedPane request.
+                {
+                    let mut focused = self.client.focused_remote_pane_id.lock().unwrap();
+                    *focused = Some(pane_id);
+                }
+
                 let mux = Mux::get();
-                if let Err(err) = mux.focus_pane_and_containing_tab(self.local_pane_id) {
+                if let Err(err) = mux.reconcile_pane_focus(self.local_pane_id) {
+                    // Don't let a failed reconciliation suppress a later local
+                    // attempt to report this pane to the server.
+                    let mut focused = self.client.focused_remote_pane_id.lock().unwrap();
+                    if *focused == Some(pane_id) {
+                        focused.take();
+                    }
                     log::error!("Error reconciling remote PaneFocused notification: {err:#}");
+                } else {
+                    // The PDU bypassed the local mux notification stream. Let
+                    // local UI subscribers repaint without triggering another
+                    // focus reconciliation or forwarding anything upstream.
+                    mux.notify(MuxNotification::PaneFocusReconciled(self.local_pane_id));
+                    let client = Arc::clone(&self.client);
+                    promise::spawn::spawn(async move {
+                        client
+                            .client
+                            .acknowledge_pane_focus(PaneFocusAcknowledged { pane_id, focus_seq })
+                            .await
+                    })
+                    .detach();
                 }
             }
             _ => bail!("unhandled unilateral pdu: {:?}", pdu),
