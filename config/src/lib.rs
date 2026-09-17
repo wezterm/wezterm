@@ -74,6 +74,7 @@ lazy_static! {
     static ref CONFIG: Configuration = Configuration::new();
     static ref CONFIG_FILE_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
     static ref CONFIG_SKIP: AtomicBool = AtomicBool::new(false);
+    static ref LUA_DEBUG_MODULE: AtomicBool = AtomicBool::new(false);
     static ref CONFIG_OVERRIDES: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
     static ref SHOW_ERROR: Mutex<Option<ErrorCallback>> =
         Mutex::new(Some(|e| log::error!("{}", e)));
@@ -341,16 +342,55 @@ fn default_config_with_overrides_applied() -> anyhow::Result<Config> {
     Ok(cfg)
 }
 
+/// Whether lua's `debug` module is available to the configuration.
+///
+/// Never enable debug outside of `wezterm check-config` command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LuaDebugModule {
+    Available,
+    Withheld,
+}
+
 pub fn common_init(
     config_file: Option<&OsString>,
     overrides: &[(String, String)],
     skip_config: bool,
+) -> anyhow::Result<()> {
+    // SAFETY: calling [`common_init_with_lua_debug`]
+    // with [`LuaDebugModule::Withheld`] is safe.
+    unsafe {
+        common_init_with_lua_debug(
+            config_file,
+            overrides,
+            skip_config,
+            LuaDebugModule::Withheld,
+        )
+    }
+}
+
+/// Same as [`common_init`], but enables lua's debug module.
+///
+/// # Safety
+///
+/// Using lua debug allows lua scripts to break sandbox, so users should only
+/// enable it under specific use-cases, such as testing plugins.
+pub unsafe fn common_init_with_lua_debug(
+    config_file: Option<&OsString>,
+    overrides: &[(String, String)],
+    skip_config: bool,
+    lua_debug_module: LuaDebugModule,
 ) -> anyhow::Result<()> {
     if let Some(config_file) = config_file {
         set_config_file_override(Path::new(config_file));
     } else if skip_config {
         CONFIG_SKIP.store(true, Ordering::Relaxed);
     }
+
+    // Must be recorded before the `reload` below builds the lua state.
+    LUA_DEBUG_MODULE.store(
+        lua_debug_module == LuaDebugModule::Available,
+        Ordering::Relaxed,
+    );
 
     set_config_overrides(overrides).context("common_init: set_config_overrides")?;
     reload();
@@ -406,6 +446,10 @@ pub fn set_config_file_override(path: &Path) {
         .lock()
         .unwrap()
         .replace(path.to_path_buf());
+}
+
+pub(crate) fn lua_debug_module_enabled() -> bool {
+    LUA_DEBUG_MODULE.load(Ordering::Relaxed)
 }
 
 pub fn set_config_overrides(items: &[(String, String)]) -> anyhow::Result<()> {
@@ -467,6 +511,12 @@ pub fn configuration_warnings_and_errors() -> Vec<String> {
     CONFIG.get_warnings_and_errors()
 }
 
+/// Returns warnings encountered
+/// while loading the preferred configuration
+pub fn configuration_warnings() -> Vec<String> {
+    CONFIG.get_warnings()
+}
+
 struct ConfigInner {
     config: Arc<Config>,
     error: Option<String>,
@@ -506,11 +556,20 @@ impl ConfigInner {
         self.subscribers.retain(|_, notify| notify());
     }
 
-    fn watch_path(&mut self, path: PathBuf) {
+    /// Errs when no watcher could be created, so that the caller can stop
+    /// asking rather than repeat the same failure for every path.
+    fn watch_path(&mut self, path: PathBuf) -> Result<(), ()> {
         if self.watcher.is_none() {
             let (tx, rx) = std::sync::mpsc::channel();
             const DELAY: Duration = Duration::from_millis(200);
-            let watcher = notify::recommended_watcher(tx).unwrap();
+            let watcher = match notify::recommended_watcher(tx) {
+                Ok(watcher) => watcher,
+                Err(err) => {
+                    // Host ran out of inotify instances.
+                    log::warn!("unable to watch for configuration changes: {err:#}");
+                    return Err(());
+                }
+            };
             let path = path.clone();
 
             std::thread::spawn(move || {
@@ -558,6 +617,7 @@ impl ConfigInner {
                 .watch(&path, notify::RecursiveMode::NonRecursive)
                 .ok();
         }
+        Ok(())
     }
 
     fn accumulate_watch_paths(lua: &Lua, watch_paths: &mut Vec<PathBuf>) {
@@ -635,7 +695,10 @@ impl ConfigInner {
         self.notify();
         if self.config.automatically_reload_config {
             for path in watch_paths {
-                self.watch_path(path);
+                if self.watch_path(path).is_err() {
+                    // Host ran out of inotify instances.
+                    break;
+                }
             }
         }
     }
@@ -765,6 +828,11 @@ impl Configuration {
             result.push(warning.clone());
         }
         result
+    }
+
+    pub fn get_warnings(&self) -> Vec<String> {
+        let inner = self.inner.lock().unwrap();
+        inner.warnings.clone()
     }
 
     /// Returns any captured error message, and clears

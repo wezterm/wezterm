@@ -1,5 +1,5 @@
 use clap::builder::ValueParser;
-use clap::{Parser, ValueHint};
+use clap::{Parser, ValueEnum, ValueHint};
 use config::{GuiPosition, SshParameters};
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -270,4 +270,202 @@ pub struct ShowKeysCommand {
     /// In lua mode, show only the named key table
     #[arg(long)]
     pub key_table: Option<String>,
+}
+
+#[derive(Debug, Parser, Clone)]
+pub struct CheckConfigCommand {
+    /// The configuration file to check; defaults to the one wezterm would
+    /// normally load
+    #[arg(value_parser, value_hint=ValueHint::FilePath)]
+    pub config_file: Option<OsString>,
+
+    /// Make lua's `debug` module available, as test frameworks expect.
+    /// It lets a script reach past the sandbox. Only use this option to test
+    /// trusted code, or run it in an isolated environment
+    #[arg(long = "unsafe-enable-debug-module")]
+    pub unsafe_enable_debug_module: bool,
+
+    /// Fail if the configuration produced any warnings
+    #[arg(long = "warnings-as-errors")]
+    pub warnings_as_errors: bool,
+
+    /// The appearance `wezterm.gui.get_appearance()` reports
+    #[arg(long, value_enum, value_name = "MODE", default_value_t = CheckAppearance::Light)]
+    pub appearance: CheckAppearance,
+}
+
+/// Mirrors `window::Appearance`, which this crate cannot name: it depends
+/// on `clap` and `config` only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum CheckAppearance {
+    #[default]
+    Light,
+    Dark,
+    LightHighContrast,
+    DarkHighContrast,
+}
+
+impl CheckAppearance {
+    /// Must stay identical to `window::Appearance`'s `ToString`:
+    /// configurations compare against these by name.
+    pub fn as_wezterm_name(self) -> &'static str {
+        match self {
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+            Self::LightHighContrast => "LightHighContrast",
+            Self::DarkHighContrast => "DarkHighContrast",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CheckOutcome {
+    Ok,
+    Failed,
+}
+
+pub fn check_outcome(
+    config_error: Option<&str>,
+    warnings: &[String],
+    warnings_as_errors: bool,
+) -> CheckOutcome {
+    if config_error.is_some() {
+        return CheckOutcome::Failed;
+    }
+    if warnings_as_errors && !warnings.is_empty() {
+        return CheckOutcome::Failed;
+    }
+    CheckOutcome::Ok
+}
+
+/// Works out which configuration file `check-config` should check, given
+/// the global `--config-file` and its own positional argument.
+///
+/// These conflicts are settled here rather than by clap because the
+/// positional lives on the subcommand while `--config-file` and
+/// `--skip-config` live on the top-level command, and clap cannot declare
+/// a conflict across that boundary.  Clap does declare the third pair,
+/// which makes the last arm below defence in depth.
+pub fn resolve_config_file(
+    global: Option<&OsString>,
+    positional: Option<&OsString>,
+    skip_config: bool,
+) -> anyhow::Result<Option<OsString>> {
+    match (global, positional) {
+        (Some(_), Some(_)) => anyhow::bail!(
+            "The configuration file was named twice: once with --config-file \
+             and once as an argument to check-config. Use one or the other."
+        ),
+        (None, Some(_)) if skip_config => anyhow::bail!(
+            "--skip-config means no configuration file is loaded at all, so \
+             naming a file for check-config to check contradicts it."
+        ),
+        (Some(_), None) if skip_config => anyhow::bail!(
+            "--skip-config means no configuration file is loaded at all, so \
+             naming one with --config-file contradicts it."
+        ),
+        _ => Ok(positional.or(global).cloned()),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn warnings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_clean_config_passes_either_way() {
+        assert_eq!(check_outcome(None, &[], false), CheckOutcome::Ok);
+        assert_eq!(check_outcome(None, &[], true), CheckOutcome::Ok);
+    }
+
+    #[test]
+    fn warnings_pass_unless_asked_otherwise() {
+        let w = warnings(&["intensity is deprecated"]);
+        assert_eq!(check_outcome(None, &w, false), CheckOutcome::Ok);
+        assert_eq!(check_outcome(None, &w, true), CheckOutcome::Failed);
+    }
+
+    #[test]
+    fn an_error_always_fails() {
+        let w = warnings(&["intensity is deprecated"]);
+        assert_eq!(
+            check_outcome(Some("boom"), &[], false),
+            CheckOutcome::Failed
+        );
+        assert_eq!(check_outcome(Some("boom"), &[], true), CheckOutcome::Failed);
+        assert_eq!(check_outcome(Some("boom"), &w, false), CheckOutcome::Failed);
+    }
+
+    #[test]
+    fn the_default_simulated_appearance_is_light() {
+        assert_eq!(CheckAppearance::default(), CheckAppearance::Light);
+    }
+
+    #[test]
+    fn appearance_names_match_the_window_crate() {
+        assert_eq!(CheckAppearance::Light.as_wezterm_name(), "Light");
+        assert_eq!(CheckAppearance::Dark.as_wezterm_name(), "Dark");
+        assert_eq!(
+            CheckAppearance::LightHighContrast.as_wezterm_name(),
+            "LightHighContrast"
+        );
+        assert_eq!(
+            CheckAppearance::DarkHighContrast.as_wezterm_name(),
+            "DarkHighContrast"
+        );
+    }
+
+    #[test]
+    fn naming_no_file_resolves_to_nothing() {
+        assert_eq!(resolve_config_file(None, None, false).unwrap(), None);
+        assert_eq!(resolve_config_file(None, None, true).unwrap(), None);
+    }
+
+    #[test]
+    fn either_way_of_naming_the_file_works() {
+        let path = OsString::from("/tmp/a.lua");
+        assert_eq!(
+            resolve_config_file(Some(&path), None, false).unwrap(),
+            Some(path.clone())
+        );
+        assert_eq!(
+            resolve_config_file(None, Some(&path), false).unwrap(),
+            Some(path)
+        );
+    }
+
+    #[test]
+    fn naming_the_file_twice_is_refused() {
+        let global = OsString::from("/tmp/a.lua");
+        let positional = OsString::from("/tmp/b.lua");
+        let err = format!(
+            "{:#}",
+            resolve_config_file(Some(&global), Some(&positional), false).unwrap_err()
+        );
+        assert!(err.contains("named twice"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn naming_a_file_contradicts_skip_config() {
+        let path = OsString::from("/tmp/a.lua");
+        let err = format!(
+            "{:#}",
+            resolve_config_file(None, Some(&path), true).unwrap_err()
+        );
+        assert!(err.contains("--skip-config"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn config_file_option_contradicts_skip_config() {
+        let path = OsString::from("/tmp/a.lua");
+        let err = format!(
+            "{:#}",
+            resolve_config_file(Some(&path), None, true).unwrap_err()
+        );
+        assert!(err.contains("--skip-config"), "unexpected error: {}", err);
+    }
 }

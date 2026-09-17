@@ -5,6 +5,10 @@
 If things aren't working out, there may be an issue printed in the logs.
 Read on to learn more about how to see those logs.
 
+If you suspect your configuration is at fault, [wezterm
+check-config](cli/check-config.md) loads it and reports what is wrong without
+starting wezterm.
+
 ### Debug Overlay
 
 By default, pressing <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>L</kbd> will activate
