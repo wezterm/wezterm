@@ -569,3 +569,98 @@ impl Domain for TmuxDomain {
         DomainState::Attached
     }
 }
+
+pub(crate) fn decode_affinities_option(raw: &str) -> String {
+    let text = raw.trim().trim_matches('"');
+    if let Some(hex) = text.strip_prefix("a_") {
+        if let Some(bytes) = decode_hex(hex) {
+            if let Ok(decoded) = String::from_utf8(bytes) {
+                return decoded;
+            }
+        }
+    }
+    text.to_string()
+}
+
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    let nibble = |c: u8| -> Option<u8> {
+        match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        }
+    };
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for i in (0..bytes.len()).step_by(2) {
+        out.push((nibble(bytes[i])? << 4) | nibble(bytes[i + 1])?);
+    }
+    Some(out)
+}
+
+pub(crate) fn parse_affinity_groups(raw: &str) -> Vec<Vec<TmuxWindowId>> {
+    let text = decode_affinities_option(raw);
+    if text.is_empty() {
+        return vec![];
+    }
+    let mut groups = vec![];
+    for part in text.split_whitespace() {
+        let siblings = part.split(';').next().unwrap_or("");
+        let mut ids = vec![];
+        for tok in siblings.split(',') {
+            let tok = tok.trim();
+            if let Ok(id) = tok.parse::<TmuxWindowId>() {
+                ids.push(id);
+            }
+        }
+        if !ids.is_empty() {
+            groups.push(ids);
+        }
+    }
+    groups
+}
+
+pub(crate) fn format_affinity_groups(groups: &[Vec<TmuxWindowId>]) -> String {
+    groups
+        .iter()
+        .filter(|group| !group.is_empty())
+        .map(|group| {
+            let mut ids = group.clone();
+            ids.sort_unstable();
+            ids.dedup();
+            ids.iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_plain_affinity_groups() {
+        let groups = parse_affinity_groups("2,1,pty-guid;style=fs 4");
+        assert_eq!(groups, vec![vec![2, 1], vec![4]]);
+    }
+
+    #[test]
+    fn parse_hex_encoded_affinity_groups() {
+        // a_ + hex("1,2 3")
+        let groups = parse_affinity_groups("a_312C322033");
+        assert_eq!(groups, vec![vec![1, 2], vec![3]]);
+    }
+
+    #[test]
+    fn format_sorts_ids_within_a_group() {
+        assert_eq!(format_affinity_groups(&[vec![2, 0, 1]]), "0,1,2");
+        assert_eq!(format_affinity_groups(&[vec![1], vec![0]]), "1 0");
+    }
+}
