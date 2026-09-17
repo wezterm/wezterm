@@ -192,6 +192,7 @@ impl TmuxDomainState {
         let mux = Mux::get();
         mux.remove_tab(tab.tab_id);
         gui_tabs.remove(&window_id);
+        self.tmux_to_gui.lock().remove(&window_id);
 
         Ok(())
     }
@@ -405,15 +406,6 @@ impl TmuxDomainState {
         };
         let mux = Mux::get();
 
-        self.create_gui_window();
-        let mut gui_window = self.gui_window.lock();
-        let gui_window_id = match gui_window.as_mut() {
-            Some(x) => x,
-            None => {
-                anyhow::bail!("No tmux gui created");
-            }
-        };
-
         for window in windows.iter() {
             if window.session_id != current_session {
                 continue;
@@ -421,6 +413,8 @@ impl TmuxDomainState {
             if self.check_window_attached(window.window_id) {
                 continue;
             }
+
+            let gui_window_id = self.resolve_gui_window_for(window.window_id);
 
             let size = TerminalSize {
                 rows: window.window_height as usize,
@@ -538,8 +532,11 @@ impl TmuxDomainState {
                 }
             }
 
-            mux.add_tab_to_window(&tab, **gui_window_id)?;
-            gui_window_id.notify();
+            mux.add_tab_to_window(&tab, gui_window_id)?;
+            self.notify_gui_window(gui_window_id);
+            self.tmux_to_gui
+                .lock()
+                .insert(window.window_id, gui_window_id);
 
             {
                 let mut pending = self.pending_windows.lock();

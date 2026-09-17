@@ -1,4 +1,3 @@
-use crate::activity::Activity;
 use crate::domain::{alloc_domain_id, Domain, DomainId, DomainState, SplitSource};
 use crate::pane::{Pane, PaneId};
 use crate::tab::{SplitRequest, Tab, TabId};
@@ -69,7 +68,11 @@ pub(crate) struct TmuxDomainState {
     pub domain_id: DomainId, // ID of TmuxDomain
     state: Mutex<State>,
     pub cmd_queue: Arc<Mutex<TmuxCmdQueue>>,
-    pub gui_window: Mutex<Option<MuxWindowBuilder>>,
+    /// Builders we created, kept until the first tab is added so WindowCreated
+    /// fires with content. Cmd+N may pass an already-created mux window instead.
+    pub gui_window_builders: Mutex<HashMap<WindowId, MuxWindowBuilder>>,
+    /// tmux window → native mux OS window (tabs that share a value are one OS window).
+    pub tmux_to_gui: Mutex<HashMap<TmuxWindowId, WindowId>>,
     pub gui_tabs: Mutex<HashMap<TmuxWindowId, TmuxTab>>,
     pub remote_panes: Mutex<HashMap<TmuxPaneId, RefTmuxRemotePane>>,
     pub tmux_session: Mutex<Option<TmuxSessionId>>,
@@ -264,7 +267,7 @@ impl TmuxDomainState {
                 }
                 Event::WindowAdd { window } => {
                     // Only handle the new tab, the first empty window handled by sync_window_state
-                    if !self.gui_window.lock().is_none() {
+                    if self.has_gui_windows() {
                         if let Some(session) = *self.tmux_session.lock() {
                             let mut cmd_queue = self.cmd_queue.as_ref().lock();
                             cmd_queue.push_back(Box::new(ListAllWindows {
@@ -355,30 +358,35 @@ impl TmuxDomainState {
         .detach();
     }
 
-    /// create a standalone window for tmux tabs
-    pub fn create_gui_window(&self) {
-        if self.gui_window.lock().is_none() {
-            let mux = Mux::get();
-            let window_builder =
-                if let Some((_domain, window_id, _tab)) = mux.resolve_pane_id(self.pane_id) {
-                    MuxWindowBuilder {
-                        window_id,
-                        activity: Some(Activity::new()),
-                        notified: false,
-                    }
-                } else {
-                    mux.new_empty_window(
-                        None, /* TODO: pass session here */
-                        None, /* position */
-                    )
-                };
+    pub fn has_gui_windows(&self) -> bool {
+        !self.gui_window_builders.lock().is_empty() || !self.tmux_to_gui.lock().is_empty()
+    }
 
-            log::info!("Tmux create window id {}", window_builder.window_id);
-            {
-                let mut window_id = self.gui_window.lock();
-                *window_id = Some(window_builder); // keep the builder so it won't be purged
-            }
-        };
+    /// create a standalone window for tmux tabs
+    pub fn create_gui_window(&self) -> WindowId {
+        let mux = Mux::get();
+        let window_builder = mux.new_empty_window(
+            None, /* TODO: pass session here */
+            None, /* position */
+        );
+        let id = *window_builder;
+        log::info!("Tmux create window id {}", id);
+        self.gui_window_builders.lock().insert(id, window_builder);
+        id
+    }
+
+    pub fn notify_gui_window(&self, window_id: WindowId) {
+        if let Some(builder) = self.gui_window_builders.lock().get_mut(&window_id) {
+            builder.notify();
+        }
+    }
+
+    /// Pick the native OS window that should host a newly attached tmux window.
+    pub fn resolve_gui_window_for(&self, tmux_window_id: TmuxWindowId) -> WindowId {
+        if let Some(id) = self.tmux_to_gui.lock().get(&tmux_window_id).copied() {
+            return id;
+        }
+        self.create_gui_window()
     }
 
     /// create a tmux window
@@ -426,7 +434,8 @@ impl TmuxDomain {
             // parser,
             state: Mutex::new(State::WaitForInitialGuard),
             cmd_queue: Arc::new(Mutex::new(cmd_queue)),
-            gui_window: Mutex::new(None),
+            gui_window_builders: Mutex::new(HashMap::default()),
+            tmux_to_gui: Mutex::new(HashMap::default()),
             gui_tabs: Mutex::new(HashMap::default()),
             remote_panes: Mutex::new(HashMap::default()),
             tmux_session: Mutex::new(None),
