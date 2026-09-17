@@ -22,6 +22,45 @@ pub(crate) trait TmuxCommand: Send + Debug {
     fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()>;
 }
 
+#[derive(Debug)]
+pub(crate) struct RawTmuxCommand {
+    command: String,
+}
+
+impl RawTmuxCommand {
+    pub fn new(command: String) -> Self {
+        Self { command }
+    }
+}
+
+impl TmuxCommand for RawTmuxCommand {
+    fn get_command(&self, _domain_id: DomainId) -> String {
+        format!("{}\n", self.command.trim_end_matches(['\r', '\n']))
+    }
+
+    fn process_result(&self, domain_id: DomainId, result: &Guarded) -> anyhow::Result<()> {
+        let mux = Mux::get();
+        let domain = mux
+            .get_domain(domain_id)
+            .ok_or_else(|| anyhow!("tmux domain {domain_id} was removed"))?;
+        let tmux_domain = domain
+            .downcast_ref::<TmuxDomain>()
+            .ok_or_else(|| anyhow!("domain {domain_id} is not a tmux domain"))?;
+        let status = if result.error { "error" } else { "result" };
+        let output = result.output.trim_end_matches(['\r', '\n']);
+        let message = if output.is_empty() {
+            format!("\r\ntmux command {status}: {}\r\n", self.command)
+        } else {
+            format!(
+                "\r\ntmux command {status}: {}\r\n{}\r\n",
+                self.command, output
+            )
+        };
+        crate::localpane::emit_output_for_pane(tmux_domain.inner.pane_id, &message);
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PaneItem {
     session_id: TmuxSessionId,
@@ -1237,5 +1276,16 @@ impl TmuxCommand for AttachDone {
         // Do nothing, just change the state.
         *tmux_domain.inner.attach_state.lock() = AttachState::Done;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RawTmuxCommand, TmuxCommand};
+
+    #[test]
+    fn raw_tmux_command_has_one_line_terminator() {
+        let command = RawTmuxCommand::new("new-window\r\n".to_string());
+        assert_eq!(command.get_command(0), "new-window\n");
     }
 }

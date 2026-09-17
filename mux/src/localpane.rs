@@ -433,6 +433,9 @@ impl Pane for LocalPane {
                 KeyCode::Char('L') | KeyCode::Char('l') => {
                     tmux.toggle_protocol_logging();
                 }
+                KeyCode::Char('C') | KeyCode::Char('c') => {
+                    tmux.request_command_prompt();
+                }
                 _ => {}
             }
             return Ok(());
@@ -939,6 +942,7 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
                                     "esc    Detach cleanly.\r\n",
                                     "  X    Force-quit tmux mode.\r\n",
                                     "  L    Toggle logging.\r\n",
+                                    "  C    Run tmux command.\r\n",
                                 ),
                             );
                         }

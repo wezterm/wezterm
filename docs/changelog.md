@@ -81,7 +81,8 @@ As features stabilize some brief notes about them will accumulate here.
   omits the other (needed for HTM detach), and raw protocol bytes are
   preserved for logging. Thanks to @MisterTea!
 * `tmux -CC`: the gateway pane now uses an iTerm2-style command menu
-  (Esc detach, X force-quit, L protocol logging). Thanks to @MisterTea!
+  (Esc detach, X force-quit, L protocol logging, C run tmux command).
+  Thanks to @MisterTea!
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.

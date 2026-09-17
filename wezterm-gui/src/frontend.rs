@@ -90,6 +90,7 @@ impl GuiFrontEnd {
                 MuxNotification::WindowTitleChanged { .. } => {}
                 MuxNotification::TabResized(_) => {}
                 MuxNotification::TabAddedToWindow { .. } => {}
+                MuxNotification::TmuxCommandPrompt { .. } => {}
                 MuxNotification::PaneRemoved(_) => {}
                 MuxNotification::WindowInvalidated(_) => {}
                 MuxNotification::PaneOutput(_) => {}

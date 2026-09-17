@@ -82,6 +82,10 @@ pub enum MuxNotification {
         window_id: WindowId,
     },
     PaneFocused(PaneId),
+    TmuxCommandPrompt {
+        pane_id: PaneId,
+        domain_id: DomainId,
+    },
     TabResized(TabId),
     TabTitleChanged {
         tab_id: TabId,

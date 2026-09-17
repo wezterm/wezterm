@@ -3,10 +3,10 @@ use crate::domain::{alloc_domain_id, Domain, DomainId, DomainState, SplitSource}
 use crate::pane::{Pane, PaneId};
 use crate::tab::{SplitRequest, Tab, TabId};
 use crate::tmux_commands::{
-    ListAllPanes, ListAllWindows, ListCommands, NewWindow, SplitPane, TmuxCommand,
+    ListAllPanes, ListAllWindows, ListCommands, NewWindow, RawTmuxCommand, SplitPane, TmuxCommand,
 };
 use crate::window::WindowId;
-use crate::{Mux, MuxWindowBuilder};
+use crate::{Mux, MuxNotification, MuxWindowBuilder};
 use async_trait::async_trait;
 use filedescriptor::FileDescriptor;
 use parking_lot::{Condvar, Mutex};
@@ -90,6 +90,12 @@ pub struct TmuxDomain {
     pub(crate) inner: Arc<TmuxDomainState>,
 }
 
+impl TmuxDomain {
+    pub fn enqueue_user_command(&self, command: String) {
+        self.inner.enqueue_user_command(command);
+    }
+}
+
 impl TmuxDomainState {
     pub fn detach_client(&self) -> anyhow::Result<()> {
         let pane = Mux::get()
@@ -137,6 +143,24 @@ impl TmuxDomainState {
                 &format!("{direction} {}\r\n", line.trim_end_matches(['\r', '\n'])),
             );
         }
+    }
+
+    pub fn enqueue_user_command(&self, command: String) {
+        let command = command.trim().to_string();
+        if command.is_empty() || self.force_quit.load(Ordering::SeqCst) {
+            return;
+        }
+        self.cmd_queue
+            .lock()
+            .push_back(Box::new(RawTmuxCommand::new(command)));
+        Self::schedule_send_next_command(self.domain_id);
+    }
+
+    pub fn request_command_prompt(&self) {
+        Mux::get().notify(MuxNotification::TmuxCommandPrompt {
+            pane_id: self.pane_id,
+            domain_id: self.domain_id,
+        });
     }
 
     pub fn advance(&self, events: Box<Vec<Event>>) {
