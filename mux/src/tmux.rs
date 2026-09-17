@@ -13,6 +13,7 @@ use parking_lot::{Condvar, Mutex};
 use portable_pty::CommandBuilder;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use termwiz::tmux_cc::*;
 use wezterm_term::TerminalSize;
@@ -72,6 +73,8 @@ pub(crate) struct TmuxDomainState {
     pub gui_tabs: Mutex<HashMap<TmuxWindowId, TmuxTab>>,
     pub remote_panes: Mutex<HashMap<TmuxPaneId, RefTmuxRemotePane>>,
     pub tmux_session: Mutex<Option<TmuxSessionId>>,
+    protocol_logging: AtomicBool,
+    force_quit: AtomicBool,
     pub support_commands: Mutex<HashMap<String, String>>,
     pub attach_state: Mutex<AttachState>,
     pending_splits: Mutex<VecDeque<promise::Promise<TmuxPaneId>>>,
@@ -88,7 +91,58 @@ pub struct TmuxDomain {
 }
 
 impl TmuxDomainState {
+    pub fn detach_client(&self) -> anyhow::Result<()> {
+        let pane = Mux::get()
+            .get_pane(self.pane_id)
+            .ok_or_else(|| anyhow::anyhow!("tmux gateway pane {} was removed", self.pane_id))?;
+        pane.writer().write_all(b"detach-client\n")?;
+        Ok(())
+    }
+
+    pub fn force_quit(&self) {
+        if self.force_quit.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        self.cmd_queue.lock().clear();
+        *self.state.lock() = State::Exit;
+        for pane in self.remote_panes.lock().values() {
+            let pane = pane.lock();
+            let (lock, condvar) = &*pane.active_lock;
+            *lock.lock() = true;
+            condvar.notify_all();
+        }
+
+        Mux::get().domain_was_detached(self.domain_id);
+    }
+
+    pub fn toggle_protocol_logging(&self) -> bool {
+        let enabled = !self.protocol_logging.load(Ordering::SeqCst);
+        self.protocol_logging.store(enabled, Ordering::SeqCst);
+        crate::localpane::emit_output_for_pane(
+            self.pane_id,
+            if enabled {
+                "\r\ntmux logging on\r\n"
+            } else {
+                "\r\ntmux logging off\r\n"
+            },
+        );
+        enabled
+    }
+
+    pub fn log_protocol_line(&self, direction: &str, line: &str) {
+        if self.protocol_logging.load(Ordering::SeqCst) {
+            crate::localpane::emit_output_for_pane(
+                self.pane_id,
+                &format!("{direction} {}\r\n", line.trim_end_matches(['\r', '\n'])),
+            );
+        }
+    }
+
     pub fn advance(&self, events: Box<Vec<Event>>) {
+        if self.force_quit.load(Ordering::SeqCst) {
+            return;
+        }
         for event in events.iter() {
             let state = *self.state.lock();
             log::debug!("tmux: {:?} in state {:?}", event, state);
@@ -253,6 +307,7 @@ impl TmuxDomainState {
                 continue;
             }
             log::debug!("sending cmd {:?}", cmd);
+            self.log_protocol_line(">", cmd.trim_end_matches(['\r', '\n']));
             let mux = Mux::get();
             if let Some(pane) = mux.get_pane(self.pane_id) {
                 let mut writer = pane.writer();
@@ -351,6 +406,8 @@ impl TmuxDomain {
             gui_tabs: Mutex::new(HashMap::default()),
             remote_panes: Mutex::new(HashMap::default()),
             tmux_session: Mutex::new(None),
+            protocol_logging: AtomicBool::new(false),
+            force_quit: AtomicBool::new(false),
             support_commands: Mutex::new(HashMap::default()),
             attach_state: Mutex::new(AttachState::Init),
             pending_splits: Mutex::new(VecDeque::default()),
