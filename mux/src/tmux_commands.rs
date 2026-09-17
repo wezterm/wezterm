@@ -532,11 +532,29 @@ impl TmuxDomainState {
                 }
             }
 
+            if new_window {
+                *self.activating_window.lock() = Some(window.window_id);
+            }
             mux.add_tab_to_window(&tab, gui_window_id)?;
             self.notify_gui_window(gui_window_id);
             self.tmux_to_gui
                 .lock()
                 .insert(window.window_id, gui_window_id);
+            if new_window || *self.active_window.lock() == Some(window.window_id) {
+                if let Some(mut mux_window) = mux.get_window_mut(gui_window_id) {
+                    if let Some(idx) = mux_window.get_tab_idx_for_id(tab.tab_id()) {
+                        mux_window.remember_and_set_active_tab_idx(idx);
+                    }
+                }
+            }
+            if new_window {
+                self.cmd_queue.lock().push_back(Box::new(SelectWindow {
+                    window_id: window.window_id,
+                }));
+                if let Some(pane) = tab.get_active_pane() {
+                    mux.notify(MuxNotification::PaneFocused(pane.pane_id()));
+                }
+            }
 
             {
                 let mut pending = self.pending_windows.lock();
@@ -619,18 +637,33 @@ impl TmuxDomainState {
 
                 match n {
                     MuxNotification::PaneFocused(pane_id) => {
-                        let tmux_pane_id = match tmux_domain
+                        let tmux_pane = match tmux_domain
                             .inner
                             .remote_panes
                             .lock()
                             .iter()
                             .find(|(_, p)| p.lock().local_pane_id == pane_id)
                         {
-                            Some((_, p)) => Some(p.lock().pane_id),
+                            Some((_, p)) => {
+                                let p = p.lock();
+                                Some((p.pane_id, p.window_id))
+                            }
                             None => None,
                         };
 
-                        if let Some(pane_id) = tmux_pane_id {
+                        if let Some((pane_id, window_id)) = tmux_pane {
+                            if let Some(activating_window) =
+                                *tmux_domain.inner.activating_window.lock()
+                            {
+                                if activating_window != window_id {
+                                    return;
+                                }
+                            }
+                            if let Some(active_window) = *tmux_domain.inner.active_window.lock() {
+                                if active_window != window_id {
+                                    return;
+                                }
+                            }
                             tmux_domain
                                 .inner
                                 .cmd_queue
@@ -655,6 +688,18 @@ impl TmuxDomainState {
                                 None => None,
                             };
                             if let Some(window_id) = tmux_window_id {
+                                if let Some(activating_window) =
+                                    *tmux_domain.inner.activating_window.lock()
+                                {
+                                    if activating_window != window_id {
+                                        return;
+                                    }
+                                }
+                                let mut active_window = tmux_domain.inner.active_window.lock();
+                                if *active_window == Some(window_id) {
+                                    return;
+                                }
+                                *active_window = Some(window_id);
                                 tmux_domain.inner.cmd_queue.lock().push_back(Box::new(
                                     SelectWindow {
                                         window_id: window_id,
@@ -800,7 +845,8 @@ impl TmuxCommand for ListAllPanes {
         let mux = Mux::get();
         if let Some(domain) = mux.get_domain(domain_id) {
             if let Some(tmux_domain) = domain.downcast_ref::<TmuxDomain>() {
-                if !self.prune {
+                let activating = *tmux_domain.inner.activating_window.lock();
+                if !self.prune || activating == Some(self.window_id) {
                     return tmux_domain.inner.sync_pane_state(&items);
                 } else {
                     return tmux_domain

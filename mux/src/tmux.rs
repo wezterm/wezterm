@@ -76,6 +76,8 @@ pub(crate) struct TmuxDomainState {
     pub gui_tabs: Mutex<HashMap<TmuxWindowId, TmuxTab>>,
     pub remote_panes: Mutex<HashMap<TmuxPaneId, RefTmuxRemotePane>>,
     pub tmux_session: Mutex<Option<TmuxSessionId>>,
+    pub active_window: Mutex<Option<TmuxWindowId>>,
+    pub activating_window: Mutex<Option<TmuxWindowId>>,
     protocol_logging: AtomicBool,
     force_quit: AtomicBool,
     pub support_commands: Mutex<HashMap<String, String>>,
@@ -265,6 +267,11 @@ impl TmuxDomainState {
                     self.subscribe_notification();
                     log::info!("tmux session changed:{}", session);
                 }
+                Event::SessionWindowChanged { session, window } => {
+                    if Some(*session) == *self.tmux_session.lock() {
+                        self.activate_tmux_window(*window);
+                    }
+                }
                 Event::WindowAdd { window } => {
                     // Only handle the new tab, the first empty window handled by sync_window_state
                     if self.has_gui_windows() {
@@ -396,6 +403,24 @@ impl TmuxDomainState {
         TmuxDomainState::schedule_send_next_command(self.domain_id);
     }
 
+    pub fn activate_tmux_window(&self, tmux_window_id: TmuxWindowId) {
+        *self.active_window.lock() = Some(tmux_window_id);
+
+        let tab_id = match self.gui_tabs.lock().get(&tmux_window_id) {
+            Some(tab) => tab.tab_id,
+            None => return,
+        };
+        let gui_window_id = match self.tmux_to_gui.lock().get(&tmux_window_id).copied() {
+            Some(window) => window,
+            None => return,
+        };
+        if let Some(mut window) = Mux::get().get_window_mut(gui_window_id) {
+            if let Some(idx) = window.get_tab_idx_for_id(tab_id) {
+                window.remember_and_set_active_tab_idx(idx);
+            }
+        }
+    }
+
     /// split the tmux pane
     pub fn split_tmux_pane(
         &self,
@@ -439,6 +464,8 @@ impl TmuxDomain {
             gui_tabs: Mutex::new(HashMap::default()),
             remote_panes: Mutex::new(HashMap::default()),
             tmux_session: Mutex::new(None),
+            active_window: Mutex::new(None),
+            activating_window: Mutex::new(None),
             protocol_logging: AtomicBool::new(false),
             force_quit: AtomicBool::new(false),
             support_commands: Mutex::new(HashMap::default()),

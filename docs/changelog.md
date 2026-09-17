@@ -86,6 +86,9 @@ As features stabilize some brief notes about them will accumulate here.
 * `tmux -CC`: each tmux window now maps to its own native OS window
   instead of stacking every tab in a single GUI window. Thanks to
   @MisterTea!
+* `tmux -CC`: `%session-window-changed` now activates the matching tab
+  and focus changes are ignored while a window is still attaching.
+  Thanks to @MisterTea!
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
