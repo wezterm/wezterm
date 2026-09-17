@@ -2,9 +2,18 @@
 // Copyright © 2015 Sebastian Thiel
 // <https://github.com/Byron/open-rs>
 
+/// Some desktop openers (notably KDE's KIO) re-parse the URL argument
+/// and split it on whitespace, so a file path containing spaces is
+/// truncated and fails to open. A raw space is never valid in a URI,
+/// so encoding it as %20 is safe and cannot double-encode an existing
+/// escape sequence.
+fn encode_spaces(url: &str) -> String {
+    url.replace(' ', "%20")
+}
+
 #[cfg(not(windows))]
 pub fn open_url(url: &str) {
-    let url = url.to_string();
+    let url = encode_spaces(url);
     std::thread::spawn(move || {
         #[cfg(target_os = "macos")]
         let candidates: &[&[&str]] = &[&["/usr/bin/open", &url]];
@@ -33,7 +42,7 @@ pub fn open_url(url: &str) {
 
 #[cfg(not(windows))]
 pub fn open_with(url: &str, app: &str) {
-    let url = url.to_string();
+    let url = encode_spaces(url);
     let app = app.to_string();
 
     std::thread::spawn(move || {
@@ -99,4 +108,30 @@ pub fn open_url(url: &str) {
 #[cfg(windows)]
 pub fn open_with(url: &str, app: &str) {
     shell_execute(url.to_string(), Some(app.to_string()));
+}
+
+#[cfg(test)]
+mod test {
+    use super::encode_spaces;
+
+    #[test]
+    fn encodes_spaces() {
+        assert_eq!(
+            encode_spaces("file:///home/user/My Projects/Report.pdf"),
+            "file:///home/user/My%20Projects/Report.pdf"
+        );
+    }
+
+    #[test]
+    fn leaves_encoded_urls_untouched() {
+        assert_eq!(
+            encode_spaces("file:///home/user/My%20Projects/Report.pdf"),
+            "file:///home/user/My%20Projects/Report.pdf"
+        );
+    }
+
+    #[test]
+    fn leaves_urls_without_spaces_untouched() {
+        assert_eq!(encode_spaces("https://example.com/a?b=1"), "https://example.com/a?b=1");
+    }
 }
