@@ -1133,7 +1133,10 @@ impl Config {
                     // file. Note that we can't catch this happening for files that are
                     // imported via the lua require function.
                     lua.load(s.trim_start_matches('\u{FEFF}'))
-                        .set_name(p.to_string_lossy())
+                        // The `@` tells lua this names a file rather than
+                        // being source text, which is what `require` does
+                        // for the modules it loads.
+                        .set_name(format!("@{}", p.to_string_lossy()))
                         .eval_async(),
                 )?;
                 let config = Config::apply_overrides_to(&lua, config)?;

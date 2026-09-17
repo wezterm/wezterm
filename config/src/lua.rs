@@ -154,7 +154,9 @@ fn config_builder_new_index<'lua>(
                             let name_what = names.name_what;
 
                             let dbg_source = debug.source();
-                            let source = dbg_source.source.unwrap_or_default();
+                            // `short_src` rather than `source`, which
+                            // carries lua's `@` file marker.
+                            let source = dbg_source.short_src.unwrap_or_default();
                             let func_name = match (name, name_what) {
                                 (Some(name), Some(name_what)) => {
                                     format!("{name_what} {name}")

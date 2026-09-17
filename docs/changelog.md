@@ -170,6 +170,9 @@ As features stabilize some brief notes about them will accumulate here.
   as though it were yours. Both now report the error and exit non-zero.
 * A failing `wezterm ls-fonts` or `wezterm show-keys` raised a desktop
   notification rather than reporting to the terminal it was run from.
+* Config errors named the file as `[string "/path/to/wezterm.lua"]` and truncated
+  long paths. It is now named like any other lua file.
+* The invalid-option traceback showed a leading `@` on `require`d module paths.
 * macOS: Fix window border when opacity<1 and shadow enabled.
   Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256

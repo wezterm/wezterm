@@ -104,6 +104,25 @@ fn a_configuration_that_raises_an_error_exits_one() {
 }
 
 #[test]
+fn an_error_names_the_configuration_file_as_a_file() {
+    // Loaded under an `@` name, so lua reports it the way it reports any
+    // other file rather than wrapping it in `[string "..."]` and dropping
+    // the tail of a long path.
+    let output = check("error('boom')\nreturn {}\n", &[]);
+
+    assert!(
+        !stderr(&output).contains("[string \""),
+        "the path should not be wrapped as source text, got: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("wezterm.lua:1:"),
+        "the error should name the file and line, got: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn a_failing_configuration_is_not_reported_as_a_missing_one() {
     // A failed load leaves `WEZTERM_CONFIG_FILE` unset, which is also how
     // "no file was found" is detected.  The file was found, so saying
