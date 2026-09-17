@@ -77,6 +77,9 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* `tmux -CC`: control mode now ends on `%exit` or ST even when the client
+  omits the other (needed for HTM detach), and raw protocol bytes are
+  preserved for logging. Thanks to @MisterTea!
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
