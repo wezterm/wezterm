@@ -2,7 +2,8 @@ use crate::domain::{alloc_domain_id, Domain, DomainId, DomainState, SplitSource}
 use crate::pane::{Pane, PaneId};
 use crate::tab::{SplitRequest, Tab, TabId};
 use crate::tmux_commands::{
-    ListAllPanes, ListAllWindows, ListCommands, NewWindow, RawTmuxCommand, SplitPane, TmuxCommand,
+    ListAllPanes, ListAllWindows, ListCommands, NewWindow, RawTmuxCommand, SetAffinities,
+    SplitPane, TmuxCommand,
 };
 use crate::window::WindowId;
 use crate::{Mux, MuxNotification, MuxWindowBuilder};
@@ -73,6 +74,11 @@ pub(crate) struct TmuxDomainState {
     pub gui_window_builders: Mutex<HashMap<WindowId, MuxWindowBuilder>>,
     /// tmux window → native mux OS window (tabs that share a value are one OS window).
     pub tmux_to_gui: Mutex<HashMap<TmuxWindowId, WindowId>>,
+    /// iTerm2 `@affinities` groups: each inner vec is the tmux windows in one OS window.
+    pub affinities: Mutex<Vec<Vec<TmuxWindowId>>>,
+    pub last_affinities: Mutex<Option<String>>,
+    /// Next new tmux window should join this window's affinity group (Cmd+T).
+    pub pending_affinity: Mutex<Option<TmuxWindowId>>,
     pub gui_tabs: Mutex<HashMap<TmuxWindowId, TmuxTab>>,
     pub remote_panes: Mutex<HashMap<TmuxPaneId, RefTmuxRemotePane>>,
     pub tmux_session: Mutex<Option<TmuxSessionId>>,
@@ -393,7 +399,109 @@ impl TmuxDomainState {
         if let Some(id) = self.tmux_to_gui.lock().get(&tmux_window_id).copied() {
             return id;
         }
+        if let Some(aff) = *self.pending_affinity.lock() {
+            if let Some(id) = self.tmux_to_gui.lock().get(&aff).copied() {
+                return id;
+            }
+            if let Some(id) = self.gui_id_for_affinity_of(aff) {
+                return id;
+            }
+        }
+        if let Some(id) = self.gui_id_for_affinity_of(tmux_window_id) {
+            return id;
+        }
+        let attaching = *self.attach_state.lock() == AttachState::Init;
+        if attaching {
+            let in_known_group = self
+                .affinities
+                .lock()
+                .iter()
+                .any(|group| group.contains(&tmux_window_id));
+            if !in_known_group {
+                if let Some(id) = self.tmux_to_gui.lock().values().next().copied() {
+                    return id;
+                }
+                if let Some(id) = self.gui_window_builders.lock().keys().next().copied() {
+                    return id;
+                }
+            }
+        }
         self.create_gui_window()
+    }
+
+    fn gui_id_for_affinity_of(&self, tmux_window_id: TmuxWindowId) -> Option<WindowId> {
+        let affinities = self.affinities.lock();
+        let group = affinities
+            .iter()
+            .find(|group| group.contains(&tmux_window_id))?;
+        let map = self.tmux_to_gui.lock();
+        group.iter().find_map(|sibling| map.get(sibling).copied())
+    }
+
+    pub fn record_window_affinity(&self, tmux_window_id: TmuxWindowId, gui_id: WindowId) {
+        self.tmux_to_gui.lock().insert(tmux_window_id, gui_id);
+        let pending = self.pending_affinity.lock().take();
+        let siblings: Vec<TmuxWindowId> = self
+            .tmux_to_gui
+            .lock()
+            .iter()
+            .filter_map(|(tid, gid)| (*gid == gui_id && *tid != tmux_window_id).then_some(*tid))
+            .collect();
+
+        let mut affinities = self.affinities.lock();
+        if affinities
+            .iter()
+            .any(|group| group.contains(&tmux_window_id))
+        {
+            return;
+        }
+        if let Some(aff) = pending {
+            if let Some(group) = affinities.iter_mut().find(|group| group.contains(&aff)) {
+                if !group.contains(&tmux_window_id) {
+                    group.push(tmux_window_id);
+                }
+                return;
+            }
+        }
+        if let Some(sib) = siblings.first() {
+            if let Some(group) = affinities.iter_mut().find(|group| group.contains(sib)) {
+                group.push(tmux_window_id);
+                return;
+            }
+        }
+        affinities.push(vec![tmux_window_id]);
+    }
+
+    pub fn forget_window_affinity(&self, tmux_window_id: TmuxWindowId) {
+        self.tmux_to_gui.lock().remove(&tmux_window_id);
+        let mut affinities = self.affinities.lock();
+        for group in affinities.iter_mut() {
+            group.retain(|id| *id != tmux_window_id);
+        }
+        affinities.retain(|group| !group.is_empty());
+    }
+
+    pub fn queue_save_affinities(&self) {
+        let payload = format_affinity_groups(&self.affinities.lock());
+        {
+            let mut last = self.last_affinities.lock();
+            if last.as_deref() == Some(payload.as_str()) {
+                return;
+            }
+            *last = Some(payload.clone());
+        }
+        self.cmd_queue
+            .lock()
+            .push_back(Box::new(SetAffinities { payload }));
+    }
+
+    pub fn apply_saved_affinities(&self, raw: &str) {
+        let groups = parse_affinity_groups(raw);
+        if groups.is_empty() {
+            return;
+        }
+        *self.affinities.lock() = groups.clone();
+        *self.last_affinities.lock() = Some(format_affinity_groups(&groups));
     }
 
     /// create a tmux window
@@ -461,6 +569,9 @@ impl TmuxDomain {
             cmd_queue: Arc::new(Mutex::new(cmd_queue)),
             gui_window_builders: Mutex::new(HashMap::default()),
             tmux_to_gui: Mutex::new(HashMap::default()),
+            affinities: Mutex::new(Vec::new()),
+            last_affinities: Mutex::new(None),
+            pending_affinity: Mutex::new(None),
             gui_tabs: Mutex::new(HashMap::default()),
             remote_panes: Mutex::new(HashMap::default()),
             tmux_session: Mutex::new(None),
