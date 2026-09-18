@@ -35,6 +35,7 @@ case "$TERM" in
     return 0
   ;;
 esac
+
 # This function wraps bash-preexec.sh so that it can be included verbatim
 # in this file, even though it uses `return` to short-circuit in some cases.
 __wezterm_install_bash_prexec() {
@@ -442,7 +443,6 @@ __wezterm_set_user_var() {
     fi
   fi
 }
-
 
 # This function emits an OSC 7 sequence to inform the terminal
 # of the current working directory.  It prefers to use a helper
