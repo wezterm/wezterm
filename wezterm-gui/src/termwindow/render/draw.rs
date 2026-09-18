@@ -146,6 +146,9 @@ impl crate::TermWindow {
         webgpu.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
+        // let wgpu free the per-frame buffers and bind groups we just dropped
+        let _ = webgpu.device.poll(wgpu::PollType::Poll);
+
         Ok(())
     }
 
