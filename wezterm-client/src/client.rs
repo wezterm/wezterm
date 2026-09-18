@@ -434,6 +434,52 @@ async fn client_thread_async(
     }
 }
 
+#[cfg(windows)]
+fn socketpair() -> filedescriptor::Result<(FileDescriptor, FileDescriptor)> {
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+
+    let l = std::net::TcpListener::bind("localhost:0")?;
+    let addr = l.local_addr()?;
+
+    let connector = std::thread::spawn(move || std::net::TcpStream::connect(addr));
+
+    let (a, _) = l.accept()?;
+    let b = connector.join().unwrap()?;
+
+    let raw_a = a.into_raw_socket();
+    let raw_b = b.into_raw_socket();
+
+    let fd_a = unsafe { FileDescriptor::from_raw_socket(raw_a) };
+    let fd_b = unsafe { FileDescriptor::from_raw_socket(raw_b) };
+
+    Ok((fd_a, fd_b))
+}
+
+#[cfg(unix)]
+fn socketpair() -> filedescriptor::Result<(FileDescriptor, FileDescriptor)> {
+    filedescriptor::socketpair()
+}
+
+#[cfg(windows)]
+fn redirect_to_socket(
+    mut stdin: std::process::ChildStdin,
+    mut stdout: std::process::ChildStdout,
+    dest: FileDescriptor,
+) -> anyhow::Result<()> {
+    let mut dest_read = dest.try_clone()?;
+    let mut dest_write = dest;
+
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut stdout, &mut dest_write);
+    });
+
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut dest_read, &mut stdin);
+    });
+
+    Ok(())
+}
+
 pub fn unix_connect_with_retry(
     target: &UnixTarget,
     just_spawned: bool,
@@ -463,14 +509,33 @@ pub fn unix_connect_with_retry(
                 let mut cmd = std::process::Command::new(&argv[0]);
                 cmd.args(&argv[1..]);
 
-                let (a, b) = filedescriptor::socketpair()?;
+                let (a, b) = socketpair()?;
 
-                cmd.stdin(b.as_stdio()?);
-                cmd.stdout(b.as_stdio()?);
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.stdin(std::process::Stdio::piped());
+                    cmd.stdout(std::process::Stdio::piped());
+
+                    const CREATE_NO_WINDOW: u32 = 0x08000000;
+                    cmd.creation_flags(CREATE_NO_WINDOW);
+                }
+                #[cfg(not(windows))]
+                {
+                    cmd.stdin(b.as_stdio()?);
+                    cmd.stdout(b.as_stdio()?);
+                }
                 cmd.stderr(std::process::Stdio::inherit());
                 let mut child = cmd
                     .spawn()
                     .with_context(|| format!("spawning proxy command {:?}", cmd))?;
+
+                #[cfg(windows)]
+                let _ = redirect_to_socket(
+                    child.stdin.take().expect("failed to get stdin"),
+                    child.stdout.take().expect("failed to get stdout"),
+                    b,
+                )?;
 
                 error.take();
 
