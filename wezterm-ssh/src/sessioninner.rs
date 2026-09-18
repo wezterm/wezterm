@@ -11,9 +11,7 @@ use crate::sftp::{OpenWithMode, SftpChannelResult, SftpRequest};
 use crate::sftpwrap::SftpWrap;
 use anyhow::{anyhow, Context};
 use camino::Utf8PathBuf;
-use filedescriptor::{
-    poll, pollfd, socketpair, AsRawSocketDescriptor, FileDescriptor, POLLIN, POLLOUT,
-};
+use filedescriptor::{poll, pollfd, AsRawSocketDescriptor, FileDescriptor, POLLIN, POLLOUT};
 use portable_pty::ExitStatus;
 use smol::channel::{bounded, Receiver, Sender, TryRecvError};
 use socket2::{Domain, Socket, Type};
@@ -58,6 +56,52 @@ impl Drop for SessionInner {
     fn drop(&mut self) {
         log::trace!("Dropping SessionInner");
     }
+}
+
+#[cfg(windows)]
+fn socketpair() -> filedescriptor::Result<(FileDescriptor, FileDescriptor)> {
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+
+    let l = std::net::TcpListener::bind("localhost:0")?;
+    let addr = l.local_addr()?;
+
+    let connector = std::thread::spawn(move || std::net::TcpStream::connect(addr));
+
+    let (a, _) = l.accept()?;
+    let b = connector.join().unwrap()?;
+
+    let raw_a = a.into_raw_socket();
+    let raw_b = b.into_raw_socket();
+
+    let fd_a = unsafe { FileDescriptor::from_raw_socket(raw_a) };
+    let fd_b = unsafe { FileDescriptor::from_raw_socket(raw_b) };
+
+    Ok((fd_a, fd_b))
+}
+
+#[cfg(unix)]
+fn socketpair() -> filedescriptor::Result<(FileDescriptor, FileDescriptor)> {
+    filedescriptor::socketpair()
+}
+
+#[cfg(windows)]
+fn redirect_to_socket(
+    mut stdin: std::process::ChildStdin,
+    mut stdout: std::process::ChildStdout,
+    dest: FileDescriptor,
+) -> anyhow::Result<()> {
+    let mut dest_read = dest.try_clone()?;
+    let mut dest_write = dest;
+
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut stdout, &mut dest_write);
+    });
+
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut dest_read, &mut stdin);
+    });
+
+    Ok(())
 }
 
 impl SessionInner {
@@ -347,12 +391,31 @@ impl SessionInner {
 
                 let (a, b) = socketpair()?;
 
-                cmd.stdin(b.as_stdio()?);
-                cmd.stdout(b.as_stdio()?);
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.stdin(std::process::Stdio::piped());
+                    cmd.stdout(std::process::Stdio::piped());
+
+                    const CREATE_NO_WINDOW: u32 = 0x08000000;
+                    cmd.creation_flags(CREATE_NO_WINDOW);
+                }
+                #[cfg(not(windows))]
+                {
+                    cmd.stdin(b.as_stdio()?);
+                    cmd.stdout(b.as_stdio()?);
+                }
                 cmd.stderr(std::process::Stdio::inherit());
-                let child = cmd
+                let mut child = cmd
                     .spawn()
                     .with_context(|| format!("spawning ProxyCommand {}", proxy_command))?;
+
+                #[cfg(windows)]
+                let _ = redirect_to_socket(
+                    child.stdin.take().expect("failed to get stdin"),
+                    child.stdout.take().expect("failed to get stdout"),
+                    b,
+                )?;
 
                 #[cfg(unix)]
                 unsafe {
