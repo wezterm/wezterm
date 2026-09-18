@@ -2,13 +2,15 @@ use super::*;
 use crate::connection::ConnectionOps;
 use crate::parameters::{self, Parameters};
 use crate::{
-    Appearance, Clipboard, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent,
-    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
-    RequestedWindowGeometry, ResolvedGeometry, ScreenPoint, ScreenRect, ULength, WindowDecorations,
-    WindowEvent, WindowEventSender, WindowOps, WindowState,
+    menu_action_for_command_id, resolve_context_menu, Appearance, Clipboard, ContextMenuItem,
+    CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent, Modifiers, MouseButtons,
+    MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect, RequestedWindowGeometry,
+    ResolvedGeometry, ScreenPoint, ScreenRect, ULength, WindowDecorations, WindowEvent,
+    WindowEventSender, WindowOps, WindowState,
 };
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use config::keyassignment::KeyAssignment;
 use config::{ConfigHandle, ImePreeditRendering, SystemBackdrop};
 use lazy_static::lazy_static;
 use promise::Future;
@@ -92,6 +94,19 @@ lazy_static! {
 
         if unsafe { GetVersionExW(&osver as *const _ as _) } == winapi::shared::minwindef::TRUE {
             osver.dwBuildNumber >= 22621
+        } else {
+            true
+        }
+    };
+    // The uxtheme dark-mode ordinals only exist from Windows 10 1809 (17763).
+    static ref IS_WIN10_1809: bool = {
+        let osver = OSVERSIONINFOW {
+            dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as _,
+            ..Default::default()
+        };
+
+        if unsafe { GetVersionExW(&osver as *const _ as _) } == winapi::shared::minwindef::TRUE {
+            osver.dwBuildNumber >= 17763
         } else {
             true
         }
@@ -969,6 +984,86 @@ impl WindowOps for Window {
         clipboard_win::set_clipboard_string(&text).ok();
     }
 
+    fn show_context_menu(&self, items: Vec<ContextMenuItem>) {
+        let handle = self.0;
+        let hwnd = handle.0;
+        if hwnd.is_null() {
+            return;
+        }
+
+        let entries = resolve_context_menu(items);
+
+        // TrackPopupMenu pumps a modal message loop that re-enters the window
+        // proc; defer so that the caller's borrow of the window inner state
+        // is released before any re-entrant message is dispatched.
+        promise::spawn::spawn(async move {
+            let mut point = POINT { x: 0, y: 0 };
+            if unsafe { GetCursorPos(&mut point) } == 0 {
+                return;
+            }
+
+            sync_menu_theme_with_os();
+
+            let hmenu = unsafe { CreatePopupMenu() };
+            if hmenu.is_null() {
+                return;
+            }
+
+            // A paste action is only useful when the clipboard holds text; grey
+            // it out otherwise.
+            let clipboard_has_text = unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT) } != 0;
+
+            for item in &entries {
+                let mut enabled = item.enabled;
+                if matches!(item.action, KeyAssignment::PasteFrom(_)) {
+                    enabled = enabled && clipboard_has_text;
+                }
+
+                let mut flags = MF_STRING;
+                if !enabled {
+                    flags |= MF_GRAYED;
+                }
+                let wide = wide_string(&item.label);
+                unsafe { AppendMenuW(hmenu, flags, item.command_id, wide.as_ptr()) };
+            }
+
+            // Unless the owning window is the foreground window, the menu
+            // won't close when the user clicks outside of it.
+            unsafe { SetForegroundWindow(hwnd) };
+
+            let chosen = unsafe {
+                TrackPopupMenu(
+                    hmenu,
+                    TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
+                    point.x,
+                    point.y,
+                    0,
+                    hwnd,
+                    null(),
+                )
+            };
+
+            unsafe {
+                // Without a message posted here, the next menu shown can
+                // dismiss itself immediately.
+                PostMessageW(hwnd, WM_NULL, 0, 0);
+                DestroyMenu(hmenu);
+            }
+
+            if chosen > 0 {
+                if let Some(action) = menu_action_for_command_id(&entries, chosen as usize) {
+                    Connection::with_window_inner(handle, move |inner| {
+                        inner
+                            .events
+                            .dispatch(WindowEvent::PerformKeyAssignment(action));
+                        Ok(())
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
     fn set_window_drag_position(&self, coords: ScreenPoint) {
         Connection::with_window_inner(self.0, move |inner| {
             inner.window_drag_position = Some(coords);
@@ -1336,6 +1431,36 @@ fn enable_blur_behind(hwnd: HWND) {
         DwmEnableBlurBehindWindow(hwnd, &bb);
 
         DeleteObject(region as _);
+    }
+}
+
+/// Make popup menus follow the OS light/dark theme, using the undocumented
+/// uxtheme dark-mode ordinals available from Windows 10 1809.
+fn sync_menu_theme_with_os() {
+    use winapi::um::libloaderapi::{GetModuleHandleW, GetProcAddress};
+
+    if !*IS_WIN10_1809 {
+        return;
+    }
+
+    unsafe {
+        let uxtheme = GetModuleHandleW(wide_string("uxtheme.dll").as_ptr());
+        if uxtheme.is_null() {
+            return;
+        }
+        // 135 is SetPreferredAppMode (1903+) / AllowDarkModeForApp (1809+);
+        // an argument of 1 selects AllowDark under either signature.
+        let set_app_mode: Option<extern "system" fn(i32) -> i32> =
+            std::mem::transmute(GetProcAddress(uxtheme, 135 as _));
+        if let Some(set_app_mode) = set_app_mode {
+            set_app_mode(1);
+        }
+        // 136 is FlushMenuThemes.
+        let flush_menu_themes: Option<extern "system" fn()> =
+            std::mem::transmute(GetProcAddress(uxtheme, 136 as _));
+        if let Some(flush_menu_themes) = flush_menu_themes {
+            flush_menu_themes();
+        }
     }
 }
 
