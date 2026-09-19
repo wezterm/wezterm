@@ -449,6 +449,7 @@ pub const NERD_FONT_GLYPHS: &[(&str, char)] = &[
     ("custom_common_lisp", '\u{e6b0}'),                             // 
     ("custom_cpp", '\u{e61d}'),                                     // 
     ("custom_crystal", '\u{e62f}'),                                 // 
+    ("custom_css", '\u{e6b8}'),                                     // 
     ("custom_default", '\u{e612}'),                                 // 
     ("custom_electron", '\u{e62e}'),                                // 
     ("custom_elixir", '\u{e62d}'),                                  // 
@@ -989,6 +990,18 @@ pub const NERD_FONT_GLYPHS: &[(&str, char)] = &[
     ("dev_yunohost", '\u{e8ee}'),                                   // 
     ("dev_zend", '\u{e778}'),                                       // 
     ("dev_zig", '\u{e8ef}'),                                        // 
+    ("extra_progress_empty_left", '\u{ee00}'),                      // 
+    ("extra_progress_empty_mid", '\u{ee01}'),                       // 
+    ("extra_progress_empty_right", '\u{ee02}'),                     // 
+    ("extra_progress_full_left", '\u{ee03}'),                       // 
+    ("extra_progress_full_mid", '\u{ee04}'),                        // 
+    ("extra_progress_full_right", '\u{ee05}'),                      // 
+    ("extra_progress_spinner_1", '\u{ee06}'),                       // 
+    ("extra_progress_spinner_2", '\u{ee07}'),                       // 
+    ("extra_progress_spinner_3", '\u{ee08}'),                       // 
+    ("extra_progress_spinner_4", '\u{ee09}'),                       // 
+    ("extra_progress_spinner_5", '\u{ee0a}'),                       // 
+    ("extra_progress_spinner_6", '\u{ee0b}'),                       // 
     ("fa_500px", '\u{f26e}'),                                       // 
     ("fa_accessible_icon", '\u{f29b}'),                             // 
     ("fa_accusoft", '\u{f0b7}'),                                    // 
