@@ -434,7 +434,7 @@ fi
 # It requires the `base64` utility to be available in the path.
 __wezterm_set_user_var() {
   if hash base64 2>/dev/null ; then
-    if [[ -z "${TMUX}" ]] ; then
+    if [[ -z "${TMUX-}" ]] ; then
       printf "\033]1337;SetUserVar=%s=%s\007" "$1" "$(echo -n "$2" | base64 | tr -d '\n')"
     else
       # <https://github.com/tmux/tmux/wiki/FAQ#what-is-the-passthrough-escape-sequence-and-how-do-i-use-it>
