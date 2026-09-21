@@ -464,9 +464,10 @@ pub fn unix_connect_with_retry(
                 cmd.args(&argv[1..]);
 
                 let (a, b) = filedescriptor::socketpair()?;
+                let (stdin, stdout) = b.as_stdio_pair()?;
 
-                cmd.stdin(b.as_stdio()?);
-                cmd.stdout(b.as_stdio()?);
+                cmd.stdin(stdin);
+                cmd.stdout(stdout);
                 cmd.stderr(std::process::Stdio::inherit());
                 let mut child = cmd
                     .spawn()

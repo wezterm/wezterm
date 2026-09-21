@@ -4,6 +4,7 @@ use crate::{
     Result, StdioDescriptor,
 };
 use std::io::{self, Error as IoError};
+use std::os::windows::io::{FromRawSocket, IntoRawSocket};
 use std::os::windows::prelude::*;
 use std::ptr;
 use std::sync::Once;
@@ -286,6 +287,25 @@ impl FileDescriptor {
             Ok(std_original)
         }
     }
+
+    pub(crate) fn as_stdio_pair_impl(&self) -> Result<(std::process::Stdio, std::process::Stdio)> {
+        let stdin = Pipe::new()?;
+        let stdout = Pipe::new()?;
+        let mut stdin_write = stdin.write;
+        let mut stdout_read = stdout.read;
+        let mut read = self.try_clone()?;
+        let mut write = self.try_clone()?;
+
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut stdout_read, &mut write);
+        });
+
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut read, &mut stdin_write);
+        });
+
+        Ok((stdin.read.as_stdio()?, stdout.write.as_stdio()?))
+    }
 }
 
 impl IntoRawHandle for FileDescriptor {
@@ -488,67 +508,19 @@ fn socket(af: ADDRESS_FAMILY, sock_type: i32, proto: i32) -> Result<FileDescript
 
 #[doc(hidden)]
 pub fn socketpair_impl() -> Result<(FileDescriptor, FileDescriptor)> {
-    init_winsock();
+    let l = std::net::TcpListener::bind("localhost:0")?;
+    let addr = l.local_addr()?;
 
-    let s = socket(AF_INET, SOCK_STREAM, 0)?;
+    let connector = std::thread::spawn(move || std::net::TcpStream::connect(addr));
 
-    let mut in_addr: SOCKADDR_IN = unsafe { std::mem::zeroed() };
-    in_addr.sin_family = AF_INET;
-    in_addr.sin_addr.S_un.S_addr = unsafe { htonl(INADDR_LOOPBACK) };
+    let (sock_server, _) = l.accept()?;
+    let sock_client = connector.join().unwrap()?;
 
-    unsafe {
-        if bind(
-            s.as_raw_handle() as _,
-            std::mem::transmute(&in_addr),
-            std::mem::size_of_val(&in_addr) as _,
-        ) != 0
-        {
-            return Err(Error::Bind(IoError::last_os_error()));
-        }
-    }
+    let raw_server = sock_server.into_raw_socket();
+    let raw_client = sock_client.into_raw_socket();
 
-    let mut addr_len = std::mem::size_of_val(&in_addr) as i32;
-
-    unsafe {
-        if getsockname(
-            s.as_raw_handle() as _,
-            std::mem::transmute(&mut in_addr),
-            &mut addr_len,
-        ) != 0
-        {
-            return Err(Error::Getsockname(IoError::last_os_error()));
-        }
-    }
-
-    unsafe {
-        if listen(s.as_raw_handle() as _, 1) != 0 {
-            return Err(Error::Listen(IoError::last_os_error()));
-        }
-    }
-
-    let client = socket(AF_INET, SOCK_STREAM, 0)?;
-
-    unsafe {
-        if connect(
-            client.as_raw_handle() as _,
-            std::mem::transmute(&in_addr),
-            addr_len,
-        ) != 0
-        {
-            return Err(Error::Connect(IoError::last_os_error()));
-        }
-    }
-
-    let server = unsafe { accept(s.as_raw_handle() as _, ptr::null_mut(), ptr::null_mut()) };
-    if server == INVALID_SOCKET {
-        return Err(Error::Accept(IoError::last_os_error()));
-    }
-    let server = FileDescriptor {
-        handle: OwnedHandle {
-            handle: server as _,
-            handle_type: HandleType::Socket,
-        },
-    };
+    let server = unsafe { FileDescriptor::from_raw_socket(raw_server) };
+    let client = unsafe { FileDescriptor::from_raw_socket(raw_client) };
 
     Ok((server, client))
 }
