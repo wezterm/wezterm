@@ -654,6 +654,7 @@ impl super::TermWindow {
         capture_mouse: bool,
     ) {
         let mut is_click_to_focus_pane = false;
+        let mut is_over_active_pane = true;
 
         let ClickPosition {
             mut column,
@@ -676,6 +677,7 @@ impl super::TermWindow {
             {
                 if pane.pane_id() != pos.pane.pane_id() {
                     // We're over a pane that isn't active
+                    is_over_active_pane = false;
                     match &event.kind {
                         WMEK::Press(_) => {
                             let mux = Mux::get();
@@ -811,7 +813,12 @@ impl super::TermWindow {
             column,
         };
         pane.with_lines_mut(stable_row..stable_row + 1, &mut find_link);
-        let new_highlight = find_link.current;
+        let new_highlight = if is_over_active_pane {
+            find_link.current
+        } else {
+            // mouse isn't over the active pane, don't highlight URLs
+            None
+        };
 
         match (self.current_highlight.as_ref(), new_highlight) {
             (Some(old_link), Some(new_link)) if Arc::ptr_eq(&old_link, &new_link) => {
