@@ -293,12 +293,52 @@ impl FrameDecoder {
             ImageFormat::WebP => {
                 let mut reader = reader.into_inner();
                 reader.rewind().context("rewinding reader for WebP")?;
-                let mut decoder =
-                    image::codecs::webp::WebPDecoder::new(reader).context("WebPDecoder")?;
-                decoder
-                    .set_limits(limits)
-                    .context("WebPDecoder::set_limits")?;
-                decoder.into_frames()
+                let mut decoder = image_webp::WebPDecoder::new(reader).context("WebPDecoder")?;
+                if let Some(limit) = limits.max_alloc {
+                    decoder.set_memory_limit(limit as usize)
+                }
+
+                let (width, height) = decoder.dimensions();
+                let frame_count = if decoder.is_animated() {
+                    decoder.num_frames()
+                } else {
+                    1
+                };
+
+                let raw_len = decoder
+                    .output_buffer_size()
+                    .context("Invalid buffer size")?;
+                let mut raw_buf = vec![0u8; raw_len];
+
+                let mut frames_vec: Vec<ImageResult<Frame>> =
+                    Vec::with_capacity(frame_count as usize);
+
+                for _ in 0..frame_count {
+                    let rgba_image = if !decoder.has_alpha() {
+                        image::RgbImage::from_raw(width, height, raw_buf.clone())
+                            .map(|img_buf| image::DynamicImage::ImageRgb8(img_buf).to_rgba8())
+                    } else {
+                        image::RgbaImage::from_raw(width, height, raw_buf.clone())
+                    };
+
+                    if let Some(frame) = rgba_image {
+                        let delay_ms = if decoder.is_animated() {
+                            decoder
+                                .read_frame(&mut raw_buf)
+                                .context("reading WebP frame")?
+                        } else {
+                            decoder
+                                .read_image(&mut raw_buf)
+                                .context("reading static WebP image")?;
+                            u32::MAX
+                        };
+                        let delay = image::Delay::from_numer_denom_ms(delay_ms, 1);
+
+                        frames_vec.push(Ok(Frame::from_parts(frame, 0, 0, delay)));
+                    }
+                }
+
+                Frames::new(Box::new(frames_vec.into_iter()))
             }
             _ => {
                 let buf = reader.decode().context("decode image")?;
