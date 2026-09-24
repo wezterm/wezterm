@@ -52,6 +52,8 @@ pub struct ColorPalette {
     pub cursor_fg: SrgbaTuple,
     pub cursor_bg: SrgbaTuple,
     pub cursor_border: SrgbaTuple,
+    pub copy_mode_cursor_fg: SrgbaTuple,
+    pub copy_mode_cursor_bg: SrgbaTuple,
     pub selection_fg: SrgbaTuple,
     pub selection_bg: SrgbaTuple,
     pub scrollbar_thumb: SrgbaTuple,
@@ -171,6 +173,9 @@ impl ColorPalette {
         let cursor_border = RgbColor::new_8bpc(0x52, 0xad, 0x70).into();
         let cursor_fg = colors[AnsiColor::Black as usize].into();
 
+        let copy_mode_cursor_bg = RgbColor::new_8bpc(0x52, 0xad, 0x70).into();
+        let copy_mode_cursor_fg = colors[AnsiColor::Black as usize].into();
+
         let selection_fg = SrgbaTuple(0., 0., 0., 0.);
         let selection_bg = SrgbaTuple(0.5, 0.4, 0.6, 0.5);
 
@@ -184,6 +189,8 @@ impl ColorPalette {
             cursor_fg,
             cursor_bg,
             cursor_border,
+            copy_mode_cursor_fg,
+            copy_mode_cursor_bg,
             selection_fg,
             selection_bg,
             scrollbar_thumb,
