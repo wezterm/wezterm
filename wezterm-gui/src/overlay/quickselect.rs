@@ -23,7 +23,7 @@ use wezterm_term::{
 };
 use window::WindowOps;
 
-const PATTERNS: [&str; 14] = [
+const PATTERNS: [&str; 15] = [
     // markdown_url
     r"\[[^]]*\]\(([^)]+)\)",
     // url
@@ -36,6 +36,8 @@ const PATTERNS: [&str; 14] = [
     r"sha256:([0-9a-f]{64})",
     // path
     r"(?:[.\w\-@~]+)?(?:/+[.\w\-@]+)+",
+    // windows path
+    r#"(?:[a-zA-Z]:|.)\\(?:(?:(?![<>:"/\\|?*]).)+(?:(?<![ .])\\)?)*"#,
     // color
     r"#[0-9a-fA-F]{6}",
     // uuid
