@@ -450,6 +450,9 @@ pub struct Config {
     #[dynamic(default)]
     pub quick_select_remove_styling: bool,
 
+    #[dynamic(default = "default_search_debounce_ms")]
+    pub search_debounce_ms: u64,
+
     #[dynamic(default)]
     pub mouse_bindings: Vec<Mouse>,
     #[dynamic(default)]
@@ -1674,6 +1677,10 @@ fn default_swallow_mouse_click_on_window_focus() -> bool {
 
 fn default_mux_output_parser_coalesce_delay_ms() -> u64 {
     3
+}
+
+fn default_search_debounce_ms() -> u64 {
+    350
 }
 
 fn default_mux_output_parser_buffer_size() -> usize {
