@@ -59,3 +59,23 @@ workspace = true
 [target.'cfg(windows)'.build-dependencies]
 cc.workspace = true
 embed-resource.workspace = true
+
+# Build with `cargo deb -p wezterm`
+[package.metadata.deb]
+maintainer = "Wez Furlong <wez@wezfurlong.org>"
+copyright = "2025, wezterm developers."
+license-file = ["../LICENSE.md"]
+extended-description = "A GPU-accelerated cross-platform terminal emulator and multiplexer"
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    # binary
+    ["target/release/wezterm", "usr/bin/", "755"],
+    ["target/release/wezterm-gui", "usr/bin/", "755"],
+    ["target/release/wezterm-mux-server", "usr/bin/", "755"],
+    # assets
+    ["../assets/wezterm.desktop", "usr/share/applications/wezterm.desktop", "644"],
+    ["../assets/icon/wezterm-icon.svg", "usr/share/icons/hicolor/scalable/apps/org.wezfurlong.wezterm.svg", "644"],
+    ["../assets/wezterm.appdata.xml", "usr/share/metainfo/org.wezfurlong.wezterm.svg", "644"],
+]
