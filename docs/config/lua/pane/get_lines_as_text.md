@@ -71,4 +71,4 @@ return {
 }
 ```
 
-See also: [pane:get_lines_as_escapes()](get_lines_as_escapes.md).
+See also: [pane:get_lines_as_escapes()](get_lines_as_escapes.md), [pane:get_logical_lines_as_text()](get_logical_lines_as_text.md).
