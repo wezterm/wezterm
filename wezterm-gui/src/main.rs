@@ -148,6 +148,7 @@ async fn async_run_ssh(opts: SshCommand) -> anyhow::Result<()> {
         username: opts.user_at_host_and_port.username.clone(),
         multiplexing: SshMultiplexing::None,
         ssh_option,
+        assume_shell: opts.assume_shell.unwrap_or_default(),
         ..Default::default()
     };
 
