@@ -19,6 +19,43 @@ pub enum ScaleChange {
     Relative(f64),
 }
 
+/// On Windows, scaling changes may adjust the pixel geometry by a few pixels,
+/// so this function checks if we're in a close-enough ballpark.
+fn close_enough(a: f32, b: f32) -> bool {
+    let diff = (a - b).abs();
+    diff < 10.
+}
+
+/// The dpi_adjusted values compared below are physical inches, not
+/// pixels, so the 10-unit pixel tolerance above is far too coarse
+/// for them: a compositor tile/snap that arrives together with a
+/// dpi change (eg: the first configure on a hidpi output) differs
+/// by several inches but still passed the 10 "inch" test, was
+/// misclassified as a pure dpi change, and the window then snapped
+/// back to its previous size. A genuine same-physical-size dpi
+/// transition differs by well under an inch.
+fn close_enough_inches(a: f32, b: f32) -> bool {
+    let diff = (a - b).abs();
+    diff < 1.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{close_enough, close_enough_inches};
+
+    #[test]
+    fn inch_scale_comparison_rejects_tile_sized_resize() {
+        assert!(close_enough_inches(10.0, 10.99));
+        assert!(!close_enough_inches(10.0, 18.0));
+    }
+
+    #[test]
+    fn raw_pixel_comparison_keeps_ten_unit_tolerance() {
+        assert!(close_enough(100.0, 109.0));
+        assert!(!close_enough(100.0, 110.0));
+    }
+}
+
 impl super::TermWindow {
     pub fn resize(
         &mut self,
@@ -355,22 +392,15 @@ impl super::TermWindow {
             n as f32 / dpi as f32
         }
 
-        /// On Windows, scaling changes may adjust the pixel geometry by a few pixels,
-        /// so this function checks if we're in a close-enough ballpark.
-        fn close_enough(a: f32, b: f32) -> bool {
-            let diff = (a - b).abs();
-            diff < 10.
-        }
-
         // Distinguish between eg: dpi being detected as double the initial dpi (where
         // the pixel dimensions don't change), and the dpi change being detected, but
         // where the window manager also decides to tile/resize the window.
         // In the latter case, we don't want to preserve the terminal rows/cols.
         let simple_dpi_change = dimensions.dpi != self.dimensions.dpi
-            && ((close_enough(
+            && ((close_enough_inches(
                 dpi_adjusted(dimensions.pixel_height, dimensions.dpi),
                 dpi_adjusted(self.dimensions.pixel_height, self.dimensions.dpi),
-            ) && close_enough(
+            ) && close_enough_inches(
                 dpi_adjusted(dimensions.pixel_width, dimensions.dpi),
                 dpi_adjusted(self.dimensions.pixel_width, self.dimensions.dpi),
             )) || (close_enough(
