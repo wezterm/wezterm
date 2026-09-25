@@ -1,9 +1,9 @@
-# Note: if you are viewing this from the tap repo, this file is automatically
+# NOTE: If you are viewing this from the tap repo, this file is automatically
 # updated from:
 # https://github.com/wezterm/wezterm/blob/main/ci/wezterm-linuxbrew.rb.template
 # by automation in the wezterm repo.
 class Wezterm < Formula
-  desc "A GPU-accelerated cross-platform terminal emulator and multiplexer written by @wez and implemented in Rust"
+  desc "GPU-accelerated cross-platform terminal emulator and multiplexer"
   homepage "https://wezterm.org/"
   url "https://github.com/wezterm/wezterm/releases/download/@TAG@/WezTerm-@TAG@-Ubuntu20.04.AppImage"
   sha256 "@SHA256@"
@@ -11,7 +11,13 @@ class Wezterm < Formula
 
   def install
     Dir.glob("*.AppImage").each do |img|
+      system "./#{img}", "--appimage-extract"
       bin.install img => "wezterm"
+      desktop = "squashfs-root/usr/share/applications/org.wezfurlong.wezterm.desktop"
+      inreplace desktop, "TryExec=wezterm", "TryExec=#{opt_bin}/wezterm"
+      inreplace desktop, "Exec=wezterm ", "Exec=#{opt_bin}/wezterm "
+      (share/"applications").install desktop
+      share.install "squashfs-root/usr/share/icons"
     end
   end
 end
