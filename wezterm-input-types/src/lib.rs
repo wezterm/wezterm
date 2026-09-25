@@ -3080,6 +3080,43 @@ mod test {
     }
 
     #[test]
+    fn encode_issue_8149() {
+        let flags = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
+            | KittyKeyboardFlags::REPORT_EVENT_TYPES
+            | KittyKeyboardFlags::REPORT_ALTERNATE_KEYS
+            | KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            | KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT;
+
+        let event = |key, modifiers| KeyEvent {
+            key,
+            modifiers,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+
+        assert_eq!(
+            event(KeyCode::Char('a'), Modifiers::CTRL).encode_kitty(flags),
+            "\x1b[97;5u"
+        );
+        assert_eq!(
+            event(KeyCode::Char('b'), Modifiers::CTRL).encode_kitty(flags),
+            "\x1b[98;5u"
+        );
+        assert_eq!(
+            event(KeyCode::Char('a'), Modifiers::NONE).encode_kitty(flags),
+            "\x1b[97;1;97u"
+        );
+        assert_eq!(
+            event(KeyCode::Char('A'), Modifiers::SHIFT).encode_kitty(flags),
+            "\x1b[97:65;2;65u"
+        );
+    }
+
+    #[test]
     fn encode_issue_3526() {
         let flags = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
 
