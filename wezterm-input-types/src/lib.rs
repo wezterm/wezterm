@@ -1776,26 +1776,32 @@ impl KeyEvent {
             _ => false,
         };
 
-        let generated_text =
-            if self.key_is_down && flags.contains(KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT) {
-                match &self.key {
-                    Char(c) => format!(";{}", *c as u32),
-                    KeyCode::Numpad(n) => format!(";{}", '0' as u32 + *n as u32),
-                    Composed(s) => {
-                        let mut codepoints = ";".to_string();
-                        for c in s.chars() {
-                            if codepoints.len() > 1 {
-                                codepoints.push(':');
-                            }
-                            write!(&mut codepoints, "{}", c as u32).ok();
-                        }
-                        codepoints
-                    }
-                    _ => String::new(),
+        let generated_text = if self.key_is_down
+            && flags.contains(KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT)
+        {
+            match &self.key {
+                Char(c)
+                    if raw_modifiers.contains(Modifiers::CTRL) && ctrl_mapping(*c).is_some() =>
+                {
+                    String::new()
                 }
-            } else {
-                String::new()
-            };
+                Char(c) => format!(";{}", *c as u32),
+                KeyCode::Numpad(n) => format!(";{}", '0' as u32 + *n as u32),
+                Composed(s) => {
+                    let mut codepoints = ";".to_string();
+                    for c in s.chars() {
+                        if codepoints.len() > 1 {
+                            codepoints.push(':');
+                        }
+                        write!(&mut codepoints, "{}", c as u32).ok();
+                    }
+                    codepoints
+                }
+                _ => String::new(),
+            }
+        } else {
+            String::new()
+        };
 
         let guess_phys = self
             .raw
