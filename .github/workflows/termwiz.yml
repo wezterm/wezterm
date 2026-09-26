@@ -1,28 +1,7 @@
 name: termwiz
 
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "termwiz/**"
-      - "bidi/**"
-      - "wezterm-dynamic/**"
-      - "color-types/**"
-      - "filedescriptor/**"
-      - "vtparse/**"
-      - ".github/workflows/termwiz.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "termwiz/**"
-      - "bidi/**"
-      - "wezterm-dynamic/**"
-      - "color-types/**"
-      - "filedescriptor/**"
-      - "vtparse/**"
-      - ".github/workflows/termwiz.yml"
+  workflow_dispatch:
 
 jobs:
   build-termwiz-all-features:
