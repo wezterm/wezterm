@@ -146,7 +146,7 @@ impl<'a> ProbeCapabilities<'a> {
             }
 
             parser.parse(&byte, |action| {
-                if waiting_st { 
+                if waiting_st {
                     waiting_st = false;
                     if !matches!(action, Action::Esc(Esc::Code(EscCode::StringTerminator))) {
                         outcome = Some(Err(no_dynamic_color_response_err()));
