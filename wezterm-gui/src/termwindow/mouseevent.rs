@@ -265,9 +265,12 @@ impl super::TermWindow {
             Some(tab) => tab,
             None => return,
         };
+        // Measure the delta relative to the middle of the divider, so that
+        // grabbing a wide divider anywhere doesn't cause it to jump
+        let middle = (split.thickness / 2) as isize;
         let delta = match split.direction {
-            SplitDirection::Horizontal => (x as isize).saturating_sub(split.left as isize),
-            SplitDirection::Vertical => (y as isize).saturating_sub(split.top as isize),
+            SplitDirection::Horizontal => (x as isize).saturating_sub(split.left as isize + middle),
+            SplitDirection::Vertical => (y as isize).saturating_sub(split.top as isize + middle),
         };
 
         if delta != 0 {

@@ -77,6 +77,10 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* [pane_divider_cols](config/lua/config/pane_divider_cols.md) and
+  [pane_divider_rows](config/lua/config/pane_divider_rows.md) options to make
+  the dividers between panes wider/taller than a single cell, leaving more
+  space between the text of adjacent panes.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.

@@ -835,6 +835,16 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub unzoom_on_switch_pane: bool,
 
+    /// The width, in cells, of the divider between panes that are
+    /// arranged side by side (left/right).
+    #[dynamic(default = "default_one")]
+    pub pane_divider_cols: usize,
+
+    /// The height, in rows, of the divider between panes that are
+    /// stacked on top of each other (top/bottom).
+    #[dynamic(default = "default_one")]
+    pub pane_divider_rows: usize,
+
     #[dynamic(default = "default_max_fps")]
     pub max_fps: u64,
 
@@ -1334,6 +1344,9 @@ impl Config {
     pub fn compute_extra_defaults(&self, config_path: Option<&Path>) -> Self {
         let mut cfg = self.clone();
 
+        cfg.pane_divider_cols = clamp_pane_divider("pane_divider_cols", cfg.pane_divider_cols);
+        cfg.pane_divider_rows = clamp_pane_divider("pane_divider_rows", cfg.pane_divider_rows);
+
         // Convert any relative font dirs to their config file relative locations
         if let Some(config_dir) = config_path.as_ref().and_then(|p| p.parent()) {
             for font_dir in &mut cfg.font_dirs {
@@ -1707,6 +1720,19 @@ fn default_scrollback_lines() -> usize {
 }
 
 const MAX_SCROLLBACK_LINES: usize = 999_999_999;
+/// The largest permitted value for pane_divider_cols and pane_divider_rows
+pub const MAX_PANE_DIVIDER_SIZE: usize = 8;
+
+fn clamp_pane_divider(name: &str, value: usize) -> usize {
+    let clamped = value.clamp(1, MAX_PANE_DIVIDER_SIZE);
+    if clamped != value {
+        log::warn!(
+            "{name} = {value} is out of range 1..={MAX_PANE_DIVIDER_SIZE}; using {clamped} instead"
+        );
+    }
+    clamped
+}
+
 fn validate_scrollback_lines(value: &usize) -> Result<(), String> {
     if *value > MAX_SCROLLBACK_LINES {
         return Err(format!(

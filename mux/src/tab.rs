@@ -41,6 +41,8 @@ struct TabInner {
     id: TabId,
     pane: Option<Tree>,
     size: TerminalSize,
+    /// The divider sizes that the split tree is currently laid out with
+    dividers: PaneDividers,
     size_before_zoom: TerminalSize,
     active: usize,
     zoomed: Option<Arc<dyn Pane>>,
@@ -141,43 +143,109 @@ impl Default for SplitRequest {
     }
 }
 
-impl SplitDirectionAndSize {
-    fn top_of_second(&self) -> usize {
-        match self.direction {
-            SplitDirection::Horizontal => 0,
-            SplitDirection::Vertical => self.first.rows as usize + 1,
+/// The size, in cells, of the dividers that separate panes
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct PaneDividers {
+    /// The width of the divider between panes arranged left/right
+    /// (a SplitDirection::Horizontal split)
+    pub cols: usize,
+    /// The height of the divider between panes arranged top/bottom
+    /// (a SplitDirection::Vertical split)
+    pub rows: usize,
+}
+
+impl Default for PaneDividers {
+    fn default() -> Self {
+        Self { cols: 1, rows: 1 }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PANE_DIVIDERS: std::cell::Cell<Option<PaneDividers>> =
+        std::cell::Cell::new(None);
+}
+
+impl PaneDividers {
+    /// Returns the divider sizes specified by the current configuration
+    pub fn from_config() -> Self {
+        #[cfg(test)]
+        if let Some(dividers) = TEST_PANE_DIVIDERS.with(|d| d.get()) {
+            return dividers;
+        }
+
+        let config = configuration();
+        Self {
+            cols: config.pane_divider_cols.max(1),
+            rows: config.pane_divider_rows.max(1),
         }
     }
 
-    fn left_of_second(&self) -> usize {
+    /// Returns the thickness of the divider for a split in the
+    /// specified direction
+    pub fn for_direction(&self, direction: SplitDirection) -> usize {
+        match direction {
+            SplitDirection::Horizontal => self.cols,
+            SplitDirection::Vertical => self.rows,
+        }
+    }
+}
+
+impl SplitDirectionAndSize {
+    fn top_of_second(&self, dividers: PaneDividers) -> usize {
         match self.direction {
-            SplitDirection::Horizontal => self.first.cols as usize + 1,
+            SplitDirection::Horizontal => 0,
+            SplitDirection::Vertical => self.first.rows as usize + dividers.rows,
+        }
+    }
+
+    fn left_of_second(&self, dividers: PaneDividers) -> usize {
+        match self.direction {
+            SplitDirection::Horizontal => self.first.cols as usize + dividers.cols,
             SplitDirection::Vertical => 0,
         }
     }
 
+    /// Returns the width of the split, including the divider, using
+    /// the divider sizes from the current configuration
     pub fn width(&self) -> usize {
+        self.width_with(PaneDividers::from_config())
+    }
+
+    pub fn width_with(&self, dividers: PaneDividers) -> usize {
         if self.direction == SplitDirection::Horizontal {
-            self.first.cols + self.second.cols + 1
+            self.first.cols + self.second.cols + dividers.cols
         } else {
             self.first.cols
         }
     }
 
+    /// Returns the height of the split, including the divider, using
+    /// the divider sizes from the current configuration
     pub fn height(&self) -> usize {
+        self.height_with(PaneDividers::from_config())
+    }
+
+    pub fn height_with(&self, dividers: PaneDividers) -> usize {
         if self.direction == SplitDirection::Vertical {
-            self.first.rows + self.second.rows + 1
+            self.first.rows + self.second.rows + dividers.rows
         } else {
             self.first.rows
         }
     }
 
+    /// Returns the overall size of the split, using the divider sizes
+    /// from the current configuration
     pub fn size(&self) -> TerminalSize {
+        self.size_with(PaneDividers::from_config())
+    }
+
+    pub fn size_with(&self, dividers: PaneDividers) -> TerminalSize {
         let cell_width = self.first.pixel_width / self.first.cols;
         let cell_height = self.first.pixel_height / self.first.rows;
 
-        let rows = self.height();
-        let cols = self.width();
+        let rows = self.height_with(dividers);
+        let cols = self.width_with(dividers);
 
         TerminalSize {
             rows,
@@ -203,6 +271,9 @@ pub struct PositionedSplit {
     /// For Horizontal splits, how tall the split should be, for Vertical
     /// splits how wide it should be
     pub size: usize,
+    /// For Horizontal splits, how wide the divider is, for Vertical
+    /// splits how tall it is, in cells
+    pub thickness: usize,
 }
 
 fn is_pane(pane: &Arc<dyn Pane>, other: &Option<&Arc<dyn Pane>>) -> bool {
@@ -222,6 +293,7 @@ fn pane_tree(
     workspace: &str,
     left_col: usize,
     top_row: usize,
+    dividers: PaneDividers,
 ) -> PaneNode {
     match tree {
         Tree::Empty => PaneNode::Empty,
@@ -230,6 +302,7 @@ fn pane_tree(
             PaneNode::Split {
                 left: Box::new(pane_tree(
                     &*left, tab_id, window_id, active, zoomed, workspace, left_col, top_row,
+                    dividers,
                 )),
                 right: Box::new(pane_tree(
                     &*right,
@@ -241,13 +314,14 @@ fn pane_tree(
                     if data.direction == SplitDirection::Vertical {
                         left_col
                     } else {
-                        left_col + data.left_of_second()
+                        left_col + data.left_of_second(dividers)
                     },
                     if data.direction == SplitDirection::Horizontal {
                         top_row
                     } else {
-                        top_row + data.top_of_second()
+                        top_row + data.top_of_second(dividers)
                     },
+                    dividers,
                 )),
                 node: data,
             }
@@ -316,7 +390,7 @@ where
 
 /// Computes the minimum (x, y) size based on the panes in this portion
 /// of the tree.
-fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
+fn compute_min_size(tree: &mut Tree, dividers: PaneDividers) -> (usize, usize) {
     match tree {
         Tree::Node { data: None, .. } | Tree::Empty => (1, 1),
         Tree::Node {
@@ -324,19 +398,26 @@ fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
             right,
             data: Some(data),
         } => {
-            let (left_x, left_y) = compute_min_size(&mut *left);
-            let (right_x, right_y) = compute_min_size(&mut *right);
+            let (left_x, left_y) = compute_min_size(&mut *left, dividers);
+            let (right_x, right_y) = compute_min_size(&mut *right, dividers);
             match data.direction {
-                SplitDirection::Vertical => (left_x.max(right_x), left_y + right_y + 1),
-                SplitDirection::Horizontal => (left_x + right_x + 1, left_y.max(right_y)),
+                SplitDirection::Vertical => (left_x.max(right_x), left_y + right_y + dividers.rows),
+                SplitDirection::Horizontal => {
+                    (left_x + right_x + dividers.cols, left_y.max(right_y))
+                }
             }
         }
         Tree::Leaf(_) => (1, 1),
     }
 }
 
-fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &TerminalSize) {
-    let (min_x, _) = compute_min_size(tree);
+fn adjust_x_size(
+    tree: &mut Tree,
+    mut x_adjust: isize,
+    cell_dimensions: &TerminalSize,
+    dividers: PaneDividers,
+) {
+    let (min_x, _) = compute_min_size(tree, dividers);
     while x_adjust != 0 {
         match tree {
             Tree::Empty | Tree::Leaf(_) => return,
@@ -356,26 +437,26 @@ fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &Termina
                         x_adjust = new_cols.saturating_sub(data.first.cols as isize);
 
                         if x_adjust != 0 {
-                            adjust_x_size(&mut *left, x_adjust, cell_dimensions);
+                            adjust_x_size(&mut *left, x_adjust, cell_dimensions, dividers);
                             data.first.cols = new_cols.try_into().unwrap();
                             data.first.pixel_width =
                                 data.first.cols.saturating_mul(cell_dimensions.pixel_width);
 
-                            adjust_x_size(&mut *right, x_adjust, cell_dimensions);
+                            adjust_x_size(&mut *right, x_adjust, cell_dimensions, dividers);
                             data.second.cols = data.first.cols;
                             data.second.pixel_width = data.first.pixel_width;
                         }
                         return;
                     }
                     SplitDirection::Horizontal if x_adjust > 0 => {
-                        adjust_x_size(&mut *left, 1, cell_dimensions);
+                        adjust_x_size(&mut *left, 1, cell_dimensions, dividers);
                         data.first.cols += 1;
                         data.first.pixel_width =
                             data.first.cols.saturating_mul(cell_dimensions.pixel_width);
                         x_adjust -= 1;
 
                         if x_adjust > 0 {
-                            adjust_x_size(&mut *right, 1, cell_dimensions);
+                            adjust_x_size(&mut *right, 1, cell_dimensions, dividers);
                             data.second.cols += 1;
                             data.second.pixel_width =
                                 data.second.cols.saturating_mul(cell_dimensions.pixel_width);
@@ -385,14 +466,14 @@ fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &Termina
                     SplitDirection::Horizontal => {
                         // x_adjust is negative
                         if data.first.cols > 1 {
-                            adjust_x_size(&mut *left, -1, cell_dimensions);
+                            adjust_x_size(&mut *left, -1, cell_dimensions, dividers);
                             data.first.cols -= 1;
                             data.first.pixel_width =
                                 data.first.cols.saturating_mul(cell_dimensions.pixel_width);
                             x_adjust += 1;
                         }
                         if x_adjust < 0 && data.second.cols > 1 {
-                            adjust_x_size(&mut *right, -1, cell_dimensions);
+                            adjust_x_size(&mut *right, -1, cell_dimensions, dividers);
                             data.second.cols -= 1;
                             data.second.pixel_width =
                                 data.second.cols.saturating_mul(cell_dimensions.pixel_width);
@@ -405,8 +486,13 @@ fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &Termina
     }
 }
 
-fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &TerminalSize) {
-    let (_, min_y) = compute_min_size(tree);
+fn adjust_y_size(
+    tree: &mut Tree,
+    mut y_adjust: isize,
+    cell_dimensions: &TerminalSize,
+    dividers: PaneDividers,
+) {
+    let (_, min_y) = compute_min_size(tree, dividers);
     while y_adjust != 0 {
         match tree {
             Tree::Empty | Tree::Leaf(_) => return,
@@ -426,25 +512,25 @@ fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &Termina
                         y_adjust = new_rows.saturating_sub(data.first.rows as isize);
 
                         if y_adjust != 0 {
-                            adjust_y_size(&mut *left, y_adjust, cell_dimensions);
+                            adjust_y_size(&mut *left, y_adjust, cell_dimensions, dividers);
                             data.first.rows = new_rows.try_into().unwrap();
                             data.first.pixel_height =
                                 data.first.rows.saturating_mul(cell_dimensions.pixel_height);
 
-                            adjust_y_size(&mut *right, y_adjust, cell_dimensions);
+                            adjust_y_size(&mut *right, y_adjust, cell_dimensions, dividers);
                             data.second.rows = data.first.rows;
                             data.second.pixel_height = data.first.pixel_height;
                         }
                         return;
                     }
                     SplitDirection::Vertical if y_adjust > 0 => {
-                        adjust_y_size(&mut *left, 1, cell_dimensions);
+                        adjust_y_size(&mut *left, 1, cell_dimensions, dividers);
                         data.first.rows += 1;
                         data.first.pixel_height =
                             data.first.rows.saturating_mul(cell_dimensions.pixel_height);
                         y_adjust -= 1;
                         if y_adjust > 0 {
-                            adjust_y_size(&mut *right, 1, cell_dimensions);
+                            adjust_y_size(&mut *right, 1, cell_dimensions, dividers);
                             data.second.rows += 1;
                             data.second.pixel_height = data
                                 .second
@@ -456,14 +542,14 @@ fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &Termina
                     SplitDirection::Vertical => {
                         // y_adjust is negative
                         if data.first.rows > 1 {
-                            adjust_y_size(&mut *left, -1, cell_dimensions);
+                            adjust_y_size(&mut *left, -1, cell_dimensions, dividers);
                             data.first.rows -= 1;
                             data.first.pixel_height =
                                 data.first.rows.saturating_mul(cell_dimensions.pixel_height);
                             y_adjust += 1;
                         }
                         if y_adjust < 0 && data.second.rows > 1 {
-                            adjust_y_size(&mut *right, -1, cell_dimensions);
+                            adjust_y_size(&mut *right, -1, cell_dimensions, dividers);
                             data.second.rows -= 1;
                             data.second.pixel_height = data
                                 .second
@@ -493,6 +579,89 @@ fn apply_sizes_from_splits(tree: &Tree, size: &TerminalSize) {
         Tree::Leaf(pane) => {
             pane.resize(*size).ok();
         }
+    }
+}
+
+/// Divides `total` cells between the two sides of a split that are
+/// separated by a divider that is `divider` cells thick, preserving
+/// the prior proportions of the two sides as closely as possible while
+/// respecting the minimum size of each side.
+fn distribute_split(
+    total: usize,
+    divider: usize,
+    first: usize,
+    second: usize,
+    min_first: usize,
+    min_second: usize,
+) -> (usize, usize) {
+    let avail = total.saturating_sub(divider);
+    let prior = first + second;
+    let first = if prior == 0 {
+        avail / 2
+    } else {
+        (avail * first + prior / 2) / prior
+    };
+    let first = first.min(avail.saturating_sub(min_second)).max(min_first);
+    (first, avail.saturating_sub(first).max(min_second))
+}
+
+/// Re-computes the sizes of the splits in the tree so that the tree
+/// fills `size` using the specified divider sizes.
+/// This is used when the divider sizes have changed, at which point the
+/// size information in the split nodes is no longer consistent.
+/// `size` must be at least as large as compute_min_size() for the tree.
+fn relayout_splits(
+    tree: &mut Tree,
+    size: &TerminalSize,
+    cell_dimensions: &TerminalSize,
+    dividers: PaneDividers,
+) {
+    if let Tree::Node {
+        left,
+        right,
+        data: Some(data),
+    } = tree
+    {
+        let (min_left_x, min_left_y) = compute_min_size(&mut *left, dividers);
+        let (min_right_x, min_right_y) = compute_min_size(&mut *right, dividers);
+        match data.direction {
+            SplitDirection::Horizontal => {
+                let (first, second) = distribute_split(
+                    size.cols,
+                    dividers.cols,
+                    data.first.cols,
+                    data.second.cols,
+                    min_left_x,
+                    min_right_x,
+                );
+                data.first.cols = first;
+                data.second.cols = second;
+                data.first.rows = size.rows;
+                data.second.rows = size.rows;
+            }
+            SplitDirection::Vertical => {
+                let (first, second) = distribute_split(
+                    size.rows,
+                    dividers.rows,
+                    data.first.rows,
+                    data.second.rows,
+                    min_left_y,
+                    min_right_y,
+                );
+                data.first.rows = first;
+                data.second.rows = second;
+                data.first.cols = size.cols;
+                data.second.cols = size.cols;
+            }
+        }
+        for side in [&mut data.first, &mut data.second] {
+            side.pixel_width = side.cols.saturating_mul(cell_dimensions.pixel_width);
+            side.pixel_height = side.rows.saturating_mul(cell_dimensions.pixel_height);
+            side.dpi = cell_dimensions.dpi;
+        }
+        let (first, second) = (data.first, data.second);
+        relayout_splits(&mut *left, &first, cell_dimensions, dividers);
+        relayout_splits(&mut *right, &second, cell_dimensions, dividers);
     }
 }
 
@@ -599,6 +768,20 @@ impl Tab {
 
     pub fn get_size(&self) -> TerminalSize {
         self.inner.lock().get_size()
+    }
+
+    /// Returns the divider sizes that the panes in this tab are
+    /// currently laid out with
+    pub fn pane_dividers(&self) -> PaneDividers {
+        self.inner.lock().dividers
+    }
+
+    /// Checks whether the configured pane divider sizes have changed,
+    /// and if so, re-computes the layout of the panes in this tab so
+    /// that they fit around the revised dividers.
+    /// Returns true if the layout was changed.
+    pub fn sync_pane_dividers(&self) -> bool {
+        self.inner.lock().sync_dividers()
     }
 
     /// Apply the new size of the tab to the panes contained within.
@@ -759,6 +942,7 @@ impl TabInner {
             id: TAB_ID.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed),
             pane: Some(Tree::new()),
             size: *size,
+            dividers: PaneDividers::from_config(),
             size_before_zoom: *size,
             active: 0,
             zoomed: None,
@@ -806,6 +990,9 @@ impl TabInner {
         self.pane.replace(cursor.tree());
         self.zoomed = zoomed;
         self.size = size;
+        // The tree was laid out by the remote mux server; assume that
+        // it used the same divider sizes as us.
+        self.dividers = PaneDividers::from_config();
 
         self.resize(size);
 
@@ -852,6 +1039,7 @@ impl TabInner {
                 &workspace,
                 0,
                 0,
+                self.dividers,
             )
         } else {
             PaneNode::Empty
@@ -1025,6 +1213,7 @@ impl TabInner {
         let active_idx = self.active;
         let zoomed_id = self.zoomed.as_ref().map(|p| p.pane_id());
         let root_size = self.size;
+        let dividers = self.dividers;
         let mut cursor = self.pane.take().unwrap().cursor();
 
         loop {
@@ -1043,8 +1232,8 @@ impl TabInner {
                             });
                         }
                         if branch == PathBranch::IsRight {
-                            top += node.top_of_second();
-                            left += node.left_of_second();
+                            top += node.top_of_second(dividers);
+                            left += node.left_of_second(dividers);
                         }
                     }
                 }
@@ -1084,6 +1273,7 @@ impl TabInner {
             return dividers;
         }
 
+        let pane_dividers = self.dividers;
         let mut cursor = self.pane.take().unwrap().cursor();
         let mut index = 0;
 
@@ -1094,8 +1284,8 @@ impl TabInner {
                 for (branch, p) in cursor.path_to_root() {
                     if let Some(p) = p {
                         if branch == PathBranch::IsRight {
-                            left += p.left_of_second();
-                            top += p.top_of_second();
+                            left += p.left_of_second(pane_dividers);
+                            top += p.top_of_second(pane_dividers);
                         }
                     }
                 }
@@ -1111,10 +1301,11 @@ impl TabInner {
                         left,
                         top,
                         size: if node.direction == SplitDirection::Horizontal {
-                            node.height() as usize
+                            node.height_with(pane_dividers) as usize
                         } else {
-                            node.width() as usize
+                            node.width_with(pane_dividers) as usize
                         },
+                        thickness: pane_dividers.for_direction(node.direction),
                     })
                 }
                 index += 1;
@@ -1136,18 +1327,71 @@ impl TabInner {
         self.size
     }
 
+    /// Checks whether the configured divider sizes differ from those
+    /// that the tree is laid out with, and if so, re-computes the split
+    /// sizes to accommodate the new dividers and resizes the panes to match.
+    /// Returns true if the layout was changed.
+    fn sync_dividers(&mut self) -> bool {
+        let dividers = PaneDividers::from_config();
+        if dividers == self.dividers {
+            return false;
+        }
+        self.dividers = dividers;
+
+        // While zoomed, the tree is laid out according to the size
+        // that the tab had prior to zooming
+        let size = if self.zoomed.is_some() {
+            self.size_before_zoom
+        } else {
+            self.size
+        };
+        if size.rows == 0 || size.cols == 0 {
+            return true;
+        }
+        let root = match self.pane.as_mut() {
+            Some(root) => root,
+            None => return true,
+        };
+
+        let dims = cell_dimensions(&size);
+        let (min_x, min_y) = compute_min_size(root, dividers);
+        let cols = size.cols.max(min_x);
+        let rows = size.rows.max(min_y);
+        let size = TerminalSize {
+            rows,
+            cols,
+            pixel_width: cols * dims.pixel_width,
+            pixel_height: rows * dims.pixel_height,
+            dpi: dims.dpi,
+        };
+        relayout_splits(root, &size, &dims, dividers);
+
+        if self.zoomed.is_some() {
+            self.size_before_zoom = size;
+        } else {
+            self.size = size;
+            apply_sizes_from_splits(root, &size);
+        }
+
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+        true
+    }
+
     fn resize(&mut self, size: TerminalSize) {
         if size.rows == 0 || size.cols == 0 {
             // Ignore "impossible" resize requests
             return;
         }
 
+        self.sync_dividers();
+
         if let Some(zoomed) = &self.zoomed {
             self.size = size;
             zoomed.resize(size).ok();
         } else {
             let dims = cell_dimensions(&size);
-            let (min_x, min_y) = compute_min_size(self.pane.as_mut().unwrap());
+            let dividers = self.dividers;
+            let (min_x, min_y) = compute_min_size(self.pane.as_mut().unwrap(), dividers);
             let current_size = self.size;
 
             // Constrain the new size to the minimum possible dimensions
@@ -1166,11 +1410,13 @@ impl TabInner {
                 self.pane.as_mut().unwrap(),
                 cols as isize - current_size.cols as isize,
                 &dims,
+                dividers,
             );
             adjust_y_size(
                 self.pane.as_mut().unwrap(),
                 rows as isize - current_size.rows as isize,
                 &dims,
+                dividers,
             );
 
             self.size = size;
@@ -1191,6 +1437,7 @@ impl TabInner {
             .pixel_height
             .checked_div(pane_size.rows)
             .unwrap_or(1);
+        let dividers = self.dividers;
         if let Ok(Some(node)) = cursor.node_mut() {
             // Adjust the size of the node; we preserve the size of the first
             // child and adjust the second, so if we are split down the middle
@@ -1200,12 +1447,16 @@ impl TabInner {
                 node.first.rows = pane_size.rows;
                 node.second.rows = pane_size.rows;
 
-                node.second.cols = pane_size.cols.saturating_sub(1 + node.first.cols);
+                node.second.cols = pane_size
+                    .cols
+                    .saturating_sub(dividers.cols + node.first.cols);
             } else {
                 node.first.cols = pane_size.cols;
                 node.second.cols = pane_size.cols;
 
-                node.second.rows = pane_size.rows.saturating_sub(1 + node.first.rows);
+                node.second.rows = pane_size
+                    .rows
+                    .saturating_sub(dividers.rows + node.first.rows);
             }
             node.first.pixel_width = node.first.cols * cell_width;
             node.first.pixel_height = node.first.rows * cell_height;
@@ -1220,7 +1471,7 @@ impl TabInner {
             return;
         }
 
-        fn compute_size(node: &mut Tree) -> Option<TerminalSize> {
+        fn compute_size(node: &mut Tree, dividers: PaneDividers) -> Option<TerminalSize> {
             match node {
                 Tree::Empty => None,
                 Tree::Leaf(pane) => {
@@ -1236,13 +1487,13 @@ impl TabInner {
                 }
                 Tree::Node { left, right, data } => {
                     if let Some(data) = data {
-                        if let Some(first) = compute_size(left) {
+                        if let Some(first) = compute_size(left, dividers) {
                             data.first = first;
                         }
-                        if let Some(second) = compute_size(right) {
+                        if let Some(second) = compute_size(right, dividers) {
                             data.second = second;
                         }
-                        Some(data.size())
+                        Some(data.size_with(dividers))
                     } else {
                         None
                     }
@@ -1250,8 +1501,9 @@ impl TabInner {
             }
         }
 
+        let dividers = self.dividers;
         if let Some(root) = self.pane.as_mut() {
-            if let Some(size) = compute_size(root) {
+            if let Some(size) = compute_size(root, dividers) {
                 self.size = size;
             }
         }
@@ -1262,6 +1514,7 @@ impl TabInner {
         if self.zoomed.is_some() {
             return;
         }
+        self.sync_dividers();
 
         let mut cursor = self.pane.take().unwrap().cursor();
         let mut index = 0;
@@ -1293,37 +1546,40 @@ impl TabInner {
 
     fn adjust_node_at_cursor(&mut self, cursor: &mut Cursor, delta: isize) {
         let cell_dimensions = self.cell_dimensions();
+        let dividers = self.dividers;
         if let Ok(Some(node)) = cursor.node_mut() {
             match node.direction {
                 SplitDirection::Horizontal => {
-                    let width = node.width();
+                    let width = node.width_with(dividers);
 
                     let mut cols = node.first.cols as isize;
                     cols = cols
                         .saturating_add(delta)
                         .max(1)
-                        .min((width as isize).saturating_sub(2));
+                        .min((width as isize).saturating_sub(1 + dividers.cols as isize));
                     node.first.cols = cols as usize;
                     node.first.pixel_width =
                         node.first.cols.saturating_mul(cell_dimensions.pixel_width);
 
-                    node.second.cols = width.saturating_sub(node.first.cols.saturating_add(1));
+                    node.second.cols =
+                        width.saturating_sub(node.first.cols.saturating_add(dividers.cols));
                     node.second.pixel_width =
                         node.second.cols.saturating_mul(cell_dimensions.pixel_width);
                 }
                 SplitDirection::Vertical => {
-                    let height = node.height();
+                    let height = node.height_with(dividers);
 
                     let mut rows = node.first.rows as isize;
                     rows = rows
                         .saturating_add(delta)
                         .max(1)
-                        .min((height as isize).saturating_sub(2));
+                        .min((height as isize).saturating_sub(1 + dividers.rows as isize));
                     node.first.rows = rows as usize;
                     node.first.pixel_height =
                         node.first.rows.saturating_mul(cell_dimensions.pixel_height);
 
-                    node.second.rows = height.saturating_sub(node.first.rows.saturating_add(1));
+                    node.second.rows =
+                        height.saturating_sub(node.first.rows.saturating_add(dividers.rows));
                     node.second.pixel_height = node
                         .second
                         .rows
@@ -1378,6 +1634,7 @@ impl TabInner {
         if self.zoomed.is_some() {
             return;
         }
+        self.sync_dividers();
         let active_index = self.active;
         let mut cursor = self.pane.take().unwrap().cursor();
         let mut index = 0;
@@ -1488,6 +1745,7 @@ impl TabInner {
         let mut best = None;
 
         let recency = &self.recency;
+        let dividers = self.dividers;
 
         fn edge_intersects(
             active_start: usize,
@@ -1504,7 +1762,7 @@ impl TabInner {
         for pane in &panes {
             let score = match direction {
                 PaneDirection::Right => {
-                    if pane.left == active.left + active.width + 1
+                    if pane.left == active.left + active.width + dividers.cols
                         && edge_intersects(active.top, active.height, pane.top, pane.height)
                     {
                         1 + recency.score(pane.index)
@@ -1513,7 +1771,7 @@ impl TabInner {
                     }
                 }
                 PaneDirection::Left => {
-                    if pane.left + pane.width + 1 == active.left
+                    if pane.left + pane.width + dividers.cols == active.left
                         && edge_intersects(active.top, active.height, pane.top, pane.height)
                     {
                         1 + recency.score(pane.index)
@@ -1522,7 +1780,7 @@ impl TabInner {
                     }
                 }
                 PaneDirection::Up => {
-                    if pane.top + pane.height + 1 == active.top
+                    if pane.top + pane.height + dividers.rows == active.top
                         && edge_intersects(active.left, active.width, pane.left, pane.width)
                     {
                         1 + recency.score(pane.index)
@@ -1531,7 +1789,7 @@ impl TabInner {
                     }
                 }
                 PaneDirection::Down => {
-                    if active.top + active.height + 1 == pane.top
+                    if active.top + active.height + dividers.rows == pane.top
                         && edge_intersects(active.left, active.width, pane.left, pane.width)
                     {
                         1 + recency.score(pane.index)
@@ -1614,6 +1872,7 @@ impl TabInner {
             let mut pane_index = 0;
             let mut removed_indices = vec![];
             let cell_dims = self.cell_dimensions();
+            let dividers = self.dividers;
 
             loop {
                 // Figure out the available size by looking at our immediate parent node.
@@ -1657,11 +1916,13 @@ impl TabInner {
 
                         // Now we need to increase the size of the current node
                         // and propagate the revised size to its children.
+                        let rows = parent.height_with(dividers);
+                        let cols = parent.width_with(dividers);
                         let size = TerminalSize {
-                            rows: parent.height(),
-                            cols: parent.width(),
-                            pixel_width: cell_dims.pixel_width * parent.width(),
-                            pixel_height: cell_dims.pixel_height * parent.height(),
+                            rows,
+                            cols,
+                            pixel_width: cell_dims.pixel_width * cols,
+                            pixel_height: cell_dims.pixel_height * rows,
                             dpi: cell_dims.dpi,
                         };
 
@@ -1871,16 +2132,18 @@ impl TabInner {
         pane_index: usize,
         request: SplitRequest,
     ) -> Option<SplitDirectionAndSize> {
+        self.sync_dividers();
         let cell_dims = self.cell_dimensions();
+        let divider = self.dividers.for_direction(request.direction);
 
-        fn split_dimension(dim: usize, request: SplitRequest) -> (usize, usize) {
+        fn split_dimension(dim: usize, request: SplitRequest, divider: usize) -> (usize, usize) {
             let target_size = match request.size {
                 SplitSize::Cells(n) => n,
                 SplitSize::Percent(n) => (dim * (n as usize)) / 100,
             }
             .max(1);
 
-            let remain = dim.saturating_sub(target_size + 1);
+            let remain = dim.saturating_sub(target_size + divider);
 
             if request.target_is_second {
                 (remain, target_size)
@@ -1894,12 +2157,12 @@ impl TabInner {
 
             let ((width1, width2), (height1, height2)) = match request.direction {
                 SplitDirection::Horizontal => (
-                    split_dimension(size.cols as usize, request),
+                    split_dimension(size.cols as usize, request, divider),
                     (size.rows as usize, size.rows as usize),
                 ),
                 SplitDirection::Vertical => (
                     (size.cols as usize, size.cols as usize),
-                    split_dimension(size.rows as usize, request),
+                    split_dimension(size.rows as usize, request, divider),
                 ),
             };
 
@@ -1929,12 +2192,13 @@ impl TabInner {
         self.iter_panes().iter().nth(pane_index).map(|pos| {
             let ((width1, width2), (height1, height2)) = match request.direction {
                 SplitDirection::Horizontal => (
-                    split_dimension(pos.width, request),
+                    split_dimension(pos.width, request, divider),
                     (pos.height, pos.height),
                 ),
-                SplitDirection::Vertical => {
-                    ((pos.width, pos.width), split_dimension(pos.height, request))
-                }
+                SplitDirection::Vertical => (
+                    (pos.width, pos.width),
+                    split_dimension(pos.height, request, divider),
+                ),
             };
 
             SplitDirectionAndSize {
@@ -1975,20 +2239,21 @@ impl TabInner {
                 })?;
 
             let tab_size = self.size;
+            let dividers = self.dividers;
             if split_info.first.rows == 0
                 || split_info.first.cols == 0
                 || split_info.second.rows == 0
                 || split_info.second.cols == 0
-                || split_info.top_of_second() + split_info.second.rows > tab_size.rows
-                || split_info.left_of_second() + split_info.second.cols > tab_size.cols
+                || split_info.top_of_second(dividers) + split_info.second.rows > tab_size.rows
+                || split_info.left_of_second(dividers) + split_info.second.cols > tab_size.cols
             {
                 log::error!(
                     "No space for split!!! {:#?} height={} width={} top_of_second={} left_of_second={} tab_size={:?}",
                     split_info,
-                    split_info.height(),
-                    split_info.width(),
-                    split_info.top_of_second(),
-                    split_info.left_of_second(),
+                    split_info.height_with(dividers),
+                    split_info.width_with(dividers),
+                    split_info.top_of_second(dividers),
+                    split_info.left_of_second(dividers),
                     tab_size
                 );
                 anyhow::bail!("No space for split!");
@@ -2515,6 +2780,401 @@ mod test {
         assert_eq!(24, panes[2].height);
         assert_eq!(400, panes[2].pixel_width);
         assert_eq!(600, panes[2].pixel_height);
+    }
+
+    /// Overrides the configured divider sizes for the current test thread
+    fn set_test_dividers(cols: usize, rows: usize) {
+        TEST_PANE_DIVIDERS.with(|d| d.set(Some(PaneDividers { cols, rows })));
+    }
+
+    /// Sets the active pane without involving the Mux, which is not
+    /// available in these tests
+    fn set_active(tab: &Tab, index: usize) {
+        let mut inner = tab.inner.lock();
+        inner.active = index;
+        inner.recency.tag(index);
+    }
+
+    fn test_size() -> TerminalSize {
+        TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        }
+    }
+
+    /// Verifies that the panes and dividers exactly tile the tab
+    fn assert_layout_fills_tab(tab: &Tab) {
+        assert_layout_fills(tab, tab.get_size());
+    }
+
+    /// Verifies that the panes and dividers exactly tile an area of
+    /// the specified size
+    fn assert_layout_fills(tab: &Tab, size: TerminalSize) {
+        let dividers = tab.pane_dividers();
+        let panes = tab.iter_panes();
+        let splits = tab.iter_splits();
+
+        let mut covered = vec![vec![0usize; size.cols]; size.rows];
+        for pos in &panes {
+            assert_eq!(pos.pixel_width, pos.width * 10, "{pos:?}");
+            assert_eq!(pos.pixel_height, pos.height * 25, "{pos:?}");
+            for row in pos.top..pos.top + pos.height {
+                for col in pos.left..pos.left + pos.width {
+                    covered[row][col] += 1;
+                }
+            }
+        }
+        for split in &splits {
+            assert_eq!(split.thickness, dividers.for_direction(split.direction));
+            let (width, height) = match split.direction {
+                SplitDirection::Horizontal => (split.thickness, split.size),
+                SplitDirection::Vertical => (split.size, split.thickness),
+            };
+            for row in split.top..split.top + height {
+                for col in split.left..split.left + width {
+                    covered[row][col] += 1;
+                }
+            }
+        }
+        for (row, cols) in covered.iter().enumerate() {
+            for (col, count) in cols.iter().enumerate() {
+                assert_eq!(
+                    *count, 1,
+                    "cell row={row} col={col} is covered {count} times.\n{panes:#?}\n{splits:#?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tab_splitting_wide_dividers() {
+        set_test_dividers(3, 2);
+        let size = test_size();
+
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+        assert_eq!(tab.pane_dividers(), PaneDividers { cols: 3, rows: 2 });
+
+        let horz_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(horz_size.first.cols, 37);
+        assert_eq!(horz_size.second.cols, 40);
+        assert_eq!(horz_size.first.pixel_width, 370);
+        assert_eq!(horz_size.second.pixel_width, 400);
+        assert_eq!(horz_size.width_with(tab.pane_dividers()), 80);
+        assert_eq!(horz_size.height_with(tab.pane_dividers()), 24);
+
+        let new_index = tab
+            .split_and_insert(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+                FakePane::new(2, horz_size.second),
+            )
+            .unwrap();
+        assert_eq!(new_index, 1);
+
+        let panes = tab.iter_panes();
+        assert_eq!(2, panes.len());
+        assert_eq!(
+            (0, 0, 37, 24),
+            (panes[0].left, panes[0].top, panes[0].width, panes[0].height)
+        );
+        assert_eq!(
+            (40, 0, 40, 24),
+            (panes[1].left, panes[1].top, panes[1].width, panes[1].height)
+        );
+        assert_layout_fills_tab(&tab);
+
+        let vert_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Vertical,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(vert_size.first.rows, 10);
+        assert_eq!(vert_size.second.rows, 12);
+        assert_eq!(vert_size.first.cols, 37);
+        assert_eq!(vert_size.height_with(tab.pane_dividers()), 24);
+
+        let new_index = tab
+            .split_and_insert(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Vertical,
+                    ..Default::default()
+                },
+                FakePane::new(3, vert_size.second),
+            )
+            .unwrap();
+        assert_eq!(new_index, 1);
+
+        let panes = tab.iter_panes();
+        assert_eq!(3, panes.len());
+        assert_eq!(
+            (0, 0, 37, 10),
+            (panes[0].left, panes[0].top, panes[0].width, panes[0].height)
+        );
+        assert_eq!(
+            (0, 12, 37, 12),
+            (panes[1].left, panes[1].top, panes[1].width, panes[1].height)
+        );
+        assert_eq!(
+            (40, 0, 40, 24),
+            (panes[2].left, panes[2].top, panes[2].width, panes[2].height)
+        );
+        assert_eq!(1, panes[0].pane.pane_id());
+        assert_eq!(3, panes[1].pane.pane_id());
+        assert_eq!(2, panes[2].pane.pane_id());
+        assert_layout_fills_tab(&tab);
+
+        let splits = tab.iter_splits();
+        assert_eq!(
+            splits,
+            vec![
+                PositionedSplit {
+                    index: 0,
+                    direction: SplitDirection::Horizontal,
+                    left: 37,
+                    top: 0,
+                    size: 24,
+                    thickness: 3,
+                },
+                PositionedSplit {
+                    index: 1,
+                    direction: SplitDirection::Vertical,
+                    left: 0,
+                    top: 10,
+                    size: 37,
+                    thickness: 2,
+                },
+            ]
+        );
+
+        // Adjacent panes are found across the wide dividers
+        assert!(panes[1].is_active);
+        assert_eq!(tab.get_pane_direction(PaneDirection::Up, false), Some(0));
+        assert_eq!(tab.get_pane_direction(PaneDirection::Right, false), Some(2));
+        assert_eq!(tab.get_pane_direction(PaneDirection::Down, false), None);
+        assert_eq!(tab.get_pane_direction(PaneDirection::Left, false), None);
+        set_active(&tab, 0);
+        assert_eq!(tab.get_pane_direction(PaneDirection::Down, false), Some(1));
+        assert_eq!(tab.get_pane_direction(PaneDirection::Right, false), Some(2));
+        assert_eq!(tab.get_pane_direction(PaneDirection::Up, false), None);
+        set_active(&tab, 2);
+        // Both panes 0 and 1 are adjacent; pane 0 was more recently active
+        assert_eq!(tab.get_pane_direction(PaneDirection::Left, false), Some(0));
+        set_active(&tab, 1);
+        set_active(&tab, 2);
+        assert_eq!(tab.get_pane_direction(PaneDirection::Left, false), Some(1));
+        assert_eq!(tab.get_pane_direction(PaneDirection::Right, false), None);
+
+        // Move the vertical split down by one row
+        tab.resize_split_by(1, 1);
+        let panes = tab.iter_panes();
+        assert_eq!(
+            (0, 0, 37, 11),
+            (panes[0].left, panes[0].top, panes[0].width, panes[0].height)
+        );
+        assert_eq!(
+            (0, 13, 37, 11),
+            (panes[1].left, panes[1].top, panes[1].width, panes[1].height)
+        );
+        assert_layout_fills_tab(&tab);
+
+        // The split cannot be moved so far that a pane would vanish
+        tab.resize_split_by(0, -100);
+        let panes = tab.iter_panes();
+        assert_eq!((0, 1), (panes[0].left, panes[0].width));
+        assert_eq!((4, 76), (panes[2].left, panes[2].width));
+        assert_layout_fills_tab(&tab);
+
+        tab.resize_split_by(0, 100);
+        let panes = tab.iter_panes();
+        assert_eq!((0, 76), (panes[0].left, panes[0].width));
+        assert_eq!((79, 1), (panes[2].left, panes[2].width));
+        assert_layout_fills_tab(&tab);
+
+        tab.resize_split_by(1, -100);
+        let panes = tab.iter_panes();
+        assert_eq!((0, 1), (panes[0].top, panes[0].height));
+        assert_eq!((3, 21), (panes[1].top, panes[1].height));
+        assert_layout_fills_tab(&tab);
+
+        // compute_split_size is consistent with the resulting layout
+        let split = tab
+            .compute_split_size(
+                2,
+                SplitRequest {
+                    direction: SplitDirection::Vertical,
+                    size: SplitSize::Cells(5),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!((split.first.rows, split.second.rows), (17, 5));
+        tab.split_and_insert(
+            2,
+            SplitRequest {
+                direction: SplitDirection::Vertical,
+                size: SplitSize::Cells(5),
+                ..Default::default()
+            },
+            FakePane::new(4, split.second),
+        )
+        .unwrap();
+        let panes = tab.iter_panes();
+        assert_eq!(
+            (79, 19, 1, 5),
+            (panes[3].left, panes[3].top, panes[3].width, panes[3].height)
+        );
+        assert_layout_fills_tab(&tab);
+
+        // Resizing the tab keeps everything tiled
+        tab.resize(TerminalSize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 1200,
+            pixel_height: 1000,
+            dpi: 96,
+        });
+        assert_layout_fills_tab(&tab);
+        tab.resize(test_size());
+        assert_layout_fills_tab(&tab);
+    }
+
+    #[test]
+    fn tab_top_level_split_wide_dividers() {
+        set_test_dividers(3, 2);
+        let size = test_size();
+
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+        let horz_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            FakePane::new(2, horz_size.second),
+        )
+        .unwrap();
+
+        let request = SplitRequest {
+            direction: SplitDirection::Vertical,
+            top_level: true,
+            ..Default::default()
+        };
+        let vert_size = tab.compute_split_size(0, request).unwrap();
+        assert_eq!((vert_size.first.rows, vert_size.second.rows), (10, 12));
+        assert_eq!((vert_size.first.cols, vert_size.second.cols), (80, 80));
+        tab.split_and_insert(0, request, FakePane::new(3, vert_size.second))
+            .unwrap();
+
+        let panes = tab.iter_panes();
+        assert_eq!(3, panes.len());
+        assert_eq!(
+            (0, 0, 37, 10),
+            (panes[0].left, panes[0].top, panes[0].width, panes[0].height)
+        );
+        assert_eq!(
+            (40, 0, 40, 10),
+            (panes[1].left, panes[1].top, panes[1].width, panes[1].height)
+        );
+        assert_eq!(
+            (0, 12, 80, 12),
+            (panes[2].left, panes[2].top, panes[2].width, panes[2].height)
+        );
+        assert_layout_fills(&tab, size);
+    }
+
+    #[test]
+    fn tab_divider_size_change() {
+        set_test_dividers(1, 1);
+        let size = test_size();
+
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+        for (id, direction) in [
+            (2, SplitDirection::Horizontal),
+            (3, SplitDirection::Vertical),
+        ] {
+            let request = SplitRequest {
+                direction,
+                ..Default::default()
+            };
+            let split_size = tab.compute_split_size(0, request).unwrap();
+            tab.split_and_insert(0, request, FakePane::new(id, split_size.second))
+                .unwrap();
+        }
+        assert_layout_fills_tab(&tab);
+        assert!(!tab.sync_pane_dividers());
+
+        let dims = |tab: &Tab| {
+            tab.iter_panes()
+                .iter()
+                .map(|p| (p.left, p.top, p.width, p.height))
+                .collect::<Vec<_>>()
+        };
+        let original = dims(&tab);
+        assert_eq!(
+            original,
+            vec![(0, 0, 39, 11), (0, 12, 39, 12), (40, 0, 40, 24)]
+        );
+
+        // Simulate a config reload that changes the divider sizes
+        set_test_dividers(3, 2);
+        assert!(tab.sync_pane_dividers());
+        assert!(!tab.sync_pane_dividers());
+        assert_eq!(tab.pane_dividers(), PaneDividers { cols: 3, rows: 2 });
+        assert_eq!(tab.get_size(), size);
+        assert_layout_fills_tab(&tab);
+        assert_eq!(
+            dims(&tab),
+            vec![(0, 0, 38, 11), (0, 13, 38, 11), (41, 0, 39, 24)]
+        );
+
+        // And back again; the proportions are preserved as closely as possible
+        set_test_dividers(1, 1);
+        tab.resize(size);
+        assert_eq!(tab.pane_dividers(), PaneDividers::default());
+        assert_layout_fills_tab(&tab);
+        assert_eq!(
+            dims(&tab),
+            vec![(0, 0, 39, 12), (0, 13, 39, 11), (40, 0, 40, 24)]
+        );
+
+        // A change while zoomed is applied to the unzoomed layout
+        tab.set_zoomed(true);
+        set_test_dividers(8, 8);
+        assert!(tab.sync_pane_dividers());
+        tab.set_zoomed(false);
+        assert_eq!(tab.get_size(), size);
+        assert_layout_fills_tab(&tab);
     }
 
     fn is_send_and_sync<T: Send + Sync>() -> bool {

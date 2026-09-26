@@ -109,28 +109,32 @@ impl crate::TermWindow {
         let cell_height = self.render_metrics.cell_size.height as f32;
         let background_rect = {
             // We want to fill out to the edges of the splits
+            // Each pane extends halfway into the adjacent dividers
+            let dividers = self.pane_dividers();
+            let divider_width = dividers.cols as f32 * cell_width;
+            let divider_height = dividers.rows as f32 * cell_height;
             let (x, width_delta) = if pos.left == 0 {
                 (
                     0.,
-                    padding_left + border.left.get() as f32 + (cell_width / 2.0),
+                    padding_left + border.left.get() as f32 + (divider_width / 2.0),
                 )
             } else {
                 (
-                    padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                    padding_left + border.left.get() as f32 - (divider_width / 2.0)
                         + (pos.left as f32 * cell_width),
-                    cell_width,
+                    divider_width,
                 )
             };
 
             let (y, height_delta) = if pos.top == 0 {
                 (
                     (top_pixel_y - padding_top),
-                    padding_top + (cell_height / 2.0),
+                    padding_top + (divider_height / 2.0),
                 )
             } else {
                 (
-                    top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
-                    cell_height,
+                    top_pixel_y + (pos.top as f32 * cell_height) - (divider_height / 2.0),
+                    divider_height,
                 )
             };
             euclid::rect(
@@ -602,29 +606,33 @@ impl crate::TermWindow {
         let border = self.get_os_border();
         let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
 
-        // We want to fill out to the edges of the splits
+        // We want to fill out to the edges of the splits; each pane
+        // extends halfway into the adjacent dividers
+        let dividers = self.pane_dividers();
+        let divider_width = dividers.cols as f32 * cell_width;
+        let divider_height = dividers.rows as f32 * cell_height;
         let (x, width_delta) = if pos.left == 0 {
             (
                 0.,
-                padding_left + border.left.get() as f32 + (cell_width / 2.0),
+                padding_left + border.left.get() as f32 + (divider_width / 2.0),
             )
         } else {
             (
-                padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                padding_left + border.left.get() as f32 - (divider_width / 2.0)
                     + (pos.left as f32 * cell_width),
-                cell_width,
+                divider_width,
             )
         };
 
         let (y, height_delta) = if pos.top == 0 {
             (
                 (top_pixel_y - padding_top),
-                padding_top + (cell_height / 2.0),
+                padding_top + (divider_height / 2.0),
             )
         } else {
             (
-                top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
-                cell_height,
+                top_pixel_y + (pos.top as f32 * cell_height) - (divider_height / 2.0),
+                divider_height,
             )
         };
 

@@ -46,8 +46,8 @@ use mux::pane::{
 };
 use mux::renderable::RenderableDimensions;
 use mux::tab::{
-    PositionedPane, PositionedSplit, SplitDirection, SplitRequest, SplitSize as MuxSplitSize, Tab,
-    TabId,
+    PaneDividers, PositionedPane, PositionedSplit, SplitDirection, SplitRequest,
+    SplitSize as MuxSplitSize, Tab, TabId,
 };
 use mux::window::WindowId as MuxWindowId;
 use mux::{Mux, MuxNotification};
@@ -1805,6 +1805,8 @@ impl TermWindow {
             let term_config: Arc<dyn TerminalConfiguration> =
                 Arc::new(TermConfig::with_config(config.clone()));
             for tab in window.iter_tabs() {
+                // Re-layout the panes if the divider sizes were changed
+                tab.sync_pane_dividers();
                 for pane in tab.iter_panes_ignoring_zoom() {
                     pane.pane.set_config(Arc::clone(&term_config));
                 }
@@ -3418,6 +3420,14 @@ impl TermWindow {
                 .map(|overlay| overlay.pane.clone())
                 .or_else(|| Some(pane))
         }
+    }
+
+    /// Returns the sizes of the dividers between the panes of the active tab
+    fn pane_dividers(&self) -> PaneDividers {
+        Mux::get()
+            .get_active_tab_for_window(self.mux_window_id)
+            .map(|tab| tab.pane_dividers())
+            .unwrap_or_default()
     }
 
     fn get_splits(&mut self) -> Vec<PositionedSplit> {

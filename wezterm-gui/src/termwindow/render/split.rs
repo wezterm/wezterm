@@ -28,15 +28,21 @@ impl crate::TermWindow {
         let pos_y = split.top as f32 * cell_height + first_row_offset + padding_top;
         let pos_x = split.left as f32 * cell_width + padding_left + border.left.get() as f32;
 
+        // The line is drawn through the center of the divider, and extends
+        // into the dividers at either end so that it meets any crossing lines.
+        let dividers = self.pane_dividers();
+        let thickness = split.thickness.max(1);
+
         if split.direction == SplitDirection::Horizontal {
+            let cross = dividers.rows as f32 * cell_height;
             self.filled_rectangle(
                 layers,
                 2,
                 euclid::rect(
-                    pos_x + (cell_width / 2.0),
-                    pos_y - (cell_height / 2.0),
+                    pos_x + (thickness as f32 * cell_width / 2.0),
+                    pos_y - (cross / 2.0),
                     self.render_metrics.underline_height as f32,
-                    (1. + split.size as f32) * cell_height,
+                    (dividers.rows as f32 + split.size as f32) * cell_height,
                 ),
                 foreground,
             )?;
@@ -44,7 +50,7 @@ impl crate::TermWindow {
                 x: border.left.get() as usize
                     + padding_left as usize
                     + (split.left * cell_width as usize),
-                width: cell_width as usize,
+                width: thickness * cell_width as usize,
                 y: padding_top as usize
                     + first_row_offset as usize
                     + split.top * cell_height as usize,
@@ -52,13 +58,14 @@ impl crate::TermWindow {
                 item_type: UIItemType::Split(split.clone()),
             });
         } else {
+            let cross = dividers.cols as f32 * cell_width;
             self.filled_rectangle(
                 layers,
                 2,
                 euclid::rect(
-                    pos_x - (cell_width / 2.0),
-                    pos_y + (cell_height / 2.0),
-                    (1.0 + split.size as f32) * cell_width,
+                    pos_x - (cross / 2.0),
+                    pos_y + (thickness as f32 * cell_height / 2.0),
+                    (dividers.cols as f32 + split.size as f32) * cell_width,
                     self.render_metrics.underline_height as f32,
                 ),
                 foreground,
@@ -71,7 +78,7 @@ impl crate::TermWindow {
                 y: padding_top as usize
                     + first_row_offset as usize
                     + split.top * cell_height as usize,
-                height: cell_height as usize,
+                height: thickness * cell_height as usize,
                 item_type: UIItemType::Split(split.clone()),
             });
         }
