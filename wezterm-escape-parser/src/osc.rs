@@ -1,6 +1,8 @@
 use crate::color::SrgbaTuple;
 pub use crate::hyperlink::Hyperlink;
 use crate::{Result, bail, ensure, format_err};
+#[cfg(not(feature = "std"))]
+use alloc::{format, vec};
 use base64::Engine;
 use bitflags::bitflags;
 use core::fmt::{Display, Error as FmtError, Formatter, Result as FmtResult};

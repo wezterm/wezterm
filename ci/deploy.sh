@@ -168,7 +168,7 @@ BuildRequires: Mesa-libEGL-devel
 %else
 BuildRequires: mesa-libEGL-devel
 %endif
-%if 0%{?fedora} >= 41
+%if 0%{?fedora} >= 41 && 0%{?fedora} < 45
 BuildRequires: openssl-devel-engine
 %endif
 Source0: wezterm-${TAR_NAME}.tar.gz
