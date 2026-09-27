@@ -23,6 +23,7 @@ logging.workspace = true
 mux-lua.workspace = true
 plugin.workspace = true
 procinfo-funcs.workspace = true
+resurrect.workspace = true
 serde-funcs.workspace = true
 share-data.workspace = true
 spawn-funcs.workspace = true

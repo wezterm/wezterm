@@ -1,0 +1,10 @@
+[package]
+name = "resurrect"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[dependencies]
+anyhow.workspace = true
+config.workspace = true

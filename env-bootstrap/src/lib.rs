@@ -193,6 +193,7 @@ fn register_lua_modules() {
         logging::register,
         mux_lua::register,
         procinfo_funcs::register,
+        resurrect::register,
         filesystem::register,
         serde_funcs::register,
         plugin::register,

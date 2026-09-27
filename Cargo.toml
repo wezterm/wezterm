@@ -184,6 +184,7 @@ rcgen = "0.12"
 regex = "1"
 reqwest = "0.12"
 resize = "0.5"
+resurrect = { path = "lua-api-crates/resurrect" }
 rstest = "0.21"
 rusqlite = "0.32"
 serde = {version="1.0", default-features=false, features = ["derive"]}

@@ -1547,6 +1547,7 @@ dependencies = [
  "objc2-foundation",
  "plugin",
  "procinfo-funcs",
+ "resurrect",
  "serde-funcs",
  "share-data",
  "spawn-funcs",
@@ -5012,6 +5013,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2a08c42ea86684dc00256494c4eb8b54707890ddac50c05060a717f29669029"
 dependencies = [
  "rgb",
+]
+
+[[package]]
+name = "resurrect"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
 ]
 
 [[package]]

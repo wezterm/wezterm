@@ -44,38 +44,11 @@ function utils.utf8len(str)
 	return len
 end
 
--- Execute a cmd and return its stdout
----@param cmd string command
----@return boolean success result
----@return string|nil error
-function utils.execute(cmd)
-	local stdout
-	local suc, err = pcall(function()
-		local handle = io.popen(cmd)
-		if not handle then
-			error("Could not open process: " .. cmd)
-		end
-		stdout = handle:read("*a")
-		if stdout == nil then
-			error("Error running process: " .. cmd)
-		end
-		handle:close()
-	end)
-	if suc then
-		return suc, stdout
-	else
-		return suc, err
-	end
-end
-
--- Create the folder if it does not exist
+-- Create the folder (and any missing parents) if it does not exist.
+-- This is implemented natively by wezterm rather than by spawning `mkdir`.
 ---@param path string
 function utils.ensure_folder_exists(path)
-	if utils.is_windows then
-		os.execute('mkdir /p "' .. path:gsub("/", "\\" .. '"'))
-	else
-		os.execute('mkdir -p "' .. path .. '"')
-	end
+	require("resurrect.native").ensure_dir(path)
 end
 
 -- deep copy

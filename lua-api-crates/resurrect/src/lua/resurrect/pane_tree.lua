@@ -43,15 +43,25 @@ local function is_bottom(root, pane)
 	return false
 end
 
+-- The divider between panes may be wider than a single cell (see the
+-- pane_divider_cols and pane_divider_rows options), so rather than looking
+-- for a pane that starts exactly one cell after `root`, pick the nearest
+-- aligned pane that starts after `root`.
+
 ---@param root pane_tree
 ---@param panes PaneInformation
 ---@return pane_tree | nil
 local function pop_connected_bottom(root, panes)
+	local best
 	for i, pane in ipairs(panes) do
-		if root.left == pane.left and root.top + root.height + 1 == pane.top then
-			table.remove(panes, i)
-			return pane
+		if root.left == pane.left and root.top + root.height < pane.top then
+			if best == nil or pane.top < panes[best].top then
+				best = i
+			end
 		end
+	end
+	if best then
+		return table.remove(panes, best)
 	end
 end
 
@@ -59,11 +69,16 @@ end
 ---@param panes PaneInformation
 ---@return pane_tree | nil
 local function pop_connected_right(root, panes)
+	local best
 	for i, pane in ipairs(panes) do
-		if root.top == pane.top and root.left + root.width + 1 == pane.left then
-			table.remove(panes, i)
-			return pane
+		if root.top == pane.top and root.left + root.width < pane.left then
+			if best == nil or pane.left < panes[best].left then
+				best = i
+			end
 		end
+	end
+	if best then
+		return table.remove(panes, best)
 	end
 end
 

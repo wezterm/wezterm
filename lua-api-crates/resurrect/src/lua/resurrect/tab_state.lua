@@ -131,7 +131,7 @@ function pub.save_tab_action()
 						if title then
 							callback_pane:tab():set_title(title)
 							local state = pub.get_tab_state(tab)
-							resurrect.save_state(state)
+							resurrect.state_manager.save_state(state)
 						end
 					end),
 				}),

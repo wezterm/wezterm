@@ -50,109 +50,18 @@ pub.default_fuzzy_load_opts = {
 	end,
 }
 
--- Optimized recursive JSON file finder for all platforms
+-- Recursive JSON file finder.
+-- This is implemented natively by wezterm rather than by spawning helper
+-- processes (VBS scripts via wscript.exe on Windows, find/stat/awk elsewhere).
+-- The output has one "<mtime epoch seconds> <path>" line per file.
 ---@param base_path string starting path from which the recursive search takes place
 ---@return string|nil
 local function find_json_files_recursive(base_path)
-	local cmd
-	local stdout
-	local suc, err
-
-	if utils.is_windows then
-		-- For Windows, use VBS for better performance and truly invisible execution
-		local temp_vbs = os.tmpname() .. ".vbs"
-		local temp_out = os.tmpname() .. ".txt"
-
-		local vbs_script = string.format(
-			[[
-                Set fso = CreateObject("Scripting.FileSystemObject")
-                Set outFile = fso.CreateTextFile("%s", True)
-                
-                Sub ProcessFolder(folderPath)
-                    On Error Resume Next
-                    Set folder = fso.GetFolder(folderPath)
-                    If Err.Number <> 0 Then
-                        Exit Sub
-                    End If
-                    
-                    ' Process files in current folder
-                    For Each file in folder.Files
-                        If LCase(fso.GetExtensionName(file.Name)) = "json" Then
-                            epoch = DateDiff("s", "01/01/1970 00:00:00", file.DateLastModified)
-                            outFile.WriteLine(epoch & " " & file.Path)
-                        End If
-                    Next
-                    
-                    ' Process subfolders recursively
-                    For Each subFolder in folder.SubFolders
-                        ProcessFolder(subFolder.Path)
-                    Next
-                End Sub
-                
-                ProcessFolder("%s")
-                outFile.Close
-            ]],
-			temp_out:gsub("\\", "\\\\"),
-			base_path:gsub("\\", "\\\\")
-		)
-
-		-- Create a second VBS script that will run the first one invisibly
-		local launcher_vbs = os.tmpname() .. "_launcher.vbs"
-		local launcher_script = string.format(
-			[[
-                Set WshShell = CreateObject("WScript.Shell")
-                WshShell.Run "wscript.exe //nologo %s", 0, True
-            ]],
-			temp_vbs
-		)
-
-		-- Write the scripts
-		suc, err = file_io.write_file(temp_vbs, vbs_script)
-		if not suc then
-			wezterm.emit("resurrect.error", err)
-			return
-		end
-
-		suc, err = file_io.write_file(launcher_vbs, launcher_script)
-		if not suc then
-			wezterm.emit("resurrect.error", err)
-			os.remove(temp_vbs) -- by the time we are here the `temb_vbs` file already exists so we should clean up
-			return
-		end
-		-- Execute using launcher (completely hidden)
-		os.execute("wscript.exe //nologo " .. launcher_vbs)
-
-		suc, stdout = file_io.read_file(temp_out)
-
-		-- Clean up temp files
-		os.remove(temp_vbs)
-		os.remove(launcher_vbs)
-		os.remove(temp_out)
-
-		if suc then
-			return stdout
-		else
-			wezterm.emit("resurrect.error", stdout)
-			return
-		end
-	elseif utils.is_mac then
-		-- macOS recursive find command for JSON files
-		cmd = 'find "' .. base_path .. '" -type f -name "*.json" -print0 | xargs -0 stat -f "%m %N"'
-	else
-		-- Linux optimized recursive find command for JSON files
-		cmd = string.format(
-			'find "$(realpath %q)" -type f -name "*.json" -printf "%%T@ %%p\\n" | awk \'{split($1, a, "."); print a[1], $2}\'',
-			base_path
-		)
-	end
-
-	-- Execute the command and capture stdout for non-Windows
-	suc, stdout = utils.execute(cmd)
-
+	local suc, stdout = pcall(require("resurrect.native").list_json_files, base_path)
 	if suc then
 		return stdout
 	else
-		wezterm.emit("resurrect.error", stdout)
+		wezterm.emit("resurrect.error", tostring(stdout))
 		return
 	end
 end
