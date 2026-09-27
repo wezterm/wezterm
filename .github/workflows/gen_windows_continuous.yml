@@ -1,8 +1,6 @@
 name: windows_continuous
 
 on:
-  schedule:
-    - cron: "10 3 * * *"
   push:
     branches:
       - main
@@ -92,7 +90,7 @@ jobs:
           path: |
             WezTerm-*.zip
             WezTerm-*.exe
-          retention-days: 5
+          retention-days: 90
 
   upload:
     runs-on: ubuntu-latest
