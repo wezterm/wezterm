@@ -1302,7 +1302,7 @@ impl TermWindow {
                 MuxNotification::SaveToDownloads { .. } => {
                     // Handled by frontend
                 }
-                MuxNotification::PaneFocused(_) => {
+                MuxNotification::PaneFocused { .. } => {
                     // Also handled by clientpane
                     self.update_title_post_status();
                 }
@@ -1469,7 +1469,7 @@ impl TermWindow {
                     | Alert::SetUserVar { .. }
                     | Alert::Bell,
             }
-            | MuxNotification::PaneFocused(pane_id)
+            | MuxNotification::PaneFocused { pane_id, .. }
             | MuxNotification::PaneRemoved(pane_id)
             | MuxNotification::PaneOutput(pane_id) => {
                 // Check window validity and propagate to the window event handler
