@@ -80,12 +80,13 @@ impl GuiFrontEnd {
                 MuxNotification::PaneFocused(pane_id) => {
                     promise::spawn::spawn_into_main_thread(async move {
                         let mux = Mux::get();
-                        if let Err(err) = mux.focus_pane_and_containing_tab(pane_id) {
+                        if let Err(err) = mux.reconcile_pane_focus(pane_id) {
                             log::error!("Error reconciling PaneFocused notification: {err:#}");
                         }
                     })
                     .detach();
                 }
+                MuxNotification::PaneFocusReconciled(_) => {}
                 MuxNotification::TabTitleChanged { .. } => {}
                 MuxNotification::WindowTitleChanged { .. } => {}
                 MuxNotification::TabResized(_) => {}
