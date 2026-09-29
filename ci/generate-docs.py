@@ -462,6 +462,7 @@ TOC = [
         "CLI Reference",
         "cli/general.md",
         children=[
+            Page("wezterm check-config", "cli/check-config.md"),
             Gen("wezterm cli", "cli/cli"),
             Page("wezterm connect", "cli/connect.md"),
             Page("wezterm imgcat", "cli/imgcat.md"),

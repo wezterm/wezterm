@@ -116,6 +116,12 @@ enum SubCommand {
     #[command(name = "show-keys", about = "Show key assignments")]
     ShowKeys(ShowKeysCommand),
 
+    #[command(
+        name = "check-config",
+        about = "Check that the configuration loads, and exit non-zero if it does not"
+    )]
+    CheckConfig(CheckConfigCommand),
+
     #[command(name = "cli", about = "Interact with experimental mux server")]
     Cli(cli::CliCommand),
 
@@ -747,6 +753,7 @@ fn run() -> anyhow::Result<()> {
         | SubCommand::BlockingStart(_)
         | SubCommand::LsFonts(_)
         | SubCommand::ShowKeys(_)
+        | SubCommand::CheckConfig(_)
         | SubCommand::Ssh(_)
         | SubCommand::Serial(_)
         | SubCommand::Connect(_) => delegate_to_gui(saver),

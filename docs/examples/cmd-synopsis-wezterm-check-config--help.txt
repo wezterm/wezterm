@@ -1,0 +1,21 @@
+Check that the configuration loads, and exit non-zero if it does not
+
+Usage: wezterm check-config [OPTIONS] [CONFIG_FILE]
+
+Arguments:
+  [CONFIG_FILE]  The configuration file to check; defaults to the one wezterm
+                 would normally load
+
+Options:
+      --unsafe-enable-debug-module
+          Make lua's `debug` module available, as test frameworks expect. It
+          lets a script reach past the sandbox. Only use this option to test
+          trusted code, or run it in an isolated environment
+      --warnings-as-errors
+          Fail if the configuration produced any warnings
+      --appearance <MODE>
+          The appearance `wezterm.gui.get_appearance()` reports [default: light]
+          [possible values: light, dark, light-high-contrast,
+          dark-high-contrast]
+  -h, --help
+          Print help
