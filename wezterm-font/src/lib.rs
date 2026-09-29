@@ -271,17 +271,28 @@ impl LoadedFont {
         if let Some(raster) = rasterizers.get(&fallback) {
             raster.rasterize_glyph(glyph_pos, self.font_size, self.dpi)
         } else {
-            let raster_selection = self
-                .font_config
-                .upgrade()
+            let font_config = self.font_config.upgrade();
+            let raster_selection = font_config
+                .as_ref()
                 .map_or(FontRasterizerSelection::default(), |c| {
                     c.config.borrow().font_rasterizer
                 });
-            let raster = new_rasterizer(
-                raster_selection,
-                &(self.handles.borrow())[fallback],
-                self.pixel_geometry,
-            )?;
+            let raster = if let Some(c) = &font_config {
+                let cfg = c.config.borrow();
+                new_rasterizer(
+                    raster_selection,
+                    &(self.handles.borrow())[fallback],
+                    self.pixel_geometry,
+                    &cfg,
+                )?
+            } else {
+                new_rasterizer(
+                    raster_selection,
+                    &(self.handles.borrow())[fallback],
+                    self.pixel_geometry,
+                    &Default::default(),
+                )?
+            };
             let result = raster.rasterize_glyph(glyph_pos, self.font_size, self.dpi);
             rasterizers.insert(fallback, raster);
             result

@@ -58,6 +58,8 @@ Additional options for configuring fonts can be found elsewhere in the docs:
 * [font_locator](lua/config/font_locator.md) - override the system font resolver
 * [font_rules](lua/config/font_rules.md) - advanced control over which fonts are used for italic, bold and other textual styles
 * [font_shaper](lua/config/font_shaper.md) - affects kerning and ligatures
+* [font_thicken](lua/config/font_thicken.md) - draw fonts with a thicker stroke
+* [font_thicken_strength](lua/config/font_thicken_strength.md) - control the amount of thickening
 * [font_size](lua/config/font_size.md) - change the size of the text
 * [freetype_load_flags](lua/config/freetype_load_flags.md) - advanced hinting configuration
 * [freetype_load_target](lua/config/freetype_load_target.md) - configure hinting and anti-aliasing
