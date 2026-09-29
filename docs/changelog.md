@@ -160,6 +160,10 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* `tmux -CC`: entering control mode no longer panics with
+  `local task polled by a thread that didn't spawn it`. DCS `1000p`
+  domain setup, `TmuxEvents`, and detach now run on the mux/main thread.
+  Thanks to @MisterTea! #3223 #6133 #336
 * macOS: Fix window border when opacity<1 and shadow enabled.
   Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256

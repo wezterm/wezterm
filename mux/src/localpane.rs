@@ -874,25 +874,28 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
                 {
                     log::info!("tmux -CC mode requested");
 
-                    // Create a new domain to host these tmux tabs
-                    let domain = TmuxDomain::new(self.pane_id);
+                    // Create the domain on this thread so subsequent TmuxEvents
+                    // can be queued, then attach it on the main/mux thread.
+                    let pane_id = self.pane_id;
+                    let domain = TmuxDomain::new(pane_id);
                     let tmux_domain = Arc::clone(&domain.inner);
+                    self.tmux_domain.replace(Arc::clone(&tmux_domain));
+                    promise::spawn::spawn_into_main_thread(async move {
+                        let domain: Arc<dyn Domain> = Arc::new(domain);
+                        let mux = Mux::get();
+                        mux.add_domain(&domain);
 
-                    let domain: Arc<dyn Domain> = Arc::new(domain);
-                    let mux = Mux::get();
-                    mux.add_domain(&domain);
-
-                    if let Some(pane) = mux.get_pane(self.pane_id) {
-                        let pane = pane.downcast_ref::<LocalPane>().unwrap();
-                        pane.tmux_domain.lock().replace(Arc::clone(&tmux_domain));
-
-                        emit_output_for_pane(
-                            self.pane_id,
-                            "\r\n[This pane is running tmux control mode. Press q to detach]",
-                        );
-                    }
-
-                    self.tmux_domain.replace(tmux_domain);
+                        if let Some(pane) = mux.get_pane(pane_id) {
+                            if let Some(pane) = pane.downcast_ref::<LocalPane>() {
+                                pane.tmux_domain.lock().replace(Arc::clone(&tmux_domain));
+                            }
+                            emit_output_for_pane(
+                                pane_id,
+                                "\r\n[This pane is running tmux control mode. Press q to detach]",
+                            );
+                        }
+                    })
+                    .detach();
 
                 // TODO: do we need to proactively list available tabs here?
                 // if so we should arrange to call domain.attach() and make
@@ -903,12 +906,17 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
             }
             DeviceControlMode::Exit => {
                 if let Some(tmux) = self.tmux_domain.take() {
-                    let mux = Mux::get();
-                    if let Some(pane) = mux.get_pane(self.pane_id) {
-                        let pane = pane.downcast_ref::<LocalPane>().unwrap();
-                        pane.tmux_domain.lock().take();
-                    }
-                    mux.domain_was_detached(tmux.domain_id);
+                    let pane_id = self.pane_id;
+                    promise::spawn::spawn_into_main_thread(async move {
+                        let mux = Mux::get();
+                        if let Some(pane) = mux.get_pane(pane_id) {
+                            if let Some(pane) = pane.downcast_ref::<LocalPane>() {
+                                pane.tmux_domain.lock().take();
+                            }
+                        }
+                        mux.domain_was_detached(tmux.domain_id);
+                    })
+                    .detach();
                 }
             }
             DeviceControlMode::Data(c) => {
@@ -921,8 +929,11 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
                 }
             }
             DeviceControlMode::TmuxEvents(events) => {
-                if let Some(tmux) = self.tmux_domain.as_ref() {
-                    tmux.advance(events);
+                if let Some(tmux) = self.tmux_domain.clone() {
+                    promise::spawn::spawn_into_main_thread(async move {
+                        tmux.advance(events);
+                    })
+                    .detach();
                 } else {
                     log::warn!("unhandled DeviceControlMode::TmuxEvents {:?}", &events);
                 }
