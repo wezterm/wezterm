@@ -675,6 +675,23 @@ mod test {
     }
 
     #[test]
+    fn hyperlink_uri_with_semicolons() {
+        let mut p = Parser::new();
+        let actions = p.parse_as_vec(b"\x1b]8;id=x;https://example.com/a;b?c=d;e\x07");
+        let link = crate::hyperlink::Hyperlink::new_with_id("https://example.com/a;b?c=d;e", "x");
+        assert_eq!(
+            vec![Action::OperatingSystemCommand(Box::new(
+                OperatingSystemCommand::SetHyperlink(Some(link)),
+            ))],
+            actions
+        );
+        assert_eq!(
+            encode(&actions),
+            "\x1b]8;id=x;https://example.com/a;b?c=d;e\x1b\\"
+        );
+    }
+
+    #[test]
     fn test_emoji_title_osc() {
         let input = "\x1b]0;\u{1f915}\x07";
         let mut p = Parser::new();

@@ -1486,6 +1486,27 @@ mod test {
             Hyperlink::parse(&[b"8", b"", b"x"]).unwrap(),
             Some(Hyperlink::new("x"))
         );
+
+        // `;` is valid in a URI, so everything after the params is the URI
+        assert_eq!(
+            parse(
+                &["8", "", "https://example.com/a", "b", "c=d"],
+                "\x1b]8;;https://example.com/a;b;c=d\x1b\\"
+            ),
+            OperatingSystemCommand::SetHyperlink(Some(Hyperlink::new(
+                "https://example.com/a;b;c=d"
+            )))
+        );
+        assert_eq!(
+            parse(
+                &["8", "id=foo", "data:text/plain", "base64,aGk="],
+                "\x1b]8;id=foo;data:text/plain;base64,aGk=\x1b\\"
+            ),
+            OperatingSystemCommand::SetHyperlink(Some(Hyperlink::new_with_id(
+                "data:text/plain;base64,aGk=",
+                "foo"
+            )))
+        );
     }
 
     #[test]
