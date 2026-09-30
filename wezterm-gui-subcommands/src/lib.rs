@@ -39,10 +39,9 @@ pub struct StartCommand {
     #[arg(long = "always-new-process")]
     pub always_new_process: bool,
 
-    /// Exit with the child exit code of the pane spawned for PROGRAM. When an
-    /// existing GUI is reused, wait for that pane without closing the shared
-    /// GUI. Requires an explicit command and the local domain.
-    #[arg(long = "wait-exit")]
+    /// Wait for PROG to exit and exit with its exit status, without waiting
+    /// for the GUI window to close. Requires PROG and the local domain.
+    #[arg(long = "wait-exit", requires = "prog")]
     pub wait_exit: bool,
 
     /// When spawning into an existing GUI instance, spawn a new
@@ -134,6 +133,8 @@ mod exit_status_flag_tests {
         .unwrap();
         assert!(tracked.wait_exit);
         assert_eq!(tracked.prog, vec![OsString::from("cmd.exe")]);
+
+        assert!(StartCommand::try_parse_from(["start", "--wait-exit"]).is_err());
     }
 }
 

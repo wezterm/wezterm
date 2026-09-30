@@ -20,6 +20,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::current_dir;
 use std::ffi::OsString;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -62,6 +63,10 @@ mod utilsprites;
 
 static INITIAL_PANE_EXIT_CODE: AtomicU32 = AtomicU32::new(0);
 static INITIAL_PANE_EXIT_REPORTED: AtomicBool = AtomicBool::new(false);
+
+/// Set in the environment of the GUI that `--wait-exit` runs as a child
+/// process, to tell it to report the initial pane's exit status on stdout.
+const WAIT_EXIT_REPORT_ENV: &str = "WEZTERM_WAIT_EXIT_REPORT";
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -770,6 +775,9 @@ fn build_initial_mux(
 }
 
 fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> anyhow::Result<()> {
+    // Don't let the panes we spawn inherit this.
+    let report_to_launcher = std::env::var_os(WAIT_EXIT_REPORT_ENV).is_some();
+    std::env::remove_var(WAIT_EXIT_REPORT_ENV);
     if opts.wait_exit && (opts.domain.is_some() || opts.attach || opts.prog.is_empty()) {
         anyhow::bail!("--wait-exit requires a program and the local domain");
     }
@@ -834,6 +842,27 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
         return Ok(());
     }
 
+    if opts.wait_exit {
+        if report_to_launcher {
+            // Tell the launcher about the pane's exit status as soon as it
+            // is known, rather than when the GUI closes.
+            let mux = Arc::clone(&mux);
+            std::thread::spawn(move || {
+                let code = loop {
+                    if let Some(code) = mux.wait_for_initial_pane_exit_code(Duration::from_secs(60))
+                    {
+                        break code;
+                    }
+                };
+                let mut stdout = std::io::stdout();
+                writeln!(stdout, "{}", code).ok();
+                stdout.flush().ok();
+            });
+        } else {
+            return run_gui_and_wait_for_initial_pane();
+        }
+    }
+
     let gui = crate::frontend::try_new()?;
     let activity = Activity::new();
     let wait_exit = opts.wait_exit;
@@ -855,6 +884,29 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
         INITIAL_PANE_EXIT_CODE.store(code, Ordering::Relaxed);
         INITIAL_PANE_EXIT_REPORTED.store(true, Ordering::Release);
     }
+    Ok(())
+}
+
+/// A GUI running in this process would keep our caller waiting until its
+/// window closes, so run the GUI as a child process and wait for it to report
+/// the exit status of the initial pane instead.
+fn run_gui_and_wait_for_initial_pane() -> anyhow::Result<()> {
+    let mut child = std::process::Command::new(std::env::current_exe()?)
+        .args(std::env::args_os().skip(1))
+        .env(WAIT_EXIT_REPORT_ENV, "1")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .context("spawn GUI process")?;
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().context("GUI process stdout")?).read_line(&mut line)?;
+    let code = match line.trim().parse::<u32>() {
+        Ok(code) => code,
+        // The GUI exited without reporting a status, for example because it
+        // handed the pane to a GUI that appeared in the meantime.
+        Err(_) => child.wait()?.code().unwrap_or(1) as u32,
+    };
+    INITIAL_PANE_EXIT_CODE.store(code, Ordering::Relaxed);
+    INITIAL_PANE_EXIT_REPORTED.store(true, Ordering::Release);
     Ok(())
 }
 
