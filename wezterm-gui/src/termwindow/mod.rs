@@ -3554,6 +3554,7 @@ impl TermWindow {
         if let Some(overlay) = self.tab_state(tab_id).overlay.take() {
             Mux::get().remove_pane(overlay.pane.pane_id());
         }
+        self.update_title();
         if let Some(window) = self.window.as_ref() {
             window.invalidate();
         }
@@ -3573,6 +3574,7 @@ impl TermWindow {
                 Mux::get().remove_pane(overlay.pane.pane_id());
             }
         }
+        self.update_title();
         if let Some(window) = self.window.as_ref() {
             window.invalidate();
         }
