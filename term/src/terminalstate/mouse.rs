@@ -141,6 +141,26 @@ impl TerminalState {
         self.current_mouse_buttons.retain(|&b| b != event_button);
         self.current_mouse_buttons.push(event_button);
 
+        // A press establishes the pointer position as far as the application is
+        // concerned, so remember it for the "has the pointer actually moved?"
+        // check in mouse_move below. xterm specifies that "Motion events are
+        // reported only if the mouse pointer has moved to a different character
+        // cell", so a Move for the cell we just pressed in must not be reported.
+        //
+        // This matters because some systems synthesize a zero-distance mouse
+        // move in between the button-down and button-up of a click: Windows 10
+        // and later do so when the click is the one that activated a previously
+        // unfocused window. Without this, that synthetic event was reported as a
+        // button-motion (drag) event, which makes tmux enter copy mode and
+        // clobber the clipboard on every click that focuses the window.
+        // See <https://github.com/wezterm/wezterm/issues/2414>.
+        //
+        // It also fixes the inverse problem: because last_mouse_move used to be
+        // updated only when a motion event was reported, repeating the exact
+        // same drag gesture twice would silently drop the motion report of the
+        // second one.
+        self.last_mouse_move.replace(event);
+
         if !(self.mouse_tracking || self.button_event_mouse || self.any_event_mouse) {
             return Ok(());
         }
