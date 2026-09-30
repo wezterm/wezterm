@@ -384,24 +384,9 @@ impl MasterPty for UnixMasterPty {
 }
 
 /// Represents the master end of a pty.
-/// EOT will be sent, and then the file descriptor will be closed when
-/// the Pty is dropped.
+/// The file descriptor will be closed when the writer is dropped.
 struct UnixMasterWriter {
     fd: PtyFd,
-}
-
-impl Drop for UnixMasterWriter {
-    fn drop(&mut self) {
-        let mut t: libc::termios = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
-        if unsafe { libc::tcgetattr(self.fd.0.as_raw_fd(), &mut t) } == 0 {
-            // EOF is only interpreted after a newline, so if it is set,
-            // we send a newline followed by EOF.
-            let eot = t.c_cc[libc::VEOF];
-            if eot != 0 {
-                let _ = self.fd.0.write_all(&[b'\n', eot]);
-            }
-        }
-    }
 }
 
 impl Write for UnixMasterWriter {
@@ -410,5 +395,45 @@ impl Write for UnixMasterWriter {
     }
     fn flush(&mut self) -> Result<(), io::Error> {
         self.fd.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use filedescriptor::{poll, pollfd, POLLIN};
+    use std::time::Duration;
+
+    fn is_readable(fd: &PtyFd, timeout: Duration) -> bool {
+        let mut pfd = [pollfd {
+            fd: fd.as_raw_fd(),
+            events: POLLIN,
+            revents: 0,
+        }];
+        poll(&mut pfd, Some(timeout)).unwrap();
+        pfd[0].revents & POLLIN != 0
+    }
+
+    #[test]
+    fn dropping_writer_does_not_submit_pending_input() {
+        let (mut master, mut slave) = openpty(PtySize::default()).unwrap();
+
+        // Type part of a command without pressing enter, then drop
+        // the writer, as happens when a pane is closed.
+        let mut writer = master.take_writer().unwrap();
+        writer.write_all(b"half typed").unwrap();
+        drop(writer);
+
+        // The slave is in canonical mode, so it only becomes readable
+        // once a line is complete. Dropping the writer must not
+        // complete the line on behalf of the user.
+        assert!(!is_readable(&slave.fd, Duration::from_millis(500)));
+
+        // The input is still pending: pressing enter submits it.
+        master.fd.write_all(b"\n").unwrap();
+        assert!(is_readable(&slave.fd, Duration::from_secs(5)));
+        let mut buf = [0u8; 64];
+        let len = slave.fd.read(&mut buf).unwrap();
+        assert_eq!(&buf[..len], b"half typed\n");
     }
 }

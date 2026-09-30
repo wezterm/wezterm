@@ -28,14 +28,11 @@ fn main() -> anyhow::Result<()> {
 
         {
             // Obtain the writer.
-            // When the writer is dropped, EOF will be sent to
-            // the program that was spawned.
-            // It is important to take the writer even if you don't
-            // send anything to its stdin so that EOF can be
-            // generated, otherwise you risk deadlocking yourself.
+            // On unix, dropping the writer doesn't send EOF to the
+            // program that was spawned: if it reads its input until
+            // EOF, write the EOF character (usually `\x04`) at the
+            // start of a line, otherwise you risk deadlocking yourself.
             let writer = pair.master.take_writer()?;
-
-            // Explicitly generate EOF
             drop(writer);
         }
 
