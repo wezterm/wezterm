@@ -7230,7 +7230,7 @@ dependencies = [
  "wezterm-gui-subcommands",
  "wezterm-mux-server-impl",
  "wezterm-term",
- "winapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
