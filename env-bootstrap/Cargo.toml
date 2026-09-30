@@ -33,9 +33,5 @@ time-funcs.workspace = true
 url-funcs.workspace = true
 wezterm-version.workspace = true
 
-[target."cfg(windows)".dependencies]
-winapi.workspace = true
-
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2.workspace = true
 objc2-foundation.workspace = true

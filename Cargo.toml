@@ -105,7 +105,6 @@ futures = "0.3"
 futures-lite = "2.3"
 futures-util = "0.3"
 gethostname = "0.5"
-getrandom = "0.3.1"
 git2 = { version = "0.20", default-features = false, features = ["https"] }
 gl_generator = "0.14"
 glium = { version = "0.35", default-features = false }
@@ -117,7 +116,6 @@ hdrhistogram = "7.1"
 hex = {version="0.4", default-features=false}
 hostname = "0.4"
 http_req = "0.11"
-human-sort = "0.2"
 humansize = "2.1"
 humantime = "2.1"
 image = "0.25"
@@ -165,7 +163,6 @@ percent-encoding = "2.3"
 pest = "2.7"
 pest_derive = "2.7"
 phf = {version="0.11", default-features=false}
-phf_codegen = "0.10"
 pkg-config = "0.3"
 plist = "1.7"
 plugin = { path = "lua-api-crates/plugin" }
