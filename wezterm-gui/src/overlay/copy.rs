@@ -3,7 +3,7 @@ use crate::termwindow::keyevent::KeyTableArgs;
 use crate::termwindow::{TermWindow, TermWindowNotif};
 use config::keyassignment::{
     ClipboardCopyDestination, CopyModeAssignment, KeyAssignment, KeyTable, KeyTableEntry,
-    ScrollbackEraseMode, SelectionMode,
+    ScrollDirection, ScrollbackEraseMode, SelectionMode,
 };
 use mux::domain::DomainId;
 use mux::pane::{
@@ -824,6 +824,38 @@ impl CopyRenderable {
         }
     }
 
+    fn move_to_blank_line(&mut self, direction: ScrollDirection) {
+        let dimensions = self.delegate.get_dimensions();
+        let bottom = dimensions.scrollback_bottom();
+
+        let direction = match direction {
+            ScrollDirection::Up => -1,
+            ScrollDirection::Down => 1,
+        };
+        let mut line_index = self.cursor.y;
+
+        loop {
+            line_index += direction;
+
+            if line_index < dimensions.scrollback_top || line_index >= bottom {
+                break;
+            }
+
+            let lines = self.delegate.get_logical_lines(line_index..line_index + 1);
+
+            if lines.len() == 1 && lines[0].is_visually_empty() {
+                break;
+            }
+        }
+
+        // Note: We jump to the `line_index` even if we didn't find a blank line. This lets you use
+        // `move_to_blank_line` to navigate to the boundaries of the scrollback even if it doesn't
+        // end/start with blank lines.
+        self.cursor.x = 0;
+        self.cursor.y = line_index;
+        self.select_to_cursor_pos();
+    }
+
     fn move_backward_one_word(&mut self) {
         let y = if self.cursor.x == 0 && self.cursor.y > 0 {
             self.cursor.x = usize::max_value();
@@ -1262,6 +1294,7 @@ impl Pane for CopyOverlay {
                     MoveToStartOfNextLine => render.move_to_start_of_next_line(),
                     MoveToSelectionOtherEnd => render.move_to_selection_other_end(),
                     MoveToSelectionOtherEndHoriz => render.move_to_selection_other_end_horiz(),
+                    MoveToBlankLine(direction) => render.move_to_blank_line(*direction),
                     MoveBackwardWord => render.move_backward_one_word(),
                     MoveForwardWord => render.move_forward_one_word(),
                     MoveForwardWordEnd => render.move_to_end_of_word(),
