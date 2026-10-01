@@ -38,7 +38,11 @@ use winapi::shared::windef::*;
 use winapi::shared::winerror::S_OK;
 use winapi::um::imm::*;
 use winapi::um::libloaderapi::GetModuleHandleW;
-use winapi::um::shellapi::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
+use winapi::um::shellapi::{
+    DragAcceptFiles, DragFinish, DragQueryFileW, SHAppBarMessage, ABE_BOTTOM, ABE_LEFT, ABE_RIGHT,
+    ABE_TOP, ABM_GETAUTOHIDEBAREX, ABM_GETSTATE, ABM_GETTASKBARPOS, ABS_AUTOHIDE, APPBARDATA,
+    HDROP,
+};
 use winapi::um::shellscalingapi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use winapi::um::sysinfoapi::{GetTickCount, GetVersionExW};
 use winapi::um::uxtheme::{
@@ -1127,25 +1131,118 @@ fn no_native_title_bar(decorations: WindowDecorations) -> bool {
         || decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
 }
 
-unsafe fn wm_nccalcsize(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-    let inner = rc_from_hwnd(hwnd)?;
-    let inner = match inner.try_borrow() {
-        Ok(inner) => inner,
-        Err(_) => {
-            // We've been called recursively and the upper levels
-            // own the borrow. Just take the default action
-            return None;
+/// With auto‑hide enabled for the taskbar and a window maximized, we should subtract the corresponding pixel value
+/// from the window coordinates on the taskbar side to avoid the window overlapping the taskbar.
+///
+/// Why is 2: Windows terminal uses 2.
+/// ref: https://github.com/microsoft/terminal/blob/86d15aef08e500be34497ff4e3a6f0d099ffb067/src/cascadia/WindowsTerminal/NonClientIslandWindow.cpp#L21
+const AUTO_HIDE_TASKBAR_THICKNESS: i32 = 2;
+
+/// Records whether each edge of a monitor has an auto-hidden taskbar.
+#[derive(Default)]
+struct AutoHideTaskbarEdges {
+    left: bool,
+    top: bool,
+    right: bool,
+    bottom: bool,
+}
+
+impl AutoHideTaskbarEdges {
+    fn is_empty(&self) -> bool {
+        !self.left && !self.top && !self.right && !self.bottom
+    }
+
+    fn insert(&mut self, edge: UINT) {
+        match edge {
+            ABE_LEFT => self.left = true,
+            ABE_TOP => self.top = true,
+            ABE_RIGHT => self.right = true,
+            ABE_BOTTOM => self.bottom = true,
+            _ => {}
         }
+    }
+}
+
+unsafe fn monitor_rect(monitor: HMONITOR) -> Option<RECT> {
+    if monitor.is_null() {
+        return None;
+    }
+
+    let mut info: MONITORINFO = std::mem::zeroed();
+    info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(monitor, &mut info) == 0 {
+        None
+    } else {
+        Some(info.rcMonitor)
+    }
+}
+
+/// Find the auto-hidden taskbar edges associated with `monitor`.
+///
+/// `ABM_GETAUTOHIDEBAREX` is the only per-monitor query and can report
+/// third-party appbars, but it is known to return NULL on some current Windows
+/// builds. In that case, fall back to `ABM_GETTASKBARPOS`, which reports the
+/// system taskbar, and verify its monitor from the returned rectangle.
+unsafe fn auto_hide_taskbar_edges(monitor: HMONITOR) -> AutoHideTaskbarEdges {
+    let mut appbar_data: APPBARDATA = std::mem::zeroed();
+    appbar_data.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
+    if SHAppBarMessage(ABM_GETSTATE, &mut appbar_data) as UINT & ABS_AUTOHIDE == 0 {
+        return AutoHideTaskbarEdges::default();
+    }
+
+    let Some(monitor_rect) = monitor_rect(monitor) else {
+        return AutoHideTaskbarEdges::default();
     };
 
-    let no_native_title_bar = no_native_title_bar(inner.config.window_decorations);
+    let mut edges = AutoHideTaskbarEdges::default();
+    for edge in [ABE_LEFT, ABE_TOP, ABE_RIGHT, ABE_BOTTOM] {
+        let mut data: APPBARDATA = std::mem::zeroed();
+        data.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
+        data.uEdge = edge;
+        data.rc = monitor_rect;
+
+        if !SHAppBarMessage(ABM_GETAUTOHIDEBAREX, &mut data).is_null() {
+            edges.insert(edge);
+        }
+    }
+
+    if edges.is_empty() {
+        let mut data: APPBARDATA = std::mem::zeroed();
+        data.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
+        if SHAppBarMessage(ABM_GETTASKBARPOS, &mut data) != 0
+            && MonitorFromRect(&data.rc, MONITOR_DEFAULTTONEAREST) == monitor
+        {
+            edges.insert(data.uEdge);
+        }
+    }
+
+    edges
+}
+
+unsafe fn wm_nccalcsize(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    let (no_native_title_bar, has_saved_placement, dpi) = {
+        let inner = rc_from_hwnd(hwnd)?;
+        let inner = match inner.try_borrow() {
+            Ok(inner) => inner,
+            Err(_) => {
+                // We've been called recursively and the upper levels
+                // own the borrow. Just take the default action
+                return None;
+            }
+        };
+
+        (
+            no_native_title_bar(inner.config.window_decorations),
+            inner.saved_placement.is_some(),
+            inner.get_effective_dpi() as u32,
+        )
+    };
 
     if !(wparam == 1 && no_native_title_bar) {
         return None;
     }
 
-    if inner.saved_placement.is_none() {
-        let dpi = inner.get_effective_dpi() as u32;
+    if !has_saved_placement {
         let frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi);
         let frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi);
         let padding = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
@@ -1153,11 +1250,17 @@ unsafe fn wm_nccalcsize(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
         let params = (lparam as *mut NCCALCSIZE_PARAMS).as_mut().unwrap();
 
         let requested_client_rect = &mut params.rgrc[0];
+        let original_window_rect = *requested_client_rect;
 
         requested_client_rect.right -= frame_x + padding;
         requested_client_rect.left += frame_x + padding;
 
         let is_maximized = get_window_state(hwnd) == WindowState::MAXIMIZED;
+
+        let monitor = match MonitorFromRect(&original_window_rect, MONITOR_DEFAULTTONULL) {
+            monitor if !monitor.is_null() => monitor,
+            _ => MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+        };
 
         // Handle bugged top window border on Windows 10
         if *IS_WIN10 {
@@ -1173,6 +1276,39 @@ unsafe fn wm_nccalcsize(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
 
             if is_maximized {
                 requested_client_rect.top += frame_y + padding;
+            }
+        }
+
+        // Leave a small margin on the edge with an auto-hidden taskbar. This
+        // prevents Windows from treating the window as a full-screen app and
+        // allows the taskbar to be revealed when the pointer reaches that
+        // edge. This follows the approach used by Windows Terminal:
+        // https://github.com/microsoft/terminal/blob/86d15aef08e500be34497ff4e3a6f0d099ffb067/src/cascadia/WindowsTerminal/NonClientIslandWindow.cpp#L687-L720
+        if is_maximized && !monitor.is_null() {
+            let edges = auto_hide_taskbar_edges(monitor);
+            if !edges.is_empty() {
+                if let Some(monitor_rect) = monitor_rect(monitor) {
+                    if edges.left {
+                        requested_client_rect.left = requested_client_rect
+                            .left
+                            .max(monitor_rect.left + AUTO_HIDE_TASKBAR_THICKNESS);
+                    }
+                    if edges.right {
+                        requested_client_rect.right = requested_client_rect
+                            .right
+                            .min(monitor_rect.right - AUTO_HIDE_TASKBAR_THICKNESS);
+                    }
+                    if edges.top {
+                        requested_client_rect.top = requested_client_rect
+                            .top
+                            .max(monitor_rect.top + AUTO_HIDE_TASKBAR_THICKNESS);
+                    }
+                    if edges.bottom {
+                        requested_client_rect.bottom = requested_client_rect
+                            .bottom
+                            .min(monitor_rect.bottom - AUTO_HIDE_TASKBAR_THICKNESS);
+                    }
+                }
             }
         }
     }
