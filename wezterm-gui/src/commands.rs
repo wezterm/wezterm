@@ -1785,6 +1785,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &[],
             icon: None,
         },
+        ShowContextMenu => CommandDef {
+            brief: "Show the context menu".into(),
+            doc: "Pop up the context menu (Copy/Paste) at the mouse position".into(),
+            keys: vec![],
+            args: &[],
+            menubar: &[],
+            icon: None,
+        },
         CompleteSelection(destination) => CommandDef {
             brief: format!("Completes selection, and copy {destination:?}").into(),
             doc: format!(
@@ -2047,6 +2055,10 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         CopyTo(ClipboardCopyDestination::PrimarySelection),
         CopyTo(ClipboardCopyDestination::Clipboard),
         PasteFrom(ClipboardPasteSource::Clipboard),
+        // Only the Windows backend implements show_context_menu, so only
+        // advertise the command there.
+        #[cfg(windows)]
+        ShowContextMenu,
         ClearScrollback(ScrollbackEraseMode::ScrollbackOnly),
         ClearScrollback(ScrollbackEraseMode::ScrollbackAndViewport),
         QuickSelect,
