@@ -39,25 +39,11 @@ fn main() {
 
     {
         // Obtain the writer.
-        // When the writer is dropped, EOF will be sent to
-        // the program that was spawned.
-        // It is important to take the writer even if you don't
-        // send anything to its stdin so that EOF can be
-        // generated, otherwise you risk deadlocking yourself.
+        // On unix, dropping the writer doesn't send EOF to the
+        // program that was spawned: if it reads its input until
+        // EOF, write the EOF character (usually `\x04`) at the
+        // start of a line, otherwise you risk deadlocking yourself.
         let mut writer = pair.master.take_writer().unwrap();
-
-        if cfg!(target_os = "macos") {
-            // macOS quirk: the child and reader must be started and
-            // allowed a brief grace period to run before we allow
-            // the writer to drop. Otherwise, the data we send to
-            // the kernel to trigger EOF is interleaved with the
-            // data read by the reader! WTF!?
-            // This appears to be a race condition for very short
-            // lived processes on macOS.
-            // I'd love to find a more deterministic solution to
-            // this than sleeping.
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
 
         // This example doesn't need to write anything, but if you
         // want to send data to the child, you'd set `to_write` to
