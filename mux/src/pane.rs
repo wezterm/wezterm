@@ -267,6 +267,10 @@ pub trait Pane: Downcast + Send + Sync {
         KeyboardEncoding::Xterm
     }
 
+    fn get_application_cursor_keys(&self) -> bool {
+        false
+    }
+
     fn copy_user_vars(&self) -> HashMap<String, String> {
         HashMap::new()
     }
