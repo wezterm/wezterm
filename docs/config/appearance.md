@@ -110,6 +110,8 @@ config.colors = {
   -- When the IME, a dead key or a leader key are being processed and are effectively
   -- holding input pending the result of input composition, change the cursor
   -- to this color to give a visual cue about the compose state.
+  -- In Windows builtin IME rendering, this also colors the preedit caret.
+  -- Without an override, that caret uses the resolved composition foreground.
   compose_cursor = 'orange',
 
   -- Override the foreground color for composition/IME preview text,

@@ -160,6 +160,12 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Windows: Builtin IME preedit rendering now shows the composition caret,
+  including caret-only movement and positions at the end of the preedit.
+  Fixes missing caret tracking with Microsoft Pinyin.
+  [#8229](https://github.com/wezterm/wezterm/issues/8229)
+* Windows: Explicitly declare the `window` crate's Shell API dependency,
+  fixing standalone builds and tests that previously relied on feature unification.
 * macOS: Fix window border when opacity<1 and shadow enabled.
   Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
