@@ -824,3 +824,162 @@ pub fn parse_status_text(text: &str, default_cell: CellAttributes) -> Line {
     flush_print(&mut print_buffer, &mut cells, &pen);
     Line::from_cells(cells, SEQ_ZERO)
 }
+
+#[cfg(test)]
+mod formatting_tests {
+    use super::*;
+    use termwiz::cell::{AttributeChange, Intensity, Underline};
+
+    #[test]
+    fn explicit_attributes_override_tab_defaults() {
+        let colors = TabBarColors::default();
+        // These are the defaults used for active, inactive, hovered and fancy tabs,
+        // as well as the normal and hovered new-tab button.
+        for defaults in [
+            colors.active_tab().as_cell_attributes(),
+            colors.inactive_tab().as_cell_attributes(),
+            colors.inactive_tab_hover().as_cell_attributes(),
+            colors.new_tab().as_cell_attributes(),
+            colors.new_tab_hover().as_cell_attributes(),
+            CellAttributes::default(),
+        ] {
+            let text = format_as_escapes(vec![
+                FormatItem::ResetAttributes,
+                FormatItem::Attribute(AttributeChange::Italic(false)),
+                FormatItem::Text("a".into()),
+                FormatItem::Attribute(AttributeChange::Intensity(Intensity::Bold)),
+                FormatItem::Text("b".into()),
+                FormatItem::Attribute(AttributeChange::Underline(Underline::Single)),
+                FormatItem::Text("c".into()),
+            ])
+            .unwrap();
+            let line = parse_status_text(&text, defaults.clone());
+            assert_eq!(line.len(), 3);
+            for cell in line.visible_cells() {
+                assert!(!cell.attrs().italic(), "{:?}: {:?}", defaults, text);
+                assert_eq!(cell.attrs().foreground(), defaults.foreground());
+                assert_eq!(cell.attrs().background(), defaults.background());
+            }
+            let attrs: Vec<_> = line.visible_cells().map(|c| c.attrs().clone()).collect();
+            assert_eq!(attrs[1].intensity(), Intensity::Bold);
+            assert_eq!(attrs[2].underline(), Underline::Single);
+        }
+    }
+
+    #[test]
+    fn omitted_attributes_and_reset_keep_context_defaults() {
+        let defaults = TabBarColors::default()
+            .inactive_tab_hover()
+            .as_cell_attributes();
+        let text = format_as_escapes(vec![
+            FormatItem::Text("a".into()),
+            FormatItem::Attribute(AttributeChange::Italic(false)),
+            FormatItem::Text("b".into()),
+            FormatItem::ResetAttributes,
+            FormatItem::Text("c".into()),
+        ])
+        .unwrap();
+        let line = parse_status_text(&text, defaults.clone());
+        let attrs: Vec<_> = line.visible_cells().map(|c| c.attrs().clone()).collect();
+        assert_eq!(attrs[0], defaults);
+        assert!(!attrs[1].italic());
+        assert_eq!(attrs[2], defaults);
+        assert_eq!(
+            parse_status_text("plain", defaults.clone())
+                .visible_cells()
+                .next()
+                .unwrap()
+                .attrs(),
+            &defaults
+        );
+    }
+
+    #[test]
+    fn explicit_defaults_override_inherited_attributes_and_raw_colors() {
+        let mut defaults = TabBarColors::default()
+            .inactive_tab_hover()
+            .as_cell_attributes();
+        defaults
+            .set_intensity(Intensity::Bold)
+            .set_underline(Underline::Single)
+            .set_reverse(true);
+        let text = format_as_escapes(vec![
+            FormatItem::Text("\x1b[31m\x1b[44m".into()),
+            FormatItem::Attribute(AttributeChange::Italic(false)),
+            FormatItem::Attribute(AttributeChange::Intensity(Intensity::Normal)),
+            FormatItem::Attribute(AttributeChange::Underline(Underline::None)),
+            FormatItem::Attribute(AttributeChange::Reverse(false)),
+            FormatItem::Foreground(FormatColor::Default),
+            FormatItem::Background(FormatColor::Default),
+            FormatItem::Text("x".into()),
+        ])
+        .unwrap();
+        let line = parse_status_text(&text, defaults.clone());
+        let mut expected = defaults;
+        expected
+            .set_italic(false)
+            .set_intensity(Intensity::Normal)
+            .set_underline(Underline::None)
+            .set_reverse(false);
+        assert_eq!(line.visible_cells().next().unwrap().attrs(), &expected);
+    }
+
+    #[test]
+    fn preformatted_text_preserves_explicit_overrides_and_width() {
+        let defaults = TabBarColors::default().new_tab_hover().as_cell_attributes();
+        let button = format_as_escapes(vec![
+            FormatItem::Attribute(AttributeChange::Italic(false)),
+            FormatItem::Text(" + ".into()),
+        ])
+        .unwrap();
+        // Preformatted button text and strings returned from format-tab-title
+        // must behave like the table form, even when wrapped in another format.
+        for text in [
+            button.clone(),
+            format_as_escapes(vec![FormatItem::Text(button)]).unwrap(),
+        ] {
+            let line = parse_status_text(&text, defaults.clone());
+            assert_eq!(line.len(), 3);
+            assert!(line.visible_cells().all(|c| !c.attrs().italic()));
+        }
+        let raw = "\x1b[23m界e\u{301}";
+        let wrapped = format_as_escapes(vec![FormatItem::Text(raw.into())]).unwrap();
+        assert_eq!(
+            parse_status_text(&wrapped, defaults.clone()),
+            parse_status_text(raw, defaults)
+        );
+    }
+
+    #[test]
+    fn nested_plain_and_color_only_formats_preserve_surrounding_attributes() {
+        let defaults = TabBarColors::default()
+            .inactive_tab_hover()
+            .as_cell_attributes();
+        for nested in [
+            format_as_escapes(vec![]).unwrap(),
+            format_as_escapes(vec![FormatItem::Text("x".into())]).unwrap(),
+            format_as_escapes(vec![
+                FormatItem::Foreground(FormatColor::AnsiColor(AnsiColor::Red)),
+                FormatItem::Text("x".into()),
+            ])
+            .unwrap(),
+            format_as_escapes(vec![
+                FormatItem::Attribute(AttributeChange::Hyperlink(Some(std::sync::Arc::new(
+                    termwiz::hyperlink::Hyperlink::new("https://wezterm.org"),
+                )))),
+                FormatItem::Text("x".into()),
+            ])
+            .unwrap(),
+        ] {
+            let text = format_as_escapes(vec![
+                FormatItem::Attribute(AttributeChange::Italic(false)),
+                FormatItem::Text(nested),
+                FormatItem::Text("y".into()),
+            ])
+            .unwrap();
+            assert!(parse_status_text(&text, defaults.clone())
+                .visible_cells()
+                .all(|c| !c.attrs().italic()));
+        }
+    }
+}
