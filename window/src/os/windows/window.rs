@@ -1608,6 +1608,54 @@ unsafe fn wm_kill_focus(
     None
 }
 
+/// Handle window activation changes (eg: alt-tabbing to/from the window).
+///
+/// WezTerm only paints on demand (via `InvalidateRect`/`WM_PAINT`). For a
+/// DWM-composited, GPU-backed window the system does not reliably generate a
+/// `WM_PAINT` when the window is uncovered after being occluded, and the
+/// composited surface may still hold stale or corrupt content. The user then
+/// sees garbage until some other event (eg: a mouse move) forces a repaint.
+///
+/// When the window becomes active again we therefore force a fresh repaint.
+/// We clear `paint_throttled` so the repaint can't be swallowed by the frame
+/// rate limiter. Because the restore/compositor transition (including the
+/// restore animation) may not have completed yet, a single immediate repaint
+/// can still race the DWM surface, so we also schedule one more repaint
+/// shortly afterwards to guarantee that a correct frame lands once composition
+/// has settled.
+unsafe fn wm_activate(
+    hwnd: HWND,
+    _msg: UINT,
+    wparam: WPARAM,
+    _lparam: LPARAM,
+) -> Option<LRESULT> {
+    let activated = (wparam & 0xffff) != WA_INACTIVE as WPARAM;
+    if activated {
+        if let Some(inner) = rc_from_hwnd(hwnd) {
+            let window_id = {
+                let mut inner = inner.borrow_mut();
+                inner.paint_throttled = false;
+                InvalidateRect(hwnd, null(), 0);
+                inner.hwnd
+            };
+
+            promise::spawn::spawn(async move {
+                async_io::Timer::after(std::time::Duration::from_millis(100)).await;
+                Connection::with_window_inner(window_id, move |inner| {
+                    inner.paint_throttled = false;
+                    unsafe {
+                        InvalidateRect(inner.hwnd.0, null(), 0);
+                    }
+                    Ok(())
+                });
+            })
+            .detach();
+        }
+    }
+    // Allow DefWindowProcW to perform the default activation handling too.
+    None
+}
+
 unsafe fn wm_paint(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
@@ -2953,6 +3001,7 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
         WM_PAINT => wm_paint(hwnd, msg, wparam, lparam),
         WM_ENTERSIZEMOVE | WM_EXITSIZEMOVE => wm_enter_exit_size_move(hwnd, msg, wparam, lparam),
         WM_WINDOWPOSCHANGED => wm_windowposchanged(hwnd, msg, wparam, lparam),
+        WM_ACTIVATE => wm_activate(hwnd, msg, wparam, lparam),
         WM_SETFOCUS => wm_set_focus(hwnd, msg, wparam, lparam),
         WM_KILLFOCUS => wm_kill_focus(hwnd, msg, wparam, lparam),
         WM_DEADCHAR | WM_KEYDOWN | WM_KEYUP | WM_SYSCHAR | WM_CHAR | WM_IME_CHAR | WM_SYSKEYUP
