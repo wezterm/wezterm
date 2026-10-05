@@ -18,6 +18,29 @@ use wezterm_bidi::Direction;
 use wezterm_term::color::ColorAttribute;
 use wezterm_term::CellAttributes;
 
+/// Position a caret quad within the pane. At the end of the preedit, the
+/// bar is right-aligned so it stays on the composition background.
+fn composition_caret_quad(
+    start_column: usize,
+    cursor_column: usize,
+    composition_width: usize,
+    cell_width: f32,
+    pixel_width: f32,
+) -> Option<(Range<f32>, bool)> {
+    let x = (start_column + cursor_column) as f32 * cell_width;
+    if x > pixel_width {
+        return None;
+    }
+    let right_aligned =
+        (composition_width > 0 && cursor_column == composition_width) || x == pixel_width;
+    let range = if right_aligned {
+        x - cell_width..x
+    } else {
+        x..x + cell_width
+    };
+    Some((range, right_aligned))
+}
+
 impl crate::TermWindow {
     /// "Render" a line of the terminal screen into the vertex buffer.
     /// This is nominally a matter of setting the fg/bg color and the
@@ -77,8 +100,8 @@ impl crate::TermWindow {
 
         // Referencing the text being composed, but only if it belongs to this pane
         let composing = if cursor_idx.is_some() {
-            if let DeadKeyStatus::Composing(composing) = &self.dead_key_status {
-                Some(composing)
+            if let DeadKeyStatus::Composing { text, cursor } = &self.dead_key_status {
+                Some((text, *cursor))
             } else {
                 None
             }
@@ -91,11 +114,13 @@ impl crate::TermWindow {
         let (_bidi_enabled, bidi_direction) = params.line.bidi_info();
         let direction = bidi_direction.direction();
 
-        // Do we need to shape immediately, or can we use the pre-shaped data?
-        if let Some(composing) = composing {
-            composition_width = unicode_column_width(composing, None);
+        // Measure the preedit text and its caret in terminal columns.
+        if let Some((text, _)) = composing {
+            composition_width = unicode_column_width(text, None);
         }
-
+        let composition_cursor = composing
+            .and_then(|(text, cursor)| cursor.and_then(|cursor| text.get(..cursor)))
+            .map(|prefix| unicode_column_width(prefix, None));
         let cursor_cell = if params.stable_line_idx == Some(params.cursor.y) {
             params.line.get_cell(params.cursor.x)
         } else {
@@ -303,50 +328,25 @@ impl crate::TermWindow {
             0.0..0.0
         };
 
-        // Render composition/IME preview background
-        if composition_width > 0 {
-            if let Some(compose_bg) = &params.config.resolved_palette.compose_bg {
-                let start = params.left_pixel_x + (params.cursor.x as f32 * cell_width);
-                let width = composition_width as f32 * cell_width;
-                let mut quad = self
-                    .filled_rectangle(
-                        layers,
-                        0,
-                        euclid::rect(start, params.top_pixel_y, width, cell_height),
-                        compose_bg.to_linear(),
-                    )
-                    .context("filled_rectangle")?;
-                quad.set_hsv(hsv);
-            }
-        }
-
-        // Consider cursor
-        if !cursor_range.is_empty() {
+        // Resolve cursor colors once. The preedit background, glyphs and
+        // caret must agree, including reverse video and visual bell colors.
+        let cursor_colors = if !cursor_range.is_empty() {
             let (fg_color, bg_color) = if let Some(c) = &cursor_cell {
                 let attrs = c.attrs();
-
-                let bg_color = params.palette.resolve_bg(attrs.background()).to_linear();
-
-                let fg_color = resolve_fg_color_attr(
-                    &attrs,
-                    attrs.foreground(),
-                    &params.palette,
-                    &params.config,
-                    &Default::default(),
-                );
-
-                (fg_color, bg_color)
+                (
+                    resolve_fg_color_attr(
+                        &attrs,
+                        attrs.foreground(),
+                        &params.palette,
+                        &params.config,
+                        &Default::default(),
+                    ),
+                    params.palette.resolve_bg(attrs.background()).to_linear(),
+                )
             } else {
                 (params.foreground, params.default_bg)
             };
-
-            let ComputeCellFgBgResult {
-                cursor_shape,
-                cursor_border_color,
-                cursor_border_color_alt,
-                cursor_border_mix,
-                ..
-            } = self.compute_cell_fg_bg(ComputeCellFgBgParams {
+            Some(self.compute_cell_fg_bg(ComputeCellFgBgParams {
                 cursor: Some(params.cursor),
                 selected: false,
                 fg_color,
@@ -360,7 +360,47 @@ impl crate::TermWindow {
                 cursor_is_default_color: params.cursor_is_default_color,
                 cursor_border_color: params.cursor_border_color,
                 pane: params.pane,
-            });
+            }))
+        } else {
+            None
+        };
+
+        // Render composition/IME preview background
+        if composition_width > 0 || composition_cursor.is_some() {
+            let compose_bg = if composition_cursor.is_some() {
+                cursor_colors
+                    .as_ref()
+                    .map(|colors| (colors.bg_color, colors.bg_color_alt, colors.bg_color_mix))
+            } else {
+                params.config.resolved_palette.compose_bg.map(|color| {
+                    let color = color.to_linear();
+                    (color, color, 0.)
+                })
+            };
+            if let Some((compose_bg, compose_bg_alt, compose_bg_mix)) = compose_bg {
+                let start = params.left_pixel_x + (params.cursor.x as f32 * cell_width);
+                let width = (cursor_range.end - cursor_range.start) as f32 * cell_width;
+                if let Some(rect) = euclid::rect(start, params.top_pixel_y, width, cell_height)
+                    .intersection(&bounding_rect)
+                {
+                    let mut quad = self
+                        .filled_rectangle(layers, 0, rect, compose_bg)
+                        .context("filled_rectangle")?;
+                    quad.set_alt_color_and_mix_value(compose_bg_alt, compose_bg_mix);
+                    quad.set_hsv(hsv);
+                }
+            }
+        }
+
+        // Consider cursor
+        if !cursor_range.is_empty() && composition_cursor.is_none() {
+            let ComputeCellFgBgResult {
+                cursor_shape,
+                cursor_border_color,
+                cursor_border_color_alt,
+                cursor_border_mix,
+                ..
+            } = cursor_colors.as_ref().unwrap();
             let pos_x = (self.dimensions.pixel_width as f32 / -2.)
                 + params.left_pixel_x
                 + (phys(params.cursor.x, num_cols, direction) as f32 * cell_width);
@@ -424,7 +464,7 @@ impl crate::TermWindow {
                             .glyph_cache
                             .borrow_mut()
                             .cursor_sprite(
-                                Some(shape),
+                                Some(*shape),
                                 &params.render_metrics,
                                 (cursor_range.end - cursor_range.start) as u8,
                             )?
@@ -432,8 +472,57 @@ impl crate::TermWindow {
                     );
                 }
 
-                quad.set_fg_color(cursor_border_color);
-                quad.set_alt_color_and_mix_value(cursor_border_color_alt, cursor_border_mix);
+                quad.set_fg_color(*cursor_border_color);
+                quad.set_alt_color_and_mix_value(*cursor_border_color_alt, *cursor_border_mix);
+            }
+        }
+
+        // A composition caret is independent of the terminal cursor's shape
+        // and visibility, and must be drawn above the preedit glyphs.
+        if let Some(cursor) = composition_cursor {
+            if let Some((range, right_aligned)) = composition_caret_quad(
+                params.cursor.x,
+                cursor,
+                composition_width,
+                cell_width,
+                params.pixel_width,
+            ) {
+                let colors = cursor_colors.as_ref().unwrap();
+                let color = params
+                    .config
+                    .resolved_palette
+                    .compose_cursor
+                    .map(|color| color.to_linear())
+                    .unwrap_or(colors.fg_color);
+                let sprite = gl_state.glyph_cache.borrow_mut().cursor_sprite(
+                    Some(CursorShape::SteadyBar),
+                    &params.render_metrics,
+                    1,
+                )?;
+                let mut quad = layers.allocate(2).context("composition caret")?;
+                let left = gl_x + params.left_pixel_x;
+                quad.set_position(
+                    left + range.start,
+                    pos_y,
+                    left + range.end,
+                    pos_y + cell_height,
+                );
+                let texture = sprite.texture_coords();
+                if right_aligned {
+                    // Mirror the left-edge bar onto the right edge of the
+                    // previous cell, rather than drawing on the next cell.
+                    quad.set_texture_discrete(
+                        texture.max_x(),
+                        texture.min_x(),
+                        texture.min_y(),
+                        texture.max_y(),
+                    );
+                } else {
+                    quad.set_texture(texture);
+                }
+                quad.set_has_color(false);
+                quad.set_fg_color(color);
+                quad.set_hsv(hsv);
             }
         }
 
@@ -619,29 +708,29 @@ impl crate::TermWindow {
                             let selected =
                                 !is_cursor && selection_pixel_range.contains(&range.start);
 
-                            let ComputeCellFgBgResult {
-                                fg_color: glyph_color,
-                                bg_color,
-                                fg_color_alt,
-                                fg_color_mix,
-                                ..
-                            } = self.compute_cell_fg_bg(ComputeCellFgBgParams {
-                                cursor: if is_cursor { Some(params.cursor) } else { None },
-                                selected,
-                                fg_color: item.fg_color,
-                                bg_color: item.bg_color,
-                                is_active_pane: params.is_active,
-                                config: params.config,
-                                selection_fg: params.selection_fg,
-                                selection_bg: params.selection_bg,
-                                cursor_fg: params.cursor_fg,
-                                cursor_bg: params.cursor_bg,
-                                cursor_is_default_color: params.cursor_is_default_color,
-                                cursor_border_color: params.cursor_border_color,
-                                pane: params.pane,
-                            });
+                            let computed_colors;
+                            let colors = if is_cursor && composition_cursor.is_some() {
+                                cursor_colors.as_ref().unwrap()
+                            } else {
+                                computed_colors = self.compute_cell_fg_bg(ComputeCellFgBgParams {
+                                    cursor: if is_cursor { Some(params.cursor) } else { None },
+                                    selected,
+                                    fg_color: item.fg_color,
+                                    bg_color: item.bg_color,
+                                    is_active_pane: params.is_active,
+                                    config: params.config,
+                                    selection_fg: params.selection_fg,
+                                    selection_bg: params.selection_bg,
+                                    cursor_fg: params.cursor_fg,
+                                    cursor_bg: params.cursor_bg,
+                                    cursor_is_default_color: params.cursor_is_default_color,
+                                    cursor_border_color: params.cursor_border_color,
+                                    pane: params.pane,
+                                });
+                                &computed_colors
+                            };
 
-                            if glyph_color == bg_color || cluster.attrs.invisible() {
+                            if colors.fg_color == colors.bg_color || cluster.attrs.invisible() {
                                 // Essentially invisible: don't render it, as anti-aliasing
                                 // can cause a ghostly outline of the invisible glyph to appear.
                                 continue;
@@ -663,8 +752,11 @@ impl crate::TermWindow {
                                 gl_x + range.end,
                                 pos_y + top + texture.coords.size.height as f32 * height_scale,
                             );
-                            quad.set_fg_color(glyph_color);
-                            quad.set_alt_color_and_mix_value(fg_color_alt, fg_color_mix);
+                            quad.set_fg_color(colors.fg_color);
+                            quad.set_alt_color_and_mix_value(
+                                colors.fg_color_alt,
+                                colors.fg_color_mix,
+                            );
                             quad.set_texture(texture_rect);
                             quad.set_hsv(if glyph.brightness_adjust != 1.0 {
                                 let hsv = hsv.unwrap_or_else(|| HsbTransform::default());
@@ -927,5 +1019,60 @@ impl crate::TermWindow {
         }
 
         Ok((shaped, invalidate_on_hover_change))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::composition_caret_quad;
+
+    #[test]
+    fn composition_caret_moves_and_stays_inside_preedit_at_end() {
+        // Moving the caret does not change the preedit text or its width.
+        assert_eq!(
+            composition_caret_quad(3, 0, 8, 10., 200.),
+            Some((30.0..40.0, false))
+        );
+        assert_eq!(
+            composition_caret_quad(3, 3, 8, 10., 200.),
+            Some((60.0..70.0, false))
+        );
+        assert_eq!(
+            composition_caret_quad(3, 8, 8, 10., 200.),
+            Some((100.0..110.0, true))
+        );
+    }
+
+    #[test]
+    fn composition_caret_is_visible_when_preedit_fills_row() {
+        assert_eq!(
+            composition_caret_quad(72, 8, 8, 10., 800.),
+            Some((790.0..800.0, true))
+        );
+    }
+
+    #[test]
+    fn composition_caret_does_not_overflow_with_truncated_preedit() {
+        assert_eq!(composition_caret_quad(72, 9, 9, 10., 800.), None);
+        assert_eq!(
+            composition_caret_quad(72, 8, 9, 10., 800.),
+            Some((790.0..800.0, true))
+        );
+    }
+
+    #[test]
+    fn composition_caret_respects_scaled_cells() {
+        assert_eq!(
+            composition_caret_quad(32, 8, 8, 20., 800.),
+            Some((780.0..800.0, true))
+        );
+    }
+
+    #[test]
+    fn empty_preedit_caret_stays_at_insertion_point() {
+        assert_eq!(
+            composition_caret_quad(3, 0, 0, 10., 200.),
+            Some((30.0..40.0, false))
+        );
     }
 }
