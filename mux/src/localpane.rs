@@ -11,6 +11,8 @@ use async_trait::async_trait;
 use config::keyassignment::ScrollbackEraseMode;
 use config::{configuration, ExitBehavior, ExitBehaviorMessaging};
 use fancy_regex::Regex;
+#[cfg(unix)]
+use filedescriptor::{poll, pollfd, FileDescriptor, Pipe, POLLIN};
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty, PtySize};
 use procinfo::LocalProcessInfo;
@@ -21,6 +23,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::io::{Result as IoResult, Write};
 use std::ops::Range;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use termwiz::escape::csi::{Sgr, CSI};
@@ -127,6 +131,9 @@ pub struct LocalPane {
     process: Mutex<ProcessState>,
     pty: Mutex<Box<dyn MasterPty>>,
     writer: Mutex<Box<dyn Write + Send>>,
+    /// Stops the reader when dropped, see KillableReader
+    #[cfg(unix)]
+    reader_stop: Mutex<Option<FileDescriptor>>,
     domain_id: DomainId,
     tmux_domain: Mutex<Option<Arc<TmuxDomainState>>>,
     proc_list: Mutex<Option<CachedProcInfo>>,
@@ -260,6 +267,13 @@ impl Pane for LocalPane {
             }
             _ => {}
         }
+
+        // Let the reader thread close its handle on the pty. The pty is only
+        // hung up once nothing has it open anymore, and the hangup is what
+        // reaches processes that the SIGHUP above doesn't, such as a shell
+        // started by `su`.
+        #[cfg(unix)]
+        self.reader_stop.lock().take();
     }
 
     fn is_dead(&self) -> bool {
@@ -434,7 +448,14 @@ impl Pane for LocalPane {
     }
 
     fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>> {
-        Ok(Some(self.pty.lock().try_clone_reader()?))
+        let pty = self.pty.lock();
+        #[cfg(unix)]
+        if let Some(fd) = pty.as_raw_fd() {
+            let (reader, stop) = KillableReader::new(fd)?;
+            self.reader_stop.lock().replace(stop);
+            return Ok(Some(Box::new(reader)));
+        }
+        Ok(Some(pty.try_clone_reader()?))
     }
 
     fn send_paste(&self, text: &str) -> Result<(), Error> {
@@ -1031,6 +1052,8 @@ impl LocalPane {
             }),
             pty: Mutex::new(pty),
             writer: Mutex::new(writer),
+            #[cfg(unix)]
+            reader_stop: Mutex::new(None),
             domain_id,
             tmux_domain: Mutex::new(None),
             proc_list: Mutex::new(None),
@@ -1152,6 +1175,68 @@ impl LocalPane {
     }
 }
 
+/// Reads from the pty until the pane is killed, and then reports EOF so
+/// that the reader thread doesn't keep the pty open.
+#[cfg(unix)]
+struct KillableReader {
+    /// A handle on the pty, like the one from MasterPty::try_clone_reader
+    pty: FileDescriptor,
+    /// Becomes readable when the write end, held by the pane, is closed
+    stop: FileDescriptor,
+}
+
+#[cfg(unix)]
+impl KillableReader {
+    /// Returns the reader along with the write end that stops it once dropped
+    fn new(pty_fd: RawFd) -> anyhow::Result<(Self, FileDescriptor)> {
+        // Safety: the caller holds the pty, so the fd is open during the dup
+        let pty = FileDescriptor::dup(&unsafe { BorrowedFd::borrow_raw(pty_fd) })?;
+        let pipe = Pipe::new()?;
+        Ok((
+            Self {
+                pty,
+                stop: pipe.read,
+            },
+            pipe.write,
+        ))
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Read for KillableReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut pfd = [
+            pollfd {
+                fd: self.pty.as_raw_fd(),
+                events: POLLIN,
+                revents: 0,
+            },
+            pollfd {
+                fd: self.stop.as_raw_fd(),
+                events: POLLIN,
+                revents: 0,
+            },
+        ];
+        loop {
+            match poll(&mut pfd, None) {
+                Ok(_) if pfd[1].revents != 0 => return Ok(0),
+                Ok(_) => break,
+                // The macOS implementation of poll reports its errors as Io
+                Err(filedescriptor::Error::Poll(err) | filedescriptor::Error::Io(err))
+                    if err.kind() == std::io::ErrorKind::Interrupted => {}
+                // Eg: an fd that is too large for select(2), which poll uses
+                // on macOS. Fall back to a plain read, which can't be stopped.
+                Err(_) => break,
+            }
+        }
+        match self.pty.read(buf) {
+            // Like PtyFd: EIO means that the other end of the pty is closed
+            Err(err) if err.raw_os_error() == Some(libc::EIO) => Ok(0),
+            result => result,
+        }
+    }
+}
+
 impl Drop for LocalPane {
     fn drop(&mut self) {
         // Avoid lingering zombies if we can, but don't block forever.
@@ -1159,5 +1244,48 @@ impl Drop for LocalPane {
         if let ProcessState::Running { signaller, .. } = &mut *self.process.lock() {
             let _ = signaller.kill();
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod test {
+    use super::*;
+    use portable_pty::{native_pty_system, CommandBuilder};
+    use std::io::Read;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn killable_reader_reports_eof_when_stopped() {
+        let pair = native_pty_system().openpty(PtySize::default()).unwrap();
+        let (mut reader, stop) = KillableReader::new(pair.master.as_raw_fd().unwrap()).unwrap();
+
+        // Nothing writes to the pty, so the read blocks
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 16];
+            tx.send(reader.read(&mut buf).unwrap()).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+
+        // Closing the write end, as LocalPane::kill does, ends it with EOF
+        drop(stop);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), 0);
+    }
+
+    #[test]
+    fn killable_reader_passes_output_through() {
+        let pair = native_pty_system().openpty(PtySize::default()).unwrap();
+        let (mut reader, _stop) = KillableReader::new(pair.master.as_raw_fd().unwrap()).unwrap();
+        let mut cmd = CommandBuilder::new("echo");
+        cmd.arg("hello");
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+
+        // The output arrives, and EOF is still reported once the process
+        // has exited and closed its end of the pty
+        let mut output = String::new();
+        reader.read_to_string(&mut output).unwrap();
+        assert!(output.contains("hello"), "{:?}", output);
+        child.wait().unwrap();
     }
 }

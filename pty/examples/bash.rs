@@ -61,6 +61,8 @@ fn main() {
         std::io::stdin().read_line(&mut input).unwrap();
 
         if input.trim() == "exit" {
+            // Pass it on to bash as well, so that it terminates
+            tx.send(input).unwrap();
             break;
         }
 
