@@ -2026,6 +2026,7 @@ impl TabInner {
                         };
 
                         self.pane.replace(cursor.tree());
+                        self.size = split_info.size();
 
                         let pane_index = if request.target_is_second {
                             self.pane.as_ref().unwrap().num_leaves().saturating_sub(1)
@@ -2525,4 +2526,106 @@ mod test {
     fn tab_is_send_and_sync() {
         assert!(is_send_and_sync::<Tab>());
     }
+
+    /// Test that a top-level split followed by closing the split pane
+    /// restores the original panes to their original sizes.
+    #[test]
+    fn top_level_split_and_close_restores_original() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+
+        // Horizontal split to get A(1) | B(2)
+        let horz_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            FakePane::new(2, horz_size.second),
+        )
+        .unwrap();
+
+        // Record the pane layout before the top-level split
+        let panes_before = tab.iter_panes();
+        assert_eq!(2, panes_before.len());
+        let pane1_before = panes_before.iter().find(|p| p.pane.pane_id() == 1).unwrap();
+        let pane2_before = panes_before.iter().find(|p| p.pane.pane_id() == 2).unwrap();
+        let p1_left = pane1_before.left;
+        let p1_top = pane1_before.top;
+        let p1_width = pane1_before.width;
+        let p1_height = pane1_before.height;
+        let p2_left = pane2_before.left;
+        let p2_top = pane2_before.top;
+        let p2_width = pane2_before.width;
+        let p2_height = pane2_before.height;
+
+        // Top-level vertical split: [A|B] / C(3)
+        let vert_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Vertical,
+                    top_level: true,
+                    target_is_second: true,
+                    size: SplitSize::default(),
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Vertical,
+                top_level: true,
+                target_is_second: true,
+                size: SplitSize::default(),
+            },
+            FakePane::new(3, vert_size.second),
+        )
+        .unwrap();
+
+        assert_eq!(3, tab.iter_panes().len());
+
+        // Close pane C(3)
+        let removed = tab.remove_pane(3);
+        assert!(removed.is_some());
+
+        // Should be back to 2 panes
+        let panes_after = tab.iter_panes();
+        assert_eq!(2, panes_after.len());
+
+        // Tab size should be restored to the full original size
+        let tab_size = tab.get_size();
+        assert_eq!(24, tab_size.rows);
+        assert_eq!(80, tab_size.cols);
+
+        // Original panes should have their original positions and dimensions
+        let pane1_after = panes_after.iter().find(|p| p.pane.pane_id() == 1).unwrap();
+        let pane2_after = panes_after.iter().find(|p| p.pane.pane_id() == 2).unwrap();
+        assert_eq!(p1_left, pane1_after.left);
+        assert_eq!(p1_top, pane1_after.top);
+        assert_eq!(p1_width, pane1_after.width);
+        assert_eq!(p1_height, pane1_after.height);
+        assert_eq!(p2_left, pane2_after.left);
+        assert_eq!(p2_top, pane2_after.top);
+        assert_eq!(p2_width, pane2_after.width);
+        assert_eq!(p2_height, pane2_after.height);
+    }
+
 }
