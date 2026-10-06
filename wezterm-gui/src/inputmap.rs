@@ -499,7 +499,7 @@ impl InputMap {
 
     pub fn show_keys(&self) {
         if let Some((key, mods, duration)) = &self.leader {
-            println!("Leader: {key:?} {mods:?} {duration:?}");
+            println!("Leader: {mods:?} {key:?} {duration:?}");
         }
 
         section_header("Default key table");
@@ -775,7 +775,7 @@ fn lua_key(key: &KeyCode, mods: Modifiers, action: &KeyAssignment) -> String {
 
     let mods = format!("{mods:?}").replace(" ", "");
 
-    format!("{{ key = {key}, mods = '{mods}', action = {action} }}")
+    format!("{{ mods = '{mods}', key = {key}, action = {action} }}")
 }
 
 fn show_key_table(table: &config::keyassignment::KeyTable) {
