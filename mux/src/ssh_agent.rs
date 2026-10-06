@@ -84,6 +84,14 @@ impl AgentProxy {
         let pid = unsafe { libc::getpid() };
         let sock_path = config::RUNTIME_DIR.join(format!("agent.{pid}"));
 
+        // Ensure the runtime directory exists before creating the symlink
+        if let Err(err) = config::create_user_owned_dirs(&config::RUNTIME_DIR) {
+            log::error!(
+                "failed to create runtime directory {:?}: {err:#}",
+                *config::RUNTIME_DIR
+            );
+        }
+
         if let Some(inherited) = Self::default_ssh_auth_sock() {
             if let Err(err) = update_symlink(&inherited, &sock_path) {
                 log::error!("failed to set {sock_path:?} to initial inherited SSH_AUTH_SOCK value of {inherited:?}: {err:#}");
