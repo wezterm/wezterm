@@ -49,6 +49,7 @@ mod scripting;
 mod scrollbar;
 mod selection;
 mod shapecache;
+mod simulated_gui;
 mod spawn;
 mod stats;
 mod tabbar;
@@ -131,6 +132,23 @@ enum SubCommand {
 
     #[command(name = "show-keys", about = "Show key assignments")]
     ShowKeys(ShowKeysCommand),
+
+    #[command(
+        name = "check-config",
+        about = "Check that the configuration loads, and exit non-zero if it does not"
+    )]
+    CheckConfig(CheckConfigCommand),
+}
+
+impl SubCommand {
+    /// Subcommands that print their result into the terminal the user ran
+    /// them in.
+    fn runs_in_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::LsFonts(_) | Self::ShowKeys(_) | Self::CheckConfig(_)
+        )
+    }
 }
 
 async fn async_run_ssh(opts: SshCommand) -> anyhow::Result<()> {
@@ -826,6 +844,33 @@ fn terminate_with_error(err: anyhow::Error) -> ! {
     terminate_with_error_message(&err_text)
 }
 
+/// Where a failure gets reported depends on where the user is watching.
+enum Failure {
+    /// A subcommand run in a terminal; stderr is where the user is looking.
+    Cli(anyhow::Error),
+    /// Reachable by starting wezterm from a desktop icon, where nothing is
+    /// watching a terminal and the notification is all that is seen.
+    Gui(anyhow::Error),
+}
+
+impl From<anyhow::Error> for Failure {
+    /// `?` inside `run` defaults to the gui treatment, so a path that has
+    /// not been thought about keeps its notification.
+    fn from(err: anyhow::Error) -> Self {
+        Self::Gui(err)
+    }
+}
+
+impl Failure {
+    fn new(in_terminal: bool, err: anyhow::Error) -> Self {
+        if in_terminal {
+            Self::Cli(err)
+        } else {
+            Self::Gui(err)
+        }
+    }
+}
+
 fn main() {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
@@ -833,8 +878,13 @@ fn main() {
     config::designate_this_as_the_main_thread();
     config::assign_error_callback(mux::connui::show_configuration_error_message);
     notify_on_panic();
-    if let Err(e) = run() {
-        terminate_with_error(e);
+    match run() {
+        Ok(()) => {}
+        Err(Failure::Cli(err)) => {
+            eprintln!("{err:#}");
+            std::process::exit(1);
+        }
+        Err(Failure::Gui(err)) => terminate_with_error(err),
     }
     Mux::shutdown();
     frontend::shutdown();
@@ -849,6 +899,10 @@ fn maybe_show_configuration_error_window() {
 }
 
 fn run_show_keys(config: config::ConfigHandle, cmd: &ShowKeysCommand) -> anyhow::Result<()> {
+    // Without this the defaults would be printed as though they were the
+    // user's, which is worse than printing nothing.
+    config::configuration_result()?;
+
     let map = crate::inputmap::InputMap::new(&config);
     if cmd.lua {
         map.dump_config(cmd.key_table.as_deref());
@@ -858,13 +912,63 @@ fn run_show_keys(config: config::ConfigHandle, cmd: &ShowKeysCommand) -> anyhow:
     Ok(())
 }
 
+fn run_check_config(cmd: &CheckConfigCommand, skip_config: bool) -> anyhow::Result<()> {
+    // Only `warnings_as_errors` is read here.  The other fields had to be
+    // applied in `run`, before the lua state was built.
+    config::assign_error_callback(|err| eprintln!("{}", err));
+
+    // `common_init` has already loaded the configuration, exactly once,
+    // with every lua module registered.  Reloading it here would run a
+    // configuration that is a test suite twice.
+    let error = config::configuration_result().err();
+    let mut warnings = config::configuration_warnings();
+
+    // Set at the end of a successful load, and cleared when no
+    // configuration file was found.
+    let config_file = std::env::var_os("WEZTERM_CONFIG_FILE");
+
+    // Naming a file that is not there already failed, so none was asked
+    // for.  A job whose configuration was never put in place should not
+    // read a bare pass -- unless it asked for the defaults, in which case
+    // this is what it wanted.
+    //
+    // A failed load leaves `WEZTERM_CONFIG_FILE` unset too, so the error
+    // has to be ruled out first: there was a file, and it is about to be
+    // reported on.
+    if error.is_none() && config_file.is_none() && !skip_config {
+        warnings.push(
+            "no configuration file was found; checked wezterm's built-in defaults instead"
+                .to_string(),
+        );
+    }
+
+    for warning in &warnings {
+        eprintln!("{warning}");
+    }
+
+    let error_text = error.as_ref().map(|err| format!("{err:#}"));
+    match check_outcome(error_text.as_deref(), &warnings, cmd.warnings_as_errors) {
+        CheckOutcome::Ok => {
+            match config_file {
+                Some(path) => {
+                    println!("config ok: {}", std::path::Path::new(&path).display())
+                }
+                None => println!("config ok: no configuration file; using built-in defaults"),
+            }
+            Ok(())
+        }
+        // The error is returned rather than printed, so that it reaches
+        // stderr by the same route as every other cli failure.
+        CheckOutcome::Failed => {
+            Err(error.unwrap_or_else(|| anyhow!("the configuration produced warnings")))
+        }
+    }
+}
+
 pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyhow::Result<()> {
     use wezterm_font::parser::ParsedFont;
 
-    if let Err(err) = config::configuration_result() {
-        log::error!("{}", err);
-        return Ok(());
-    }
+    config::configuration_result()?;
 
     // Disable the normal config error UI window, as we don't have
     // a fully baked GUI environment running
@@ -1164,7 +1268,7 @@ pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyho
     Ok(())
 }
 
-fn run() -> anyhow::Result<()> {
+fn run() -> Result<(), Failure> {
     // Inform the system of our AppUserModelID.
     // Without this, our toast notifications won't be correctly
     // attributed to our application.
@@ -1179,6 +1283,12 @@ fn run() -> anyhow::Result<()> {
     }
 
     let opts = Opt::parse();
+
+    // Whether the error should be reported to stderr, or to a GUI popup.
+    let in_terminal = opts
+        .cmd
+        .as_ref()
+        .map_or(false, SubCommand::runs_in_terminal);
 
     // This is a bit gross.
     // In order to not to automatically open a standard windows console when
@@ -1209,11 +1319,45 @@ fn run() -> anyhow::Result<()> {
     stats::Stats::init()?;
     let _saver = umask::UmaskSaver::new();
 
-    config::common_init(
-        opts.config_file.as_ref(),
-        &opts.config_override,
-        opts.skip_config,
-    )?;
+    // Special handling for check-config: it allows specifying config path
+    // positionally, and enabling lua's debug mode.
+    if let Some(SubCommand::CheckConfig(check_config)) = opts.cmd.as_ref() {
+        // Mock lua's wezterm.gui module.
+        crate::simulated_gui::set_simulated_appearance(check_config.appearance);
+        config::lua::add_context_setup_func(crate::simulated_gui::register);
+
+        // Resolve config path.
+        let config_file = resolve_config_file(
+            opts.config_file.as_ref(),
+            check_config.config_file.as_ref(),
+            opts.skip_config,
+        )
+        .map_err(Failure::Cli)?;
+
+        let lua_debug_module = if check_config.unsafe_enable_debug_module {
+            config::LuaDebugModule::Available
+        } else {
+            config::LuaDebugModule::Withheld
+        };
+
+        // SAFETY: check-config command is permitted to enable lua debug.
+        unsafe {
+            config::common_init_with_lua_debug(
+                config_file.as_ref(),
+                &opts.config_override,
+                opts.skip_config,
+                lua_debug_module,
+            )
+        }
+        .map_err(Failure::Cli)?;
+    } else {
+        config::common_init(
+            opts.config_file.as_ref(),
+            &opts.config_override,
+            opts.skip_config,
+        )
+        .map_err(|err| Failure::new(in_terminal, err))?;
+    }
     let config = config::configuration();
     if let Some(value) = &config.default_ssh_auth_sock {
         std::env::set_var("SSH_AUTH_SOCK", value);
@@ -1246,7 +1390,7 @@ fn run() -> anyhow::Result<()> {
         }
     };
 
-    match sub {
+    let result = match sub {
         SubCommand::Start(start) => {
             log::trace!("Using configuration: {:#?}\nopts: {:#?}", config, opts);
             let res = run_terminal_gui(start, None);
@@ -1274,5 +1418,8 @@ fn run() -> anyhow::Result<()> {
         ),
         SubCommand::LsFonts(cmd) => run_ls_fonts(config, &cmd),
         SubCommand::ShowKeys(cmd) => run_show_keys(config, &cmd),
-    }
+        SubCommand::CheckConfig(cmd) => run_check_config(&cmd, opts.skip_config),
+    };
+
+    result.map_err(|err| Failure::new(in_terminal, err))
 }
