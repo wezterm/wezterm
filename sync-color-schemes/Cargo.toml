@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[package.metadata.cargo-shear]
+ignored = ["rusqlite"]
 
 [dependencies]
 anyhow.workspace = true
@@ -25,4 +26,3 @@ tar.workspace = true
 tempfile.workspace = true
 tokio = { workspace=true, features = ["rt-multi-thread", "sync", "macros"] }
 toml.workspace = true
-wezterm-dynamic.workspace = true

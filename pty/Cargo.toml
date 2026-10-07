@@ -24,7 +24,6 @@ default = []
 serde_support = ["serde"]
 
 [target."cfg(windows)".dependencies]
-bitflags.workspace = true
 lazy_static.workspace = true
 shared_library.workspace = true
 windows-sys = { workspace = true, features = [
