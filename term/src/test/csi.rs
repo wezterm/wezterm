@@ -308,6 +308,18 @@ fn test_cup() {
     term.assert_cursor_pos(4, 2, None, None);
 }
 
+/// CUP can park the cursor one past the last column (see test_cup);
+/// a print there must wrap rather than grow the line past the width
+/// of the screen
+#[test]
+fn test_cup_past_right_edge() {
+    let mut term = TestTerm::new(3, 8, 0);
+    term.print("abcdefgh");
+    term.cup(8, 0);
+    term.print("X");
+    assert_visible_contents(&term, file!(), line!(), &["abcdefgh", "X", ""]);
+}
+
 #[test]
 fn test_hvp() {
     let mut term = TestTerm::new(3, 4, 0);
