@@ -336,11 +336,17 @@ impl SessionInner {
             Some("none") | None => {}
             Some(proxy_command) => {
                 let mut cmd;
-                if cfg!(windows) {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_NO_WINDOW: u32 = 0x08000000;
                     let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".to_string());
                     cmd = std::process::Command::new(comspec);
                     cmd.args(["/c", proxy_command]);
-                } else {
+                    cmd.creation_flags(CREATE_NO_WINDOW);
+                }
+                #[cfg(not(windows))]
+                {
                     cmd = std::process::Command::new("sh");
                     cmd.args(["-c", &format!("exec {}", proxy_command)]);
                 }

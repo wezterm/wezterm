@@ -469,6 +469,12 @@ pub fn unix_connect_with_retry(
                 cmd.stdin(stdin);
                 cmd.stdout(stdout);
                 cmd.stderr(std::process::Stdio::inherit());
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_NO_WINDOW: u32 = 0x08000000;
+                    cmd.creation_flags(CREATE_NO_WINDOW);
+                }
                 let mut child = cmd
                     .spawn()
                     .with_context(|| format!("spawning proxy command {:?}", cmd))?;
