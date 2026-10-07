@@ -1,4 +1,5 @@
 #![allow(clippy::range_plus_one)]
+
 use super::renderstate::*;
 use super::utilsprites::RenderMetrics;
 use crate::colorease::ColorEase;
