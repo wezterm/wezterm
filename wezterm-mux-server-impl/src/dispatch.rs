@@ -58,11 +58,25 @@ where
     });
     let mut handler = SessionHandler::new(pdu_sender);
 
-    {
+    // Unsubscribe when this connection goes away. Without this the subscriber
+    // (and the unbounded channel it captures) stays registered until some
+    // notification happens to fire and `Mux::notify` reaps it. A mux with no
+    // attached client is quiet, so subscribers from short-lived connections
+    // accumulate unboundedly.
+    struct SubscriptionGuard(usize);
+    impl Drop for SubscriptionGuard {
+        fn drop(&mut self) {
+            if let Some(mux) = Mux::try_get() {
+                mux.unsubscribe(self.0);
+            }
+        }
+    }
+
+    let _subscription = {
         let mux = Mux::get();
         let tx = item_tx.clone();
-        mux.subscribe(move |n| tx.try_send(Item::Notif(n)).is_ok());
-    }
+        SubscriptionGuard(mux.subscribe(move |n| tx.try_send(Item::Notif(n)).is_ok()))
+    };
 
     loop {
         let rx_msg = item_rx.recv();

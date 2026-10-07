@@ -697,7 +697,15 @@ impl Mux {
         self.clients.write().remove(client_id);
     }
 
-    pub fn subscribe<F>(&self, subscriber: F)
+    /// Register a notification subscriber, returning its id so that the
+    /// caller can `unsubscribe` when it goes away.
+    ///
+    /// Subscribers are otherwise only reaped by `notify`, which drops those
+    /// returning false. A mux with no attached client emits few or no
+    /// notifications, so a caller that does not unsubscribe leaks its
+    /// subscriber (and anything the closure captures, such as a channel
+    /// sender and its queue) for as long as the mux stays quiet.
+    pub fn subscribe<F>(&self, subscriber: F) -> usize
     where
         F: Fn(MuxNotification) -> bool + 'static + Send + Sync,
     {
@@ -705,6 +713,12 @@ impl Mux {
         self.subscribers
             .write()
             .insert(sub_id, Box::new(subscriber));
+        sub_id
+    }
+
+    /// Remove a subscriber previously registered via `subscribe`.
+    pub fn unsubscribe(&self, sub_id: usize) {
+        self.subscribers.write().remove(&sub_id);
     }
 
     pub fn notify(&self, notification: MuxNotification) {

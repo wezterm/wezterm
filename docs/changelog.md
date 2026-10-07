@@ -160,6 +160,11 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* mux: `wezterm-mux-server` leaked a `Mux` notification subscriber, and the
+  unbounded channel it captures, for every client connection. Subscribers are
+  only reaped by `Mux::notify`, so a server with no attached client accumulated
+  them unboundedly; measured at 0.13 MB per connection, taking a server from
+  24 MB to 15 GB in 90 seconds under connection churn. #7363
 * macOS: Fix window border when opacity<1 and shadow enabled.
   Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
