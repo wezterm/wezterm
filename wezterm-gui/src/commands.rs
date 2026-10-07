@@ -1961,6 +1961,38 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell", "Attach"],
             icon: Some("md_pipe"),
         },
+        ReconnectDomain(SpawnTabDomain::CurrentPaneDomain) => CommandDef {
+            brief: "Reconnect the domain of the active pane".into(),
+            doc: "Disconnects and reconnects the domain of the active pane".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell", "Reconnect"],
+            icon: Some("md_pipe"),
+        },
+        ReconnectDomain(SpawnTabDomain::DefaultDomain) => CommandDef {
+            brief: "Reconnect the default domain".into(),
+            doc: "Disconnects and reconnects the default domain".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell", "Reconnect"],
+            icon: Some("md_pipe"),
+        },
+        ReconnectDomain(SpawnTabDomain::DomainName(name)) => CommandDef {
+            brief: format!("Reconnect the `{name}` domain").into(),
+            doc: format!("Disconnects and reconnects the domain named `{name}`").into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell", "Reconnect"],
+            icon: Some("md_pipe"),
+        },
+        ReconnectDomain(SpawnTabDomain::DomainId(id)) => CommandDef {
+            brief: format!("Reconnect the domain with id {id}").into(),
+            doc: format!("Disconnects and reconnects the domain with id {id}").into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell", "Reconnect"],
+            icon: Some("md_pipe"),
+        },
         CopyMode(copy_mode) => CommandDef {
             brief: format!("{copy_mode:?}").into(),
             doc: "".into(),
@@ -2039,6 +2071,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         CloseCurrentTab { confirm: true },
         CloseCurrentPane { confirm: true },
         DetachDomain(SpawnTabDomain::CurrentPaneDomain),
+        ReconnectDomain(SpawnTabDomain::CurrentPaneDomain),
         ResetTerminal,
         // ----------------- Edit
         #[cfg(not(target_os = "macos"))]
