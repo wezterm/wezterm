@@ -160,6 +160,11 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* `wezterm imgcat` panicked with `attempt to divide by zero` when the terminal
+  didn't report its cell size in pixels, eg: under WSL (where ConPTY answers
+  DA1 ahead of forwarding the `CSI 16 t` query) or with tmux < 3.2. WSL
+  sessions are now also treated like ConPTY when adjusting the cursor around
+  the image, so the shell prompt no longer overwrites it. #4912 #5522 #6781
 * macOS: Fix window border when opacity<1 and shadow enabled.
   Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
