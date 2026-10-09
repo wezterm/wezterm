@@ -1,6 +1,6 @@
 use clap::builder::ValueParser;
 use clap::{Parser, ValueHint};
-use config::{GuiPosition, SshParameters};
+use config::{GuiPosition, Shell, SshParameters};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -135,6 +135,13 @@ pub struct SshCommand {
         value_parser=ValueParser::new(name_equals_value),
         number_of_values = 1)]
     pub config_override: Vec<(String, String)>,
+
+    /// Set the `SshDomain.assume_shell` field for the created domain.
+    ///
+    /// Setting this to `Posix` allows wezterm to open new panes in the same directory as the
+    /// currently-focused pane (as long as your shell emits OSC 7 sequences).
+    #[arg(long = "assume-shell")]
+    pub assume_shell: Option<Shell>,
 
     /// Enable verbose ssh protocol tracing.
     /// The trace information is printed to the stderr stream of
