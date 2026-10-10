@@ -9,7 +9,8 @@ use std::ptr;
 use std::sync::Once;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, ERROR_IO_PENDING, HANDLE,
+    INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Networking::WinSock::{
     accept, bind, closesocket, connect, getsockname, getsockopt, htonl, ioctlsocket, listen, recv,
@@ -27,6 +28,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::Console::{GetStdHandle, SetStdHandle};
 use windows_sys::Win32::System::Pipes::{CreatePipe, GetNamedPipeInfo};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
+use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 
 /// `RawFileDescriptor` is a platform independent type alias for the
 /// underlying platform file descriptor type.  It is primarily useful
@@ -338,6 +340,40 @@ impl FromRawSocket for FileDescriptor {
     }
 }
 
+fn read_file_sync(hfile: HANDLE, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut num_read = 0;
+    let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        ReadFile(
+            hfile,
+            buf.as_mut_ptr() as *mut _,
+            buf.len() as _,
+            std::ptr::null_mut(),
+            &mut overlapped,
+        )
+    };
+    if ok == 0 {
+        let err = IoError::last_os_error();
+        if err.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+            let ok = unsafe { GetOverlappedResult(hfile, &mut overlapped, &mut num_read, 1) };
+            if ok == 0 {
+                Err(IoError::last_os_error())
+            } else {
+                Ok(num_read as usize)
+            }
+        } else {
+            Err(err)
+        }
+    } else {
+        let ok = unsafe { GetOverlappedResult(hfile, &mut overlapped, &mut num_read, 0) };
+        if ok == 0 {
+            Err(IoError::last_os_error())
+        } else {
+            Ok(num_read as usize)
+        }
+    }
+}
+
 impl io::Read for FileDescriptor {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if self.handle.is_socket_handle() {
@@ -358,25 +394,15 @@ impl io::Read for FileDescriptor {
                 Ok(num_read as usize)
             }
         } else {
-            let mut num_read = 0;
-            let ok = unsafe {
-                ReadFile(
-                    self.handle.as_raw_handle() as *mut _,
-                    buf.as_mut_ptr() as *mut _,
-                    buf.len() as _,
-                    &mut num_read,
-                    ptr::null_mut(),
-                )
-            };
-            if ok == 0 {
-                let err = IoError::last_os_error();
+            let ret = read_file_sync(self.handle.as_raw_handle() as *mut _, buf);
+            if let Err(err) = ret {
                 if err.kind() == std::io::ErrorKind::BrokenPipe {
                     Ok(0)
                 } else {
                     Err(err)
                 }
             } else {
-                Ok(num_read as usize)
+                ret
             }
         }
     }
