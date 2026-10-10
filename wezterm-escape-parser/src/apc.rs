@@ -620,6 +620,11 @@ pub struct KittyImagePlacement {
     pub placement_id: Option<u32>,
     /// z=...
     pub z_index: Option<i32>,
+    /// U=1 makes this a virtual placement; nothing is displayed
+    /// until the application prints U+10EEEE placeholder characters
+    /// that reference it.
+    /// <https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders>
+    pub unicode_placeholder: bool,
 }
 
 impl KittyImagePlacement {
@@ -640,6 +645,11 @@ impl KittyImagePlacement {
                 _ => return None,
             },
             z_index: geti(keys, "z"),
+            unicode_placeholder: match get(keys, "U") {
+                None | Some("0") => false,
+                Some("1") => true,
+                _ => return None,
+            },
         })
     }
 
@@ -659,6 +669,10 @@ impl KittyImagePlacement {
         }
 
         set(keys, "z", &self.z_index);
+
+        if self.unicode_placeholder {
+            keys.insert("U", "1".to_string());
+        }
     }
 }
 
