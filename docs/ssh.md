@@ -67,6 +67,45 @@ session; the packets are sent in a fire-and-forget manner as a least effort way
 to keep some traffic flowing on the connection to persuade intervening network
 hardware to keep the session alive.
 
+### SSH agent forwarding on Windows
+
+{{since('nightly')}}
+
+With the `LibSsh` [SSH backend](config/lua/config/ssh_backend.md), wezterm
+supports authentication and agent forwarding through Windows named pipes,
+including Windows OpenSSH's agent and PuTTY Pageant's OpenSSH-compatible pipe.
+Set `ForwardAgent yes` for the destination and select the pipe with
+`IdentityAgent` in your SSH configuration:
+
+```sshconfig
+Host my-server
+    ForwardAgent yes
+    IdentityAgent \\.\pipe\openssh-ssh-agent
+```
+
+Alternatively, set `SSH_AUTH_SOCK` or
+[`default_ssh_auth_sock`](config/lua/config/default_ssh_auth_sock.md) to the
+pipe path. An explicit `IdentityAgent` takes precedence.
+
+For Pageant, start it with `--openssh-config` to generate a configuration file
+containing its pipe path, then include that file for the desired host:
+
+```console
+pageant --openssh-config C:\Users\your-name\.ssh\pageant.conf
+```
+
+```sshconfig
+Host my-server
+    ForwardAgent yes
+    Include pageant.conf
+```
+
+See [Pageant's OpenSSH integration documentation](https://tartarus.org/~simon/putty-snapshots/htmldoc/Chapter9.html#pageant-cmdline-openssh-config).
+This uses Pageant's named pipe interface; the older window-message interface is
+not used. After connecting with `wezterm ssh my-server`, `ssh-add -l` on the
+remote host should list the keys currently held by the selected local agent.
+Agent forwarding is not supported by wezterm's `Ssh2` backend.
+
 ### CLI Overrides
 
 `wezterm ssh` CLI allows overriding config settings via the command line.  This
