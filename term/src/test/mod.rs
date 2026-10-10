@@ -867,6 +867,45 @@ fn test_resize_2162_by_2() {
     term.assert_cursor_pos(19, 0, None, Some(7));
 }
 
+/// Shrinking so that the cursor lands on the wrap point leaves it
+/// one past the last column; the next print must wrap rather than
+/// grow the line past the width of the screen
+#[test]
+fn test_resize_print_at_wrap_point() {
+    let num_lines = 4;
+    let num_cols = 20;
+
+    let mut term = TestTerm::new(num_lines, num_cols, 0);
+    term.print("some long long text");
+    term.resize(TerminalSize {
+        rows: num_lines,
+        cols: num_cols - 1,
+        pixel_width: 0,
+        pixel_height: 0,
+        dpi: 0,
+    });
+    term.print("X");
+    assert_visible_contents(
+        &term,
+        file!(),
+        line!(),
+        &["some long long text", "X", "", ""],
+    );
+    term.resize(TerminalSize {
+        rows: num_lines,
+        cols: num_cols,
+        pixel_width: 0,
+        pixel_height: 0,
+        dpi: 0,
+    });
+    assert_visible_contents(
+        &term,
+        file!(),
+        line!(),
+        &["some long long textX", "", "", ""],
+    );
+}
+
 /// This case tickles an edge case where the cursor ends
 /// up drifting away from where the line wraps and ends up
 /// in the wrong place
