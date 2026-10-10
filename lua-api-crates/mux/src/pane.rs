@@ -274,6 +274,22 @@ impl UserData for MuxPane {
             },
         );
 
+        methods.add_method(
+            "get_logical_lines_as_escapes",
+            |_, this, nlines: Option<usize>| {
+                let mux = get_mux()?;
+                let pane = this.resolve(&mux)?;
+                let dims = pane.get_dimensions();
+                let nlines = nlines.unwrap_or(dims.viewport_rows);
+                let bottom_row = dims.physical_top + dims.viewport_rows as isize;
+                let top_row = bottom_row.saturating_sub(nlines as isize);
+                let logical_lines = pane.get_logical_lines(top_row..bottom_row);
+                let lines = logical_lines.into_iter().map(|ll| ll.logical).collect();
+                let text = lines_to_escapes(lines).map_err(mlua::Error::external)?;
+                Ok(text)
+            },
+        );
+
         methods.add_method("get_domain_name", |_, this, _: ()| {
             let mux = get_mux()?;
             let pane = this.resolve(&mux)?;
