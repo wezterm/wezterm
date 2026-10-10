@@ -14,8 +14,26 @@ use mux::{Mux, MuxNotification};
 use portable_pty::CommandBuilder;
 use promise::spawn::spawn_into_new_thread;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use wezterm_term::TerminalSize;
+
+#[derive(Default)]
+struct PaneFocusTickets(AtomicU64);
+
+impl PaneFocusTickets {
+    fn next(&self) -> u64 {
+        self.0.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn is_current(&self, ticket: u64) -> bool {
+        self.0.load(Ordering::SeqCst) == ticket
+    }
+
+    fn invalidate(&self) {
+        self.next();
+    }
+}
 
 pub struct ClientInner {
     pub client: Client,
@@ -255,6 +273,7 @@ pub struct ClientDomain {
     label: String,
     inner: Mutex<Option<Arc<ClientInner>>>,
     local_domain_id: DomainId,
+    pane_focus_tickets: PaneFocusTickets,
 }
 
 async fn update_remote_workspace(
@@ -405,11 +424,30 @@ impl ClientDomain {
             label,
             inner: Mutex::new(None),
             local_domain_id,
+            pane_focus_tickets: PaneFocusTickets::default(),
         }
     }
 
     fn inner(&self) -> Option<Arc<ClientInner>> {
         self.inner.lock().unwrap().as_ref().map(Arc::clone)
+    }
+
+    pub(crate) fn next_pane_focus_ticket(&self) -> u64 {
+        self.pane_focus_tickets.next()
+    }
+
+    pub(crate) fn is_current_pane_focus_ticket(&self, ticket: u64) -> bool {
+        self.pane_focus_tickets.is_current(ticket)
+    }
+
+    pub(crate) fn invalidate_pane_focus_tickets(domain_id: DomainId) {
+        if let Some(mux) = Mux::try_get() {
+            if let Some(domain) = mux.get_domain(domain_id) {
+                if let Some(domain) = domain.downcast_ref::<Self>() {
+                    domain.pane_focus_tickets.invalidate();
+                }
+            }
+        }
     }
 
     pub fn connect_automatically(&self) -> bool {
@@ -418,6 +456,9 @@ impl ClientDomain {
 
     pub fn perform_detach(&self) {
         log::info!("detached domain {}", self.local_domain_id);
+        // Work spawned by the old connection must not reconcile against pane
+        // mappings established by a later attach.
+        self.pane_focus_tickets.invalidate();
         self.inner.lock().unwrap().take();
         let mux = Mux::get();
         mux.domain_was_detached(self.local_domain_id);
@@ -934,6 +975,10 @@ impl Domain for ClientDomain {
             return Ok(());
         }
 
+        // Advance before opening the new connection, so no task from a prior
+        // socket can reconcile against this attach's pane mappings.
+        self.pane_focus_tickets.invalidate();
+
         let domain_id = self.local_domain_id;
         let config = self.config.clone();
 
@@ -1004,5 +1049,38 @@ impl Domain for ClientDomain {
         } else {
             DomainState::Detached
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::PaneFocusTickets;
+
+    #[test]
+    fn only_the_latest_received_focus_ticket_is_current() {
+        // Detached reconciliation tasks may finish out of order, so receipt of
+        // a newer focus event must invalidate all earlier local work tickets.
+        let tickets = PaneFocusTickets::default();
+
+        let first = tickets.next();
+        assert!(tickets.is_current(first));
+
+        let second = tickets.next();
+        assert!(!tickets.is_current(first));
+        assert!(tickets.is_current(second));
+    }
+
+    #[test]
+    fn connection_boundary_invalidates_in_flight_focus_ticket() {
+        // A detached task from an old socket must never become current again
+        // after a reconnect, even before the new socket receives a focus PDU.
+        let tickets = PaneFocusTickets::default();
+        let old_connection = tickets.next();
+
+        tickets.invalidate();
+
+        assert!(!tickets.is_current(old_connection));
+        let new_connection = tickets.next();
+        assert!(tickets.is_current(new_connection));
     }
 }

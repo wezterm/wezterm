@@ -1,7 +1,7 @@
 use crate::client::{ClientId, ClientInfo};
 use crate::pane::{CachePolicy, Pane, PaneId};
 use crate::ssh_agent::AgentProxy;
-use crate::tab::{SplitRequest, Tab, TabId};
+use crate::tab::{NotifyMux, SplitRequest, Tab, TabId};
 use crate::window::{Window, WindowId};
 use anyhow::{anyhow, Context, Error};
 use config::keyassignment::SpawnTabDomain;
@@ -82,6 +82,9 @@ pub enum MuxNotification {
         window_id: WindowId,
     },
     PaneFocused(PaneId),
+    /// Focus received from another mux has been applied locally. Refresh local
+    /// UI state and propagate downstream without sending it back upstream.
+    PaneFocusReconciled(PaneId),
     TabResized(TabId),
     TabTitleChanged {
         tab_id: TabId,
@@ -510,6 +513,13 @@ impl Mux {
         }
     }
 
+    /// Record acknowledged client state without synthesizing focus events.
+    pub fn record_focus_metadata_for_client(&self, client_id: &ClientId, pane_id: PaneId) {
+        if let Some(info) = self.clients.write().get_mut(client_id) {
+            info.update_focused_pane(pane_id);
+        }
+    }
+
     pub fn resolve_focused_pane(
         &self,
         client_id: &ClientId,
@@ -540,9 +550,21 @@ impl Mux {
         }
     }
 
-    /// Called by PaneFocused event handlers to reconcile a remote
-    /// pane focus event and apply its effects locally
     pub fn focus_pane_and_containing_tab(&self, pane_id: PaneId) -> anyhow::Result<()> {
+        self.focus_pane_and_containing_tab_with_notify(pane_id, NotifyMux::Yes)
+    }
+
+    /// Reconcile a focus event already decided elsewhere without broadcasting
+    /// another PaneFocused notification.
+    pub fn reconcile_pane_focus(&self, pane_id: PaneId) -> anyhow::Result<()> {
+        self.focus_pane_and_containing_tab_with_notify(pane_id, NotifyMux::No)
+    }
+
+    fn focus_pane_and_containing_tab_with_notify(
+        &self,
+        pane_id: PaneId,
+        notify_mux: NotifyMux,
+    ) -> anyhow::Result<()> {
         let pane = self
             .get_pane(pane_id)
             .ok_or_else(|| anyhow::anyhow!("pane {pane_id} not found"))?;
@@ -567,7 +589,7 @@ impl Mux {
             .get_tab(tab_id)
             .ok_or_else(|| anyhow::anyhow!("tab {tab_id} not found"))?;
 
-        tab.set_active_pane(&pane);
+        tab.set_active_pane_with_notify(&pane, notify_mux);
 
         Ok(())
     }
