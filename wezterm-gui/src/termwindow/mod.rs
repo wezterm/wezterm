@@ -1028,6 +1028,18 @@ impl TermWindow {
                 pane.send_paste(text.as_str())?;
                 Ok(true)
             }
+            #[cfg(windows)]
+            WindowEvent::AccessibilityInput { pane_id, text } => {
+                if let Some(pane) = self.get_active_pane_or_overlay() {
+                    if self.focused.is_some()
+                        && self.get_modal().is_none()
+                        && pane.pane_id() == pane_id
+                    {
+                        pane.send_paste(&text)?;
+                    }
+                }
+                Ok(true)
+            }
             WindowEvent::DroppedUrl(urls) => {
                 let pane = match self.get_active_pane_or_overlay() {
                     Some(pane) => pane,
@@ -1860,6 +1872,10 @@ impl TermWindow {
 
     pub fn set_modal(&self, modal: Rc<dyn Modal>) {
         self.modal.borrow_mut().replace(modal);
+        #[cfg(windows)]
+        if let Some(window) = self.window.as_ref() {
+            window.set_accessibility_input_target(None, Rect::zero());
+        }
         if let Some(window) = self.window.as_ref() {
             window.invalidate();
         }
@@ -2133,6 +2149,11 @@ impl TermWindow {
                 self.render_metrics.cell_size,
             );
             win.set_text_cursor_position(r);
+            #[cfg(windows)]
+            win.set_accessibility_input_target(
+                self.get_modal().is_none().then_some(pos.pane.pane_id()),
+                r,
+            );
         }
     }
 

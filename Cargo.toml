@@ -33,6 +33,9 @@ opt-level = 3
 #split-debuginfo = "unpacked"
 
 [workspace.dependencies]
+accesskit = "0.25.0"
+accesskit_windows = "0.35.0"
+accesskit_consumer = "0.39.0"
 ahash = "0.8"
 anyhow = "1.0"
 assert_fs = "1.0.4"
