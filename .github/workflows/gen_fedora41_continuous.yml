@@ -97,6 +97,9 @@ jobs:
       - name: "Test"
         shell: bash
         run: "cargo nextest run --all --no-fail-fast"
+      - name: "Test wezterm-escape-parser (no_std)"
+        shell: bash
+        run: "cargo nextest run -p wezterm-escape-parser"
       - name: "Package"
         shell: bash
         run: "bash ci/deploy.sh"
