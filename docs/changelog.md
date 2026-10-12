@@ -160,6 +160,13 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Glyphs from the base font whose ink extends forward past the cells
+  allocated to them are now scaled down to fit those cells. The previous
+  shrink factor, `1/num_cells`, was a no-op for single-cell glyphs, so a
+  CJK primary font that renders an East-Asian-ambiguous character with a
+  full-width glyph (eg: NSimSun for `…` U+2026) drew its ink over the
+  following cell. Ligature ink that reaches backwards over its preceding
+  cells keeps its size. #8246
 * Multiplexer: the mouse wheel was not mapped to cursor up/down keys in the
   alternate screen for panes in a `wezterm connect` domain, because the client
   always reported the alternate screen as inactive. The server now advises the

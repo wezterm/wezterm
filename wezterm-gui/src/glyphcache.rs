@@ -50,6 +50,30 @@ fn allowed_glyph_pixel_width(
     max
 }
 
+/// Scale factor applied to a glyph from the base font whose ink extends
+/// beyond the cells allocated to its cluster: the ink is scaled down so
+/// that its right edge fits within `max_pixel_width`, mirroring the
+/// bitmap and scalable fallback branches below.
+/// `ink_right_edge` is where the rasterized ink ends relative to the
+/// left edge of the cluster; ink reaching backwards only (a negative
+/// bearing, which is how ligatures anchored at their last cell paint
+/// across the preceding blank cells) keeps its size.  The previous
+/// shrink factor, `1.0 / num_cells`, was a no-op for single-cell
+/// glyphs, so a font that renders an East-Asian-ambiguous character
+/// with a full-width glyph (eg: NSimSun for U+2026) had its ink drawn
+/// unscaled over the following cell.
+fn base_font_glyph_scale(
+    ink_right_edge: f64,
+    max_pixel_width: f64,
+    allow_width_overflow: bool,
+) -> f64 {
+    if allow_width_overflow || ink_right_edge <= max_pixel_width {
+        1.0
+    } else {
+        max_pixel_width / ink_right_edge
+    }
+}
+
 static FRAME_ERROR_REPORTED: AtomicBool = AtomicBool::new(false);
 
 /// We only want to report a frame error once at error level, because
@@ -780,12 +804,8 @@ impl GlyphCache {
 
         if info.font_idx == 0 {
             // We are the base font
-            scale = if allow_width_overflow || glyph.width as f64 <= max_pixel_width {
-                1.0
-            } else {
-                // Scale the glyph to fit in its number of cells
-                1.0 / num_cells
-            };
+            let ink_right_edge = (info.x_offset + glyph.bearing_x).get() + glyph.width as f64;
+            scale = base_font_glyph_scale(ink_right_edge, max_pixel_width, allow_width_overflow);
         } else if !glyph.is_scaled {
             // A bitmap font that isn't scaled to the requested height.
             let y_scale = base_metrics.cell_height.get() / idx_metrics.cell_height.get();
@@ -1430,5 +1450,54 @@ mod tests {
         let max = allowed_glyph_pixel_width(cell_width, num_cells, glyph_height, true);
         assert!((max - 48.825).abs() < 1e-9);
         assert!(glyph_width <= max);
+    }
+
+    /// A single-cell glyph whose ink extends forward past its cell must
+    /// be scaled down to fit.  With NSimSun at 28pt the cell is 18.5px
+    /// wide while the rasterized ink of an East-Asian-ambiguous character
+    /// such as U+2026 ELLIPSIS (which that font renders full-width but
+    /// the unicode tables allocate a single cell to) spans x=+2..+35;
+    /// the overflow branch used to divide by num_cells, which is a no-op
+    /// for num_cells == 1, so the full-width ink was drawn unscaled and
+    /// covered the following cell.
+    #[test]
+    fn single_cell_overflow_glyph_is_scaled_to_fit() {
+        let cell_width = 18.5;
+        let glyph_bearing_x = 2.0;
+        let glyph_width = 33.0;
+
+        let max = allowed_glyph_pixel_width(cell_width, 1.0, 43, false);
+        assert!((max - 23.125).abs() < 1e-9);
+
+        let ink_right_edge = glyph_bearing_x + glyph_width;
+        assert!(ink_right_edge > max);
+
+        // Fitting ink: no scaling.  The allow_width_overflow escape hatch
+        // wins even when the ink is wider than allowed
+        assert_eq!(base_font_glyph_scale(19.0, max, false), 1.0);
+        assert_eq!(base_font_glyph_scale(ink_right_edge, max, true), 1.0);
+
+        // Overflowing single-cell ink is scaled down so that its right
+        // edge fits the allowed width instead of covering the neighbor
+        let scale = base_font_glyph_scale(ink_right_edge, max, false);
+        assert!((scale - 23.125 / 35.0).abs() < 1e-9);
+        assert!(scale * ink_right_edge <= max);
+    }
+
+    /// Ligature glyphs are anchored at the last cell of the ligature and
+    /// paint backwards across the preceding blank cells via a negative
+    /// bearing_x; their ink must keep its size even though it is wider
+    /// than one cell.  The numbers are from the shapecache ligature
+    /// tests (Fira Code at 12pt: 10px cells, 20px ink, bearing_x -15).
+    #[test]
+    fn ligature_ink_reaching_backwards_is_not_scaled() {
+        let max = allowed_glyph_pixel_width(10.0, 1.0, 21, false);
+        assert!((max - 12.5).abs() < 1e-9);
+
+        // ink spans -15..+5: wider than a cell, but its right edge
+        // stays within the allowance, so it is rendered unscaled
+        let ink_right_edge = -15.0 + 20.0;
+        assert!(ink_right_edge <= max);
+        assert_eq!(base_font_glyph_scale(ink_right_edge, max, false), 1.0);
     }
 }
