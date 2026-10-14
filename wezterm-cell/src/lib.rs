@@ -392,15 +392,20 @@ impl CellAttributes {
     }
 
     /// Add an image attachement, preserving any existing attachments.
-    /// The list of images is maintained in z-index order
+    /// The list of images is maintained in z-index order; ties are
+    /// broken by the lower image id first, as the kitty graphics
+    /// protocol requires.
     pub fn attach_image(&mut self, image: Box<ImageCell>) -> &mut Self {
         self.allocate_fat_attributes();
         let fat = self.fat.as_mut().unwrap();
         let z_index = image.z_index();
-        match fat
-            .image
-            .binary_search_by(|probe| probe.z_index().cmp(&z_index))
-        {
+        let image_id = image.image_id();
+        match fat.image.binary_search_by(|probe| {
+            probe
+                .z_index()
+                .cmp(&z_index)
+                .then(probe.image_id().cmp(&image_id))
+        }) {
             Ok(idx) | Err(idx) => fat.image.insert(idx, image),
         }
         self

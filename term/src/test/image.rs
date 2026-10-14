@@ -375,3 +375,28 @@ fn kitty_both_columns_and_rows_letterboxes() {
     term.print(b"ok");
     assert_visible_contents(&term, file!(), line!(), &["   ", "    ok", "", ""]);
 }
+
+/// When two images share a z-index, the one with the lower image id is
+/// stacked below, as the spec requires.
+#[test]
+fn kitty_same_z_images_stack_by_image_id() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    // Attach image 2 first, then image 1 over the same cells with the
+    // same z-index; the attachment list must still order 1 below 2.
+    place_tiny_png(&mut term, 2, ",z=3");
+    term.print(b"\x1b[1;1H");
+    place_tiny_png(&mut term, 1, ",z=3");
+
+    let ids: Vec<Option<u32>> = term.screen().visible_lines()[0]
+        .visible_cells()
+        .next()
+        .and_then(|cell| cell.attrs().images())
+        .map(|images| images.into_iter().map(|img| img.image_id()).collect())
+        .unwrap_or_default();
+    assert!(
+        ids == vec![Some(1), Some(2)],
+        "expected lower image id stacked first, got {:?}",
+        ids
+    );
+}

@@ -186,6 +186,36 @@ impl crate::TermWindow {
             quad.set_hsv(hsv);
         }
 
+        // Images with a z-index below INT32_MIN / 2 are drawn beneath
+        // cells with non-default background colors. Quads on a layer
+        // are painted in allocation order, so these must be emitted
+        // before the background fill pass below allocates its own
+        // layer 0 quads for this line.
+        {
+            let mut visual_cell_idx = 0;
+            for item in shaped.iter() {
+                let cluster = &item.cluster;
+                let images = cluster.attrs.images().unwrap_or_else(|| vec![]);
+                for img in &images {
+                    if img.z_index() < i32::MIN / 2 {
+                        for i in 0..cluster.width {
+                            self.populate_image_quad(
+                                &img,
+                                gl_state,
+                                layers,
+                                0,
+                                visual_cell_idx + i,
+                                &params,
+                                hsv,
+                                item.fg_color,
+                            )?;
+                        }
+                    }
+                }
+                visual_cell_idx += cluster.width;
+            }
+        }
+
         // Assume that we are drawing retro tab bar if there is no
         // stable_line_idx set.
         let is_tab_bar = params.stable_line_idx.is_none();
@@ -487,7 +517,9 @@ impl crate::TermWindow {
 
                 for glyph_idx in 0..info.pos.num_cells as usize {
                     for img in &images {
-                        if img.z_index() < 0 {
+                        // The very low z-index images were already
+                        // emitted before the background fill pass
+                        if img.z_index() < 0 && img.z_index() >= i32::MIN / 2 {
                             self.populate_image_quad(
                                 &img,
                                 gl_state,
