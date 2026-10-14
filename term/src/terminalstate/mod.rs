@@ -30,6 +30,7 @@ mod image;
 mod iterm;
 mod keyboard;
 mod kitty;
+mod kitty_placeholder;
 mod mouse;
 pub(crate) mod performer;
 mod sixel;
@@ -375,6 +376,9 @@ pub struct TerminalState {
     user_vars: HashMap<String, String>,
 
     kitty_img: KittyImageState,
+    /// Run state of the unicode placeholder run being printed, used to
+    /// implement the inheritance rules of the kitty graphics protocol
+    kitty_placeholder_state: Option<crate::terminalstate::kitty_placeholder::KittyPlaceholderRun>,
     seqno: SequenceNo,
 
     /// The unicode version that is in effect
@@ -583,6 +587,7 @@ impl TerminalState {
             image_cache: lru::LruCache::new(NonZeroUsize::new(16).unwrap()),
             user_vars: HashMap::new(),
             kitty_img: Default::default(),
+            kitty_placeholder_state: None,
             seqno,
             unicode_version,
             unicode_version_stack: vec![],
@@ -1394,7 +1399,7 @@ impl TerminalState {
                 self.screen.saved_cursor().take();
                 self.screen.activate_primary_screen(self.seqno);
                 self.screen.saved_cursor().take();
-                self.kitty_remove_all_placements(true);
+                self.kitty_reset_all();
 
                 self.reverse_wraparound_mode = false;
                 self.reverse_video_mode = false;

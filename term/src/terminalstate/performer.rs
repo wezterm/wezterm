@@ -1,4 +1,5 @@
 use crate::terminal::{Alert, Progress};
+use crate::terminalstate::kitty_placeholder::IMAGE_PLACEHOLDER_CHAR;
 use crate::terminalstate::{
     default_color_map, CharSet, MouseEncoding, TabStop, UnicodeVersionStackEntry,
 };
@@ -135,6 +136,13 @@ impl<'a> Performer<'a> {
             let g = self.remap_grapheme(g);
 
             let mut print_width = grapheme_column_width(g, Some(&self.unicode_version));
+            // A kitty unicode placeholder always occupies exactly one
+            // cell, whatever the width tables say about its
+            // unassigned noncharacter base and combining marks
+            let is_placeholder = g.chars().next() == Some(IMAGE_PLACEHOLDER_CHAR);
+            if is_placeholder {
+                print_width = 1;
+            }
             if print_width == 0 {
                 // We got a zero-width grapheme.
 
@@ -221,7 +229,16 @@ impl<'a> Performer<'a> {
                 self.pen
             );
             self.screen_mut()
-                .set_cell_grapheme(x, y, g, print_width, pen, seqno);
+                .set_cell_grapheme(x, y, g, print_width, pen.clone(), seqno);
+
+            // A printed kitty unicode placeholder attaches the image
+            // slice it references; any other text breaks the
+            // placeholder run and its inheritance
+            if is_placeholder {
+                self.state.kitty_render_placeholder(g, &pen, x, y);
+            } else {
+                self.state.kitty_placeholder_state = None;
+            }
 
             if !wrappable {
                 self.cursor.x += print_width;

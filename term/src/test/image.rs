@@ -510,3 +510,113 @@ fn kitty_animate_bad_frame_replies_einval() {
     term.print(b"\x1b_Ga=a,i=42,s=1\x1b\\");
     wait_for_output(&sink, "\x1b_Gi=42;ENOENT");
 }
+
+/// The (top_left, bottom_right, image_id) of every attached kitty
+/// image cell on the visible screen, in scan order.
+fn attached_slices(term: &TestTerm) -> Vec<((f32, f32), (f32, f32), Option<u32>)> {
+    let mut out = vec![];
+    for line in term.screen().visible_lines().iter() {
+        for cell in line.visible_cells() {
+            if let Some(images) = cell.attrs().images() {
+                for image in images {
+                    let tl = image.top_left();
+                    let br = image.bottom_right();
+                    out.push((
+                        (tl.x.into_inner(), tl.y.into_inner()),
+                        (br.x.into_inner(), br.y.into_inner()),
+                        image.image_id(),
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The full unicode placeholder round trip: create a virtual
+/// placement, print U+10EEEE cells whose foreground color carries the
+/// image id and whose diacritics select the row/column, and observe
+/// one image slice per placeholder cell with the expected texture
+/// coordinates. The last cell omits its column diacritic and inherits
+/// col = left + 1 from the run.
+#[test]
+fn kitty_unicode_placeholder_renders_slices() {
+    let mut term = TestTerm::new(4, 10, 0);
+
+    // Transmit a 2x2 image and reserve a 2x2 cell virtual placement
+    term.print(
+        format!(
+            "\x1b_Ga=t,t=d,f=32,s=2,v=2,i=1,q=2;{}\x1b\\",
+            TINY_2X2_RGBA_BASE64
+        )
+        .as_bytes(),
+    );
+    term.print(b"\x1b_Ga=p,U=1,i=1,c=2,r=2,q=2\x1b\\");
+
+    // The image id (1) travels in the truecolor foreground
+    term.print(b"\x1b[38;2;0;0;1m");
+    // Row 1: cells (1,1) and (1,2). U+030D has value 1, U+030E has 2.
+    term.print("\u{10EEEE}\u{030D}\u{030D}".as_bytes());
+    term.print("\u{10EEEE}\u{030D}\u{030E}".as_bytes());
+    term.print(b"\r\n");
+    // Row 2: cells (2,1) and (2,2 inherited from the left)
+    term.print("\u{10EEEE}\u{030E}\u{030D}".as_bytes());
+    term.print("\u{10EEEE}\u{030E}".as_bytes());
+
+    let slices = attached_slices(&term);
+    assert!(slices.len() == 4, "expected 4 slices, got {:?}", slices);
+    assert!(slices.iter().all(|(_, _, id)| *id == Some(1)));
+    // First cell covers the top left quadrant of the image
+    assert!(slices[0].0 == (0.0, 0.0) && slices[0].1 == (0.5, 0.5));
+    // The inherited-column cell covers the bottom right quadrant
+    let last = &slices[3];
+    assert!(last.0 == (0.5, 0.5) && last.1 == (1.0, 1.0));
+}
+
+/// Virtual placements survive d=a (the spec only allows deleting them
+/// via d=i/I/r/R/n/N) but disappear with d=i.
+#[test]
+fn kitty_virtual_placement_delete_semantics() {
+    let mut term = TestTerm::new(4, 10, 0);
+
+    let setup = format!(
+        "\x1b_Ga=t,t=d,f=32,s=2,v=2,i=1,q=2;{}",
+        TINY_2X2_RGBA_BASE64
+    );
+    term.print(setup.as_bytes());
+    term.print(b"\x1b_Ga=p,U=1,i=1,c=2,r=2,q=2\x1b\\");
+
+    let print_placeholder_row = |term: &mut TestTerm| {
+        term.print(b"\x1b[38;2;0;0;1m");
+        term.print("\u{10EEEE}\u{030D}\u{030D}".as_bytes());
+        term.print("\u{10EEEE}\u{030D}\u{030E}".as_bytes());
+    };
+
+    // d=a keeps the virtual placement around
+    term.print(b"\x1b[1;1H\x1b[2K");
+    term.print(b"\x1b_Ga=d,d=a\x1b\\");
+    print_placeholder_row(&mut term);
+    assert!(attached_slices(&term).len() == 2);
+
+    // d=i removes it, and the same placeholder text attaches nothing
+    term.print(b"\x1b[1;1H\x1b[2K");
+    term.print(b"\x1b_Ga=d,d=i,i=1\x1b\\");
+    print_placeholder_row(&mut term);
+    assert!(attached_slices(&term).is_empty());
+}
+
+/// A virtual placement combined with relative placement keys answers
+/// EINVAL, as the spec requires.
+#[test]
+fn kitty_virtual_placement_cannot_be_relative() {
+    let (mut term, sink) = TestTerm::new_with_output_sink(3, 10, 0);
+
+    let setup = format!(
+        "\x1b_Ga=t,t=d,f=32,s=2,v=2,i=1,q=2;{}",
+        TINY_2X2_RGBA_BASE64
+    );
+    term.print(setup.as_bytes());
+    term.print(b"\x1b_Ga=p,U=1,i=1,c=1,r=1,P=2\x1b\\");
+
+    wait_for_output(&sink, "\x1b_Gi=1;EINVAL");
+}

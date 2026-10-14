@@ -1,21 +1,27 @@
 use crate::terminalstate::image::*;
+use crate::terminalstate::kitty_placeholder::{
+    diacritic_to_num, KittyPlaceholderRun, IMAGE_PLACEHOLDER_CHAR,
+};
 use crate::terminalstate::{ImageAttachParams, PlacementInfo};
 use crate::{StableRowIndex, TerminalState};
 use ::image::{
     DynamicImage, GenericImage, GenericImageView, ImageBuffer, RgbImage, Rgba, RgbaImage,
 };
 use anyhow::Context;
+use ordered_float::NotNan;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
-use wezterm_cell::image::ImageDataType;
+use wezterm_cell::image::{ImageCell, ImageDataType};
+use wezterm_cell::{Cell, CellAttributes};
 use wezterm_escape_parser::apc::{
     KittyAnimationState, KittyFrameCompositionMode, KittyImage, KittyImageAnimate,
     KittyImageCompression, KittyImageData, KittyImageDelete, KittyImageFormat, KittyImageFrame,
     KittyImageFrameCompose, KittyImagePlacement, KittyImageTransmit, KittyImageVerbosity,
 };
 use wezterm_surface::change::ImageData;
+use wezterm_surface::TextureCoordinate;
 
 #[derive(Debug, Default)]
 pub struct KittyImageState {
@@ -101,6 +107,43 @@ impl TerminalState {
             placement,
             verbosity
         );
+
+        if placement.unicode_placeholder {
+            // A virtual placement reserves a rectangle for unicode
+            // placeholder text but does not itself touch any cells.
+            // It is rendered when U+10EEEE characters referencing it
+            // are printed.
+            if placement.parent_image_id.is_some() {
+                return Err(anyhow::Error::new(KittyProtocolError {
+                    code: "EINVAL",
+                    detail: "a virtual placement cannot also be a relative placement".to_string(),
+                }));
+            }
+            let (cols, rows) = match (placement.columns, placement.rows) {
+                (Some(cols), Some(rows)) if cols > 0 && rows > 0 => (cols as usize, rows as usize),
+                _ => {
+                    return Err(anyhow::Error::new(KittyProtocolError {
+                        code: "EINVAL",
+                        detail: "a virtual placement needs both c= and r=".to_string(),
+                    }))
+                }
+            };
+            let first_row = self.screen().visible_row_to_stable_row(self.cursor.y);
+            self.kitty_img.placements.insert(
+                (image_id, placement.placement_id),
+                PlacementInfo {
+                    first_row,
+                    first_col: 0,
+                    rows: 0,
+                    cols: 0,
+                    z_index: placement.z_index.unwrap_or(0),
+                    parent: None,
+                    virtual_rect: Some((cols, rows)),
+                },
+            );
+            return Ok(());
+        }
+
         if image_id != 0 {
             self.kitty_remove_placement(image_id, placement.placement_id);
         }
@@ -407,15 +450,47 @@ impl TerminalState {
         );
     }
 
+    /// d=a/A: virtual placements are only ever deleted by
+    /// d=i/I/r/R/n/N, so they (and the data of images that only they
+    /// reference) survive a delete-all.
     pub(crate) fn kitty_remove_all_placements(&mut self, delete: bool) {
+        let taken = std::mem::take(&mut self.kitty_img.placements);
+        let mut kept = HashMap::new();
+        for ((image_id, p), info) in taken.into_iter() {
+            if info.virtual_rect.is_some() {
+                kept.insert((image_id, p), info);
+                continue;
+            }
+            self.kitty_remove_placement_from_model(image_id, p, info);
+        }
+        self.kitty_img.placements = kept;
+        if delete {
+            let referenced: HashSet<u32> = self
+                .kitty_img
+                .placements
+                .keys()
+                .map(|(id, _)| *id)
+                .collect();
+            self.kitty_img
+                .id_to_data
+                .retain(|id, _| referenced.contains(id));
+            self.kitty_img.used_memory = self.kitty_img.id_to_data.values().map(|d| d.len()).sum();
+            self.kitty_img
+                .number_to_id
+                .retain(|_, id| referenced.contains(id));
+        }
+    }
+
+    /// A terminal reset clears everything, virtual placements included
+    pub(crate) fn kitty_reset_all(&mut self) {
         for ((image_id, p), info) in std::mem::take(&mut self.kitty_img.placements).into_iter() {
             self.kitty_remove_placement_from_model(image_id, p, info);
         }
-        if delete {
-            self.kitty_img.id_to_data.clear();
-            self.kitty_img.used_memory = 0;
-            self.kitty_img.number_to_id.clear();
-        }
+        self.kitty_img.id_to_data.clear();
+        self.kitty_img.used_memory = 0;
+        self.kitty_img.number_to_id.clear();
+        self.kitty_img.accumulator.clear();
+        self.kitty_placeholder_state = None;
     }
 
     /// Handle a kitty graphics protocol delete command.
@@ -726,6 +801,159 @@ impl TerminalState {
         drop(anim);
         self.kitty_touch_image_placements(image_id);
         Ok(())
+    }
+
+    /// Render the image slice referenced by a printed unicode
+    /// placeholder cell (a U+10EEEE grapheme).
+    ///
+    /// The lower 24 bits of the image id come from the foreground
+    /// color, the placement id from the underline color, and the
+    /// row/column (plus the high 8 bits of the id) from combining
+    /// diacritics following the placeholder character. Successive
+    /// compatible cells form a run whose unknown values are inherited
+    /// from the cell to the left, with the column implicitly
+    /// incrementing, as the protocol specifies.
+    pub(crate) fn kitty_render_placeholder(
+        &mut self,
+        grapheme: &str,
+        pen: &CellAttributes,
+        x: usize,
+        y: i64,
+    ) {
+        if !self.config.enable_kitty_graphics() {
+            return;
+        }
+        let mut chars = grapheme.chars();
+        if chars.next() != Some(IMAGE_PLACEHOLDER_CHAR) {
+            return;
+        }
+
+        // The first diacritic encodes the row, the second the column,
+        // the third the high 8 bits of the image id. A missing or
+        // zero-valued diacritic means "unknown".
+        let mut marks = [0u32; 3];
+        for (slot, mark) in marks.iter_mut().zip(chars.by_ref()) {
+            *slot = diacritic_to_num(mark).unwrap_or(0);
+        }
+        let [row0, col0, hi0] = marks;
+
+        let id_lower = placeholder_color_to_id(pen.foreground());
+        if id_lower == 0 {
+            // The default foreground cannot reference an image
+            self.kitty_placeholder_state = None;
+            return;
+        }
+        let pid = placeholder_color_to_id(pen.underline_color());
+
+        let state = self.kitty_placeholder_state.take();
+        let (row, col, hi8) = match state {
+            Some(s)
+                if s.y == y
+                    && s.id_lower == id_lower
+                    && s.pid == pid
+                    && (row0 == 0 || row0 == s.row)
+                    && (col0 == 0 || col0 == s.col + 1)
+                    && (hi0 == 0 || hi0 == s.hi8) =>
+            {
+                // This cell continues the run to its left
+                (s.row, s.col + 1, s.hi8)
+            }
+            _ => (row0.max(1), col0.max(1), hi0.max(1)),
+        };
+        self.kitty_placeholder_state = Some(KittyPlaceholderRun {
+            y,
+            id_lower,
+            pid,
+            row,
+            col,
+            hi8,
+        });
+
+        let image_id = id_lower | (hi8.saturating_sub(1) << 24);
+
+        // Find the virtual placement the placeholder text refers to;
+        // with no explicit placement id any virtual placement of the
+        // image will do
+        let found = self
+            .kitty_img
+            .placements
+            .iter()
+            .find(|((id, pid_key), info)| {
+                *id == image_id
+                    && info.virtual_rect.is_some()
+                    && (pid == 0 || *pid_key == Some(pid))
+            });
+        let ((_vid, vpid), info) = match found {
+            Some(entry) => entry,
+            None => return,
+        };
+        let (cols_total, rows_total) = match info.virtual_rect {
+            Some(rect) => rect,
+            None => return,
+        };
+        let z_index = info.z_index;
+        let data = match self.kitty_img.id_to_data.get(&image_id) {
+            Some(data) => Arc::clone(data),
+            None => return,
+        };
+
+        self.kitty_attach_placeholder_slice(
+            &data, cols_total, rows_total, row, col, x, y, z_index, image_id, *vpid,
+        );
+    }
+
+    /// Attach the (row, col) cell of a cols_total x rows_total scaled
+    /// image to the screen cell at (x, y).
+    fn kitty_attach_placeholder_slice(
+        &mut self,
+        data: &Arc<ImageData>,
+        cols_total: usize,
+        rows_total: usize,
+        row: u32,
+        col: u32,
+        x: usize,
+        y: i64,
+        z_index: i32,
+        image_id: u32,
+        placement_id: Option<u32>,
+    ) {
+        if row as usize > rows_total || col as usize > cols_total {
+            return;
+        }
+        let screen = self.screen();
+        if x >= screen.physical_cols || y < 0 || y as usize >= screen.physical_rows {
+            return;
+        }
+        let seqno = self.seqno;
+
+        let top_left = TextureCoordinate::new(
+            NotNan::new((col - 1) as f32 / cols_total as f32).unwrap_or_else(|_| unreachable!()),
+            NotNan::new((row - 1) as f32 / rows_total as f32).unwrap_or_else(|_| unreachable!()),
+        );
+        let bottom_right = TextureCoordinate::new(
+            NotNan::new(col as f32 / cols_total as f32).unwrap_or_else(|_| unreachable!()),
+            NotNan::new(row as f32 / rows_total as f32).unwrap_or_else(|_| unreachable!()),
+        );
+
+        let mut cell = self
+            .screen_mut()
+            .get_cell(x, y)
+            .cloned()
+            .unwrap_or_else(Cell::blank);
+        let img = Box::new(ImageCell::with_z_index(
+            top_left,
+            bottom_right,
+            Arc::clone(data),
+            z_index,
+            0,
+            0,
+            0,
+            0,
+            Some(image_id),
+            placement_id,
+        ));
+        cell.attrs_mut().attach_image(img);
+        self.screen_mut().set_cell(x, y, &cell, seqno);
     }
 
     /// Bump the last-change seqno of the lines covered by the image's
@@ -1464,4 +1692,20 @@ where
         }
     }
     Ok(())
+}
+
+/// Interpret a cell color as the (lower 24 bits of an) image id, per
+/// the unicode placeholder scheme: a palette index is an 8-bit id and
+/// a truecolor value is a 24-bit id. The default color cannot
+/// reference an image and yields 0.
+fn placeholder_color_to_id(color: crate::color::ColorAttribute) -> u32 {
+    use wezterm_cell::color::ColorAttribute;
+    match color {
+        ColorAttribute::TrueColorWithPaletteFallback(rgba, _)
+        | ColorAttribute::TrueColorWithDefaultFallback(rgba) => {
+            ((rgba.0 * 255.) as u32) << 16 | ((rgba.1 * 255.) as u32) << 8 | (rgba.2 * 255.) as u32
+        }
+        ColorAttribute::PaletteIndex(p) => p as u32,
+        ColorAttribute::Default => 0,
+    }
 }
