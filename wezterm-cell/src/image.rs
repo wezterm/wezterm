@@ -256,7 +256,46 @@ pub enum ImageDataType {
         /// sha256 of each `frames`.
         /// Must be updated whenever a frame changes.
         hashes: Vec<[u8; 32]>,
+        /// Runtime playback state, manipulated by the kitty graphics
+        /// protocol a=a animation control command.
+        /// Defaults to playing forever, matching the behavior of
+        /// animations before this field existed.
+        #[cfg_attr(feature = "use_serde", serde(default))]
+        control: AnimationControl,
     },
+}
+
+/// Runtime animation control state for an [`ImageDataType::AnimRgba8`],
+/// manipulated via the kitty graphics protocol a=a animation control
+/// command.
+#[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnimationControl {
+    /// Whether the animation is playing
+    pub running: bool,
+    /// Playing in loading mode: hold on the last frame and wait for
+    /// more frames to be transmitted instead of looping
+    pub loading: bool,
+    /// v= loop count from the protocol: Some(1) loops forever,
+    /// Some(n) with n > 1 loops n-1 times and then stops
+    pub loop_count: Option<u32>,
+    /// Number of loops completed since the loop count was set
+    pub loops_done: u32,
+    /// 1-based frame number selected by the client via c=;
+    /// the renderer seeks to it once per change
+    pub paused_frame: Option<u32>,
+}
+
+impl Default for AnimationControl {
+    fn default() -> Self {
+        Self {
+            running: true,
+            loading: false,
+            loop_count: None,
+            loops_done: 0,
+            paused_frame: None,
+        }
+    }
 }
 
 impl std::fmt::Debug for ImageDataType {
@@ -285,6 +324,7 @@ impl std::fmt::Debug for ImageDataType {
                 height,
                 durations,
                 hashes,
+                ..
             } => fmt
                 .debug_struct("AnimRgba8")
                 .field("frames_of_len", &frames.len())
@@ -509,6 +549,7 @@ impl ImageDataType {
             frames,
             durations,
             hashes,
+            control: AnimationControl::default(),
         }
     }
 

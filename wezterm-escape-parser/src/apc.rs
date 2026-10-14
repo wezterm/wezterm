@@ -738,8 +738,14 @@ pub enum KittyImageDelete {
     AtCursorPosition { delete: bool },
 
     /// d='f' or d='F'
-    /// Delete animation frames
-    AnimationFrames { delete: bool },
+    /// Delete animation frames; the 1-based frame number comes from c=
+    /// (frame 1 by default), the image from i=/I=
+    AnimationFrames {
+        image_id: Option<u32>,
+        image_number: Option<u32>,
+        frame_number: Option<u32>,
+        delete: bool,
+    },
 
     /// d='p' or d='P'
     /// Delete all placements that intersect the specified
@@ -800,7 +806,15 @@ impl KittyImageDelete {
                 delete,
             }),
             'c' | 'C' => Some(Self::AtCursorPosition { delete }),
-            'f' | 'F' => Some(Self::AnimationFrames { delete }),
+            'f' | 'F' => Some(Self::AnimationFrames {
+                image_id: geti(keys, "i"),
+                image_number: geti(keys, "I"),
+                frame_number: match geti(keys, "c") {
+                    None | Some(0) => None,
+                    n => n,
+                },
+                delete,
+            }),
             'p' | 'P' => Some(Self::DeleteAt {
                 x: geti(keys, "x")?,
                 y: geti(keys, "y")?,
@@ -867,8 +881,16 @@ impl KittyImageDelete {
             Self::AtCursorPosition { delete } => {
                 keys.insert("d", d('c', delete));
             }
-            Self::AnimationFrames { delete } => {
+            Self::AnimationFrames {
+                image_id,
+                image_number,
+                frame_number,
+                delete,
+            } => {
                 keys.insert("d", d('f', delete));
+                set(keys, "i", image_id);
+                set(keys, "I", image_number);
+                set(keys, "c", frame_number);
             }
             Self::DeleteAt { x, y, delete } => {
                 keys.insert("d", d('p', delete));

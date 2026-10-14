@@ -532,6 +532,9 @@ impl std::fmt::Debug for FrameState {
 pub struct DecodedImage {
     frame_start: RefCell<Instant>,
     current_frame: RefCell<usize>,
+    /// The last frame selection applied from AnimationControl, so that
+    /// the a=a c=<frame> seek happens once per change
+    applied_seek: RefCell<Option<u32>>,
     image: Arc<ImageData>,
     frames: RefCell<Option<FrameState>>,
 }
@@ -542,6 +545,7 @@ impl DecodedImage {
         Self {
             frame_start: RefCell::new(Instant::now()),
             current_frame: RefCell::new(0),
+            applied_seek: RefCell::new(None),
             image: Arc::new(image),
             frames: RefCell::new(None),
         }
@@ -552,6 +556,7 @@ impl DecodedImage {
             Ok(rx) => Self {
                 frame_start: RefCell::new(Instant::now()),
                 current_frame: RefCell::new(0),
+                applied_seek: RefCell::new(None),
                 image: Arc::clone(image_data),
                 frames: RefCell::new(Some(FrameState::new(rx))),
             },
@@ -584,6 +589,7 @@ impl DecodedImage {
                 Self {
                     frame_start: RefCell::new(Instant::now()),
                     current_frame: RefCell::new(current_frame),
+                    applied_seek: RefCell::new(None),
                     image: Arc::clone(image_data),
                     frames: RefCell::new(None),
                 }
@@ -592,6 +598,7 @@ impl DecodedImage {
             _ => Self {
                 frame_start: RefCell::new(Instant::now()),
                 current_frame: RefCell::new(0),
+                applied_seek: RefCell::new(None),
                 image: Arc::clone(image_data),
                 frames: RefCell::new(None),
             },
@@ -971,18 +978,56 @@ impl GlyphCache {
 
                 return Ok((sprite, None, LoadState::Loaded));
             }
-            ImageDataType::AnimRgba8 {
-                hashes,
-                frames,
-                durations,
-                ..
-            } => {
+            ImageDataType::AnimRgba8 { .. } => {
                 let mut next = None;
+                let now = Instant::now();
                 let mut decoded_frame_start = decoded.frame_start.borrow_mut();
                 let mut decoded_current_frame = decoded.current_frame.borrow_mut();
-                if frames.len() > 1 {
-                    let now = Instant::now();
+                let mut applied_seek = decoded.applied_seek.borrow_mut();
 
+                // Client-driven frame selection (a=a, c=N): seek to the
+                // requested frame once per change
+                {
+                    let (control, frames_len) = match &mut *handle.h {
+                        ImageDataType::AnimRgba8 {
+                            control, frames, ..
+                        } => (&*control, frames.len()),
+                        _ => unreachable!(),
+                    };
+                    if *applied_seek != control.paused_frame {
+                        *applied_seek = control.paused_frame;
+                        if let Some(f) = control.paused_frame {
+                            if f > 0 && (f as usize) <= frames_len {
+                                *decoded_current_frame = f as usize - 1;
+                                *decoded_frame_start = now;
+                            }
+                        }
+                    }
+                }
+
+                // Read the playback parameters
+                let (frames_len, durations, hashes, running, loading) = match &*handle.h {
+                    ImageDataType::AnimRgba8 {
+                        frames,
+                        durations,
+                        hashes,
+                        control,
+                        ..
+                    } => (
+                        frames.len(),
+                        &**durations,
+                        hashes,
+                        control.running,
+                        control.loading,
+                    ),
+                    _ => unreachable!(),
+                };
+
+                // Set when a wrap happened during this advance that counts
+                // as a completed loop
+                let mut loop_completed = false;
+
+                if frames_len > 1 && running {
                     // We round up the frame duration to at least the minimum
                     // frame duration that wezterm can use when rendering.
                     // There's no point trying to deal with smaller intervals
@@ -996,25 +1041,67 @@ impl GlyphCache {
                     let mut next_due = *decoded_frame_start
                         + durations[*decoded_current_frame].max(min_frame_duration);
                     if now >= next_due {
-                        // Advance to next frame
-                        *decoded_current_frame = *decoded_current_frame + 1;
-                        if *decoded_current_frame >= frames.len() {
-                            *decoded_current_frame = 0;
-                            // Skip potential 0-duration root frame
-                            if durations[0].as_millis() == 0 && frames.len() > 1 {
-                                *decoded_current_frame = *decoded_current_frame + 1;
+                        let mut wrapped = false;
+                        // Advance one cell of animation; wrapping counts
+                        // as a completed loop
+                        fn advance(cur: &mut usize, frames_len: usize, wrapped: &mut bool) {
+                            *cur += 1;
+                            if *cur >= frames_len {
+                                *cur = 0;
+                                *wrapped = true;
                             }
                         }
-                        *decoded_frame_start = now;
-                        next_due = *decoded_frame_start
-                            + durations[*decoded_current_frame].max(min_frame_duration);
-                        handle.current_frame = *decoded_current_frame;
-                    }
+                        advance(&mut decoded_current_frame, frames_len, &mut wrapped);
 
-                    next.replace(next_due);
+                        // Skip gapless (zero-duration) frames entirely,
+                        // guarding against the degenerate all-zero case
+                        let mut skips_left = frames_len;
+                        while durations[*decoded_current_frame].as_millis() == 0
+                            && frames_len > 1
+                            && skips_left > 0
+                        {
+                            advance(&mut decoded_current_frame, frames_len, &mut wrapped);
+                            skips_left -= 1;
+                        }
+
+                        // Loading mode holds on the last frame, waiting for
+                        // more frames to be transmitted instead of looping
+                        if loading && wrapped {
+                            *decoded_current_frame = frames_len - 1;
+                        } else {
+                            *decoded_frame_start = now;
+                            next_due = *decoded_frame_start
+                                + durations[*decoded_current_frame].max(min_frame_duration);
+                            if wrapped {
+                                loop_completed = true;
+                            }
+                            next.replace(next_due);
+                        }
+                        handle.current_frame = *decoded_current_frame;
+                    } else {
+                        next.replace(next_due);
+                    }
                 }
 
                 let hash = hashes[*decoded_current_frame];
+                let final_due = Some(
+                    *decoded_frame_start
+                        + durations[*decoded_current_frame].max(min_frame_duration),
+                );
+
+                // Account for the completed loop; when the requested loop
+                // count is exhausted the animation stops on the current
+                // frame. (Done after the read-only borrows above end.)
+                if loop_completed {
+                    if let ImageDataType::AnimRgba8 { control, .. } = &mut *handle.h {
+                        if let Some(n) = control.loop_count.filter(|n| *n > 1) {
+                            control.loops_done += 1;
+                            if control.loops_done >= n - 1 {
+                                control.running = false;
+                            }
+                        }
+                    }
+                }
 
                 if let Some(sprite) = frame_cache.get(&hash) {
                     return Ok((sprite.clone(), next, LoadState::Loaded));
@@ -1026,14 +1113,7 @@ impl GlyphCache {
 
                 frame_cache.insert(hash, sprite.clone());
 
-                return Ok((
-                    sprite,
-                    Some(
-                        *decoded_frame_start
-                            + durations[*decoded_current_frame].max(min_frame_duration),
-                    ),
-                    LoadState::Loaded,
-                ));
+                return Ok((sprite, final_due, LoadState::Loaded));
             }
             ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => {
                 let mut frames = decoded.frames.borrow_mut();

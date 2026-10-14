@@ -400,3 +400,113 @@ fn kitty_same_z_images_stack_by_image_id() {
         ids
     );
 }
+
+/// A 2x2 pixel RGBA image used as animation frames.
+const TINY_2X2_RGBA_BASE64: &str = "AQIDBAECAwQBAgMEAQIDBA==";
+
+/// Transmit image id 1 and append a second frame, making it animated.
+fn make_two_frame_animation(term: &mut TestTerm) {
+    term.print(
+        format!(
+            "\x1b_Ga=T,t=d,f=32,s=2,v=2,i=1;{}\x1b\\",
+            TINY_2X2_RGBA_BASE64
+        )
+        .as_bytes(),
+    );
+    term.print(
+        format!(
+            "\x1b_Ga=f,t=d,f=32,s=2,v=2,i=1;{}\x1b\\",
+            TINY_2X2_RGBA_BASE64
+        )
+        .as_bytes(),
+    );
+}
+
+/// The a=a animation control command manipulates the playback state:
+/// stopping, client-driven frame selection, loop counts and per-frame
+/// gaps.
+#[test]
+fn kitty_animation_control_updates_playback_state() {
+    use std::time::Duration;
+    let mut term = TestTerm::new(3, 10, 0);
+    make_two_frame_animation(&mut term);
+
+    // Animations auto-play by default
+    {
+        let image = first_image(&term);
+        let data = image.data();
+        match &*data {
+            ImageDataType::AnimRgba8 {
+                frames, control, ..
+            } => {
+                assert!(frames.len() == 2);
+                assert!(control.running);
+            }
+            _ => panic!("expected AnimRgba8"),
+        }
+    }
+
+    // Stop the animation, select frame 1 and request 2 loops
+    term.print(b"\x1b_Ga=a,i=1,s=1,c=1,v=2\x1b\\");
+    {
+        let image = first_image(&term);
+        let data = image.data();
+        match &*data {
+            ImageDataType::AnimRgba8 { control, .. } => {
+                assert!(!control.running);
+                assert!(control.paused_frame == Some(1));
+                assert!(control.loop_count == Some(2));
+            }
+            _ => panic!("expected AnimRgba8"),
+        }
+    }
+
+    // Resume in loading mode and set the gap of frame 2 to 100ms
+    term.print(b"\x1b_Ga=a,i=1,s=2,r=2,z=100\x1b\\");
+    {
+        let image = first_image(&term);
+        let data = image.data();
+        match &*data {
+            ImageDataType::AnimRgba8 {
+                durations, control, ..
+            } => {
+                assert!(control.running);
+                assert!(control.loading);
+                assert!(durations[1] == Duration::from_millis(100));
+            }
+            _ => panic!("expected AnimRgba8"),
+        }
+    }
+}
+
+/// d=f deletes the frame selected by c= from an animation.
+#[test]
+fn kitty_delete_frame_removes_animation_frame() {
+    let mut term = TestTerm::new(3, 10, 0);
+    make_two_frame_animation(&mut term);
+
+    term.print(b"\x1b_Ga=d,d=f,i=1,c=2\x1b\\");
+
+    let image = first_image(&term);
+    let data = image.data();
+    match &*data {
+        ImageDataType::AnimRgba8 { frames, .. } => {
+            assert!(frames.len() == 1, "expected one frame left");
+        }
+        _ => panic!("expected AnimRgba8"),
+    }
+}
+
+/// Selecting a frame outside the animation answers EINVAL.
+#[test]
+fn kitty_animate_bad_frame_replies_einval() {
+    let (mut term, sink) = TestTerm::new_with_output_sink(3, 10, 0);
+    make_two_frame_animation(&mut term);
+
+    term.print(b"\x1b_Ga=a,i=1,c=9\x1b\\");
+    wait_for_output(&sink, "\x1b_Gi=1;EINVAL");
+
+    // And an unknown image answers ENOENT
+    term.print(b"\x1b_Ga=a,i=42,s=1\x1b\\");
+    wait_for_output(&sink, "\x1b_Gi=42;ENOENT");
+}

@@ -11,9 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use wezterm_cell::image::ImageDataType;
 use wezterm_escape_parser::apc::{
-    KittyFrameCompositionMode, KittyImage, KittyImageCompression, KittyImageData, KittyImageDelete,
-    KittyImageFormat, KittyImageFrame, KittyImageFrameCompose, KittyImagePlacement,
-    KittyImageTransmit, KittyImageVerbosity,
+    KittyAnimationState, KittyFrameCompositionMode, KittyImage, KittyImageAnimate,
+    KittyImageCompression, KittyImageData, KittyImageDelete, KittyImageFormat, KittyImageFrame,
+    KittyImageFrameCompose, KittyImagePlacement, KittyImageTransmit, KittyImageVerbosity,
 };
 use wezterm_surface::change::ImageData;
 
@@ -333,14 +333,26 @@ impl TerminalState {
                 }
             }
             KittyImage::Animate { control, verbosity } => {
-                // Full animation control handling arrives with the
-                // animation work; accept the command for now so that
-                // it is not treated as a parse error.
-                log::warn!(
-                    "unhandled KittyImage::Animate {:#?} {:?}",
-                    control,
-                    verbosity
-                );
+                let image_id = control.image_id;
+                let image_number = control.image_number;
+                match self.kitty_animate(control) {
+                    Ok(()) => {
+                        if image_id.is_some() || image_number.is_some() {
+                            self.kitty_send_response(
+                                verbosity,
+                                true,
+                                image_id,
+                                image_number,
+                                None,
+                                "OK".to_string(),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        log::error!("Error {:#} while handling KittyImage::Animate", err);
+                        self.kitty_reply_error(verbosity, image_id, image_number, None, &err);
+                    }
+                }
             }
         };
 
@@ -496,12 +508,244 @@ impl TerminalState {
             KittyImageDelete::DeleteZ { z, delete } => {
                 self.kitty_delete_placements_where(delete, |_, _, info| info.z_index == z);
             }
-            KittyImageDelete::AnimationFrames { delete } => {
-                // Frame deletion is handled together with animation control.
-                log::warn!(
-                    "unhandled KittyImage::Delete animation frames, delete={:?}",
-                    delete
+            KittyImageDelete::AnimationFrames {
+                image_id,
+                image_number,
+                frame_number,
+                delete,
+            } => {
+                self.kitty_delete_frames(image_id, image_number, frame_number, delete, verbosity);
+            }
+        }
+    }
+
+    /// d=f: delete animation frames. The 1-based frame number comes
+    /// from c= (frame 1, the root frame, by default), following kitty.
+    fn kitty_delete_frames(
+        &mut self,
+        image_id: Option<u32>,
+        image_number: Option<u32>,
+        frame_number: Option<u32>,
+        delete: bool,
+        verbosity: KittyImageVerbosity,
+    ) {
+        let image_id = match image_id
+            .or_else(|| image_number.and_then(|no| self.kitty_img.number_to_id.get(&no).copied()))
+        {
+            Some(id) => id,
+            None => {
+                self.kitty_send_response(
+                    verbosity,
+                    false,
+                    image_id,
+                    image_number,
+                    None,
+                    "ENOENT:no such image".to_string(),
                 );
+                return;
+            }
+        };
+
+        let anim = match self.kitty_img.id_to_data.get(&image_id) {
+            Some(anim) => Arc::clone(anim),
+            None => {
+                self.kitty_send_response(
+                    verbosity,
+                    false,
+                    Some(image_id),
+                    image_number,
+                    None,
+                    "ENOENT:no such image".to_string(),
+                );
+                return;
+            }
+        };
+
+        let mut anim = anim.data();
+        // Set when the uppercase form removes a still image entirely
+        let mut remove_still = false;
+        match &mut *anim {
+            ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => {
+                self.kitty_send_response(
+                    verbosity,
+                    false,
+                    Some(image_id),
+                    image_number,
+                    None,
+                    "EINVAL:cannot delete frames of an encoded image".to_string(),
+                );
+                return;
+            }
+            ImageDataType::Rgba8 { .. } => {
+                // A still image has no animation frames; the uppercase
+                // form removes the image itself, like kitty does
+                if delete {
+                    remove_still = true;
+                }
+            }
+            ImageDataType::AnimRgba8 {
+                frames,
+                durations,
+                hashes,
+                ..
+            } => {
+                let frame = frame_number.unwrap_or(1);
+                if frame == 0 || frame as usize > frames.len() {
+                    self.kitty_send_response(
+                        verbosity,
+                        false,
+                        Some(image_id),
+                        image_number,
+                        None,
+                        format!("EINVAL:frame {} is out of range 1-{}", frame, frames.len()),
+                    );
+                    return;
+                }
+                let idx = frame as usize - 1;
+                frames.remove(idx);
+                durations.remove(idx);
+                hashes.remove(idx);
+            }
+        }
+        drop(anim);
+        if remove_still {
+            self.kitty_remove_placement(image_id, None);
+            self.kitty_img.remove_data_for_id(image_id);
+            return;
+        }
+        self.kitty_touch_image_placements(image_id);
+    }
+
+    /// a=a: control the playback of an animated image.
+    fn kitty_animate(&mut self, cmd: KittyImageAnimate) -> anyhow::Result<()> {
+        let image_id = match cmd.image_id.or_else(|| {
+            cmd.image_number
+                .and_then(|no| self.kitty_img.number_to_id.get(&no).copied())
+        }) {
+            Some(id) => id,
+            None => {
+                return Err(KittyProtocolError {
+                    code: "ENOENT",
+                    detail: "no such image".to_string(),
+                }
+                .into())
+            }
+        };
+
+        let anim = self
+            .kitty_img
+            .id_to_data
+            .get(&image_id)
+            .ok_or_else(|| {
+                anyhow::Error::new(KittyProtocolError {
+                    code: "ENOENT",
+                    detail: format!("no such image id {}", image_id),
+                })
+            })?
+            .clone();
+
+        let mut anim = anim.data();
+        let frames_len = match &*anim {
+            ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => {
+                return Err(KittyProtocolError {
+                    code: "EINVAL",
+                    detail: "cannot control an encoded image".to_string(),
+                }
+                .into())
+            }
+            ImageDataType::Rgba8 { .. } => 1,
+            ImageDataType::AnimRgba8 { frames, .. } => frames.len(),
+        };
+
+        // Validate the frame references up front so that the command
+        // either applies completely or answers EINVAL
+        if let Some(f) = cmd.frame_number {
+            if f == 0 || f as usize > frames_len {
+                return Err(KittyProtocolError {
+                    code: "EINVAL",
+                    detail: format!("frame {} is out of range 1-{}", f, frames_len),
+                }
+                .into());
+            }
+        }
+        if let Some(r) = cmd.gap_frame {
+            if r == 0 || r as usize > frames_len {
+                return Err(KittyProtocolError {
+                    code: "EINVAL",
+                    detail: format!("frame {} is out of range 1-{}", r, frames_len),
+                }
+                .into());
+            }
+        }
+
+        // The gap applies to the frame selected by r=, else by c=,
+        // else to the root frame
+        let gap_frame = cmd.gap_frame.or(cmd.frame_number).unwrap_or(1);
+
+        match &mut *anim {
+            ImageDataType::AnimRgba8 {
+                durations, control, ..
+            } => {
+                if let Some(state) = cmd.state {
+                    match state {
+                        KittyAnimationState::Stop => {
+                            control.running = false;
+                            control.loading = false;
+                            // Stopping the animation resets the loop counter
+                            control.loops_done = 0;
+                        }
+                        KittyAnimationState::Loading => {
+                            control.running = true;
+                            control.loading = true;
+                        }
+                        KittyAnimationState::Running => {
+                            control.running = true;
+                            control.loading = false;
+                        }
+                    }
+                }
+                if let Some(v) = cmd.loop_count {
+                    // v=1 loops forever; any other positive value loops
+                    // v-1 times before the animation stops
+                    control.loop_count = Some(v);
+                    control.loops_done = 0;
+                }
+                if let Some(f) = cmd.frame_number {
+                    control.paused_frame = Some(f);
+                }
+                if let Some(gap) = cmd.gap {
+                    // Negative gaps are clamped to zero (gapless), as kitty does
+                    durations[gap_frame as usize - 1] = Duration::from_millis(gap.max(0) as u64);
+                }
+            }
+            // A still image: only the frame selection is meaningful and
+            // there is nothing to seek in a single frame image
+            ImageDataType::Rgba8 { .. } => {}
+            ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => unreachable!(),
+        }
+        drop(anim);
+        self.kitty_touch_image_placements(image_id);
+        Ok(())
+    }
+
+    /// Bump the last-change seqno of the lines covered by the image's
+    /// placements, so that the renderer picks up animation control and
+    /// frame changes that do not otherwise touch the screen model.
+    fn kitty_touch_image_placements(&mut self, image_id: u32) {
+        let seqno = self.seqno;
+        let infos: Vec<PlacementInfo> = self
+            .kitty_img
+            .placements
+            .iter()
+            .filter(|((id, _), _)| *id == image_id)
+            .map(|(_, info)| *info)
+            .collect();
+        for info in infos {
+            let screen = self.screen_mut();
+            let range = screen
+                .stable_range(&(info.first_row..info.first_row + info.rows as StableRowIndex));
+            for idx in range {
+                screen.line_mut(idx).update_last_change_seqno(seqno);
             }
         }
     }
@@ -883,6 +1127,7 @@ impl TerminalState {
                             frames,
                             durations,
                             hashes,
+                            control: Default::default(),
                         };
                     }
                     Some(n) => anyhow::bail!(
@@ -897,6 +1142,7 @@ impl TerminalState {
                 frames,
                 durations,
                 hashes,
+                ..
             } => {
                 let frame_no = frame.frame_number.unwrap_or(frames.len() as u32 + 1);
                 if frame_no == frames.len() as u32 + 1 {
