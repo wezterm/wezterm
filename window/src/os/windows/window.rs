@@ -2642,6 +2642,7 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
 
     let handled_raw = Handled::new();
     let raw_key_event = RawKeyEvent {
+        layout_unshifted: None,
         key: match phys_code {
             Some(phys) => KeyCode::Physical(phys),
             None => KeyCode::RawCode(wparam as _),
@@ -2730,6 +2731,7 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
                             key_is_down: !releasing,
                             win32_uni_char: Some(c),
                             raw: Some(RawKeyEvent {
+                                layout_unshifted: None,
                                 scan_code: 0,
                                 ..raw_key_event.clone()
                             }),

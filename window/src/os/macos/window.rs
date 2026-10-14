@@ -2599,6 +2599,7 @@ impl WindowView {
         let phys_code = vkey_to_phys(virtual_key);
         let raw_key_handled = Handled::new();
         let raw_key_event = RawKeyEvent {
+            layout_unshifted: None,
             key: if unmod.is_empty() {
                 match phys_code {
                     Some(phys) => KeyCode::Physical(phys),

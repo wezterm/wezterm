@@ -286,6 +286,7 @@ impl KeyboardWithFallback {
         let handled = Handled::new();
 
         let raw_key_event = RawKeyEvent {
+            layout_unshifted: None,
             key: match phys_code {
                 Some(phys) => KeyCode::Physical(phys),
                 None => KeyCode::RawCode(xcode.into()),

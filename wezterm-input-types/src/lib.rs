@@ -507,6 +507,8 @@ bitflags! {
         const LEFT_SHIFT = 1<<10;
         const RIGHT_SHIFT = 1<<11;
         const ENHANCED_KEY = 1<<12;
+        const HYPER = 1<<13;
+        const META = 1<<14;
     }
 }
 
@@ -526,6 +528,8 @@ impl TryFrom<String> for Modifiers {
                 mods |= Modifiers::ALT;
             } else if ele == "CTRL" {
                 mods |= Modifiers::CTRL;
+            } else if ele == "HYPER" {
+                mods |= Modifiers::HYPER;
             } else if ele == "SUPER" || ele == "CMD" || ele == "WIN" {
                 mods |= Modifiers::SUPER;
             } else if ele == "LEADER" {
@@ -1324,6 +1328,12 @@ pub struct RawKeyEvent {
     /// How many times this key repeats
     pub repeat_count: u16,
 
+    /// The unshifted form of the key according to the current OS
+    /// keyboard layout, when the platform reports it. Used by the
+    /// kitty keyboard protocol alternate keys encoding instead of the
+    /// US layout assumption.
+    pub layout_unshifted: Option<KeyCode>,
+
     /// If true, this is a key down rather than a key up event
     pub key_is_down: bool,
     pub handled: Handled,
@@ -1559,6 +1569,7 @@ impl KeyEvent {
                 if matches!(
                     self.raw,
                     Some(RawKeyEvent {
+                        layout_unshifted: None,
                         key: KeyCode::LeftControl | KeyCode::Physical(PhysKeyCode::LeftControl),
                         ..
                     })
@@ -1570,6 +1581,7 @@ impl KeyEvent {
                 if matches!(
                     self.raw,
                     Some(RawKeyEvent {
+                        layout_unshifted: None,
                         key: KeyCode::RightControl | KeyCode::Physical(PhysKeyCode::RightControl),
                         ..
                     })
@@ -1581,6 +1593,7 @@ impl KeyEvent {
                 if matches!(
                     self.raw,
                     Some(RawKeyEvent {
+                        layout_unshifted: None,
                         key: KeyCode::LeftAlt | KeyCode::Physical(PhysKeyCode::LeftAlt),
                         ..
                     })
@@ -1592,6 +1605,7 @@ impl KeyEvent {
                 if matches!(
                     self.raw,
                     Some(RawKeyEvent {
+                        layout_unshifted: None,
                         key: KeyCode::RightAlt | KeyCode::Physical(PhysKeyCode::RightAlt),
                         ..
                     })
@@ -1603,6 +1617,7 @@ impl KeyEvent {
                 if matches!(
                     self.raw,
                     Some(RawKeyEvent {
+                        layout_unshifted: None,
                         key: KeyCode::LeftShift | KeyCode::Physical(PhysKeyCode::LeftShift),
                         ..
                     })
@@ -1614,6 +1629,7 @@ impl KeyEvent {
                 if matches!(
                     self.raw,
                     Some(RawKeyEvent {
+                        layout_unshifted: None,
                         key: KeyCode::RightShift | KeyCode::Physical(PhysKeyCode::RightShift),
                         ..
                     })
@@ -1753,9 +1769,12 @@ impl KeyEvent {
         if raw_modifiers.contains(Modifiers::SUPER) {
             modifiers |= 8;
         }
-        // TODO: Hyper and Meta are not handled yet.
-        // We should somehow detect this?
-        // See: https://github.com/wezterm/wezterm/pull/4605#issuecomment-1823604708
+        if raw_modifiers.contains(Modifiers::HYPER) {
+            modifiers |= 16;
+        }
+        if raw_modifiers.contains(Modifiers::META) {
+            modifiers |= 32;
+        }
         if self.leds.contains(KeyboardLedStatus::CAPS_LOCK) {
             modifiers |= 64;
         }
@@ -1764,12 +1783,18 @@ impl KeyEvent {
         }
         modifiers += 1;
 
-        let event_type =
-            if flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES) && !self.key_is_down {
+        let event_type = if flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES) {
+            if !self.key_is_down {
                 ":3"
+            } else if self.repeat_count > 1 {
+                // An auto-repeat of a held key
+                ":2"
             } else {
                 ""
-            };
+            }
+        } else {
+            ""
+        };
 
         let is_legacy_key = match &self.key {
             Char(c) => c.is_ascii_alphanumeric() || c.is_ascii_punctuation(),
@@ -1895,9 +1920,9 @@ impl KeyEvent {
                     && !(flags.contains(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
                         && (self.modifiers.contains(Modifiers::CTRL)
                             || self.modifiers.contains(Modifiers::ALT)))
-                    && !self.modifiers.intersects(
-                        Modifiers::SUPER, /* TODO: Hyper and Meta should be added here. */
-                    );
+                    && !self
+                        .modifiers
+                        .intersects(Modifiers::SUPER | Modifiers::HYPER | Modifiers::META);
 
                 if use_legacy {
                     // Legacy text key
@@ -1920,10 +1945,17 @@ impl KeyEvent {
                     return output;
                 }
 
-                // FIXME: ideally we'd get the correct unshifted key from
-                // the OS based on the current keyboard layout. That needs
-                // more plumbing, so for now, we're assuming the US layout.
-                let c = us_layout_unshift(shifted_key);
+                // Prefer the layout-accurate unshifted key reported by
+                // the OS when available, else assume the US layout
+                let c = self
+                    .raw
+                    .as_ref()
+                    .and_then(|raw| raw.layout_unshifted.as_ref())
+                    .and_then(|k| match k {
+                        KeyCode::Char(c) => Some(*c),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| us_layout_unshift(shifted_key));
 
                 let base_layout = self
                     .raw
@@ -2489,6 +2521,7 @@ mod test {
                     raw_code: 0,
                     leds: KeyboardLedStatus::empty(),
                     phys_code: Some(PhysKeyCode::I),
+                    layout_unshifted: None,
                     #[cfg(windows)]
                     scan_code: 0,
                     repeat_count: 1,
@@ -2604,6 +2637,7 @@ mod test {
         };
 
         event.raw = Some(RawKeyEvent {
+            layout_unshifted: None,
             key: event.key.clone(),
             modifiers: event.modifiers,
             leds: KeyboardLedStatus::empty(),
@@ -3271,5 +3305,90 @@ mod test {
             .encode_kitty(flags),
             "\x1b[27;1:3u".to_string()
         );
+    }
+}
+
+#[cfg(test)]
+mod kitty_keyboard_extensions_tests {
+    use super::*;
+
+    fn plain_key(mods: Modifiers) -> KeyEvent {
+        KeyEvent {
+            key: KeyCode::Char('a'),
+            modifiers: mods,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        }
+    }
+
+    /// HYPER and META map onto the kitty modifier bits 16 and 32
+    /// (1<<4 and 1<<5), on top of the usual +1 offset.
+    #[test]
+    fn encode_hyper_and_meta_modifiers() {
+        let flags = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
+        assert_eq!(
+            plain_key(Modifiers::HYPER).encode_kitty(flags),
+            "\x1b[97;17u"
+        );
+        assert_eq!(
+            plain_key(Modifiers::META).encode_kitty(flags),
+            "\x1b[97;33u"
+        );
+        assert_eq!(
+            plain_key(Modifiers::CTRL | Modifiers::HYPER).encode_kitty(flags),
+            "\x1b[97;21u"
+        );
+    }
+
+    /// An auto-repeat of a held key is reported with the :2 event
+    /// type when REPORT_EVENT_TYPES is active.
+    #[test]
+    fn encode_repeat_event_type() {
+        let flags =
+            KittyKeyboardFlags::REPORT_EVENT_TYPES | KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
+        let mut ev = plain_key(Modifiers::CTRL);
+        assert_eq!(ev.encode_kitty(flags), "\x1b[97;5u");
+        ev.repeat_count = 2;
+        assert_eq!(ev.encode_kitty(flags), "\x1b[97;5:2u");
+        // Key up stays :3 regardless of the repeat count
+        ev.key_is_down = false;
+        assert_eq!(ev.encode_kitty(flags), "\x1b[97;5:3u");
+    }
+
+    /// When the OS reports the layout-accurate unshifted key, the
+    /// alternate keys encoding uses it in preference to the US layout
+    /// assumption.
+    #[test]
+    fn encode_alternate_keys_use_layout_unshifted() {
+        let flags = KittyKeyboardFlags::REPORT_ALTERNATE_KEYS
+            | KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
+        let ev = KeyEvent {
+            key: KeyCode::Char('Z'),
+            modifiers: Modifiers::SHIFT,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: Some(RawKeyEvent {
+                key: KeyCode::Char('Z'),
+                modifiers: Modifiers::SHIFT,
+                leds: KeyboardLedStatus::empty(),
+                phys_code: Some(PhysKeyCode::Z),
+                layout_unshifted: Some(KeyCode::Char('z')),
+                raw_code: 0,
+                #[cfg(windows)]
+                scan_code: 0,
+                repeat_count: 1,
+                key_is_down: true,
+                handled: Handled::new(),
+            }),
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+        // base z, shifted Z; the phys_code agrees so no third field
+        assert_eq!(ev.encode_kitty(flags), "\x1b[122:90;2u");
     }
 }
