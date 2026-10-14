@@ -302,3 +302,76 @@ fn kitty_query_bad_payload_replies_einval() {
 
     wait_for_output(&sink, "\x1b_Gi=1;EINVAL");
 }
+
+/// A 2x4 pixel RGBA image (1:2 aspect ratio). Cells in the mock
+/// terminal are 8x16 pixels.
+const TINY_2X4_RGBA_BASE64: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+
+/// With only c= specified, the number of rows is derived from the
+/// aspect ratio instead of squashing the image vertically.
+/// 2 cells wide = 16px, so a 1:2 image becomes 32px tall = 2 rows.
+#[test]
+fn kitty_only_columns_derives_rows_from_aspect() {
+    let mut term = TestTerm::new(4, 10, 0);
+
+    let seq = format!(
+        "\x1b_Ga=T,t=d,f=32,s=2,v=4,i=1,c=2;{}\x1b\\",
+        TINY_2X4_RGBA_BASE64
+    );
+    term.print(seq.as_bytes());
+
+    // The derived placement is 2x2 cells and the cursor ends up right
+    // after the bottom right cell
+    assert!(attached_image_ids(&term).len() == 4);
+    term.assert_cursor_pos(2, 1, None, None);
+}
+
+/// With only r= specified, the number of columns is derived from the
+/// aspect ratio: 2 rows = 32px tall, so a 1:2 image becomes 16px = 2
+/// columns wide.
+#[test]
+fn kitty_only_rows_derives_columns_from_aspect() {
+    let mut term = TestTerm::new(4, 10, 0);
+
+    let seq = format!(
+        "\x1b_Ga=T,t=d,f=32,s=2,v=4,i=1,r=2;{}\x1b\\",
+        TINY_2X4_RGBA_BASE64
+    );
+    term.print(seq.as_bytes());
+
+    assert!(attached_image_ids(&term).len() == 4);
+    term.assert_cursor_pos(2, 1, None, None);
+}
+
+/// With both c= and r= specified the image is letterboxed instead of
+/// distorted: a 1:2 image inside a 4x2 cell rectangle (32x32px) is
+/// scaled to 16x32px and centered, so only the middle two columns of
+/// each row carry image data while the cursor still advances past the
+/// whole rectangle.
+#[test]
+fn kitty_both_columns_and_rows_letterboxes() {
+    let mut term = TestTerm::new(4, 10, 0);
+
+    let seq = format!(
+        "\x1b_Ga=T,t=d,f=32,s=2,v=4,i=1,c=4,r=2;{}\x1b\\",
+        TINY_2X4_RGBA_BASE64
+    );
+    term.print(seq.as_bytes());
+
+    // The letterbox bands (columns 0 and 3 of each row) have no image
+    assert!(attached_image_ids(&term).len() == 4);
+    let cols: Vec<usize> = attached_image_ids(&term)
+        .into_iter()
+        .map(|(c, _)| c)
+        .collect();
+    assert!(
+        cols.iter().all(|c| *c == 1 || *c == 2),
+        "expected image only in the middle columns, got {:?}",
+        cols
+    );
+
+    // But the cursor still moves past the full 4 column rectangle.
+    // The image-bearing cells render as spaces in the text view.
+    term.print(b"ok");
+    assert_visible_contents(&term, file!(), line!(), &["   ", "    ok", "", ""]);
+}

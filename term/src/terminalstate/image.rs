@@ -128,52 +128,71 @@ impl TerminalState {
             draw_height
         );
 
-        let (fullcells_width, remainder_width_cell, x_delta_divisor) = params
-            .columns
-            .map(|cols| {
-                (
-                    cols,
-                    0,
-                    (cols * cell_pixel_width) as u32 * params.image_width / draw_width,
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    draw_width as usize / cell_pixel_width,
-                    draw_width as usize % cell_pixel_width,
-                    params.image_width,
-                )
-            });
-        let (fullcells_height, remainder_height_cell, y_delta_divisor) = params
-            .rows
-            .map(|rows| {
-                (
-                    rows,
-                    0,
-                    (rows * cell_pixel_height) as u32 * params.image_height / draw_height,
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    draw_height as usize / cell_pixel_height,
-                    draw_height as usize % cell_pixel_height,
-                    params.image_height,
-                )
-            });
+        // The pixel rectangle that the drawn image area occupies inside
+        // the placement grid, relative to the grid's top left corner.
+        // With neither c= nor r= the image keeps its natural size.
+        // With only one of them the other dimension is derived so that
+        // the aspect ratio is preserved. With both, the image is scaled
+        // to fit the rectangle and letterboxed (centered), so that it is
+        // never distorted.
+        let (target_x, target_y, target_w, target_h): (u32, u32, u32, u32) =
+            match (params.columns, params.rows) {
+                (Some(cols), Some(rows)) => {
+                    let box_w = cols as u64 * cell_pixel_width as u64;
+                    let box_h = rows as u64 * cell_pixel_height as u64;
+                    // Choose the smaller scale factor, comparing the
+                    // fractions box_w/draw_width and box_h/draw_height
+                    // in integer arithmetic
+                    let width_limited = box_w * draw_height as u64 <= draw_width as u64 * box_h;
+                    let (w, h) = if width_limited {
+                        (
+                            box_w,
+                            (box_w * draw_height as u64 + draw_width as u64 / 2)
+                                / draw_width as u64,
+                        )
+                    } else {
+                        (
+                            (box_h * draw_width as u64 + draw_height as u64 / 2)
+                                / draw_height as u64,
+                            box_h,
+                        )
+                    };
+                    // Rounding may push a pixel outside the box; clamp
+                    let w = w.min(box_w) as u32;
+                    let h = h.min(box_h) as u32;
+                    (
+                        ((box_w - w as u64) / 2) as u32,
+                        ((box_h - h as u64) / 2) as u32,
+                        w,
+                        h,
+                    )
+                }
+                (Some(cols), None) => {
+                    let w = cols as u64 * cell_pixel_width as u64;
+                    let h = (w * draw_height as u64 + draw_width as u64 / 2) / draw_width as u64;
+                    (0, 0, w as u32, h as u32)
+                }
+                (None, Some(rows)) => {
+                    let h = rows as u64 * cell_pixel_height as u64;
+                    let w = (h * draw_width as u64 + draw_height as u64 / 2) / draw_height as u64;
+                    (0, 0, w as u32, h as u32)
+                }
+                (None, None) => (0, 0, draw_width, draw_height),
+            };
 
-        let target_pixel_width = fullcells_width * cell_pixel_width + remainder_width_cell;
-        let target_pixel_height = fullcells_height * cell_pixel_height + remainder_height_cell;
-        let first_row = self.screen().visible_row_to_stable_row(self.cursor.y);
+        anyhow::ensure!(
+            target_w != 0 && target_h != 0,
+            "refusing to display image that scales down to zero pixels (WxH: {}x{})",
+            target_w,
+            target_h
+        );
 
-        let mut ypos = NotNan::new(params.source_origin_y as f32 / params.image_height as f32)
-            .with_context(|| format!("computing ypos {params:#?}"))?;
-        let start_xpos = NotNan::new(params.source_origin_x as f32 / params.image_width as f32)
-            .context("computing xpos")?;
-
-        let cursor_x = self.cursor.x;
-
-        let width_in_cells = fullcells_width + one_or_zero::<usize>(remainder_width_cell > 0);
-        let height_in_cells = fullcells_height + one_or_zero::<usize>(remainder_height_cell > 0);
+        let width_in_cells = params.columns.unwrap_or_else(|| {
+            (target_w as usize + cell_pixel_width as usize - 1) / cell_pixel_width as usize
+        });
+        let height_in_cells = params.rows.unwrap_or_else(|| {
+            (target_h as usize + cell_pixel_height as usize - 1) / cell_pixel_height as usize
+        });
         let height_in_cells = if params.do_not_move_cursor {
             height_in_cells.min(self.screen().physical_rows - self.cursor.y as usize)
         } else {
@@ -181,13 +200,15 @@ impl TerminalState {
         };
 
         log::debug!(
-            "image is {}x{} cells (cell is {}x{}), target pixel dims {}x{}, {:?}, (term is {}x{}@{}x{})",
+            "image occupies {}x{} px at offset {},{} inside {}x{} cells (cell is {}x{}), {:?}, (term is {}x{}@{}x{})",
+            target_w,
+            target_h,
+            target_x,
+            target_y,
             width_in_cells,
             height_in_cells,
             cell_pixel_width,
             cell_pixel_height,
-            target_pixel_width,
-            target_pixel_height,
             params,
             physical_cols,
             physical_rows,
@@ -195,13 +216,17 @@ impl TerminalState {
             self.pixel_height
         );
 
-        let mut remain_y = target_pixel_height;
-        for y in 0..height_in_cells {
-            let padding_bottom = cell_pixel_height.saturating_sub(remain_y) as u16;
-            let y_delta = (remain_y.min(cell_pixel_height) as f32) / y_delta_divisor as f32;
-            remain_y = remain_y.saturating_sub(cell_pixel_height);
+        let first_row = self.screen().visible_row_to_stable_row(self.cursor.y);
+        let cursor_x = self.cursor.x;
 
-            let mut xpos = start_xpos;
+        for y in 0..height_in_cells {
+            let cell_y0 = y as u32 * cell_pixel_height as u32;
+            let cell_y1 = cell_y0 + cell_pixel_height as u32;
+            // The X/Y pixel offsets displace the image within the cells
+            let usable_y0 = cell_y0 + cell_padding_top as u32;
+            let overlap_y0 = usable_y0.max(target_y);
+            let overlap_y1 = cell_y1.min(target_y + target_h);
+
             let cursor_y = if params.do_not_move_cursor {
                 self.cursor.y + y as i64
             } else {
@@ -211,36 +236,59 @@ impl TerminalState {
                 "setting cells for y={} x=[{}..{}]",
                 cursor_y,
                 cursor_x,
-                cursor_x + fullcells_width
+                cursor_x + width_in_cells
             );
-            let mut remain_x = target_pixel_width;
             for x in 0..width_in_cells {
-                let padding_right = cell_pixel_width.saturating_sub(remain_x) as u16;
-                let x_delta = (remain_x.min(cell_pixel_width) as f32) / x_delta_divisor as f32;
-                remain_x = remain_x.saturating_sub(cell_pixel_width);
-                log::debug!(
-                    "x_delta {} ({} px), y_delta {} ({} px), padding_right={}, padding_bottom={}",
-                    x_delta,
-                    x_delta * x_delta_divisor as f32,
-                    y_delta,
-                    y_delta * y_delta_divisor as f32,
-                    padding_right,
-                    padding_bottom
+                let cell_x0 = x as u32 * cell_pixel_width as u32;
+                let cell_x1 = cell_x0 + cell_pixel_width as u32;
+                let usable_x0 = cell_x0 + cell_padding_left as u32;
+                let overlap_x0 = usable_x0.max(target_x);
+                let overlap_x1 = cell_x1.min(target_x + target_w);
+
+                // Cells the (letterboxed) image does not reach stay as
+                // they are but still count towards the placement grid
+                // and the cursor movement below.
+                if overlap_x0 >= overlap_x1 || overlap_y0 >= overlap_y1 {
+                    continue;
+                }
+
+                // Map the overlapping region back into source pixels
+                let src_x0 = params.source_origin_x as u64
+                    + (overlap_x0 - target_x) as u64 * draw_width as u64 / target_w as u64;
+                let src_x1 = params.source_origin_x as u64
+                    + (overlap_x1 - target_x) as u64 * draw_width as u64 / target_w as u64;
+                let src_y0 = params.source_origin_y as u64
+                    + (overlap_y0 - target_y) as u64 * draw_height as u64 / target_h as u64;
+                let src_y1 = params.source_origin_y as u64
+                    + (overlap_y1 - target_y) as u64 * draw_height as u64 / target_h as u64;
+
+                let top_left = TextureCoordinate::new(
+                    NotNan::new(src_x0 as f32 / params.image_width as f32)
+                        .context("computing xpos")?,
+                    NotNan::new(src_y0 as f32 / params.image_height as f32)
+                        .context("computing ypos")?,
                 );
+                let bottom_right = TextureCoordinate::new(
+                    NotNan::new(src_x1 as f32 / params.image_width as f32)
+                        .context("computing xpos")?,
+                    NotNan::new(src_y1 as f32 / params.image_height as f32)
+                        .context("computing ypos")?,
+                );
+
                 let mut cell = self
                     .screen_mut()
                     .get_cell(cursor_x + x, cursor_y)
                     .cloned()
                     .unwrap_or_else(Cell::blank);
                 let img = Box::new(ImageCell::with_z_index(
-                    TextureCoordinate::new(xpos, ypos),
-                    TextureCoordinate::new(xpos + x_delta, ypos + y_delta),
+                    top_left,
+                    bottom_right,
                     params.data.clone(),
                     params.z_index,
-                    cell_padding_left,
-                    cell_padding_top,
-                    padding_right,
-                    padding_bottom,
+                    (overlap_x0 - cell_x0) as u16,
+                    (overlap_y0 - cell_y0) as u16,
+                    (cell_x1 - overlap_x1) as u16,
+                    (cell_y1 - overlap_y1) as u16,
                     params.image_id,
                     params.placement_id,
                 ));
@@ -253,9 +301,7 @@ impl TerminalState {
 
                 self.screen_mut()
                     .set_cell(cursor_x + x, cursor_y, &cell, seqno);
-                xpos += x_delta;
             }
-            ypos += y_delta;
             if !params.do_not_move_cursor && y < height_in_cells - 1 {
                 self.new_line(false);
             }
@@ -263,10 +309,12 @@ impl TerminalState {
 
         // adjust cursor position if the drawn cells move beyond current cell
         let x_padding_shift: i64 = one_or_zero(
-            draw_width as usize + cell_padding_left as usize > cell_pixel_width * width_in_cells,
+            (target_x + target_w) as usize + cell_padding_left as usize
+                > cell_pixel_width as usize * width_in_cells,
         );
         let y_padding_shift: i64 = one_or_zero(
-            draw_height as usize + cell_padding_top as usize > cell_pixel_height * height_in_cells,
+            (target_y + target_h) as usize + cell_padding_top as usize
+                > cell_pixel_height as usize * height_in_cells,
         );
         if !params.do_not_move_cursor {
             // Sixel places the cursor under the left corner of the image,
