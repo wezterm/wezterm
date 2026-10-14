@@ -1137,16 +1137,16 @@ impl TerminalState {
             }
             _ => (row0.max(1), col0.max(1), hi0.max(1)),
         };
-        self.kitty_placeholder_state = Some(KittyPlaceholderRun {
+        let run = KittyPlaceholderRun {
             y,
             id_lower,
             pid,
             row,
             col,
             hi8,
-        });
-
-        let image_id = id_lower | (hi8.saturating_sub(1) << 24);
+        };
+        let image_id = run.image_id();
+        self.kitty_placeholder_state = Some(run);
 
         // Find the virtual placement the placeholder text refers to;
         // with no explicit placement id any virtual placement of the
