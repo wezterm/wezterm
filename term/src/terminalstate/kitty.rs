@@ -238,37 +238,8 @@ impl TerminalState {
             } => {
                 self.kitty_img_place(image_id, image_number, placement, verbosity)?;
             }
-            KittyImage::Delete {
-                what:
-                    KittyImageDelete::ByImageId {
-                        image_id,
-                        placement_id,
-                        delete,
-                    },
-                verbosity,
-            } => {
-                log::trace!(
-                    "remove a placement: image_id {} placement_id {:?} delete {} verb {:?}",
-                    image_id,
-                    placement_id,
-                    delete,
-                    verbosity
-                );
-
-                self.kitty_remove_placement(image_id, placement_id);
-
-                if delete {
-                    self.kitty_img.remove_data_for_id(image_id);
-                }
-            }
-            KittyImage::Delete {
-                what: KittyImageDelete::All { delete },
-                verbosity: _,
-            } => {
-                self.kitty_remove_all_placements(delete);
-            }
             KittyImage::Delete { what, verbosity } => {
-                log::warn!("unhandled KittyImage::Delete {:?} {:?}", what, verbosity);
+                self.kitty_img_delete(what, verbosity);
             }
             KittyImage::TransmitFrame {
                 transmit,
@@ -355,6 +326,153 @@ impl TerminalState {
             self.kitty_img.id_to_data.clear();
             self.kitty_img.used_memory = 0;
             self.kitty_img.number_to_id.clear();
+        }
+    }
+
+    /// Handle a kitty graphics protocol delete command.
+    /// The lowercase forms remove the matching placements but keep the
+    /// image data; the uppercase forms additionally free the data of any
+    /// image that no longer has any placements.
+    fn kitty_img_delete(&mut self, what: KittyImageDelete, verbosity: KittyImageVerbosity) {
+        match what {
+            KittyImageDelete::ByImageId {
+                image_id,
+                placement_id,
+                delete,
+            } => {
+                log::trace!(
+                    "remove a placement: image_id {} placement_id {:?} delete {} verb {:?}",
+                    image_id,
+                    placement_id,
+                    delete,
+                    verbosity
+                );
+
+                self.kitty_remove_placement(image_id, placement_id);
+
+                if delete {
+                    self.kitty_img.remove_data_for_id(image_id);
+                }
+            }
+            KittyImageDelete::All { delete } => {
+                self.kitty_remove_all_placements(delete);
+            }
+            KittyImageDelete::ByImageNumber {
+                image_number,
+                placement_id,
+                delete,
+            } => match self.kitty_img.number_to_id.get(&image_number).copied() {
+                Some(image_id) => {
+                    self.kitty_remove_placement(image_id, placement_id);
+                    if delete {
+                        self.kitty_img.remove_data_for_id(image_id);
+                    }
+                }
+                None => {
+                    self.kitty_send_response(
+                        verbosity,
+                        false,
+                        None,
+                        Some(image_number),
+                        "ENOENT:no image with that number".to_string(),
+                    );
+                }
+            },
+            KittyImageDelete::ByIdRange { from, to, delete } => {
+                self.kitty_delete_placements_where(delete, |image_id, _, _| {
+                    image_id >= from && image_id <= to
+                });
+            }
+            KittyImageDelete::AtCursorPosition { delete } => {
+                let (col, row) = self.cursor_cell();
+                self.kitty_delete_placements_where(delete, |_, _, info| {
+                    placement_intersects_cell(info, col, row)
+                });
+            }
+            KittyImageDelete::DeleteAt { x, y, delete } => {
+                let col = x as usize;
+                let row = self.screen().visible_row_to_stable_row(y as i64);
+                self.kitty_delete_placements_where(delete, |_, _, info| {
+                    placement_intersects_cell(info, col, row)
+                });
+            }
+            KittyImageDelete::DeleteAtZ { x, y, z, delete } => {
+                let col = x as usize;
+                let row = self.screen().visible_row_to_stable_row(y as i64);
+                self.kitty_delete_placements_where(delete, |_, _, info| {
+                    info.z_index == z && placement_intersects_cell(info, col, row)
+                });
+            }
+            KittyImageDelete::DeleteColumn { x, delete } => {
+                let col = x as usize;
+                self.kitty_delete_placements_where(delete, |_, _, info| {
+                    col >= info.first_col && col < info.first_col + info.cols
+                });
+            }
+            KittyImageDelete::DeleteRow { y, delete } => {
+                let row = self.screen().visible_row_to_stable_row(y as i64);
+                self.kitty_delete_placements_where(delete, |_, _, info| {
+                    row >= info.first_row && row < info.first_row + info.rows as StableRowIndex
+                });
+            }
+            KittyImageDelete::DeleteZ { z, delete } => {
+                self.kitty_delete_placements_where(delete, |_, _, info| info.z_index == z);
+            }
+            KittyImageDelete::AnimationFrames { delete } => {
+                // Frame deletion is handled together with animation control.
+                log::warn!(
+                    "unhandled KittyImage::Delete animation frames, delete={:?}",
+                    delete
+                );
+            }
+        }
+    }
+
+    /// The cursor position expressed as a (viewport column, stable row)
+    /// pair, suitable for intersection tests against placements.
+    fn cursor_cell(&self) -> (usize, StableRowIndex) {
+        (
+            self.cursor.x,
+            self.screen().visible_row_to_stable_row(self.cursor.y),
+        )
+    }
+
+    /// Remove every placement for which `pred` returns true.
+    /// When `delete_data` is set (the uppercase delete forms), also free
+    /// the image data of the affected images that no longer have any
+    /// placements, matching the spec's managed-group semantics.
+    fn kitty_delete_placements_where(
+        &mut self,
+        delete_data: bool,
+        pred: impl Fn(u32, Option<u32>, &PlacementInfo) -> bool,
+    ) {
+        let matching: Vec<(u32, Option<u32>, PlacementInfo)> = self
+            .kitty_img
+            .placements
+            .iter()
+            .filter(|(key, info)| pred(key.0, key.1, info))
+            .map(|(key, info)| (key.0, key.1, *info))
+            .collect();
+
+        let mut touched: HashSet<u32> = HashSet::new();
+        for (image_id, placement_id, info) in matching {
+            touched.insert(image_id);
+            self.kitty_img.placements.remove(&(image_id, placement_id));
+            self.kitty_remove_placement_from_model(image_id, placement_id, info);
+        }
+
+        if delete_data {
+            let still_referenced: HashSet<u32> = self
+                .kitty_img
+                .placements
+                .keys()
+                .map(|(id, _)| *id)
+                .collect();
+            for image_id in &touched {
+                if !still_referenced.contains(image_id) {
+                    self.kitty_img.remove_data_for_id(*image_id);
+                }
+            }
         }
     }
 
@@ -935,6 +1053,15 @@ impl TerminalState {
             }
         }
     }
+}
+
+/// Whether a placement covers the given viewport cell, identified by
+/// its column and stable row.
+fn placement_intersects_cell(info: &PlacementInfo, col: usize, row: StableRowIndex) -> bool {
+    row >= info.first_row
+        && row < info.first_row + info.rows as StableRowIndex
+        && col >= info.first_col
+        && col < info.first_col + info.cols
 }
 
 /// Make a copy of the source region.

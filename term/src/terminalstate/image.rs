@@ -12,8 +12,18 @@ use wezterm_surface::TextureCoordinate;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlacementInfo {
     pub first_row: StableRowIndex,
+    /// Leftmost column of the placement, in viewport coordinates
+    pub first_col: usize,
     pub rows: usize,
     pub cols: usize,
+    /// The z-index this placement was attached with
+    pub z_index: i32,
+    /// For relative placements: the (image id, placement id) of the
+    /// parent placement
+    pub parent: Option<(u32, Option<u32>)>,
+    /// For virtual placements: the (cols, rows) rectangle that unicode
+    /// placeholder text may occupy
+    pub virtual_rect: Option<(usize, usize)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -277,8 +287,12 @@ impl TerminalState {
 
         Ok(PlacementInfo {
             first_row,
+            first_col: cursor_x,
             rows: height_in_cells,
             cols: width_in_cells,
+            z_index: params.z_index,
+            parent: None,
+            virtual_rect: None,
         })
     }
 

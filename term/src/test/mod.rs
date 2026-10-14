@@ -43,6 +43,46 @@ struct TestTerm {
     term: Terminal,
 }
 
+/// A writer sink that records everything the terminal writes back to
+/// the pty (for example, responses to kitty graphics protocol queries),
+/// shared with the terminal's writer thread behind a mutex.
+#[derive(Clone, Default)]
+struct SharedWriteSink(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedWriteSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Poll the shared sink until `want` shows up in the bytes the terminal
+/// has written back. Responses are flushed from a dedicated writer
+/// thread, so they arrive asynchronously from advance_bytes.
+fn wait_for_output(sink: &Mutex<Vec<u8>>, want: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        {
+            let buf = sink.lock().unwrap();
+            let contents = String::from_utf8_lossy(&buf).into_owned();
+            if contents.contains(want) {
+                return;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!(
+                    "timed out waiting for {:?} in terminal output; got {:?}",
+                    want, contents
+                );
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 #[derive(Debug)]
 struct TestTermConfig {
     scrollback: usize,
@@ -89,6 +129,44 @@ impl TestTerm {
         term.set_auto_wrap(true);
 
         term
+    }
+
+    /// Like [`TestTerm::new`], but the pty writer records into a shared
+    /// buffer that the test can inspect, which is how responses written
+    /// by the terminal (kitty graphics protocol replies and friends)
+    /// can be asserted upon.
+    fn new_with_output_sink(
+        height: usize,
+        width: usize,
+        scrollback: usize,
+    ) -> (Self, Arc<Mutex<Vec<u8>>>) {
+        let _ = env_logger::Builder::new()
+            .is_test(true)
+            .filter_level(log::LevelFilter::Trace)
+            .try_init();
+
+        let sink = SharedWriteSink::default();
+        let recorded = sink.0.clone();
+        let mut term = Terminal::new(
+            TerminalSize {
+                rows: height,
+                cols: width,
+                pixel_width: width * 8,
+                pixel_height: height * 16,
+                dpi: 0,
+            },
+            Arc::new(TestTermConfig { scrollback }),
+            "WezTerm",
+            "O_o",
+            Box::new(sink),
+        );
+        let clip: Arc<dyn Clipboard> = Arc::new(LocalClip::new());
+        term.set_clipboard(&clip);
+
+        let mut term = Self { term };
+        term.set_auto_wrap(true);
+
+        (term, recorded)
     }
 
     fn print<B: AsRef<[u8]>>(&mut self, bytes: B) {

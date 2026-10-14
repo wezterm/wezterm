@@ -124,3 +124,127 @@ fn kitty_frame_edit_keeps_the_stored_hash_current() {
 
     assert_ne!(edited_hash, transmitted_hash);
 }
+
+/// The (column, image id) of every cell on the visible screen that
+/// currently carries a kitty image attachment.
+fn attached_image_ids(term: &TestTerm) -> Vec<(usize, Option<u32>)> {
+    let mut out = vec![];
+    for line in term.screen().visible_lines().iter() {
+        for cell in line.visible_cells() {
+            if let Some(images) = cell.attrs().images() {
+                for image in images {
+                    out.push((cell.cell_index(), image.image_id()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Transmit the tiny PNG with a client-chosen image id, leaving the
+/// cursor right after the 2x1 cells the 11x11 pixel image occupies.
+fn place_tiny_png(term: &mut TestTerm, image_id: u32, extra_keys: &str) {
+    let seq = format!(
+        "\x1b_Ga=T,t=d,f=100,i={}{};{}\x1b\\",
+        image_id, extra_keys, TINY_PNG_BASE64
+    );
+    term.print(seq.as_bytes());
+}
+
+/// d=c must remove exactly the placements that intersect the cursor cell,
+/// leaving unrelated placements alone.
+#[test]
+fn kitty_delete_at_cursor_cell() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    place_tiny_png(&mut term, 1, "");
+    term.print(b"\x1b[2;1H"); // move to the start of the second row
+    place_tiny_png(&mut term, 2, "");
+
+    // Park the cursor on the first image (row 1, column 1) and delete
+    // whatever is under it.
+    term.print(b"\x1b[1;1H");
+    term.print(b"\x1b_Ga=d,d=c\x1b\\");
+
+    let ids = attached_image_ids(&term);
+    assert!(
+        ids.iter().all(|(_, id)| *id == Some(2)),
+        "only the second image should remain, got {:?}",
+        ids
+    );
+}
+
+/// d=x must remove placements intersecting a column, and d=y those
+/// intersecting a (viewport) row.
+#[test]
+fn kitty_delete_by_column_and_row() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    // Image occupies columns 0-1 of row 1
+    place_tiny_png(&mut term, 1, "");
+    term.print(b"\x1b_Ga=d,d=x,x=0\x1b\\");
+    assert!(attached_image_ids(&term).is_empty());
+
+    // And row deletion picks up an image placed on row 2
+    term.print(b"\x1b[2;1H");
+    place_tiny_png(&mut term, 2, "");
+    term.print(b"\x1b_Ga=d,d=y,y=1\x1b\\");
+    assert!(attached_image_ids(&term).is_empty());
+}
+
+/// d=q removes placements at a cell only when the z-index matches too.
+#[test]
+fn kitty_delete_at_cell_with_z() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    place_tiny_png(&mut term, 1, ",z=5");
+    // Wrong z-index: nothing is removed
+    term.print(b"\x1b_Ga=d,d=q,x=0,y=0,z=6\x1b\\");
+    assert!(attached_image_ids(&term).len() == 2);
+
+    // Matching z-index at the same cell removes it
+    term.print(b"\x1b_Ga=d,d=q,x=0,y=0,z=5\x1b\\");
+    assert!(attached_image_ids(&term).is_empty());
+}
+
+/// d=z removes placements carrying a given z-index.
+#[test]
+fn kitty_delete_by_z_index() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    place_tiny_png(&mut term, 1, ",z=-1");
+    term.print(b"\x1b[2;1H");
+    place_tiny_png(&mut term, 2, ",z=2");
+
+    term.print(b"\x1b_Ga=d,d=z,z=-1\x1b\\");
+
+    let ids = attached_image_ids(&term);
+    assert!(ids.iter().all(|(_, id)| *id == Some(2)));
+}
+
+/// d=r removes every image whose id falls in the x=..y= range.
+#[test]
+fn kitty_delete_by_id_range() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    place_tiny_png(&mut term, 1, "");
+    term.print(b"\x1b[2;1H");
+    place_tiny_png(&mut term, 3, "");
+
+    // Range 1..2 covers image 1 but not image 3
+    term.print(b"\x1b_Ga=d,d=r,x=1,y=2\x1b\\");
+
+    let ids = attached_image_ids(&term);
+    assert!(ids.iter().all(|(_, id)| *id == Some(3)));
+}
+
+/// d=n with an unknown image number must answer ENOENT on the pty
+/// rather than silently doing nothing.
+#[test]
+fn kitty_delete_unknown_number_replies_enoent() {
+    let (mut term, sink) = TestTerm::new_with_output_sink(3, 10, 0);
+
+    term.print(b"\x1b_Ga=d,d=n,I=32\x1b\\");
+
+    wait_for_output(&sink, "\x1b_GI=32;ENOENT");
+}
