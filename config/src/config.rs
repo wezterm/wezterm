@@ -255,7 +255,7 @@ pub struct Config {
 
     #[dynamic(default = "default_true")]
     pub enable_kitty_graphics: bool,
-    #[dynamic(default)]
+    #[dynamic(default = "default_true")]
     pub enable_kitty_keyboard: bool,
 
     /// Whether the terminal should respond to requests to read the

@@ -177,7 +177,7 @@ pub trait TerminalConfiguration: Downcast + std::fmt::Debug + Send + Sync {
     }
 
     fn enable_kitty_keyboard(&self) -> bool {
-        false
+        true
     }
 
     /// The default unicode version to assume.
