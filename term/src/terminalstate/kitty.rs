@@ -138,14 +138,40 @@ impl TerminalState {
                     cols: 0,
                     z_index: placement.z_index.unwrap_or(0),
                     parent: None,
+                    parent_offsets: (0, 0),
                     virtual_rect: Some((cols, rows)),
                 },
             );
             return Ok(());
         }
 
+        if let Some(parent_image_id) = placement.parent_image_id {
+            return self.kitty_img_place_relative(
+                image_id,
+                image_number,
+                placement,
+                parent_image_id,
+            );
+        }
+
         if image_id != 0 {
-            self.kitty_remove_placement(image_id, placement.placement_id);
+            // Re-placing detaches only this placement; relative
+            // children are moved along below rather than deleted
+            let keys: Vec<Option<u32>> = if placement.placement_id.is_some() {
+                vec![placement.placement_id]
+            } else {
+                self.kitty_img
+                    .placements
+                    .keys()
+                    .filter(|(id, _)| *id == image_id)
+                    .map(|(_, p)| *p)
+                    .collect()
+            };
+            for pid in keys {
+                if let Some(info) = self.kitty_img.placements.remove(&(image_id, pid)) {
+                    self.kitty_remove_placement_from_model(image_id, pid, info);
+                }
+            }
         }
         let img = Arc::clone(self.kitty_img.id_to_data.get(&image_id).ok_or_else(|| {
             anyhow::Error::new(KittyProtocolError {
@@ -176,6 +202,7 @@ impl TerminalState {
             image_id: Some(image_id),
             placement_id: placement.placement_id,
             do_not_move_cursor: placement.do_not_move_cursor,
+            origin: None,
         })?;
 
         self.kitty_img
@@ -187,6 +214,9 @@ impl TerminalState {
             image_number,
             placement.placement_id
         );
+
+        // Relative placements follow their parent when it moves
+        self.kitty_relattach_children((image_id, placement.placement_id));
 
         Ok(())
     }
@@ -422,23 +452,270 @@ impl TerminalState {
         }
     }
 
-    fn kitty_remove_placement(&mut self, image_id: u32, placement_id: Option<u32>) {
-        if placement_id.is_some() {
-            if let Some(info) = self.kitty_img.placements.remove(&(image_id, placement_id)) {
-                log::trace!("removed placement {} {:?}", image_id, placement_id);
-                self.kitty_remove_placement_from_model(image_id, placement_id, info);
+    /// Place an image relative to another placement (P=/Q=/H=/V=).
+    /// The child follows its parent when the parent is re-placed and
+    /// is deleted together with it.
+    fn kitty_img_place_relative(
+        &mut self,
+        image_id: u32,
+        image_number: Option<u32>,
+        placement: KittyImagePlacement,
+        parent_image_id: u32,
+    ) -> anyhow::Result<()> {
+        let key = (image_id, placement.placement_id);
+        let parent_key = (parent_image_id, placement.parent_placement_id);
+
+        if key == parent_key {
+            return Err(anyhow::Error::new(KittyProtocolError {
+                code: "EINVAL",
+                detail: "a placement cannot be its own parent".to_string(),
+            }));
+        }
+
+        let parent_info = match self.kitty_img.placements.get(&parent_key) {
+            Some(info) => *info,
+            None => {
+                return Err(anyhow::Error::new(KittyProtocolError {
+                    code: "ENOPARENT",
+                    detail: format!(
+                        "no parent placement {}:{:?}",
+                        parent_image_id, placement.parent_placement_id
+                    ),
+                }))
+            }
+        };
+
+        // Walk the ancestry: reject cycles and chains that are too deep.
+        // kitty guarantees at least a depth of 8.
+        const PARENT_DEPTH_LIMIT: usize = 8;
+        let mut ancestor = parent_key;
+        for depth in 0..PARENT_DEPTH_LIMIT {
+            if ancestor == key {
+                return Err(anyhow::Error::new(KittyProtocolError {
+                    code: "ECYCLE",
+                    detail: "this parent reference creates a cycle".to_string(),
+                }));
+            }
+            ancestor = match self
+                .kitty_img
+                .placements
+                .get(&ancestor)
+                .and_then(|i| i.parent)
+            {
+                Some(next) => next,
+                None => break,
+            };
+            if depth + 1 == PARENT_DEPTH_LIMIT {
+                return Err(anyhow::Error::new(KittyProtocolError {
+                    code: "ETOODEEP",
+                    detail: "too many levels of parent references".to_string(),
+                }));
+            }
+        }
+
+        // Where the parent currently sits
+        let (parent_x, parent_y) = if parent_info.virtual_rect.is_some() {
+            // A virtual parent sits at the top left of the placeholder
+            // cells that currently reference it
+            match self.kitty_find_virtual_anchor(parent_key) {
+                Some(anchor) => anchor,
+                None => {
+                    return Err(anyhow::Error::new(KittyProtocolError {
+                        code: "ENOPARENT",
+                        detail: "the parent virtual placement is not on screen".to_string(),
+                    }))
+                }
             }
         } else {
-            let mut to_clear = vec![];
-            for (id, p) in self.kitty_img.placements.keys() {
-                if *id == image_id {
-                    to_clear.push(*p);
+            let viewport_top = self.screen().visible_row_to_stable_row(0);
+            (
+                parent_info.first_col as i64,
+                (parent_info.first_row - viewport_top) as i64,
+            )
+        };
+
+        let h = placement.h_offset.unwrap_or(0);
+        let v = placement.v_offset.unwrap_or(0);
+        let origin = (parent_x + h, parent_y + v);
+
+        let img = Arc::clone(self.kitty_img.id_to_data.get(&image_id).ok_or_else(|| {
+            anyhow::Error::new(KittyProtocolError {
+                code: "ENOENT",
+                detail: format!(
+                    "no matching image id {} in id_to_data for image_number {:?}",
+                    image_id, image_number
+                ),
+            })
+        })?);
+
+        let (image_width, image_height) = img.data().dimensions()?;
+
+        // Remove the previous incarnation of this placement, children
+        // included; they are re-attached below
+        self.kitty_remove_placement_tree(key);
+
+        let mut info = self.assign_image_to_cells(ImageAttachParams {
+            image_width,
+            image_height,
+            source_width: placement.w,
+            source_height: placement.h,
+            source_origin_x: placement.x.unwrap_or(0),
+            source_origin_y: placement.y.unwrap_or(0),
+            cell_padding_left: placement.x_offset.unwrap_or(0) as u16,
+            cell_padding_top: placement.y_offset.unwrap_or(0) as u16,
+            data: img,
+            style: ImageAttachStyle::Kitty,
+            z_index: placement.z_index.unwrap_or(0),
+            columns: placement.columns.map(|x| x as usize),
+            rows: placement.rows.map(|x| x as usize),
+            image_id: Some(image_id),
+            placement_id: placement.placement_id,
+            do_not_move_cursor: true,
+            origin: Some(origin),
+        })?;
+        info.parent = Some(parent_key);
+        info.parent_offsets = (h, v);
+        self.kitty_img.placements.insert(key, info);
+
+        Ok(())
+    }
+
+    /// The top left cell of the placeholder cells currently rendering
+    /// a virtual placement, in (column, viewport row) form.
+    fn kitty_find_virtual_anchor(&mut self, key: (u32, Option<u32>)) -> Option<(i64, i64)> {
+        let mut best: Option<(i64, i64)> = None;
+        let rows = self.screen().physical_rows as i64;
+        for y in 0..rows {
+            let stable = self.screen().visible_row_to_stable_row(y);
+            let line = self.screen_mut().line_mut(stable as usize);
+            for cell in line.visible_cells() {
+                if let Some(images) = cell.attrs().images() {
+                    for img in images {
+                        if img.image_id() == Some(key.0)
+                            && (key.1.is_none() || img.placement_id() == key.1)
+                        {
+                            let cx = cell.cell_index() as i64;
+                            best = Some(match best {
+                                None => (cx, y),
+                                Some((mx, my)) => (mx.min(cx), my.min(y)),
+                            });
+                        }
+                    }
                 }
             }
-            for p in to_clear.into_iter() {
-                if let Some(info) = self.kitty_img.placements.remove(&(image_id, p)) {
-                    self.kitty_remove_placement_from_model(image_id, p, info);
+        }
+        best
+    }
+
+    /// Remove a placement and, recursively, the placements that hang
+    /// off of it; their lifetime is tied to their parent.
+    fn kitty_remove_placement_tree(&mut self, key: (u32, Option<u32>)) {
+        let children: Vec<(u32, Option<u32>)> = self
+            .kitty_img
+            .placements
+            .iter()
+            .filter(|(_, info)| info.parent == Some(key))
+            .map(|(k, _)| *k)
+            .collect();
+        if let Some(info) = self.kitty_img.placements.remove(&key) {
+            self.kitty_remove_placement_from_model(key.0, key.1, info);
+        }
+        for child in children {
+            self.kitty_remove_placement_tree(child);
+        }
+    }
+
+    /// Re-attach the placements that hang off of `key` so that they
+    /// follow a parent that was just moved.
+    fn kitty_relattach_children(&mut self, key: (u32, Option<u32>)) {
+        let children: Vec<((u32, Option<u32>), PlacementInfo)> = self
+            .kitty_img
+            .placements
+            .iter()
+            .filter(|(_, info)| info.parent == Some(key))
+            .map(|(k, info)| (*k, *info))
+            .collect();
+        for (child_key, child_info) in children {
+            let parent = match self.kitty_img.placements.get(&key) {
+                Some(info) => *info,
+                None => return,
+            };
+            let (parent_x, parent_y) = if parent.virtual_rect.is_some() {
+                match self.kitty_find_virtual_anchor(key) {
+                    Some(anchor) => anchor,
+                    None => continue,
                 }
+            } else {
+                let viewport_top = self.screen().visible_row_to_stable_row(0);
+                (
+                    parent.first_col as i64,
+                    (parent.first_row - viewport_top) as i64,
+                )
+            };
+            let (h, v) = child_info.parent_offsets;
+            let origin = (parent_x + h, parent_y + v);
+
+            let data = match self.kitty_img.id_to_data.get(&child_key.0) {
+                Some(data) => Arc::clone(data),
+                None => continue,
+            };
+            let (image_width, image_height) = match data.data().dimensions() {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            self.kitty_remove_placement_from_model(child_key.0, child_key.1, child_info);
+
+            let info = match self.assign_image_to_cells(ImageAttachParams {
+                image_width,
+                image_height,
+                source_width: None,
+                source_height: None,
+                source_origin_x: 0,
+                source_origin_y: 0,
+                cell_padding_left: 0,
+                cell_padding_top: 0,
+                data,
+                style: ImageAttachStyle::Kitty,
+                z_index: child_info.z_index,
+                columns: None,
+                rows: None,
+                image_id: Some(child_key.0),
+                placement_id: child_key.1,
+                do_not_move_cursor: true,
+                origin: Some(origin),
+            }) {
+                Ok(info) => info,
+                Err(err) => {
+                    log::error!("re-attaching relative placement: {:#}", err);
+                    continue;
+                }
+            };
+            // Preserve the shape the child was created with
+            let mut info = info;
+            info.parent = Some(key);
+            info.parent_offsets = (h, v);
+            self.kitty_img.placements.insert(child_key, info);
+
+            // And its own children follow in turn
+            self.kitty_relattach_children(child_key);
+        }
+    }
+
+    fn kitty_remove_placement(&mut self, image_id: u32, placement_id: Option<u32>) {
+        if placement_id.is_some() {
+            log::trace!("removed placement {} {:?}", image_id, placement_id);
+            self.kitty_remove_placement_tree((image_id, placement_id));
+        } else {
+            let to_clear: Vec<Option<u32>> = self
+                .kitty_img
+                .placements
+                .keys()
+                .filter(|(id, _)| *id == image_id)
+                .map(|(_, p)| *p)
+                .collect();
+            for p in to_clear.into_iter() {
+                self.kitty_remove_placement_tree((image_id, p));
             }
         }
 

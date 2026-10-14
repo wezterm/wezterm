@@ -145,6 +145,7 @@ impl TerminalState {
             z_index: 0,
             image_id: None,
             placement_id: None,
+            origin: None,
             do_not_move_cursor: self.sixel_display_mode,
         }) {
             log::error!("set sixel image: {:#}", err);

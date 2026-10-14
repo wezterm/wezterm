@@ -620,3 +620,112 @@ fn kitty_virtual_placement_cannot_be_relative() {
 
     wait_for_output(&sink, "\x1b_Gi=1;EINVAL");
 }
+
+/// The (column, row, image id) of every attached kitty image cell on
+/// the visible screen, in scan order.
+fn attached_positions(term: &TestTerm) -> Vec<(usize, usize, Option<u32>)> {
+    let mut out = vec![];
+    for (row, line) in term.screen().visible_lines().iter().enumerate() {
+        for cell in line.visible_cells() {
+            if let Some(images) = cell.attrs().images() {
+                for image in images {
+                    out.push((cell.cell_index(), row, image.image_id()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Relative placements position their image at parent + (H, V), follow
+/// the parent when it is re-placed, and are deleted together with it.
+#[test]
+fn kitty_relative_placement_lifecycle() {
+    let mut term = TestTerm::new(4, 10, 0);
+
+    // Parent (image 1) at row 0, columns 0-1
+    place_tiny_png(&mut term, 1, "");
+
+    // Child (image 2) placed relative to the parent, two cells right
+    let seq = format!("\x1b_Ga=t,t=d,f=100,i=2,q=2;{}\x1b\\", TINY_PNG_BASE64);
+    term.print(seq.as_bytes());
+    term.print(b"\x1b_Ga=p,i=2,P=1,H=2,V=0\x1b\\");
+
+    let positions = attached_positions(&term);
+    assert!(
+        positions
+            .iter()
+            .any(|(c, r, id)| *id == Some(2) && *r == 0 && *c == 2),
+        "child should sit at row 0 column 2, got {:?}",
+        positions
+    );
+
+    // Move the parent down a row; the child must follow
+    term.print(b"\x1b[2;1H");
+    term.print(b"\x1b_Ga=p,i=1\x1b\\");
+    let positions = attached_positions(&term);
+    assert!(
+        positions.iter().all(|(_, r, _)| *r == 1),
+        "everything should have moved to row 1, got {:?}",
+        positions
+    );
+    assert!(positions.iter().any(|(c, _, id)| *id == Some(2) && *c == 2));
+
+    // Deleting the parent takes the child with it
+    term.print(b"\x1b_Ga=d,d=i,i=1\x1b\\");
+    assert!(attached_positions(&term).is_empty());
+}
+
+/// Relative placement parents answer the protocol error codes: a
+/// missing parent is ENOPARENT and self-parenting is EINVAL.
+#[test]
+fn kitty_relative_placement_error_codes() {
+    let (mut term, sink) = TestTerm::new_with_output_sink(4, 10, 0);
+
+    let seq = format!("\x1b_Ga=t,t=d,f=100,i=2,q=2;{}\x1b\\", TINY_PNG_BASE64);
+    term.print(seq.as_bytes());
+
+    term.print(b"\x1b_Ga=p,i=2,P=99\x1b\\");
+    wait_for_output(&sink, "\x1b_Gi=2;ENOPARENT");
+
+    term.print(b"\x1b_Ga=p,i=2,P=2\x1b\\");
+    wait_for_output(&sink, "\x1b_Gi=2;EINVAL");
+}
+
+/// A parent chain that circles back on itself answers ECYCLE.
+#[test]
+fn kitty_relative_placement_cycle_replies_ecycle() {
+    let mut term = TestTerm::new(4, 10, 0);
+
+    // Image 1 at the cursor, image 2 relative to it
+    place_tiny_png(&mut term, 1, "");
+    let seq = format!("\x1b_Ga=t,t=d,f=100,i=2,q=2;{}\x1b\\", TINY_PNG_BASE64);
+    term.print(seq.as_bytes());
+    term.print(b"\x1b_Ga=p,i=2,P=1,H=2\x1b\\");
+
+    // Re-placing image 1 relative to image 2 closes the loop; the
+    // command must be refused, leaving image 1 where it was
+    term.print(b"\x1b[3;1H");
+    term.print(b"\x1b_Ga=p,i=1,P=2,V=2\x1b\\");
+    let positions = attached_positions(&term);
+    assert!(
+        positions.iter().any(|(_, r, id)| *id == Some(1) && *r == 0),
+        "image 1 must not have moved to row 2, got {:?}",
+        positions
+    );
+}
+
+/// ECYCLE is answered on the pty as well.
+#[test]
+fn kitty_relative_placement_cycle_replies_ecycle_response() {
+    let (mut term, sink) = TestTerm::new_with_output_sink(4, 10, 0);
+
+    place_tiny_png(&mut term, 1, "");
+    let seq = format!("\x1b_Ga=t,t=d,f=100,i=2,q=2;{}\x1b\\", TINY_PNG_BASE64);
+    term.print(seq.as_bytes());
+    term.print(b"\x1b_Ga=p,i=2,P=1,H=2\x1b\\");
+
+    term.print(b"\x1b[3;1H");
+    term.print(b"\x1b_Ga=p,i=1,P=2,V=2\x1b\\");
+    wait_for_output(&sink, "\x1b_Gi=1;ECYCLE");
+}

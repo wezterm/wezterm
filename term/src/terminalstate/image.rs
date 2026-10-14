@@ -21,6 +21,8 @@ pub struct PlacementInfo {
     /// For relative placements: the (image id, placement id) of the
     /// parent placement
     pub parent: Option<(u32, Option<u32>)>,
+    /// For relative placements: the H=/V= cell offsets from the parent
+    pub parent_offsets: (i64, i64),
     /// For virtual placements: the (cols, rows) rectangle that unicode
     /// placeholder text may occupy
     pub virtual_rect: Option<(usize, usize)>,
@@ -60,6 +62,11 @@ pub struct ImageAttachParams {
 
     pub style: ImageAttachStyle,
     pub do_not_move_cursor: bool,
+
+    /// Explicit placement origin (viewport column, viewport row) for
+    /// relative placements; when set, the image attaches there instead
+    /// of at the cursor and the cursor never moves
+    pub origin: Option<(i64, i64)>,
 
     pub data: Arc<ImageData>,
 }
@@ -216,8 +223,22 @@ impl TerminalState {
             self.pixel_height
         );
 
-        let first_row = self.screen().visible_row_to_stable_row(self.cursor.y);
-        let cursor_x = self.cursor.x;
+        let (origin_x, origin_y, at_cursor) = match params.origin {
+            Some((ox, oy)) => (ox, oy, false),
+            None => (self.cursor.x as i64, self.cursor.y, true),
+        };
+        // Captured before the loop, which may move the cursor below
+        let first_col = if at_cursor {
+            self.cursor.x
+        } else {
+            origin_x.max(0) as usize
+        };
+
+        let first_row = self.screen().visible_row_to_stable_row(if at_cursor {
+            self.cursor.y
+        } else {
+            origin_y
+        });
 
         for y in 0..height_in_cells {
             let cell_y0 = y as u32 * cell_pixel_height as u32;
@@ -227,7 +248,9 @@ impl TerminalState {
             let overlap_y0 = usable_y0.max(target_y);
             let overlap_y1 = cell_y1.min(target_y + target_h);
 
-            let cursor_y = if params.do_not_move_cursor {
+            let cursor_y = if !at_cursor {
+                origin_y + y as i64
+            } else if params.do_not_move_cursor {
                 self.cursor.y + y as i64
             } else {
                 self.cursor.y
@@ -235,8 +258,8 @@ impl TerminalState {
             log::debug!(
                 "setting cells for y={} x=[{}..{}]",
                 cursor_y,
-                cursor_x,
-                cursor_x + width_in_cells
+                origin_x,
+                origin_x + width_in_cells as i64
             );
             for x in 0..width_in_cells {
                 let cell_x0 = x as u32 * cell_pixel_width as u32;
@@ -244,6 +267,17 @@ impl TerminalState {
                 let usable_x0 = cell_x0 + cell_padding_left as u32;
                 let overlap_x0 = usable_x0.max(target_x);
                 let overlap_x1 = cell_x1.min(target_x + target_w);
+
+                // Cells outside of the screen for relative placements
+                // are simply not attached
+                if !at_cursor
+                    && ((origin_x + x as i64) < 0
+                        || cursor_y < 0
+                        || (origin_x + x as i64) >= physical_cols as i64
+                        || cursor_y >= physical_rows as i64)
+                {
+                    continue;
+                }
 
                 // Cells the (letterboxed) image does not reach stay as
                 // they are but still count towards the placement grid
@@ -275,9 +309,10 @@ impl TerminalState {
                         .context("computing ypos")?,
                 );
 
+                let cell_x = origin_x + x as i64;
                 let mut cell = self
                     .screen_mut()
-                    .get_cell(cursor_x + x, cursor_y)
+                    .get_cell(cell_x as usize, cursor_y)
                     .cloned()
                     .unwrap_or_else(Cell::blank);
                 let img = Box::new(ImageCell::with_z_index(
@@ -300,9 +335,9 @@ impl TerminalState {
                 };
 
                 self.screen_mut()
-                    .set_cell(cursor_x + x, cursor_y, &cell, seqno);
+                    .set_cell(cell_x as usize, cursor_y, &cell, seqno);
             }
-            if !params.do_not_move_cursor && y < height_in_cells - 1 {
+            if at_cursor && !params.do_not_move_cursor && y < height_in_cells - 1 {
                 self.new_line(false);
             }
         }
@@ -316,7 +351,7 @@ impl TerminalState {
             (target_y + target_h) as usize + cell_padding_top as usize
                 > cell_pixel_height as usize * height_in_cells,
         );
-        if !params.do_not_move_cursor {
+        if at_cursor && !params.do_not_move_cursor {
             // Sixel places the cursor under the left corner of the image,
             // unless sixel_scrolls_right is enabled.
             // iTerm places it after the bottom right corner.
@@ -335,11 +370,12 @@ impl TerminalState {
 
         Ok(PlacementInfo {
             first_row,
-            first_col: cursor_x,
+            first_col,
             rows: height_in_cells,
             cols: width_in_cells,
             z_index: params.z_index,
             parent: None,
+            parent_offsets: (0, 0),
             virtual_rect: None,
         })
     }
