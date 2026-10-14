@@ -61,6 +61,33 @@ keys (notably: `CMD`/`Super`/`Windows`) to be reported to the application.
 
 [enable_kitty_keyboard](lua/config/enable_kitty_keyboard.md) controls whether
 wezterm will honor the application requests to modify the keyboard encoding.
+{{since('nightly')}} it defaults to `true`.
+
+{{since('nightly')}} the encoding also reports key repeats as the `:2` event
+type under `REPORT_EVENT_TYPES`, and encodes the `HYPER` and `META` modifiers
+when the platform reports them.
+
+### Platform notes for the enhanced input sources
+
+The repeat indication, the `HYPER`/`META` modifiers and the
+layout-accurate base key used by the alternate keys reporting need
+extra input plumbing that is gathered on an opt-in basis: build
+wezterm with the `kitty-x11-keyboard` feature enabled (for example
+`cargo build --features kitty-x11-keyboard` in the `wezterm-gui`
+crate) to enable:
+
+* On X11: auto-repeat detection, the `Hyper`/`Meta` xkb virtual
+  modifiers, and the level-0 (unshifted) symbol of each key from the
+  current keymap.
+* On macOS: `NSEvent.isARepeat` based repeat detection and
+  `UCKeyTranslate` based unshifted keys.
+* On Windows: repeat detection and `MapVirtualKeyW` based unshifted
+  keys.
+
+Without the feature these inputs are simply not reported; the
+`HYPER` and `META` modifiers can still be synthesized from Lua via
+`SendKey` with the `HYPER` modifier. The `META` modifier string
+remains an alias of `ALT` for backwards compatibility.
 
 ## Windows
 

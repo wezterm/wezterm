@@ -21,6 +21,23 @@ usually the best available version.
 
 As features stabilize some brief notes about them will accumulate here.
 
+#### Added
+* Kitty graphics protocol: the remaining protocol features are now implemented;
+  see the new [graphics protocol](graphics-protocol.md) page for the full
+  support matrix. Highlights: all delete sub-commands (`d=n c f p q r x y z`),
+  the `a=a` animation control command (pause / loading mode / loop counts /
+  client-driven frame selection / per-frame gaps and gapless frames), unicode
+  placeholders (`U=1` virtual placements rendered by `U+10EEEE` text),
+  relative placements (`P=`/`Q=`/`H=`/`V=` with `ENOPARENT`/`ECYCLE`/
+  `ETOODEEP` errors), spec error codes (`ENOENT`/`EINVAL`/`ENOSPC`/`EBADF`)
+  with `p=` echoing, and aspect-ratio preserving scaling with letterboxing
+  for `c=`/`r=`.
+* Kitty keyboard protocol: key repeats are now reported as the `:2` event
+  type, `HYPER`/`META` modifiers are encoded, and the alternate keys encoding
+  can use a layout-accurate base key. The extra input sources are gathered
+  when building with the `kitty-x11-keyboard` feature; see
+  [key encoding](config/key-encoding.md) for the platform notes.
+
 #### Changed
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
@@ -30,6 +47,9 @@ As features stabilize some brief notes about them will accumulate here.
 * Wayland: currently being reimplemented, it maybe more unstable than usual.
   Please file GH issues for any problems you see.
   Many thanks to @tzx and @tmccombs! #4777 #5781
+* [enable_kitty_keyboard](config/lua/config/enable_kitty_keyboard.md) now
+  defaults to `true`, so applications can negotiate the enhanced keyboard
+  encoding without user configuration.
 * [show_update_window](config/lua/config/show_update_window.md) has been
   deprecated; it no longer has any effect and will be removed in a future
   release.
