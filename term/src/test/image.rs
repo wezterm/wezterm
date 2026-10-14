@@ -248,3 +248,57 @@ fn kitty_delete_unknown_number_replies_enoent() {
 
     wait_for_output(&sink, "\x1b_GI=32;ENOENT");
 }
+
+/// Specifying both i= and I= is an EINVAL, answered on the pty
+/// (this used to be a TODO that only logged).
+#[test]
+fn kitty_transmit_with_both_id_and_number_replies_einval() {
+    let (mut term, sink) = TestTerm::new_with_output_sink(3, 10, 0);
+
+    let seq = format!("\x1b_Ga=T,t=d,f=100,i=1,I=2;{}\x1b\\", TINY_PNG_BASE64);
+    term.print(seq.as_bytes());
+
+    wait_for_output(&sink, "\x1b_Gi=1,I=2;EINVAL");
+}
+
+/// Placing an image that was never transmitted answers ENOENT, and a
+/// successful placement is acknowledged with OK, echoing the placement
+/// id the client chose.
+#[test]
+fn kitty_place_replies_enoent_then_ok_with_placement_id() {
+    let (mut term, sink) = TestTerm::new_with_output_sink(3, 10, 0);
+
+    // Not transmitted yet
+    term.print(b"\x1b_Ga=p,i=99\x1b\\");
+    wait_for_output(&sink, "\x1b_Gi=99;ENOENT");
+
+    // Transmit quietly, then place with an explicit placement id
+    let seq = format!("\x1b_Ga=t,t=d,f=100,i=7,q=2;{}\x1b\\", TINY_PNG_BASE64);
+    term.print(seq.as_bytes());
+    term.print(b"\x1b_Ga=p,i=7,p=5\x1b\\");
+    wait_for_output(&sink, "\x1b_Gi=7,p=5;OK");
+}
+
+/// An image that would need more than the per-image RAM cap is refused
+/// with ENOSPC rather than a free-form error.
+#[test]
+fn kitty_transmit_oversized_image_replies_enospc() {
+    let (mut term, sink) = TestTerm::new_with_output_sink(3, 10, 0);
+
+    // 6000x5000 pixels of RGBA is 120MB, over the 100MB cap.
+    // The size check fires before the payload length is validated,
+    // so no actual pixel data needs to be sent.
+    term.print(b"\x1b_Ga=t,t=d,f=32,s=6000,v=5000,i=3;AAAA\x1b\\");
+
+    wait_for_output(&sink, "\x1b_Gi=3;ENOSPC");
+}
+
+/// A query (a=q) against a garbage direct payload answers EINVAL.
+#[test]
+fn kitty_query_bad_payload_replies_einval() {
+    let (mut term, sink) = TestTerm::new_with_output_sink(3, 10, 0);
+
+    term.print(b"\x1b_Ga=q,t=d,f=24,s=1,v=1,i=1;!!!not-base64!!!\x1b\\");
+
+    wait_for_output(&sink, "\x1b_Gi=1;EINVAL");
+}

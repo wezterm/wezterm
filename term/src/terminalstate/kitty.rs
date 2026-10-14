@@ -78,19 +78,20 @@ impl TerminalState {
     ) -> anyhow::Result<()> {
         let image_id = match image_id {
             Some(id) => id,
-            None => *self
-                .kitty_img
-                .number_to_id
-                .get(
-                    &image_number
-                        .ok_or_else(|| anyhow::anyhow!("no image_id or image_number specified!"))?,
-                )
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "image_number has no matching image id {:?} in number_to_id",
-                        image_number
-                    )
-                })?,
+            None => {
+                let no = image_number.ok_or_else(|| {
+                    anyhow::Error::new(KittyProtocolError {
+                        code: "EINVAL",
+                        detail: "no image_id or image_number specified".to_string(),
+                    })
+                })?;
+                *self.kitty_img.number_to_id.get(&no).ok_or_else(|| {
+                    anyhow::Error::new(KittyProtocolError {
+                        code: "ENOENT",
+                        detail: format!("image_number {:?} has no matching image id", no),
+                    })
+                })?
+            }
         };
 
         log::trace!(
@@ -104,11 +105,13 @@ impl TerminalState {
             self.kitty_remove_placement(image_id, placement.placement_id);
         }
         let img = Arc::clone(self.kitty_img.id_to_data.get(&image_id).ok_or_else(|| {
-            anyhow::anyhow!(
-                "no matching image id {} in id_to_data for image_number {:?}",
-                image_id,
-                image_number
-            )
+            anyhow::Error::new(KittyProtocolError {
+                code: "ENOENT",
+                detail: format!(
+                    "no matching image id {} in id_to_data for image_number {:?}",
+                    image_id, image_number
+                ),
+            })
         })?);
 
         let (image_width, image_height) = img.data().dimensions()?;
@@ -178,39 +181,61 @@ impl TerminalState {
         }
         let verbosity = img.verbosity();
         match img {
-            KittyImage::Query { transmit } => match transmit.data.load_data() {
-                Ok(_) => {
-                    self.kitty_send_response(
-                        verbosity,
-                        true,
-                        transmit.image_id,
-                        transmit.image_number,
-                        "OK".to_string(),
-                    );
+            KittyImage::Query { transmit } => {
+                // A failure to read from a file or shared memory is
+                // reported as EBADF, per the spec; anything else is a
+                // problem with the payload itself (EINVAL).
+                let from_storage = matches!(
+                    transmit.data,
+                    KittyImageData::File { .. }
+                        | KittyImageData::TemporaryFile { .. }
+                        | KittyImageData::SharedMem { .. }
+                );
+                let (image_id, image_number) = (transmit.image_id, transmit.image_number);
+                match transmit.data.load_data() {
+                    Ok(_) => {
+                        self.kitty_send_response(
+                            verbosity,
+                            true,
+                            image_id,
+                            image_number,
+                            None,
+                            "OK".to_string(),
+                        );
+                    }
+                    Err(err) => {
+                        let message = if from_storage {
+                            format!("EBADF:{:#}", err)
+                        } else {
+                            format!("EINVAL:{:#}", err)
+                        };
+                        self.kitty_send_response(
+                            verbosity,
+                            false,
+                            image_id,
+                            image_number,
+                            None,
+                            message,
+                        );
+                    }
                 }
-                Err(err) => {
-                    self.kitty_send_response(
-                        verbosity,
-                        false,
-                        transmit.image_id,
-                        transmit.image_number,
-                        format!("ERROR:{:#}", err),
-                    );
-                }
-            },
+            }
             KittyImage::TransmitData {
                 transmit,
                 verbosity,
             } => {
                 let more_data_follows = transmit.more_data_follows;
+                let image_id = transmit.image_id;
+                let image_number = transmit.image_number;
                 let img = KittyImage::TransmitData {
                     transmit,
                     verbosity,
                 };
                 if more_data_follows {
                     self.kitty_img.accumulator.push(img);
-                } else {
-                    self.kitty_img_inner(img)?;
+                } else if let Err(err) = self.kitty_img_inner(img) {
+                    log::error!("Error {:#} while handling KittyImage::TransmitData", err);
+                    self.kitty_reply_error(verbosity, image_id, image_number, None, &err);
                 }
             }
             KittyImage::TransmitDataAndDisplay {
@@ -219,6 +244,9 @@ impl TerminalState {
                 verbosity,
             } => {
                 let more_data_follows = transmit.more_data_follows;
+                let image_id = transmit.image_id;
+                let image_number = transmit.image_number;
+                let placement_id = placement.placement_id;
                 let img = KittyImage::TransmitDataAndDisplay {
                     transmit,
                     placement,
@@ -226,8 +254,12 @@ impl TerminalState {
                 };
                 if more_data_follows {
                     self.kitty_img.accumulator.push(img);
-                } else {
-                    self.kitty_img_inner(img)?;
+                } else if let Err(err) = self.kitty_img_inner(img) {
+                    log::error!(
+                        "Error {:#} while handling KittyImage::TransmitDataAndDisplay",
+                        err
+                    );
+                    self.kitty_reply_error(verbosity, image_id, image_number, placement_id, &err);
                 }
             }
             KittyImage::Display {
@@ -236,7 +268,33 @@ impl TerminalState {
                 placement,
                 verbosity,
             } => {
-                self.kitty_img_place(image_id, image_number, placement, verbosity)?;
+                let placement_id = placement.placement_id;
+                match self.kitty_img_place(image_id, image_number, placement, verbosity) {
+                    Ok(()) => {
+                        // Placement requests are acknowledged when they
+                        // identify the image they placed
+                        if image_id.is_some() || image_number.is_some() {
+                            self.kitty_send_response(
+                                verbosity,
+                                true,
+                                image_id,
+                                image_number,
+                                placement_id,
+                                "OK".to_string(),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        log::error!("Error {:#} while handling KittyImage::Display", err);
+                        self.kitty_reply_error(
+                            verbosity,
+                            image_id,
+                            image_number,
+                            placement_id,
+                            &err,
+                        );
+                    }
+                }
             }
             KittyImage::Delete { what, verbosity } => {
                 self.kitty_img_delete(what, verbosity);
@@ -246,13 +304,32 @@ impl TerminalState {
                 frame,
                 verbosity,
             } => {
-                if let Err(err) = self.kitty_frame_transmit(transmit, frame, verbosity) {
-                    log::error!("Error {:#} while handling KittyImage::TransmitFrame", err,);
+                let image_number = transmit.image_number;
+                match self.kitty_frame_transmit(transmit, frame, verbosity) {
+                    Ok(image_id) => {
+                        if let Some(no) = image_number {
+                            self.kitty_send_response(
+                                verbosity,
+                                true,
+                                Some(image_id),
+                                Some(no),
+                                None,
+                                "OK".to_string(),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        log::error!("Error {:#} while handling KittyImage::TransmitFrame", err);
+                        self.kitty_reply_error(verbosity, None, image_number, None, &err);
+                    }
                 }
             }
             KittyImage::ComposeFrame { frame, verbosity } => {
+                let image_id = frame.image_id;
+                let image_number = frame.image_number;
                 if let Err(err) = self.kitty_frame_compose(frame, verbosity) {
                     log::error!("Error {:#} while handling KittyImage::ComposeFrame", err);
+                    self.kitty_reply_error(verbosity, image_id, image_number, None, &err);
                 }
             }
             KittyImage::Animate { control, verbosity } => {
@@ -374,6 +451,7 @@ impl TerminalState {
                         false,
                         None,
                         Some(image_number),
+                        None,
                         "ENOENT:no image with that number".to_string(),
                     );
                 }
@@ -482,6 +560,7 @@ impl TerminalState {
         success: bool,
         image_id: Option<u32>,
         image_no: Option<u32>,
+        placement_id: Option<u32>,
         message: String,
     ) {
         match verbosity {
@@ -498,80 +577,92 @@ impl TerminalState {
 
         log::trace!("Query Response: {}", message);
 
-        match (image_id, image_no) {
-            (Some(id), Some(no)) => {
-                write!(self.writer, "\x1b_GI={},i={};{}\x1b\\", no, id, message).ok();
-            }
-            (Some(id), None) => {
-                write!(self.writer, "\x1b_Gi={};{}\x1b\\", id, message).ok();
-            }
-            (None, Some(no)) => {
-                write!(self.writer, "\x1b_GI={};{}\x1b\\", no, message).ok();
-            }
-            (None, None) => {
-                write!(self.writer, "\x1b_G{}\x1b\\", message).ok();
+        // The spec response form is <ESC>_Gi=<id>[,I=<num>][,p=<placement
+        // id>];OK or error<ESC>\ with the keys echoed back only when the
+        // client supplied them.
+        let mut keys = vec![];
+        if let Some(id) = image_id {
+            keys.push(format!("i={}", id));
+        }
+        if let Some(no) = image_no {
+            keys.push(format!("I={}", no));
+        }
+        if let (Some(id), Some(p)) = (image_id, placement_id) {
+            // Placement ids are only meaningful for a non-zero image id
+            if id != 0 {
+                keys.push(format!("p={}", p));
             }
         }
+        if keys.is_empty() {
+            write!(self.writer, "\x1b_G{}\x1b\\", message).ok();
+        } else {
+            write!(self.writer, "\x1b_G{};{}\x1b\\", keys.join(","), message).ok();
+        }
         self.writer.flush().ok();
+    }
+
+    /// Report a failed kitty graphics command back to the client.
+    /// Errors that carry one of the protocol error codes keep it;
+    /// anything else is treated as invalid input, matching how kitty
+    /// classifies malformed control data.
+    fn kitty_reply_error(
+        &mut self,
+        verbosity: KittyImageVerbosity,
+        image_id: Option<u32>,
+        image_no: Option<u32>,
+        placement_id: Option<u32>,
+        err: &anyhow::Error,
+    ) {
+        let message = match err.downcast_ref::<KittyProtocolError>() {
+            Some(e) => e.to_string(),
+            None => format!("EINVAL:{:#}", err),
+        };
+        self.kitty_send_response(verbosity, false, image_id, image_no, placement_id, message);
     }
 
     fn kitty_frame_compose(
         &mut self,
         frame: KittyImageFrameCompose,
-        verbosity: KittyImageVerbosity,
+        _verbosity: KittyImageVerbosity,
     ) -> anyhow::Result<()> {
         let image_id = match frame.image_number {
             Some(no) => match self.kitty_img.number_to_id.get(&no) {
                 Some(id) => *id,
                 None => {
-                    self.kitty_send_response(
-                        verbosity,
-                        false,
-                        frame.image_id,
-                        frame.image_number,
-                        "ENOENT".to_string(),
-                    );
-                    anyhow::bail!("no such image_number {}", no);
+                    return Err(KittyProtocolError {
+                        code: "ENOENT",
+                        detail: format!("no such image_number {}", no),
+                    }
+                    .into())
                 }
             },
             None => frame.image_id.ok_or_else(|| {
-                self.kitty_send_response(
-                    verbosity,
-                    false,
-                    frame.image_id,
-                    frame.image_number,
-                    "ENOENT".to_string(),
-                );
-                anyhow::anyhow!("no image_id")
+                anyhow::Error::new(KittyProtocolError {
+                    code: "EINVAL",
+                    detail: "no image_id or image_number".to_string(),
+                })
             })?,
         };
 
         let src_frame = frame.source_frame.ok_or_else(|| {
-            self.kitty_send_response(
-                verbosity,
-                false,
-                frame.image_id,
-                frame.image_number,
-                "ENOENT".to_string(),
-            );
-            anyhow::anyhow!("missing source frame")
+            anyhow::Error::new(KittyProtocolError {
+                code: "EINVAL",
+                detail: "missing source frame".to_string(),
+            })
         })? as usize;
         let target_frame = frame.target_frame.ok_or_else(|| {
-            self.kitty_send_response(
-                verbosity,
-                false,
-                frame.image_id,
-                frame.image_number,
-                "ENOENT".to_string(),
-            );
-            anyhow::anyhow!("missing target frame")
+            anyhow::Error::new(KittyProtocolError {
+                code: "EINVAL",
+                detail: "missing target frame".to_string(),
+            })
         })? as usize;
 
-        let img = self
-            .kitty_img
-            .id_to_data
-            .get(&image_id)
-            .ok_or_else(|| anyhow::anyhow!("invalid image id {}", image_id))?;
+        let img = self.kitty_img.id_to_data.get(&image_id).ok_or_else(|| {
+            anyhow::Error::new(KittyProtocolError {
+                code: "ENOENT",
+                detail: format!("invalid image id {}", image_id),
+            })
+        })?;
 
         let mut img = img.data();
         match &mut *img {
@@ -669,8 +760,8 @@ impl TerminalState {
         &mut self,
         mut transmit: KittyImageTransmit,
         frame: KittyImageFrame,
-        verbosity: KittyImageVerbosity,
-    ) -> anyhow::Result<()> {
+        _verbosity: KittyImageVerbosity,
+    ) -> anyhow::Result<u32> {
         if let Some(no) = transmit.image_number.take() {
             match self.kitty_img.number_to_id.get(&no) {
                 Some(id) => {
@@ -706,18 +797,14 @@ impl TerminalState {
         let anim = match self.kitty_img.id_to_data.get(&image_id) {
             Some(anim) => anim,
             None => {
-                self.kitty_send_response(
-                    verbosity,
-                    false,
-                    Some(image_id),
-                    image_number,
-                    "ENOENT".to_string(),
-                );
-                anyhow::bail!(
-                    "no matching image id {} in id_to_data for image_number {:?}",
-                    image_id,
-                    image_number
-                )
+                return Err(KittyProtocolError {
+                    code: "ENOENT",
+                    detail: format!(
+                        "no matching image id {} in id_to_data for image_number {:?}",
+                        image_id, image_number
+                    ),
+                }
+                .into())
             }
         };
 
@@ -868,7 +955,7 @@ impl TerminalState {
             }
         }
 
-        Ok(())
+        Ok(image_id)
     }
 
     fn kitty_img_transmit_inner(
@@ -878,8 +965,11 @@ impl TerminalState {
         log::trace!("transmit {:?}", transmit);
         let (id, no) = match (transmit.image_id, transmit.image_number) {
             (Some(_), Some(_)) => {
-                // TODO: send an EINVAL error back here
-                anyhow::bail!("cannot use both i= and I= in the same request");
+                return Err(KittyProtocolError {
+                    code: "EINVAL",
+                    detail: "cannot use both i= and I= in the same request".to_string(),
+                }
+                .into())
             }
             (None, None) => {
                 // Assume image id 0
@@ -893,10 +983,21 @@ impl TerminalState {
             }
         };
 
-        let data = transmit
-            .data
-            .load_data()
-            .context("data should have been materialized in coalesce_kitty_accumulation")?;
+        // Failures to read from a file or shared memory are reported as
+        // EBADF; problems with the payload itself are EINVAL.
+        let from_storage = matches!(
+            transmit.data,
+            KittyImageData::File { .. }
+                | KittyImageData::TemporaryFile { .. }
+                | KittyImageData::SharedMem { .. }
+        );
+        let data = transmit.data.load_data().map_err(|err| {
+            let code = if from_storage { "EBADF" } else { "EINVAL" };
+            anyhow::Error::new(KittyProtocolError {
+                code,
+                detail: format!("{:#}", err),
+            })
+        })?;
 
         let data = match transmit.compression {
             KittyImageCompression::None => data,
@@ -972,6 +1073,7 @@ impl TerminalState {
                 true,
                 Some(image_id),
                 image_number,
+                None,
                 "OK".to_string(),
             );
         }

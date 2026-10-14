@@ -313,21 +313,45 @@ impl TerminalState {
     }
 }
 
+/// An error carrying one of the kitty graphics protocol error codes
+/// (ENOENT, EINVAL, ENOSPC, EBADF, ...), so that the terminal can
+/// answer the client with a spec-compliant response.
+#[derive(Debug)]
+pub(crate) struct KittyProtocolError {
+    pub code: &'static str,
+    pub detail: String,
+}
+
+impl std::fmt::Display for KittyProtocolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}:{}", self.code, self.detail)
+    }
+}
+
+impl std::error::Error for KittyProtocolError {}
+
 pub(crate) fn check_image_dimensions(width: u32, height: u32) -> anyhow::Result<()> {
     const MAX_IMAGE_SIZE: u32 = 100_000_000;
     let size = width.saturating_mul(height).saturating_mul(4);
     if size > MAX_IMAGE_SIZE {
-        anyhow::bail!(
-            "Ignoring image data for image with dimensions {}x{} \
-             because required RAM {} > max allowed {}",
-            width,
-            height,
-            SizeFormatter::new(size, DECIMAL),
-            SizeFormatter::new(MAX_IMAGE_SIZE, DECIMAL),
-        );
+        return Err(KittyProtocolError {
+            code: "ENOSPC",
+            detail: format!(
+                "image of {}x{} needs {} RAM which is more than the maximum {}",
+                width,
+                height,
+                SizeFormatter::new(size, DECIMAL),
+                SizeFormatter::new(MAX_IMAGE_SIZE, DECIMAL)
+            ),
+        }
+        .into());
     }
     if size == 0 {
-        anyhow::bail!("Ignoring image with 0x0 dimensions");
+        return Err(KittyProtocolError {
+            code: "EINVAL",
+            detail: "image with 0x0 dimensions".to_string(),
+        }
+        .into());
     }
     Ok(())
 }
