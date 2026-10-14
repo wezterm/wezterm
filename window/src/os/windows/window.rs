@@ -2641,8 +2641,35 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
     }
 
     let handled_raw = Handled::new();
+    // The unshifted form of the key under the current layout: the
+    // character the virtual key maps to without any modifiers
+    #[cfg(feature = "kitty-x11-keyboard")]
+    let layout_unshifted = {
+        let ch = MapVirtualKeyW(wparam as u32, MAPVK_VK_TO_CHAR);
+        if ch != 0 {
+            // The high bit marks a dead key; drop those
+            let ch = ch & 0x7fff_ffff;
+            let c = if ('A' as u32..='Z' as u32).contains(&ch) {
+                // MapVirtualKeyW reports letters in upper case;
+                // the unshifted base key is the lower case form
+                (ch as u8).to_ascii_lowercase() as char
+            } else {
+                std::char::from_u32(ch).unwrap_or('\0')
+            };
+            if c != '\0' {
+                Some(KeyCode::Char(c))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    #[cfg(not(feature = "kitty-x11-keyboard"))]
+    let layout_unshifted = None;
+
     let raw_key_event = RawKeyEvent {
-        layout_unshifted: None,
+        layout_unshifted,
         key: match phys_code {
             Some(phys) => KeyCode::Physical(phys),
             None => KeyCode::RawCode(wparam as _),

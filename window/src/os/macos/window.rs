@@ -2598,8 +2598,36 @@ impl WindowView {
 
         let phys_code = vkey_to_phys(virtual_key);
         let raw_key_handled = Handled::new();
+
+        // NSEvent.isARepeat tells us that this key event is an
+        // auto-repeat of a held key
+        #[cfg(feature = "kitty-x11-keyboard")]
+        let repeat_count = if is_a_repeat { 2 } else { 1 };
+        #[cfg(not(feature = "kitty-x11-keyboard"))]
+        let repeat_count = 1;
+
+        // The unshifted form of the key under the current layout,
+        // via UCKeyTranslate with the Shift modifier cleared
+        #[cfg(feature = "kitty-x11-keyboard")]
+        let layout_unshifted = {
+            let mut unshifted_flags = modifier_flags;
+            unshifted_flags.set(NSEventModifierFlags::NSShiftKeyMask, false);
+            Keyboard::new()
+                .translate(TranslateParams {
+                    virtual_key_code: virtual_key,
+                    modifier_flags: unshifted_flags,
+                    dead_state: 0,
+                    ignore_dead_keys: true,
+                    display: false,
+                })
+                .ok()
+                .and_then(|results| results.text.chars().next().map(KeyCode::Char))
+        };
+        #[cfg(not(feature = "kitty-x11-keyboard"))]
+        let layout_unshifted = None;
+
         let raw_key_event = RawKeyEvent {
-            layout_unshifted: None,
+            layout_unshifted,
             key: if unmod.is_empty() {
                 match phys_code {
                     Some(phys) => KeyCode::Physical(phys),
@@ -2612,7 +2640,7 @@ impl WindowView {
             raw_code: virtual_key as _,
             leds,
             modifiers,
-            repeat_count: 1,
+            repeat_count,
             key_is_down,
             handled: raw_key_handled.clone(),
         };
@@ -2876,7 +2904,7 @@ impl WindowView {
                 key,
                 modifiers,
                 leds,
-                repeat_count: 1,
+                repeat_count,
                 key_is_down,
                 raw: Some(raw_key_event),
             }
