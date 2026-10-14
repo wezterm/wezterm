@@ -1,0 +1,46 @@
+name: kitty-keyboard
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "window/**"
+      - "wezterm-input-types/**"
+      - "wezterm-gui/**"
+      - ".github/workflows/kitty_keyboard.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "window/**"
+      - "wezterm-input-types/**"
+      - "wezterm-gui/**"
+      - ".github/workflows/kitty_keyboard.yml"
+
+jobs:
+  build-kitty-x11-keyboard-feature:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: "Install Rust"
+        uses: dtolnay/rust-toolchain@stable
+      - name: "Cache cargo"
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+          key: "kitty-x11-keyboard-${{ runner.os }}"
+      - name: "Install cargo-nextest from Cargo"
+        uses: baptiste0928/cargo-install@v2
+        with:
+          crate: "cargo-nextest"
+      - name: "Install system deps"
+        run: ./get-deps
+      - name: Build
+        run: |
+          source $HOME/.cargo/env
+          cargo check -p window --features kitty-x11-keyboard
+          cargo check -p wezterm-gui --features kitty-x11-keyboard
+          cargo nextest run --no-fail-fast -p wezterm-input-types -p wezterm-term
