@@ -284,6 +284,16 @@ impl TerminalState {
                     log::error!("Error {:#} while handling KittyImage::ComposeFrame", err);
                 }
             }
+            KittyImage::Animate { control, verbosity } => {
+                // Full animation control handling arrives with the
+                // animation work; accept the command for now so that
+                // it is not treated as a parse error.
+                log::warn!(
+                    "unhandled KittyImage::Animate {:#?} {:?}",
+                    control,
+                    verbosity
+                );
+            }
         };
 
         Ok(())
@@ -598,7 +608,10 @@ impl TerminalState {
         let y = frame.y.unwrap_or(0);
         let frame_gap = Duration::from_millis(match frame.duration_ms {
             None | Some(0) => 40,
-            Some(n) => n.into(),
+            // A negative gap denotes a gapless frame: it is stored
+            // with a zero duration and skipped during playback.
+            Some(n) if n < 0 => 0,
+            Some(n) => n as u64,
         });
 
         match &mut *anim {

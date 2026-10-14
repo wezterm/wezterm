@@ -219,6 +219,13 @@ impl KittyImageData {
                 // temporary directory path before blindly unlinking it here.
 
                 fn looks_like_temp_path(p: &str) -> bool {
+                    // The protocol requires the name to contain
+                    // tty-graphics-protocol so that the terminal can
+                    // safely remove the file after reading it.
+                    if !p.contains("tty-graphics-protocol") {
+                        return false;
+                    }
+
                     if p.starts_with("/tmp/")
                         || p.starts_with("/var/tmp/")
                         || p.starts_with("/dev/shm/")
@@ -620,6 +627,26 @@ pub struct KittyImagePlacement {
     pub placement_id: Option<u32>,
     /// z=...
     pub z_index: Option<i32>,
+    /// Create a virtual placement that is only rendered when
+    /// unicode placeholder characters reference it.
+    /// Only U=1 is defined by the protocol.
+    /// U=...
+    pub unicode_placeholder: bool,
+    /// The id of the parent image for a relative placement.
+    /// P=...
+    pub parent_image_id: Option<u32>,
+    /// The id of a placement in the parent image for a relative
+    /// placement.
+    /// Q=...
+    pub parent_placement_id: Option<u32>,
+    /// Horizontal offset (in cells) from the parent placement.
+    /// Negative values move left.
+    /// H=...
+    pub h_offset: Option<i64>,
+    /// Vertical offset (in cells) from the parent placement.
+    /// Negative values move up.
+    /// V=...
+    pub v_offset: Option<i64>,
 }
 
 impl KittyImagePlacement {
@@ -640,6 +667,15 @@ impl KittyImagePlacement {
                 _ => return None,
             },
             z_index: geti(keys, "z"),
+            unicode_placeholder: match get(keys, "U") {
+                None | Some("0") => false,
+                Some("1") => true,
+                _ => return None,
+            },
+            parent_image_id: geti(keys, "P"),
+            parent_placement_id: geti(keys, "Q"),
+            h_offset: geti(keys, "H"),
+            v_offset: geti(keys, "V"),
         })
     }
 
@@ -659,6 +695,13 @@ impl KittyImagePlacement {
         }
 
         set(keys, "z", &self.z_index);
+        if self.unicode_placeholder {
+            keys.insert("U", "1".to_string());
+        }
+        set(keys, "P", &self.parent_image_id);
+        set(keys, "Q", &self.parent_placement_id);
+        set(keys, "H", &self.h_offset);
+        set(keys, "V", &self.v_offset);
     }
 }
 
@@ -724,6 +767,16 @@ pub enum KittyImageDelete {
     /// d='z' or d='Z'
     /// Delete all placements that have the specified z-index.
     DeleteZ { z: i32, delete: bool },
+
+    /// d='r' or d='R'
+    /// Delete all images with ids in the range x=..y= (inclusive).
+    ByIdRange {
+        /// x=... lower bound of the image id range
+        from: u32,
+        /// y=... upper bound of the image id range
+        to: u32,
+        delete: bool,
+    },
 }
 
 impl KittyImageDelete {
@@ -769,6 +822,11 @@ impl KittyImageDelete {
             }),
             'z' | 'Z' => Some(Self::DeleteZ {
                 z: geti(keys, "z")?,
+                delete,
+            }),
+            'r' | 'R' => Some(Self::ByIdRange {
+                from: geti(keys, "x")?,
+                to: geti(keys, "y")?,
                 delete,
             }),
             _ => None,
@@ -818,7 +876,7 @@ impl KittyImageDelete {
                 keys.insert("y", y.to_string());
             }
             Self::DeleteAtZ { x, y, z, delete } => {
-                keys.insert("d", d('p', delete));
+                keys.insert("d", d('q', delete));
                 keys.insert("x", x.to_string());
                 keys.insert("y", y.to_string());
                 keys.insert("z", z.to_string());
@@ -834,6 +892,11 @@ impl KittyImageDelete {
             Self::DeleteZ { z, delete } => {
                 keys.insert("d", d('z', delete));
                 keys.insert("z", z.to_string());
+            }
+            Self::ByIdRange { from, to, delete } => {
+                keys.insert("d", d('r', delete));
+                keys.insert("x", from.to_string());
+                keys.insert("y", to.to_string());
             }
         }
     }
@@ -960,8 +1023,13 @@ pub struct KittyImageFrame {
 
     /// Gap in milliseconds of this frame from the next one.
     /// Zero or omitted values are interpreted as 40ms.
+    /// Negative values indicate a gapless frame: it is used as
+    /// base data for composition but skipped during playback.
+    /// The spec defines this as the lowercase z= key; the uppercase
+    /// Z= spelling is accepted for backwards compatibility with
+    /// older clients that targeted wezterm.
     /// z=...
-    pub duration_ms: Option<u32>,
+    pub duration_ms: Option<i64>,
 
     /// Composition mode.
     /// Default is AlphaBlending
@@ -987,7 +1055,7 @@ impl KittyImageFrame {
                 None | Some(0) => None,
                 n => n,
             },
-            duration_ms: match geti(keys, "Z") {
+            duration_ms: match geti::<i64>(keys, "z").or_else(|| geti(keys, "Z")) {
                 None | Some(0) => None,
                 n => n,
             },
@@ -1005,7 +1073,7 @@ impl KittyImageFrame {
         set(keys, "y", &self.y);
         set(keys, "c", &self.base_frame);
         set(keys, "r", &self.frame_number);
-        set(keys, "Z", &self.duration_ms);
+        set(keys, "z", &self.duration_ms);
         match &self.composition_mode {
             KittyFrameCompositionMode::AlphaBlending => {}
             KittyFrameCompositionMode::Overwrite => {
@@ -1013,6 +1081,107 @@ impl KittyImageFrame {
             }
         }
         set(keys, "Y", &self.background_pixel);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KittyAnimationState {
+    /// s=1
+    /// Stop the animation
+    Stop,
+    /// s=2
+    /// Run the animation in loading mode: when the last frame is
+    /// reached, wait for more frames to be transmitted instead of
+    /// looping back to the first frame.
+    Loading,
+    /// s=3
+    /// Run the animation normally, looping back to the first frame
+    /// after the last one.
+    Running,
+}
+
+/// Parameters of the a='a' animation control command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KittyImageAnimate {
+    /// i=...
+    pub image_id: Option<u32>,
+    /// I=...
+    pub image_number: Option<u32>,
+
+    /// 1-based number of the frame to make the current frame.
+    /// If omitted, the current frame is left unchanged.
+    /// c=...
+    pub frame_number: Option<u32>,
+
+    /// Animation state.
+    /// s=...
+    pub state: Option<KittyAnimationState>,
+
+    /// Loop count.
+    /// v=1 loops forever, any other positive value n loops n-1
+    /// times. Zero is ignored by the protocol.
+    /// v=...
+    pub loop_count: Option<u32>,
+
+    /// Frame gap in milliseconds. Zero is ignored; negative values
+    /// create a gapless frame. When gap_frame is specified, applies
+    /// to that frame only.
+    /// z=...
+    pub gap: Option<i64>,
+
+    /// 1-based number of the frame whose gap should be set by
+    /// gap. If omitted while gap is specified, the gap applies to
+    /// the root frame.
+    /// r=...
+    pub gap_frame: Option<u32>,
+}
+
+impl KittyImageAnimate {
+    fn from_keys(keys: &BTreeMap<&str, &str>) -> Option<Self> {
+        Some(Self {
+            image_id: geti(keys, "i"),
+            image_number: geti(keys, "I"),
+            frame_number: match geti(keys, "c") {
+                None | Some(0) => None,
+                n => n,
+            },
+            state: match get(keys, "s") {
+                None => None,
+                Some("1") => Some(KittyAnimationState::Stop),
+                Some("2") => Some(KittyAnimationState::Loading),
+                Some("3") => Some(KittyAnimationState::Running),
+                _ => return None,
+            },
+            loop_count: match geti(keys, "v") {
+                None | Some(0) => None,
+                n => n,
+            },
+            gap: match geti::<i64>(keys, "z") {
+                None | Some(0) => None,
+                n => n,
+            },
+            gap_frame: match geti(keys, "r") {
+                None | Some(0) => None,
+                n => n,
+            },
+        })
+    }
+
+    fn to_keys(&self, keys: &mut BTreeMap<&'static str, String>) {
+        set(keys, "i", &self.image_id);
+        set(keys, "I", &self.image_number);
+        set(keys, "c", &self.frame_number);
+        if let Some(state) = &self.state {
+            let s = match state {
+                KittyAnimationState::Stop => "1",
+                KittyAnimationState::Loading => "2",
+                KittyAnimationState::Running => "3",
+            };
+            keys.insert("s", s.to_string());
+        }
+        set(keys, "v", &self.loop_count);
+        set(keys, "z", &self.gap);
+        set(keys, "r", &self.gap_frame);
     }
 }
 
@@ -1054,6 +1223,11 @@ pub enum KittyImage {
         frame: KittyImageFrameCompose,
         verbosity: KittyImageVerbosity,
     },
+    /// a='a'
+    Animate {
+        control: KittyImageAnimate,
+        verbosity: KittyImageVerbosity,
+    },
 }
 
 impl KittyImage {
@@ -1066,6 +1240,7 @@ impl KittyImage {
             Self::Delete { verbosity, .. } => *verbosity,
             Self::TransmitFrame { verbosity, .. } => *verbosity,
             Self::ComposeFrame { verbosity, .. } => *verbosity,
+            Self::Animate { verbosity, .. } => *verbosity,
         }
     }
 
@@ -1119,6 +1294,10 @@ impl KittyImage {
                 frame: KittyImageFrameCompose::from_keys(&keys)?,
                 verbosity,
             }),
+            "a" => Some(Self::Animate {
+                control: KittyImageAnimate::from_keys(&keys)?,
+                verbosity,
+            }),
             _ => None,
         }
     }
@@ -1142,7 +1321,7 @@ impl KittyImage {
                 verbosity,
                 placement,
             } => {
-                keys.insert("a", "Q".to_string());
+                keys.insert("a", "T".to_string());
                 verbosity.to_keys(keys);
                 placement.to_keys(keys);
                 transmit.to_keys(keys);
@@ -1181,6 +1360,11 @@ impl KittyImage {
             Self::ComposeFrame { frame, verbosity } => {
                 keys.insert("a", "c".to_string());
                 frame.to_keys(keys);
+                verbosity.to_keys(keys);
+            }
+            Self::Animate { control, verbosity } => {
+                keys.insert("a", "a".to_string());
+                control.to_keys(keys);
                 verbosity.to_keys(keys);
             }
         }
@@ -1278,5 +1462,230 @@ mod test {
                 },
             }
         );
+    }
+
+    #[test]
+    fn kitty_frame_gap_is_lowercase_z() {
+        // The spec defines the frame gap as the lowercase z= key;
+        // a negative gap denotes a gapless frame.
+        assert_eq!(
+            KittyImage::parse_apc("Ga=f,i=1,z=48,r=1;AAAA=".as_bytes()).unwrap(),
+            KittyImage::TransmitFrame {
+                transmit: KittyImageTransmit {
+                    format: None,
+                    data: KittyImageData::Direct("AAAA=".to_string()),
+                    width: None,
+                    height: None,
+                    image_id: Some(1),
+                    image_number: None,
+                    compression: KittyImageCompression::None,
+                    more_data_follows: false,
+                },
+                verbosity: KittyImageVerbosity::Verbose,
+                frame: KittyImageFrame {
+                    x: None,
+                    y: None,
+                    base_frame: None,
+                    frame_number: Some(1),
+                    composition_mode: KittyFrameCompositionMode::AlphaBlending,
+                    background_pixel: None,
+                    duration_ms: Some(48),
+                },
+            }
+        );
+
+        // Negative gap => gapless frame
+        let frame = KittyImageFrame::from_keys_helper("Ga=f,i=1,z=-1");
+        assert_eq!(frame.duration_ms, Some(-1));
+
+        // Uppercase Z= is accepted for backwards compatibility
+        let frame = KittyImageFrame::from_keys_helper("Ga=f,i=1,Z=25");
+        assert_eq!(frame.duration_ms, Some(25));
+
+        // z=0 is ignored (treated as the 40ms default)
+        let frame = KittyImageFrame::from_keys_helper("Ga=f,i=1,z=0");
+        assert_eq!(frame.duration_ms, None);
+    }
+
+    #[test]
+    fn kitty_virtual_and_relative_placement_keys() {
+        // U=1 creates a virtual placement for unicode placeholders
+        assert_eq!(
+            KittyImage::parse_apc("Ga=p,U=1,i=7,c=3,r=2".as_bytes()).unwrap(),
+            KittyImage::Display {
+                placement: KittyImagePlacement {
+                    x: None,
+                    y: None,
+                    w: None,
+                    h: None,
+                    x_offset: None,
+                    y_offset: None,
+                    columns: Some(3),
+                    rows: Some(2),
+                    do_not_move_cursor: false,
+                    placement_id: None,
+                    z_index: None,
+                    unicode_placeholder: true,
+                    parent_image_id: None,
+                    parent_placement_id: None,
+                    h_offset: None,
+                    v_offset: None,
+                },
+                image_id: Some(7),
+                image_number: None,
+                verbosity: KittyImageVerbosity::Verbose,
+            }
+        );
+
+        // P/Q/H/V describe a relative placement; H/V may be negative
+        assert_eq!(
+            KittyImagePlacement::parse("Ga=p,i=3,P=7,Q=2,H=-4,V=9"),
+            KittyImagePlacement {
+                parent_image_id: Some(7),
+                parent_placement_id: Some(2),
+                h_offset: Some(-4),
+                v_offset: Some(9),
+                ..KittyImagePlacement::parse("Ga=p,i=3")
+            }
+        );
+
+        // Only U=1 is defined by the protocol; U=2 must be rejected
+        assert!(KittyImage::parse_apc("Ga=p,U=2,i=7".as_bytes()).is_none());
+    }
+
+    #[test]
+    fn kitty_delete_id_range() {
+        // d=r/R deletes images with ids in the x=..y= range
+        assert_eq!(
+            KittyImage::parse_apc("Ga=d,d=r,x=5,y=9".as_bytes()).unwrap(),
+            KittyImage::Delete {
+                what: KittyImageDelete::ByIdRange {
+                    from: 5,
+                    to: 9,
+                    delete: false
+                },
+                verbosity: KittyImageVerbosity::Verbose,
+            }
+        );
+        assert_eq!(
+            KittyImage::parse_apc("Ga=d,d=R,x=5,y=9".as_bytes()).unwrap(),
+            KittyImage::Delete {
+                what: KittyImageDelete::ByIdRange {
+                    from: 5,
+                    to: 9,
+                    delete: true
+                },
+                verbosity: KittyImageVerbosity::Verbose,
+            }
+        );
+    }
+
+    #[test]
+    fn kitty_animate_command() {
+        assert_eq!(
+            KittyImage::parse_apc("Ga=a,i=3,c=7".as_bytes()).unwrap(),
+            KittyImage::Animate {
+                control: KittyImageAnimate {
+                    image_id: Some(3),
+                    image_number: None,
+                    frame_number: Some(7),
+                    state: None,
+                    loop_count: None,
+                    gap: None,
+                    gap_frame: None,
+                },
+                verbosity: KittyImageVerbosity::Verbose,
+            }
+        );
+
+        // a=a,i=7,r=3,z=48 sets the gap of frame 3 of image 7
+        assert_eq!(
+            KittyImage::parse_apc("Ga=a,i=7,r=3,z=48".as_bytes()).unwrap(),
+            KittyImage::Animate {
+                control: KittyImageAnimate {
+                    image_id: Some(7),
+                    image_number: None,
+                    frame_number: None,
+                    state: None,
+                    loop_count: None,
+                    gap: Some(48),
+                    gap_frame: Some(3),
+                },
+                verbosity: KittyImageVerbosity::Verbose,
+            }
+        );
+
+        let full =
+            KittyImage::parse_apc("Ga=a,i=1,I=2,c=1,s=3,v=5,z=-2,r=2,q=1".as_bytes()).unwrap();
+        assert_eq!(
+            full,
+            KittyImage::Animate {
+                control: KittyImageAnimate {
+                    image_id: Some(1),
+                    image_number: Some(2),
+                    frame_number: Some(1),
+                    state: Some(KittyAnimationState::Running),
+                    loop_count: Some(5),
+                    gap: Some(-2),
+                    gap_frame: Some(2),
+                },
+                verbosity: KittyImageVerbosity::OnlyErrors,
+            }
+        );
+
+        // Undefined animation states are rejected
+        assert!(KittyImage::parse_apc("Ga=a,i=1,s=4".as_bytes()).is_none());
+    }
+
+    #[test]
+    fn kitty_display_round_trip_uses_spec_action_keys() {
+        // a=T used to be re-serialized as a=Q, and d=q as d=p;
+        // both must round-trip to the keys defined by the spec.
+        let original =
+            KittyImage::parse_apc("Ga=T,i=3,p=2,C=1,c=2,r=1,f=32,s=2,v=2;AAAA=".as_bytes())
+                .unwrap();
+        let rendered = format!("{}", original);
+        assert!(rendered.contains("a=T"));
+
+        let delete_at_z = KittyImage::parse_apc("Ga=d,d=q,x=1,y=2,z=3".as_bytes()).unwrap();
+        let rendered = format!("{}", delete_at_z);
+        assert!(rendered.contains("d=q"));
+        assert!(rendered.contains("z=3"));
+    }
+
+    impl KittyImageFrame {
+        // Test helper: parse the frame portion of a full APC string
+        fn from_keys_helper(s: &str) -> KittyImageFrame {
+            let data = s.as_bytes();
+            let mut keys_payload_iter = data[1..].splitn(2, |&d| d == b';');
+            let keys = keys_payload_iter.next().unwrap();
+            let key_string = core::str::from_utf8(keys).unwrap();
+            let mut keys: BTreeMap<&str, &str> = BTreeMap::new();
+            for k_v in key_string.split(',') {
+                let mut k_v = k_v.splitn(2, '=');
+                let k = k_v.next().unwrap();
+                let v = k_v.next().unwrap();
+                keys.insert(k, v);
+            }
+            KittyImageFrame::from_keys(&keys).unwrap()
+        }
+    }
+
+    impl KittyImagePlacement {
+        // Test helper: parse the placement portion of a full APC string
+        fn parse(s: &str) -> KittyImagePlacement {
+            let data = s.as_bytes();
+            let mut keys_payload_iter = data[1..].splitn(2, |&d| d == b';');
+            let keys = keys_payload_iter.next().unwrap();
+            let key_string = core::str::from_utf8(keys).unwrap();
+            let mut keys: BTreeMap<&str, &str> = BTreeMap::new();
+            for k_v in key_string.split(',') {
+                let mut k_v = k_v.splitn(2, '=');
+                let k = k_v.next().unwrap();
+                let v = k_v.next().unwrap();
+                keys.insert(k, v);
+            }
+            KittyImagePlacement::from_keys(&keys).unwrap()
+        }
     }
 }
