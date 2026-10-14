@@ -5,8 +5,8 @@ use crate::{
 };
 use anyhow::{anyhow, ensure};
 use libc;
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, OsStr};
 use std::os::unix::ffi::OsStrExt;
 use wezterm_input_types::{KeyboardLedStatus, PhysKeyCode};
@@ -41,6 +41,18 @@ struct StateFromXcbStateNotify {
 pub struct KeyboardWithFallback {
     selected: Keyboard,
     fallback: Keyboard,
+
+    /// Keys that are logically down, to detect auto-repeat: the server
+    /// repeats a held key as KeyPress events (with a synthetic
+    /// KeyRelease carrying the same timestamp right before each one).
+    #[cfg(feature = "kitty-x11-keyboard")]
+    pressed_keys: RefCell<HashSet<u32>>,
+    /// The (keycode, time) of the most recent KeyRelease
+    #[cfg(feature = "kitty-x11-keyboard")]
+    last_release: RefCell<Option<(u32, u32)>>,
+    /// Whether the key currently being processed is an auto-repeat
+    #[cfg(feature = "kitty-x11-keyboard")]
+    pending_repeat: Cell<bool>,
 }
 
 struct Compose {
@@ -172,6 +184,12 @@ impl KeyboardWithFallback {
         Ok(Self {
             selected,
             fallback: Keyboard::new_default()?,
+            #[cfg(feature = "kitty-x11-keyboard")]
+            pressed_keys: RefCell::new(HashSet::new()),
+            #[cfg(feature = "kitty-x11-keyboard")]
+            last_release: RefCell::new(None),
+            #[cfg(feature = "kitty-x11-keyboard")]
+            pending_repeat: Cell::new(false),
         })
     }
 
@@ -222,6 +240,7 @@ impl KeyboardWithFallback {
         events: &mut WindowEventSender,
     ) {
         let xcode = xkb::Keycode::from(xcb_ev.detail());
+        self.note_press(xcode, xcb_ev.time());
         self.process_xcb_key_event_impl(xcode, xcb_ev.state(), true, events);
     }
 
@@ -231,7 +250,51 @@ impl KeyboardWithFallback {
         events: &mut WindowEventSender,
     ) {
         let xcode = xkb::Keycode::from(xcb_ev.detail());
+        self.note_release(xcode, xcb_ev.time());
         self.process_xcb_key_event_impl(xcode, xcb_ev.state(), false, events);
+    }
+
+    /// Track key presses to detect X11 auto-repeat.
+    /// Returns true when this press is a repeat of a held key.
+    #[cfg(feature = "kitty-x11-keyboard")]
+    fn note_press(&self, xcode: xkb::Keycode, time: u32) {
+        let raw: u32 = xcode.into();
+        let mut pressed = self.pressed_keys.borrow_mut();
+        let mut last_release = self.last_release.borrow_mut();
+        // The synthetic KeyRelease emitted just before a repeated
+        // KeyPress carries the same timestamp as the press
+        let synthetic_pair = matches!(*last_release, Some((kc, t)) if kc == raw && t == time);
+        let is_repeat = synthetic_pair || pressed.contains(&raw);
+        pressed.insert(raw);
+        *last_release = None;
+        drop(pressed);
+        drop(last_release);
+        self.pending_repeat.set(is_repeat);
+    }
+
+    #[cfg(not(feature = "kitty-x11-keyboard"))]
+    fn note_press(&self, _xcode: xkb::Keycode, _time: u32) {}
+
+    #[cfg(feature = "kitty-x11-keyboard")]
+    fn note_release(&self, xcode: xkb::Keycode, time: u32) {
+        let raw: u32 = xcode.into();
+        self.pressed_keys.borrow_mut().remove(&raw);
+        *self.last_release.borrow_mut() = Some((raw, time));
+        self.pending_repeat.set(false);
+    }
+
+    #[cfg(not(feature = "kitty-x11-keyboard"))]
+    fn note_release(&self, _xcode: xkb::Keycode, _time: u32) {}
+
+    /// The unshifted form of the key under the current layout, from
+    /// the level-0 symbols of the keymap
+    #[cfg(feature = "kitty-x11-keyboard")]
+    fn layout_unshifted_keycode(&self, xcode: xkb::Keycode) -> Option<KeyCode> {
+        let layout = self.selected.state.borrow().key_get_layout(xcode);
+        let keymap = self.selected.keymap.borrow();
+        let syms = keymap.key_get_syms_by_level(xcode, layout, 0);
+        syms.first()
+            .and_then(|sym| keysym_to_keycode((*sym).into()))
     }
 
     // for X11 we always pass down raw_modifiers from the incoming
@@ -253,7 +316,18 @@ impl KeyboardWithFallback {
         events: &mut WindowEventSender,
     ) -> Option<WindowKeyEvent> {
         // extract current modifiers
-        let event_modifiers = Self::modifiers_from_btn_mask(state);
+        let mut event_modifiers = Self::modifiers_from_btn_mask(state);
+        #[cfg(feature = "kitty-x11-keyboard")]
+        {
+            // Hyper/Meta are xkb virtual modifiers that have no
+            // fixed place in the core protocol button mask
+            if self.mod_is_active("Hyper") {
+                event_modifiers |= Modifiers::HYPER;
+            }
+            if self.mod_is_active("Meta") {
+                event_modifiers |= Modifiers::META;
+            }
+        }
         // take the raw modifier mask
         let raw_mod_mask = state.bits();
         // and apply it to the underlying state so that eg: shifted keys
@@ -285,8 +359,18 @@ impl KeyboardWithFallback {
         let fallback_xsym = self.fallback.state.borrow().key_get_one_sym(xcode);
         let handled = Handled::new();
 
+        #[cfg(feature = "kitty-x11-keyboard")]
+        let is_repeat = self.pending_repeat.replace(false);
+        #[cfg(not(feature = "kitty-x11-keyboard"))]
+        let is_repeat = false;
+        let repeat_count = if is_repeat { 2 } else { 1 };
+        #[cfg(feature = "kitty-x11-keyboard")]
+        let layout_unshifted = self.layout_unshifted_keycode(xcode);
+        #[cfg(not(feature = "kitty-x11-keyboard"))]
+        let layout_unshifted = None;
+
         let raw_key_event = RawKeyEvent {
-            layout_unshifted: None,
+            layout_unshifted,
             key: match phys_code {
                 Some(phys) => KeyCode::Physical(phys),
                 None => KeyCode::RawCode(xcode.into()),
@@ -295,7 +379,7 @@ impl KeyboardWithFallback {
             raw_code: xcode.into(),
             modifiers: raw_modifiers,
             leds,
-            repeat_count: 1,
+            repeat_count,
             key_is_down: pressed,
             handled: handled.clone(),
         };
@@ -441,7 +525,7 @@ impl KeyboardWithFallback {
             key: kc,
             leds,
             modifiers: raw_modifiers,
-            repeat_count: 1,
+            repeat_count,
             key_is_down: pressed,
             raw: Some(raw_key_event),
         }

@@ -15,6 +15,11 @@ k9.workspace = true
 gl_generator.workspace = true
 
 [features]
+# Enhanced kitty keyboard protocol input plumbing for X11:
+# auto-repeat detection, Hyper/Meta modifiers and layout-accurate
+# unshifted keys. Off by default; enable together with the
+# wezterm-gui feature of the same name.
+kitty-x11-keyboard = []
 wayland = ["wayland-client", "smithay-client-toolkit", "wayland-egl", "wayland-protocols", "wayland-backend", "wayland-protocols-plasma"]
 
 [dependencies]
