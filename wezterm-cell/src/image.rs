@@ -443,6 +443,22 @@ impl ImageDataType {
         }
     }
 
+    /// Serialize the payload into the container format used by the
+    /// image disk cache.  Returns None when the payload cannot be
+    /// represented (or cannot be read back from its lease).
+    #[cfg(feature = "std")]
+    pub fn to_disk_bytes(&self) -> Option<Vec<u8>> {
+        disk_format::encode(self)
+    }
+
+    /// Reconstruct a payload serialized by [`Self::to_disk_bytes`].
+    /// The container is strictly validated; any mismatch returns None.
+    /// Decoding never panics on malformed input.
+    #[cfg(feature = "std")]
+    pub fn from_disk_bytes(buf: &[u8]) -> Option<Self> {
+        disk_format::decode(buf)
+    }
+
     /// Decode an encoded file into either an Rgba8 or AnimRgba8 variant
     /// if we recognize the file format, otherwise the EncodedFile data
     /// is preserved as is.
@@ -660,5 +676,455 @@ impl ImageData {
 
     pub fn hash(&self) -> [u8; 32] {
         self.hash
+    }
+
+    /// Write the payload to the image disk cache under this image's
+    /// content hash, so that it can be recovered with
+    /// [`Self::load_from_disk`] after the in-memory copy is released.
+    /// Returns true when the payload is now on disk.
+    #[cfg(feature = "std")]
+    pub fn spill_to_disk(&self) -> bool {
+        match self.data().to_disk_bytes() {
+            Some(bytes) => wezterm_blob_leases::image_disk_cache::store(self.hash, &bytes),
+            None => false,
+        }
+    }
+
+    /// Reconstruct an image previously written by [`Self::spill_to_disk`].
+    /// Returns None when nothing is cached under `hash` or the cached
+    /// payload fails validation.
+    #[cfg(feature = "std")]
+    pub fn load_from_disk(hash: &[u8; 32]) -> Option<Arc<Self>> {
+        let bytes = wezterm_blob_leases::image_disk_cache::load(hash)?;
+        let data = ImageDataType::from_disk_bytes(&bytes)?;
+        if &data.compute_hash() != hash {
+            return None;
+        }
+        Some(Arc::new(Self::with_data(data)))
+    }
+}
+
+/// The container format used by the image disk cache.
+///
+/// The layout is a fixed little-endian header followed by per-frame
+/// entries, chosen so that encoding/decoding is cheap and versioned:
+///
+/// ```text
+/// magic    b"WTID"
+/// version  u32        (currently 1)
+/// kind     u8         1=Rgba8, 2=AnimRgba8, 3=Encoded
+/// width    u32        (0 for Encoded)
+/// height   u32        (0 for Encoded)
+/// frames   u32
+/// control  (AnimRgba8 only) flags:u8, has_loop:u8, [loop:u32],
+///          loops_done:u32, has_paused:u8, [paused:u32]
+/// frame*   secs:u64 nanos:u32 len:u32 bytes[len]
+/// ```
+///
+/// Reconstruction recomputes the content hashes, so a decoded payload
+/// hashes identically to the spilled original; the cache key (the
+/// [`ImageData`] hash) therefore survives the round trip.
+#[cfg(feature = "std")]
+mod disk_format {
+    use super::{AnimationControl, ImageDataType};
+    use std::time::Duration;
+
+    const MAGIC: &[u8; 4] = b"WTID";
+    const VERSION: u32 = 1;
+    const KIND_RGBA8: u8 = 1;
+    const KIND_ANIM: u8 = 2;
+    const KIND_ENCODED: u8 = 3;
+
+    /// A frame entry costs at least its duration, length and zero
+    /// payload bytes; used to sanity check frame counts before
+    /// allocating.
+    const MIN_FRAME_ENTRY: usize = 16;
+
+    struct Writer {
+        buf: Vec<u8>,
+    }
+
+    impl Writer {
+        fn new() -> Self {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(MAGIC);
+            Self { buf }
+        }
+        fn put_u8(&mut self, v: u8) {
+            self.buf.push(v);
+        }
+        fn put_u32(&mut self, v: u32) {
+            self.buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn put_u64(&mut self, v: u64) {
+            self.buf.extend_from_slice(&v.to_le_bytes());
+        }
+        fn put_bytes(&mut self, v: &[u8]) {
+            self.put_u32(v.len() as u32);
+            self.buf.extend_from_slice(v);
+        }
+        fn put_duration(&mut self, d: &Duration) {
+            self.put_u64(d.as_secs());
+            self.put_u32(d.subsec_nanos());
+        }
+        fn put_control(&mut self, control: &AnimationControl) {
+            let mut flags = 0u8;
+            if control.running {
+                flags |= 1;
+            }
+            if control.loading {
+                flags |= 2;
+            }
+            self.put_u8(flags);
+            match control.loop_count {
+                Some(loop_count) => {
+                    self.put_u8(1);
+                    self.put_u32(loop_count);
+                }
+                None => self.put_u8(0),
+            }
+            self.put_u32(control.loops_done);
+            match control.paused_frame {
+                Some(paused) => {
+                    self.put_u8(1);
+                    self.put_u32(paused);
+                }
+                None => self.put_u8(0),
+            }
+        }
+        fn finish(self) -> Vec<u8> {
+            self.buf
+        }
+    }
+
+    struct Reader<'a> {
+        buf: &'a [u8],
+        pos: usize,
+    }
+
+    impl<'a> Reader<'a> {
+        fn new(buf: &'a [u8]) -> Self {
+            Self { buf, pos: 0 }
+        }
+        fn take(&mut self, len: usize) -> Option<&'a [u8]> {
+            let end = self.pos.checked_add(len)?;
+            let slice = self.buf.get(self.pos..end)?;
+            self.pos = end;
+            Some(slice)
+        }
+        fn take_u8(&mut self) -> Option<u8> {
+            self.take(1).map(|s| s[0])
+        }
+        fn take_u32(&mut self) -> Option<u32> {
+            Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
+        }
+        fn take_u64(&mut self) -> Option<u64> {
+            Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
+        }
+        fn take_bytes(&mut self) -> Option<Vec<u8>> {
+            let len = self.take_u32()? as usize;
+            self.take(len).map(|s| s.to_vec())
+        }
+        fn take_duration(&mut self) -> Option<Duration> {
+            let secs = self.take_u64()?;
+            let nanos = self.take_u32()?;
+            if nanos > 999_999_999 {
+                return None;
+            }
+            Some(Duration::new(secs, nanos))
+        }
+        fn take_control(&mut self) -> Option<AnimationControl> {
+            let flags = self.take_u8()?;
+            let loop_count = match self.take_u8()? {
+                1 => Some(self.take_u32()?),
+                0 => None,
+                _ => return None,
+            };
+            let loops_done = self.take_u32()?;
+            let paused_frame = match self.take_u8()? {
+                1 => Some(self.take_u32()?),
+                0 => None,
+                _ => return None,
+            };
+            Some(AnimationControl {
+                running: flags & 1 != 0,
+                loading: flags & 2 != 0,
+                loop_count,
+                loops_done,
+                paused_frame,
+            })
+        }
+    }
+
+    fn expected_frame_len(width: u32, height: u32) -> Option<usize> {
+        (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)
+    }
+
+    pub fn encode(data: &ImageDataType) -> Option<Vec<u8>> {
+        let mut w = Writer::new();
+        w.put_u32(VERSION);
+        match data {
+            ImageDataType::Rgba8 {
+                data,
+                width,
+                height,
+                ..
+            } => {
+                if expected_frame_len(*width, *height) != Some(data.len()) {
+                    return None;
+                }
+                w.put_u8(KIND_RGBA8);
+                w.put_u32(*width);
+                w.put_u32(*height);
+                w.put_u32(1);
+                w.put_duration(&Duration::ZERO);
+                w.put_bytes(data);
+            }
+            ImageDataType::AnimRgba8 {
+                width,
+                height,
+                durations,
+                frames,
+                control,
+                ..
+            } => {
+                if durations.len() != frames.len() || frames.is_empty() {
+                    return None;
+                }
+                for frame in frames {
+                    if expected_frame_len(*width, *height) != Some(frame.len()) {
+                        return None;
+                    }
+                }
+                w.put_u8(KIND_ANIM);
+                w.put_u32(*width);
+                w.put_u32(*height);
+                w.put_u32(frames.len() as u32);
+                w.put_control(control);
+                for (frame, duration) in frames.iter().zip(durations.iter()) {
+                    w.put_duration(duration);
+                    w.put_bytes(frame);
+                }
+            }
+            ImageDataType::EncodedFile(data) => {
+                w.put_u8(KIND_ENCODED);
+                w.put_u32(0);
+                w.put_u32(0);
+                w.put_u32(1);
+                w.put_duration(&Duration::ZERO);
+                w.put_bytes(data);
+            }
+            ImageDataType::EncodedLease(lease) => {
+                let data = lease.get_data().ok()?;
+                w.put_u8(KIND_ENCODED);
+                w.put_u32(0);
+                w.put_u32(0);
+                w.put_u32(1);
+                w.put_duration(&Duration::ZERO);
+                w.put_bytes(&data);
+            }
+        }
+        Some(w.finish())
+    }
+
+    pub fn decode(buf: &[u8]) -> Option<ImageDataType> {
+        let mut r = Reader::new(buf);
+        if r.take(4)? != MAGIC {
+            return None;
+        }
+        if r.take_u32()? != VERSION {
+            return None;
+        }
+        let kind = r.take_u8()?;
+        let width = r.take_u32()?;
+        let height = r.take_u32()?;
+        let frame_count = r.take_u32()? as usize;
+        if frame_count == 0 || frame_count > buf.len() / MIN_FRAME_ENTRY {
+            return None;
+        }
+
+        let data = match kind {
+            KIND_RGBA8 => {
+                if frame_count != 1 {
+                    return None;
+                }
+                let frame_len = expected_frame_len(width, height)?;
+                let _duration = r.take_duration()?;
+                let frame = r.take_bytes()?;
+                if frame.len() != frame_len {
+                    return None;
+                }
+                let hash = ImageDataType::hash_bytes(&frame);
+                ImageDataType::Rgba8 {
+                    width,
+                    height,
+                    data: frame,
+                    hash,
+                }
+            }
+            KIND_ANIM => {
+                let control = r.take_control()?;
+                let frame_len = expected_frame_len(width, height)?;
+                let mut durations = Vec::with_capacity(frame_count);
+                let mut frames = Vec::with_capacity(frame_count);
+                let mut hashes = Vec::with_capacity(frame_count);
+                for _ in 0..frame_count {
+                    durations.push(r.take_duration()?);
+                    let frame = r.take_bytes()?;
+                    if frame.len() != frame_len {
+                        return None;
+                    }
+                    hashes.push(ImageDataType::hash_bytes(&frame));
+                    frames.push(frame);
+                }
+                ImageDataType::AnimRgba8 {
+                    width,
+                    height,
+                    durations,
+                    frames,
+                    hashes,
+                    control,
+                }
+            }
+            KIND_ENCODED => {
+                if frame_count != 1 || (width, height) != (0, 0) {
+                    return None;
+                }
+                let _duration = r.take_duration()?;
+                ImageDataType::EncodedFile(r.take_bytes()?)
+            }
+            _ => return None,
+        };
+        if r.pos != buf.len() {
+            // Trailing garbage means corruption, not a truncated write
+            return None;
+        }
+        Some(data)
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod disk_cache_tests {
+    use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// The image disk cache is a process-global singleton; hold this
+    /// lock so that tests don't fight over it.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct Serial {
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    fn setup_cache() -> Serial {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        wezterm_blob_leases::image_disk_cache::clear();
+        wezterm_blob_leases::image_disk_cache::configure(true, usize::MAX, None);
+        Serial { _guard }
+    }
+
+    fn sample_rgba() -> ImageDataType {
+        let (width, height) = (3u32, 2u32);
+        let data: Vec<u8> = (0..width * height * 4).map(|i| i as u8).collect();
+        ImageDataType::new_single_frame(width, height, data)
+    }
+
+    fn sample_anim() -> ImageDataType {
+        let (width, height) = (2u32, 2u32);
+        let frame_len = (width * height * 4) as usize;
+        let frames = vec![vec![1u8; frame_len], vec![2u8; frame_len]];
+        let hashes: Vec<[u8; 32]> = frames
+            .iter()
+            .map(|f| ImageDataType::hash_bytes(f))
+            .collect();
+        ImageDataType::AnimRgba8 {
+            width,
+            height,
+            durations: vec![Duration::new(1, 500_000_000), Duration::from_millis(250)],
+            frames,
+            hashes,
+            control: AnimationControl {
+                running: false,
+                loading: true,
+                loop_count: Some(3),
+                loops_done: 1,
+                paused_frame: Some(2),
+            },
+        }
+    }
+
+    /// Every variant survives a to_disk_bytes/from_disk_bytes round
+    /// trip, and the reconstruction hashes identically to the original
+    #[test]
+    fn roundtrip_each_variant() {
+        for original in [
+            sample_rgba(),
+            sample_anim(),
+            ImageDataType::EncodedFile(b"png-ish".to_vec()),
+        ] {
+            let expected_hash = original.compute_hash();
+            let restored = ImageDataType::from_disk_bytes(&original.to_disk_bytes().unwrap())
+                .expect("decodes");
+            assert_eq!(restored, original);
+            assert_eq!(restored.compute_hash(), expected_hash);
+        }
+    }
+
+    /// An image spilled under its hash loads back with the same
+    /// payload and hash; unknown hashes load nothing
+    #[test]
+    fn spill_and_load_via_disk_cache() {
+        let _serial = setup_cache();
+        let image = ImageData::with_data(sample_anim());
+        assert!(image.spill_to_disk());
+
+        let restored = ImageData::load_from_disk(&image.hash()).expect("loads back");
+        assert_eq!(*restored.data(), sample_anim());
+        assert_eq!(restored.hash(), image.hash());
+
+        let absent = [0xabu8; 32];
+        assert!(ImageData::load_from_disk(&absent).is_none());
+    }
+
+    /// Malformed containers are rejected instead of panicking
+    #[test]
+    fn malformed_containers_rejected() {
+        let encoded = sample_rgba().to_disk_bytes().unwrap();
+
+        assert!(ImageDataType::from_disk_bytes(&[]).is_none(), "empty");
+        assert!(ImageDataType::from_disk_bytes(b"XXXX").is_none(), "short");
+        let mut bad_magic = encoded.clone();
+        bad_magic[0] = b'X';
+        assert!(
+            ImageDataType::from_disk_bytes(&bad_magic).is_none(),
+            "magic"
+        );
+        let mut bad_version = encoded.clone();
+        bad_version[4..8].copy_from_slice(&2u32.to_le_bytes());
+        assert!(
+            ImageDataType::from_disk_bytes(&bad_version).is_none(),
+            "version"
+        );
+        assert!(
+            ImageDataType::from_disk_bytes(&encoded[..encoded.len() - 1]).is_none(),
+            "truncated"
+        );
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(
+            ImageDataType::from_disk_bytes(&trailing).is_none(),
+            "trailing garbage"
+        );
+
+        // A frame length that disagrees with the declared dimensions
+        let mut bad_dims = encoded.clone();
+        // width sits at offset 9 in the header
+        bad_dims[9..13].copy_from_slice(&99u32.to_le_bytes());
+        assert!(
+            ImageDataType::from_disk_bytes(&bad_dims).is_none(),
+            "dimension mismatch"
+        );
     }
 }
