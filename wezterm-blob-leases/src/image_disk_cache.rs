@@ -393,17 +393,23 @@ mod tests {
     /// that tests don't fight over it.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    struct Serial {
-        _guard: MutexGuard<'static, ()>,
+    struct Serial(#[allow(dead_code)] MutexGuard<'static, ()>);
+
+    impl Drop for Serial {
+        fn drop(&mut self) {
+            // The cache is a process-global static whose Drop never
+            // runs at exit; clear it per test or the temp dir leaks
+            clear();
+        }
     }
 
     fn setup(enabled: bool, budget: usize, parent: Option<&Path>) -> Serial {
         // unwrap_or_else(into_inner) keeps a failure in one test from
         // poisoning the lock for the rest
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TEST_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         clear();
         configure(enabled, budget, parent);
-        Serial { _guard }
+        Serial(guard)
     }
 
     fn hash_of(byte: u8) -> [u8; 32] {

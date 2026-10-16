@@ -1198,11 +1198,20 @@ mod disk_cache_tests {
     use std::sync::{Mutex, MutexGuard};
 
     /// The image disk cache is a process-global singleton; hold this
-    /// lock so that tests don't fight over it.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    /// lock (shared with the other cache test modules below) so that
+    /// tests don't fight over it.
+    pub(super) static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct Serial {
         _guard: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for Serial {
+        fn drop(&mut self) {
+            // The cache is a process-global static whose Drop never
+            // runs at exit; clear it per test or the temp dir leaks
+            wezterm_blob_leases::image_disk_cache::clear();
+        }
     }
 
     fn setup_cache() -> Serial {
@@ -1318,14 +1327,18 @@ mod disk_cache_tests {
 
 #[cfg(all(test, feature = "std"))]
 mod swap_out_tests {
+    use super::disk_cache_tests::TEST_LOCK;
     use super::*;
-
-    /// The image disk cache is a process-global singleton; hold this
-    /// lock so that tests don't fight over it.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    use std::sync::MutexGuard;
 
     struct Serial {
         _guard: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for Serial {
+        fn drop(&mut self) {
+            wezterm_blob_leases::image_disk_cache::clear();
+        }
     }
 
     fn setup_cache() -> Serial {
