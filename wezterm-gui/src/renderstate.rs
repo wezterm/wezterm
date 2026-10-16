@@ -772,6 +772,12 @@ impl RenderState {
             &mut glyph_cache.image_cache,
             &mut new_glyph_cache.image_cache,
         );
+        // ... and its byte accounting, which must describe the cache
+        // that was just moved over
+        std::mem::swap(
+            &mut glyph_cache.image_cache_bytes,
+            &mut new_glyph_cache.image_cache_bytes,
+        );
 
         *glyph_cache = new_glyph_cache;
         Ok(())

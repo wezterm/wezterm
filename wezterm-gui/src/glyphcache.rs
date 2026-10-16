@@ -613,6 +613,13 @@ pub struct GlyphCache {
     pub atlas: Atlas,
     pub fonts: Rc<FontConfiguration>,
     pub image_cache: LfuCache<[u8; 32], DecodedImage>,
+    /// Total payload bytes held by image_cache.  Used together with
+    /// image_cache_budget to bound the memory retained by decoded
+    /// images once the terminal model no longer references them;
+    /// images still referenced by cells are simply re-wrapped from the
+    /// model when they are next drawn, so eviction is invisible.
+    pub(crate) image_cache_bytes: usize,
+    image_cache_budget: usize,
     frame_cache: HashMap<[u8; 32], Sprite>,
     line_glyphs: HashMap<LineKey, Sprite>,
     pub block_glyphs: HashMap<SizedBlockKey, Sprite>,
@@ -635,6 +642,8 @@ impl GlyphCache {
                 |config| config.glyph_cache_image_cache_size,
                 &fonts.config(),
             ),
+            image_cache_bytes: 0,
+            image_cache_budget: fonts.config().glyph_cache_image_cache_bytes,
             frame_cache: HashMap::new(),
             atlas,
             line_glyphs: HashMap::new(),
@@ -664,6 +673,8 @@ impl GlyphCache {
                 |config| config.glyph_cache_image_cache_size,
                 &fonts.config(),
             ),
+            image_cache_bytes: 0,
+            image_cache_budget: fonts.config().glyph_cache_image_cache_bytes,
             frame_cache: HashMap::new(),
             atlas,
             line_glyphs: HashMap::new(),
@@ -744,7 +755,17 @@ impl GlyphCache {
 
     pub fn config_changed(&mut self) {
         let config = self.fonts.config();
+        let old_cap = self.image_cache.cap();
         self.image_cache.update_config(&config);
+        if self.image_cache.cap() < old_cap {
+            // Shrinking the cap evicts entries inside update_config,
+            // without a chance to adjust the byte accounting here;
+            // start that over rather than track what went away.
+            self.image_cache.clear();
+            self.image_cache_bytes = 0;
+        }
+        self.image_cache_budget = config.glyph_cache_image_cache_bytes;
+        self.evict_images_over_budget();
         self.cursor_glyphs.clear();
     }
 
@@ -1233,8 +1254,37 @@ impl GlyphCache {
                 self.min_frame_duration,
                 allow_image,
             )?;
+            let bytes = decoded.image.len();
             self.image_cache.put(hash, decoded);
+            self.image_cache_bytes += bytes;
+            self.evict_images_over_budget();
             Ok(res)
+        }
+    }
+
+    /// Enforce the image cache budgets.  Entry-cap eviction is done here
+    /// rather than left to `LfuCache::put` so that the evicted values
+    /// can be subtracted from the byte accounting; then the byte budget
+    /// is enforced, always keeping at least the most recent entry so a
+    /// single image larger than the budget still renders.
+    fn evict_images_over_budget(&mut self) {
+        while self.image_cache.len() >= self.image_cache.cap() && self.image_cache.len() > 1 {
+            match self.image_cache.evict_one() {
+                Some((_, evicted)) => {
+                    self.image_cache_bytes =
+                        self.image_cache_bytes.saturating_sub(evicted.image.len())
+                }
+                None => break,
+            }
+        }
+        while self.image_cache_bytes > self.image_cache_budget && self.image_cache.len() > 1 {
+            match self.image_cache.evict_one() {
+                Some((_, evicted)) => {
+                    self.image_cache_bytes =
+                        self.image_cache_bytes.saturating_sub(evicted.image.len())
+                }
+                None => break,
+            }
         }
     }
 
