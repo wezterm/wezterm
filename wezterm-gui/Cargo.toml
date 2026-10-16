@@ -94,7 +94,7 @@ url-funcs.workspace = true
 url.workspace = true
 walkdir.workspace = true
 wezterm-bidi.workspace = true
-wezterm-blob-leases = { workspace=true, features=["simple_tempdir"] }
+wezterm-blob-leases = { workspace=true, features=["simple_tempdir", "image_disk_cache"] }
 wezterm-client.workspace = true
 wezterm-dynamic.workspace = true
 wezterm-font.workspace = true

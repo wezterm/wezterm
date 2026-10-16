@@ -5,6 +5,7 @@ mod lease_id;
 mod manager;
 mod storage;
 
+pub mod image_disk_cache;
 pub mod simple_tempdir;
 
 pub use content_id::*;

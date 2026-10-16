@@ -10,6 +10,8 @@ license = "MIT"
 
 [dependencies]
 getrandom.workspace = true
+log = {workspace=true, optional=true}
+metrics = {workspace=true, optional=true}
 serde = {workspace=true, features=["derive"], optional=true}
 sha2.workspace = true
 tempfile = {workspace=true, optional=true}
@@ -20,3 +22,4 @@ uuid = {workspace=true, features=["v4", "rng"]}
 default = []
 serde = ["dep:serde", "uuid/serde"]
 simple_tempdir = ["dep:tempfile"]
+image_disk_cache = ["dep:tempfile", "dep:metrics", "dep:log"]
