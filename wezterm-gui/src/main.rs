@@ -413,8 +413,11 @@ async fn async_run_terminal_gui(
     let unix_socket_path =
         config::RUNTIME_DIR.join(format!("gui-sock-{}", unsafe { libc::getpid() }));
     std::env::set_var("WEZTERM_UNIX_SOCKET", unix_socket_path.clone());
+    // Park image payload blobs in the system temp dir (honoring
+    // $TMPDIR) rather than in the cache dir; the underlying TempDir
+    // removes itself and its contents when storage is cleared on exit.
     wezterm_blob_leases::register_storage(Arc::new(
-        wezterm_blob_leases::simple_tempdir::SimpleTempDir::new_in(&*config::CACHE_DIR)?,
+        wezterm_blob_leases::simple_tempdir::SimpleTempDir::new()?,
     ))?;
     if let Err(err) = spawn_mux_server(unix_socket_path, should_publish) {
         log::warn!("{:#}", err);
