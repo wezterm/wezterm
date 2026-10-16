@@ -176,6 +176,25 @@ pub trait TerminalConfiguration: Downcast + std::fmt::Debug + Send + Sync {
         false
     }
 
+    /// The per-terminal storage budget, in MiB, for image data retained
+    /// on behalf of the kitty graphics protocol.  The protocol spec
+    /// recommends that terminals impose a quota and free the oldest
+    /// images once it is exceeded; clients then observe ENOENT when
+    /// referencing a released image id.
+    // Coupled with config/src/config.rs:default_kitty_image_storage_budget_mb
+    fn kitty_image_storage_budget_mb(&self) -> usize {
+        320
+    }
+
+    /// The byte budget for the content-addressed dedup cache of recently
+    /// received image payloads.  Evicting from this cache has no effect
+    /// on protocol correctness: an identical re-transmission simply
+    /// allocates a fresh copy of the pixels instead of sharing one.
+    // Coupled with config/src/config.rs:default_image_dedup_cache_budget_bytes
+    fn image_dedup_cache_budget_bytes(&self) -> usize {
+        128 * 1024 * 1024
+    }
+
     fn enable_kitty_keyboard(&self) -> bool {
         true
     }

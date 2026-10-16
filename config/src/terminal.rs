@@ -78,6 +78,14 @@ impl wezterm_term::TerminalConfiguration for TermConfig {
         self.configuration().enable_kitty_graphics
     }
 
+    fn kitty_image_storage_budget_mb(&self) -> usize {
+        self.configuration().kitty_image_storage_budget_mb
+    }
+
+    fn image_dedup_cache_budget_bytes(&self) -> usize {
+        self.configuration().image_dedup_cache_budget_bytes
+    }
+
     fn enable_title_reporting(&self) -> bool {
         self.configuration().enable_title_reporting
     }

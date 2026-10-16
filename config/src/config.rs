@@ -848,6 +848,12 @@ pub struct Config {
     pub line_to_ele_shape_cache_size: usize,
     #[dynamic(default = "default_glyph_cache_image_cache_size")]
     pub glyph_cache_image_cache_size: usize,
+    #[dynamic(default = "default_glyph_cache_image_cache_bytes")]
+    pub glyph_cache_image_cache_bytes: usize,
+    #[dynamic(default = "default_kitty_image_storage_budget_mb")]
+    pub kitty_image_storage_budget_mb: usize,
+    #[dynamic(default = "default_image_dedup_cache_budget_bytes")]
+    pub image_dedup_cache_budget_bytes: usize,
 
     #[dynamic(default)]
     pub visual_bell: VisualBell,
@@ -2101,6 +2107,31 @@ impl DroppedFileQuoting {
 
 fn default_glyph_cache_image_cache_size() -> usize {
     256
+}
+
+/// Combined byte budget for the decoded images held by each window's
+/// render-side image cache.  Once exceeded, the least frequently
+/// displayed images are dropped from the cache; images still shown on
+/// screen are re-wrapped from the terminal model on their next use,
+/// so this only bounds memory, not what can be displayed.
+fn default_glyph_cache_image_cache_bytes() -> usize {
+    256 * 1024 * 1024
+}
+
+/// Per-terminal storage quota for kitty graphics protocol image data,
+/// in MiB.  Matches the quota that the kitty spec recommends terminals
+/// implement; the oldest images that nothing references are released
+/// once it is exceeded.
+// Coupled with term/src/config.rs:TerminalConfiguration::kitty_image_storage_budget_mb
+fn default_kitty_image_storage_budget_mb() -> usize {
+    320
+}
+
+/// Byte budget of the terminal-side content-addressed dedup cache that
+/// lets identical re-transmissions share one copy of the decoded pixels.
+// Coupled with term/src/config.rs:TerminalConfiguration::image_dedup_cache_budget_bytes
+fn default_image_dedup_cache_budget_bytes() -> usize {
+    128 * 1024 * 1024
 }
 
 fn default_shape_cache_size() -> usize {
