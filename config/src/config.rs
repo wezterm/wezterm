@@ -854,6 +854,12 @@ pub struct Config {
     pub kitty_image_storage_budget_mb: usize,
     #[dynamic(default = "default_image_dedup_cache_budget_bytes")]
     pub image_dedup_cache_budget_bytes: usize,
+    #[dynamic(default = "default_enable_kitty_image_disk_cache")]
+    pub enable_kitty_image_disk_cache: bool,
+    #[dynamic(default = "default_kitty_image_disk_cache_budget_bytes")]
+    pub kitty_image_disk_cache_budget_bytes: usize,
+    #[dynamic(default)]
+    pub kitty_image_disk_cache_dir: Option<PathBuf>,
 
     #[dynamic(default)]
     pub visual_bell: VisualBell,
@@ -2132,6 +2138,27 @@ fn default_kitty_image_storage_budget_mb() -> usize {
 // Coupled with term/src/config.rs:TerminalConfiguration::image_dedup_cache_budget_bytes
 fn default_image_dedup_cache_budget_bytes() -> usize {
     128 * 1024 * 1024
+}
+
+/// Opt-in switch for the on-disk spill cache for kitty graphics images.
+/// When enabled, images released because the kitty image storage budget
+/// was exceeded are written to a bounded disk cache instead of being
+/// dropped, and a client that later places the same image id gets its
+/// pixels restored rather than an ENOENT response.  The cache only
+/// ever holds data evicted from memory, lives in a per-process temp
+/// directory that is removed when wezterm exits, and is disabled
+/// by default.
+// Coupled with term/src/config.rs:TerminalConfiguration::kitty_image_disk_cache_enabled
+fn default_enable_kitty_image_disk_cache() -> bool {
+    false
+}
+
+/// Disk byte budget for the image disk cache.  Once exceeded, the
+/// least recently used spilled images are dropped from disk and
+/// clients observe ENOENT when placing their ids again.
+// Coupled with term/src/config.rs:TerminalConfiguration::kitty_image_disk_cache_budget_bytes
+fn default_kitty_image_disk_cache_budget_bytes() -> usize {
+    512 * 1024 * 1024
 }
 
 fn default_shape_cache_size() -> usize {

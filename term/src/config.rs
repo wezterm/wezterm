@@ -195,6 +195,30 @@ pub trait TerminalConfiguration: Downcast + std::fmt::Debug + Send + Sync {
         128 * 1024 * 1024
     }
 
+    /// Whether images released from the kitty graphics storage budget
+    /// may spill to a bounded on-disk cache, from which a later
+    /// placement of the same image id can restore the pixels instead
+    /// of observing ENOENT.  The cache holds only data evicted from
+    /// memory and is removed when the process exits.
+    // Coupled with config/src/config.rs:default_enable_kitty_image_disk_cache
+    fn kitty_image_disk_cache_enabled(&self) -> bool {
+        false
+    }
+
+    /// Disk byte budget for the on-disk spill cache for kitty images;
+    /// the least recently used spilled images are dropped once it is
+    /// exceeded.
+    // Coupled with config/src/config.rs:default_kitty_image_disk_cache_budget_bytes
+    fn kitty_image_disk_cache_budget_bytes(&self) -> usize {
+        512 * 1024 * 1024
+    }
+
+    /// Parent directory under which the on-disk image cache creates
+    /// its per-process temp directory; None uses the system temp dir.
+    fn kitty_image_disk_cache_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     fn enable_kitty_keyboard(&self) -> bool {
         true
     }

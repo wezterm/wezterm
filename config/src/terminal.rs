@@ -86,6 +86,18 @@ impl wezterm_term::TerminalConfiguration for TermConfig {
         self.configuration().image_dedup_cache_budget_bytes
     }
 
+    fn kitty_image_disk_cache_enabled(&self) -> bool {
+        self.configuration().enable_kitty_image_disk_cache
+    }
+
+    fn kitty_image_disk_cache_budget_bytes(&self) -> usize {
+        self.configuration().kitty_image_disk_cache_budget_bytes
+    }
+
+    fn kitty_image_disk_cache_dir(&self) -> Option<std::path::PathBuf> {
+        self.configuration().kitty_image_disk_cache_dir.clone()
+    }
+
     fn enable_title_reporting(&self) -> bool {
         self.configuration().enable_title_reporting
     }
