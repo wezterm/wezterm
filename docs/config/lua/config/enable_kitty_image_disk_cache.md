@@ -21,6 +21,12 @@ or the system temp dir) that is removed when wezterm exits, and its
 total size is bounded by
 [kitty_image_disk_cache_budget_bytes](kitty_image_disk_cache_budget_bytes.md).
 
+When a client application's alternate-screen session ends (ie: a
+full-screen application such as a terminal PDF viewer exits), the
+image data it left behind is released from memory *and* removed from
+this disk cache: a relaunched application retransmits everything it
+displays, so retained copies would never pay off.
+
 Spilling to and restoring from disk happens synchronously while
 processing the graphics escape sequences, so it is worth observing
 the `image_disk_cache.*` metrics before keeping the feature enabled.
