@@ -88,6 +88,17 @@ struct ScaledHistogram {
     scale: f64,
 }
 
+/// The summary of a value histogram: the mean, selected percentiles
+/// and the peak (max) value observed so far.
+struct Snapshot {
+    mean: f64,
+    p50: u64,
+    p75: u64,
+    p95: u64,
+    p99: u64,
+    max: u64,
+}
+
 impl ScaledHistogram {
     fn new(scale: f64) -> Arc<Self> {
         Arc::new(Self {
@@ -95,20 +106,16 @@ impl ScaledHistogram {
             scale,
         })
     }
-    fn percentiles(&self) -> (u64, u64, u64) {
+    fn snapshot(&self) -> Snapshot {
         let hist = self.hist.lock();
-        let p50 = hist.value_at_percentile(50.);
-        let p75 = hist.value_at_percentile(75.);
-        let p95 = hist.value_at_percentile(95.);
-        (p50, p75, p95)
-    }
-
-    fn latency_percentiles(&self) -> (Duration, Duration, Duration) {
-        let hist = self.hist.lock();
-        let p50 = pctile_latency(&*hist, 50.);
-        let p75 = pctile_latency(&*hist, 75.);
-        let p95 = pctile_latency(&*hist, 95.);
-        (p50, p75, p95)
+        Snapshot {
+            mean: hist.mean(),
+            p50: hist.value_at_percentile(50.),
+            p75: hist.value_at_percentile(75.),
+            p95: hist.value_at_percentile(95.),
+            p99: hist.value_at_percentile(99.),
+            max: hist.max(),
+        }
     }
 }
 
@@ -116,10 +123,6 @@ impl metrics::HistogramFn for ScaledHistogram {
     fn record(&self, value: f64) {
         self.hist.lock().record((value * self.scale) as u64).ok();
     }
-}
-
-fn pctile_latency(histogram: &Histogram<u64>, p: f64) -> Duration {
-    Duration::from_nanos(histogram.value_at_percentile(p))
 }
 
 struct MyCounter {
@@ -174,6 +177,10 @@ impl Inner {
                 alignment: Alignment::Left,
             },
             Column {
+                name: "mean".to_string(),
+                alignment: Alignment::Left,
+            },
+            Column {
                 name: "p50".to_string(),
                 alignment: Alignment::Left,
             },
@@ -183,6 +190,14 @@ impl Inner {
             },
             Column {
                 name: "p95".to_string(),
+                alignment: Alignment::Left,
+            },
+            Column {
+                name: "p99".to_string(),
+                alignment: Alignment::Left,
+            },
+            Column {
+                name: "max".to_string(),
                 alignment: Alignment::Left,
             },
         ];
@@ -229,21 +244,29 @@ impl Inner {
 
                 data.clear();
                 for (key, histogram) in &inner.histograms {
+                    let snap = histogram.snapshot();
                     if key.name().ends_with(".size") {
-                        let (p50, p75, p95) = histogram.percentiles();
                         data.push(vec![
                             key.to_string(),
-                            format!("{:.2?}", p50),
-                            format!("{:.2?}", p75),
-                            format!("{:.2?}", p95),
+                            format!("{:.2}", snap.mean),
+                            format!("{:.2?}", snap.p50),
+                            format!("{:.2?}", snap.p75),
+                            format!("{:.2?}", snap.p95),
+                            format!("{:.2?}", snap.p99),
+                            format!("{:.2?}", snap.max),
                         ]);
                     } else {
-                        let (p50, p75, p95) = histogram.latency_percentiles();
                         data.push(vec![
                             key.to_string(),
-                            format!("{:.2?}", p50),
-                            format!("{:.2?}", p75),
-                            format!("{:.2?}", p95),
+                            format!(
+                                "{:.2?}",
+                                Duration::from_secs_f64(snap.mean / 1_000_000_000.)
+                            ),
+                            format!("{:.2?}", Duration::from_nanos(snap.p50)),
+                            format!("{:.2?}", Duration::from_nanos(snap.p75)),
+                            format!("{:.2?}", Duration::from_nanos(snap.p95)),
+                            format!("{:.2?}", Duration::from_nanos(snap.p99)),
+                            format!("{:.2?}", Duration::from_nanos(snap.max)),
                         ]);
                     }
                 }
@@ -391,17 +414,20 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
     metrics_mod.set(
         "get_sizes",
         lua.create_function(|_, _: ()| {
-            let mut inner = INNER.lock();
+            let inner = INNER.lock();
             let counters: HashMap<String, HashMap<String, u64>> = inner
                 .histograms
-                .iter_mut()
+                .iter()
                 .filter_map(|(key, hist)| {
                     if key.name().ends_with(".size") {
+                        let snap = hist.snapshot();
                         let mut res = HashMap::new();
-                        let (p50, p75, p95) = hist.percentiles();
-                        res.insert("p50".to_string(), p50);
-                        res.insert("p75".to_string(), p75);
-                        res.insert("p95".to_string(), p95);
+                        res.insert("mean".to_string(), snap.mean as u64);
+                        res.insert("p50".to_string(), snap.p50);
+                        res.insert("p75".to_string(), snap.p75);
+                        res.insert("p95".to_string(), snap.p95);
+                        res.insert("p99".to_string(), snap.p99);
+                        res.insert("max".to_string(), snap.max);
                         Some((key.name().to_string(), res))
                     } else {
                         None
@@ -414,17 +440,38 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
     metrics_mod.set(
         "get_latency",
         lua.create_function(|_, _: ()| {
-            let mut inner = INNER.lock();
+            let inner = INNER.lock();
             let counters: HashMap<String, HashMap<String, String>> = inner
                 .histograms
-                .iter_mut()
+                .iter()
                 .filter_map(|(key, hist)| {
                     if !key.name().ends_with(".size") {
+                        let snap = hist.snapshot();
                         let mut res = HashMap::new();
-                        let (p50, p75, p95) = hist.latency_percentiles();
-                        res.insert("p50".to_string(), format!("{p50:?}"));
-                        res.insert("p75".to_string(), format!("{p75:?}"));
-                        res.insert("p95".to_string(), format!("{p95:?}"));
+                        res.insert(
+                            "mean".to_string(),
+                            format!("{:?}", Duration::from_secs_f64(snap.mean / 1_000_000_000.)),
+                        );
+                        res.insert(
+                            "p50".to_string(),
+                            format!("{:?}", Duration::from_nanos(snap.p50)),
+                        );
+                        res.insert(
+                            "p75".to_string(),
+                            format!("{:?}", Duration::from_nanos(snap.p75)),
+                        );
+                        res.insert(
+                            "p95".to_string(),
+                            format!("{:?}", Duration::from_nanos(snap.p95)),
+                        );
+                        res.insert(
+                            "p99".to_string(),
+                            format!("{:?}", Duration::from_nanos(snap.p99)),
+                        );
+                        res.insert(
+                            "max".to_string(),
+                            format!("{:?}", Duration::from_nanos(snap.max)),
+                        );
                         Some((key.name().to_string(), res))
                     } else {
                         None
@@ -435,4 +482,48 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
         })?,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ScaledHistogram::snapshot reports the mean, percentiles and the
+    /// peak value of everything recorded so far
+    #[test]
+    fn snapshot_reports_mean_percentiles_and_max() {
+        let hist = ScaledHistogram::new(1.0);
+        // Record the values 1..=100; with 2 significant digits the
+        // histogram is precise enough for the assertions below
+        for value in 1..=100u64 {
+            metrics::HistogramFn::record(&*hist, value as f64);
+        }
+        let snap = hist.snapshot();
+        assert!(
+            (45.0..=56.0).contains(&snap.mean),
+            "mean should be around 50.5, got {}",
+            snap.mean
+        );
+        assert_eq!(snap.max, 100, "peak value");
+        assert!(
+            snap.p50 >= 45 && snap.p50 <= 56,
+            "p50 should be around 50, got {}",
+            snap.p50
+        );
+        assert!(
+            snap.p95 >= 90 && snap.p95 <= 100,
+            "p95 should be around 95, got {}",
+            snap.p95
+        );
+        assert!(
+            snap.p99 >= 95 && snap.p99 <= 100,
+            "p99 should be around 99, got {}",
+            snap.p99
+        );
+        // Percentiles are ordered
+        assert!(snap.p50 <= snap.p75);
+        assert!(snap.p75 <= snap.p95);
+        assert!(snap.p95 <= snap.p99);
+        assert!(snap.p99 <= snap.max);
+    }
 }
