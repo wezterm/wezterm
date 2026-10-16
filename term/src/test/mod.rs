@@ -90,7 +90,18 @@ struct TestTermConfig {
     kitty_image_storage_budget_mb: Option<usize>,
     /// Override for the image dedup cache byte budget
     image_dedup_cache_budget_bytes: Option<usize>,
+    /// Enables the on-disk spill cache for kitty images, with
+    /// optional budget/dir overrides
+    kitty_image_disk_cache: Option<TestDiskCacheConfig>,
 }
+
+/// Test overrides for the on-disk image cache; enabling it at all is
+/// signified by the enclosing Option being Some.
+#[derive(Debug, Default)]
+pub(crate) struct TestDiskCacheConfig {
+    pub budget_bytes: Option<usize>,
+}
+
 impl TerminalConfiguration for TestTermConfig {
     fn scrollback_size(&self) -> usize {
         self.scrollback
@@ -112,6 +123,17 @@ impl TerminalConfiguration for TestTermConfig {
         self.image_dedup_cache_budget_bytes
             .unwrap_or(128 * 1024 * 1024)
     }
+
+    fn kitty_image_disk_cache_enabled(&self) -> bool {
+        self.kitty_image_disk_cache.is_some()
+    }
+
+    fn kitty_image_disk_cache_budget_bytes(&self) -> usize {
+        self.kitty_image_disk_cache
+            .as_ref()
+            .and_then(|cfg| cfg.budget_bytes)
+            .unwrap_or(512 * 1024 * 1024)
+    }
 }
 
 impl TestTerm {
@@ -128,6 +150,27 @@ impl TestTerm {
         scrollback: usize,
         kitty_image_storage_budget_mb: Option<usize>,
         image_dedup_cache_budget_bytes: Option<usize>,
+    ) -> Self {
+        Self::new_with_disk_cache(
+            height,
+            width,
+            scrollback,
+            kitty_image_storage_budget_mb,
+            image_dedup_cache_budget_bytes,
+            None,
+        )
+    }
+
+    /// Like [`TestTerm::new_with_config`], additionally enabling the
+    /// on-disk spill cache for kitty images so that tests can
+    /// exercise the spill/restore paths.
+    fn new_with_disk_cache(
+        height: usize,
+        width: usize,
+        scrollback: usize,
+        kitty_image_storage_budget_mb: Option<usize>,
+        image_dedup_cache_budget_bytes: Option<usize>,
+        disk_cache: Option<TestDiskCacheConfig>,
     ) -> Self {
         let _ = env_logger::Builder::new()
             .is_test(true)
@@ -146,6 +189,7 @@ impl TestTerm {
                 scrollback,
                 kitty_image_storage_budget_mb,
                 image_dedup_cache_budget_bytes,
+                kitty_image_disk_cache: disk_cache,
             }),
             "WezTerm",
             "O_o",
@@ -189,6 +233,7 @@ impl TestTerm {
                 scrollback,
                 kitty_image_storage_budget_mb: None,
                 image_dedup_cache_budget_bytes: None,
+                kitty_image_disk_cache: None,
             }),
             "WezTerm",
             "O_o",

@@ -7358,6 +7358,7 @@ dependencies = [
  "unicode-normalization",
  "url",
  "wezterm-bidi",
+ "wezterm-blob-leases",
  "wezterm-cell",
  "wezterm-dynamic",
  "wezterm-escape-parser",

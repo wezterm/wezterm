@@ -60,6 +60,7 @@ fn kitty_image_with_zero_pixel_dimensions_does_not_panic() {
             scrollback: 0,
             kitty_image_storage_budget_mb: None,
             image_dedup_cache_budget_bytes: None,
+            kitty_image_disk_cache: None,
         }),
         "WezTerm",
         "O_o",
@@ -870,4 +871,157 @@ fn image_dedup_budget_evicts_oldest_but_keeps_floor() {
         transmit_rgba_11x11(&mut term, id, 0x10 + id as u8);
     }
     k9::assert_equal!(term.image_cache_len(), 4);
+}
+
+/// The on-disk image cache is a process-global singleton; hold this
+/// lock for the duration of tests that enable it, clearing the cache
+/// on both entry and release so each test starts and ends empty.
+static DISK_CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct DiskCacheSerial(std::sync::MutexGuard<'static, ()>);
+
+impl Drop for DiskCacheSerial {
+    fn drop(&mut self) {
+        wezterm_blob_leases::image_disk_cache::clear();
+    }
+}
+
+fn lock_disk_cache() -> DiskCacheSerial {
+    let guard = DISK_CACHE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    wezterm_blob_leases::image_disk_cache::clear();
+    DiskCacheSerial(guard)
+}
+
+/// With the disk cache enabled, images released by the storage budget
+/// are spilled to it, and placing the released id again restores the
+/// pixels instead of observing ENOENT.
+#[test]
+fn kitty_budget_release_spills_and_place_restores() {
+    let _serial = lock_disk_cache();
+    let mut term = TestTerm::new_with_disk_cache(3, 10, 0, Some(0), None, Some(Default::default()));
+
+    // a=t only stores; the zero-budget prune that follows storing
+    // image 2 releases image 1, spilling it to the disk cache.
+    transmit_rgba_11x11(&mut term, 1, 0x10);
+    transmit_rgba_11x11(&mut term, 2, 0x20);
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![2]);
+    k9::assert_equal!(term.kitty_spilled_image_ids(), vec![1]);
+
+    // Placing the released id restores it from disk and re-displays it
+    term.print(b"\x1b[1;1H");
+    term.print(b"\x1b_Ga=p,i=1\x1b\\");
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1, 2]);
+    k9::assert_equal!(term.kitty_spilled_image_ids(), Vec::<u32>::new());
+    assert!(
+        attached_image_ids(&term)
+            .iter()
+            .any(|(_, id)| *id == Some(1)),
+        "the restored image must be displayed"
+    );
+}
+
+/// A restored image is protected by its placement: the prune triggered
+/// by a later transmission must release other, unreferenced images —
+/// never the just-restored one.  This pins the no-restore/release-cycle
+/// property of the restore path (which itself never prunes).
+#[test]
+fn kitty_restored_image_survives_next_prune() {
+    let _serial = lock_disk_cache();
+    let mut term = TestTerm::new_with_disk_cache(3, 10, 0, Some(0), None, Some(Default::default()));
+
+    transmit_rgba_11x11(&mut term, 1, 0x10);
+    transmit_rgba_11x11(&mut term, 2, 0x20);
+
+    // Restore image 1 by placing it; its placement now references it
+    term.print(b"\x1b[1;1H");
+    term.print(b"\x1b_Ga=p,i=1\x1b\\");
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1, 2]);
+
+    // Storing image 3 triggers a prune over the zero budget: the
+    // unreferenced image 2 is released (and spilled), image 1 survives
+    transmit_rgba_11x11(&mut term, 3, 0x30);
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1, 3]);
+    k9::assert_equal!(term.kitty_spilled_image_ids(), vec![2]);
+}
+
+/// Explicit deletes must not be undone by the disk cache: freeing an
+/// id's data also forgets its spilled copy, and a later placement of
+/// the id observes ENOENT rather than restoring stale pixels.
+#[test]
+fn kitty_explicit_delete_forgets_spilled_copy() {
+    let _serial = lock_disk_cache();
+    let mut term = TestTerm::new_with_disk_cache(3, 10, 0, Some(0), None, Some(Default::default()));
+
+    transmit_rgba_11x11(&mut term, 1, 0x10);
+    transmit_rgba_11x11(&mut term, 2, 0x20);
+    k9::assert_equal!(term.kitty_spilled_image_ids(), vec![1]);
+
+    // d=I with delete: image 1's data and spilled record both go away.
+    // The prune that follows the delete then releases (and spills)
+    // image 2, which is unreferenced over the zero budget.
+    term.print(b"\x1b_Ga=d,d=I,i=1,q=2\x1b\\");
+    k9::assert_equal!(term.kitty_stored_image_ids(), Vec::<u32>::new());
+    k9::assert_equal!(term.kitty_spilled_image_ids(), vec![2]);
+
+    // Placing the explicitly deleted id cannot restore anything
+    term.print(b"\x1b[1;1H");
+    term.print(b"\x1b_Ga=p,i=1,q=2\x1b\\");
+    k9::assert_equal!(term.kitty_stored_image_ids(), Vec::<u32>::new());
+    assert!(
+        !attached_image_ids(&term)
+            .iter()
+            .any(|(_, id)| *id == Some(1)),
+        "the explicitly deleted image must not be displayed"
+    );
+}
+
+/// When the disk cache's own budget evicts a spilled payload, placing
+/// its id observes ENOENT again, and the stale id→hash record is
+/// dropped so that later placements fail fast; ids whose payloads
+/// are still on disk keep restoring.
+#[test]
+fn kitty_disk_quota_eviction_makes_restore_fail() {
+    let _serial = lock_disk_cache();
+    let mut term = TestTerm::new_with_disk_cache(
+        3,
+        10,
+        0,
+        Some(0), // zero RAM storage budget: every transmit prunes
+        Some(1), // tiny dedup budget: eviction stops at the floor of 4
+        Some(TestDiskCacheConfig {
+            budget_bytes: Some(1), // tiny disk budget: one payload at a time
+        }),
+    );
+
+    // Six distinct images: the RAM budget releases (and spills) each
+    // predecessor, the disk budget keeps only the newest payload, and
+    // the dedup cache keeps only the last four payloads.
+    for id in 1..=6u32 {
+        transmit_rgba_11x11(&mut term, id, 0x10 + id as u8);
+    }
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![6]);
+    k9::assert_equal!(term.kitty_spilled_image_ids(), vec![1, 2, 3, 4, 5]);
+
+    // Image 2 is recoverable from nowhere: the dedup cache evicted it
+    // (only the last four payloads remain) and the disk budget evicted
+    // its file, so placing it observes ENOENT and drops the stale record
+    term.print(b"\x1b[1;1H");
+    term.print(b"\x1b_Ga=p,i=2,q=2\x1b\\");
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![6]);
+    k9::assert_equal!(term.kitty_spilled_image_ids(), vec![1, 3, 4, 5]);
+    assert!(
+        !attached_image_ids(&term)
+            .iter()
+            .any(|(_, id)| *id == Some(2)),
+        "the unrecoverable image must not be displayed"
+    );
+
+    // Image 3 is still held by the dedup cache and restores from
+    // memory without touching the disk
+    term.print(b"\x1b[2;1H");
+    term.print(b"\x1b_Ga=p,i=3\x1b\\");
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![3, 6]);
+    k9::assert_equal!(term.kitty_spilled_image_ids(), vec![1, 4, 5]);
 }

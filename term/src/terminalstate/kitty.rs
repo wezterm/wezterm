@@ -35,7 +35,19 @@ pub struct KittyImageState {
     next_generation: u64,
     placements: HashMap<(u32, Option<u32>), PlacementInfo>,
     used_memory: usize,
+    /// Image ids whose payload was released by the storage budget
+    /// prune and written to the on-disk image cache, mapped to the
+    /// content hash under which the payload was spilled (and the
+    /// generation at release time, used to bound the map).  A later
+    /// placement of one of these ids restores the payload from disk
+    /// instead of observing ENOENT.
+    spilled: HashMap<u32, ([u8; 32], u64)>,
 }
+
+/// Ceiling on the number of remembered spilled ids.  The map itself is
+/// tiny (a hash and a generation per entry); the cap keeps it bounded
+/// for adversarial clients that transmit huge numbers of images.
+const MAX_SPILLED_IDS: usize = 4096;
 
 impl KittyImageState {
     fn remove_data_for_id(&mut self, image_id: u32) {
@@ -51,16 +63,46 @@ impl KittyImageState {
         // clients re-transmit for every frame, and which previously
         // double-counted its payloads in used_memory forever.
         self.remove_data_for_id(image_id);
+        // Fresh data for the id invalidates any spilled record: the
+        // payload in memory is authoritative from here on.
+        self.spilled.remove(&image_id);
         self.used_memory += data.len();
         self.id_to_data.insert(image_id, data);
         self.id_generation.insert(image_id, self.next_generation);
         self.next_generation += 1;
     }
 
+    /// Remember that image_id was released to the disk cache under
+    /// `hash`, so that a later placement can restore it.
+    fn record_spilled(&mut self, image_id: u32, hash: [u8; 32], generation: u64) {
+        if self.spilled.len() >= MAX_SPILLED_IDS && !self.spilled.contains_key(&image_id) {
+            // Forget the oldest record.  The disk file is content
+            // addressed and may be shared; it is left to the cache's
+            // own budget.
+            let victim = self
+                .spilled
+                .iter()
+                .min_by_key(|(_, (_, gen))| *gen)
+                .map(|(id, _)| *id);
+            if let Some(victim) = victim {
+                self.spilled.remove(&victim);
+            }
+        }
+        self.spilled.insert(image_id, (hash, generation));
+    }
+
     /// Test-only views of the storage accounting
     #[cfg(test)]
     pub(crate) fn stored_image_ids(&self) -> Vec<u32> {
         let mut ids: Vec<u32> = self.id_to_data.keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Image ids whose payloads live only in the disk cache; for tests.
+    #[cfg(test)]
+    pub(crate) fn spilled_image_ids(&self) -> Vec<u32> {
+        let mut ids: Vec<u32> = self.spilled.keys().copied().collect();
         ids.sort_unstable();
         ids
     }
@@ -170,15 +212,18 @@ impl TerminalState {
                 }
             }
         }
-        let img = Arc::clone(self.kitty_img.id_to_data.get(&image_id).ok_or_else(|| {
-            anyhow::Error::new(KittyProtocolError {
-                code: "ENOENT",
-                detail: format!(
-                    "no matching image id {} in id_to_data for image_number {:?}",
-                    image_id, image_number
-                ),
-            })
-        })?);
+        let img = match self.kitty_img_lookup_or_restore(image_id) {
+            Some(img) => img,
+            None => {
+                return Err(anyhow::Error::new(KittyProtocolError {
+                    code: "ENOENT",
+                    detail: format!(
+                        "no matching image id {} in id_to_data for image_number {:?}",
+                        image_id, image_number
+                    ),
+                }))
+            }
+        };
 
         let (image_width, image_height) = img.data().dimensions()?;
 
@@ -535,15 +580,18 @@ impl TerminalState {
         let v = placement.v_offset.unwrap_or(0);
         let origin = (parent_x + h, parent_y + v);
 
-        let img = Arc::clone(self.kitty_img.id_to_data.get(&image_id).ok_or_else(|| {
-            anyhow::Error::new(KittyProtocolError {
-                code: "ENOENT",
-                detail: format!(
-                    "no matching image id {} in id_to_data for image_number {:?}",
-                    image_id, image_number
-                ),
-            })
-        })?);
+        let img = match self.kitty_img_lookup_or_restore(image_id) {
+            Some(img) => img,
+            None => {
+                return Err(anyhow::Error::new(KittyProtocolError {
+                    code: "ENOENT",
+                    detail: format!(
+                        "no matching image id {} in id_to_data for image_number {:?}",
+                        image_id, image_number
+                    ),
+                }))
+            }
+        };
 
         let (image_width, image_height) = img.data().dimensions()?;
 
@@ -652,8 +700,8 @@ impl TerminalState {
             let (h, v) = child_info.parent_offsets;
             let origin = (parent_x + h, parent_y + v);
 
-            let data = match self.kitty_img.id_to_data.get(&child_key.0) {
-                Some(data) => Arc::clone(data),
+            let data = match self.kitty_img_lookup_or_restore(child_key.0) {
+                Some(data) => data,
                 None => continue,
             };
             let (image_width, image_height) = match data.data().dimensions() {
@@ -748,7 +796,7 @@ impl TerminalState {
             let ids: Vec<u32> = self.kitty_img.id_to_data.keys().copied().collect();
             for image_id in ids {
                 if !referenced.contains(&image_id) {
-                    self.kitty_img.remove_data_for_id(image_id);
+                    self.kitty_forget_image(image_id);
                 }
             }
             self.kitty_img
@@ -773,6 +821,12 @@ impl TerminalState {
         self.kitty_img.number_to_id.clear();
         self.kitty_img.accumulator.clear();
         self.kitty_placeholder_state = None;
+        // A reset is an explicit clear: spilled payloads must not
+        // survive in the on-disk image cache either
+        let spilled = std::mem::take(&mut self.kitty_img.spilled);
+        for (hash, _) in spilled.values() {
+            wezterm_blob_leases::image_disk_cache::remove(hash);
+        }
     }
 
     /// Whether any row of the placement still exists in the screen or
@@ -788,11 +842,108 @@ impl TerminalState {
             || screen.stable_row_to_phys(last).is_some()
     }
 
+    /// Propagate the current configuration to the global on-disk image
+    /// cache.  Cheap and idempotent, so it is safe to call from the
+    /// budget prune and restore paths; config reloads take effect on
+    /// the next call without additional plumbing.
+    fn configure_kitty_image_disk_cache(&self) {
+        wezterm_blob_leases::image_disk_cache::configure(
+            self.config.kitty_image_disk_cache_enabled(),
+            self.config.kitty_image_disk_cache_budget_bytes(),
+            self.config.kitty_image_disk_cache_dir().as_deref(),
+        );
+    }
+
+    /// Write image_id's payload to the on-disk image cache ahead of
+    /// releasing it from memory, so that a later placement of the id
+    /// can restore it.  Returns true when the payload is recoverable.
+    fn kitty_spill_image_to_disk(&mut self, image_id: u32) -> bool {
+        let Some(data) = self.kitty_img.id_to_data.get(&image_id) else {
+            return false;
+        };
+        let hash = data.hash();
+        let generation = self
+            .kitty_img
+            .id_generation
+            .get(&image_id)
+            .copied()
+            .unwrap_or(0);
+        if data.spill_to_disk() {
+            log::info!("kitty image {image_id} spilled to the image disk cache");
+            self.kitty_img.record_spilled(image_id, hash, generation);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Look up image data by id, restoring it from the on-disk image
+    /// cache when a budget prune spilled it there.
+    ///
+    /// This is deliberately only reached from placement paths: the
+    /// restored image is protected by its new placement, so the next
+    /// prune can only release other, unreferenced images.  Never prune
+    /// from here; the budget is re-enforced at the existing prune
+    /// trigger points (transmission and deletes), which keeps the
+    /// restore path free of restore/release cycles.
+    fn kitty_img_lookup_or_restore(&mut self, image_id: u32) -> Option<Arc<ImageData>> {
+        if let Some(data) = self.kitty_img.id_to_data.get(&image_id) {
+            return Some(Arc::clone(data));
+        }
+        if !self.config.kitty_image_disk_cache_enabled() {
+            return None;
+        }
+        self.configure_kitty_image_disk_cache();
+        let (hash, _generation) = *self.kitty_img.spilled.get(&image_id)?;
+
+        // The dedup cache may still hold the pixels under the same
+        // content hash; prefer it over touching the disk.
+        let data = match self.image_cache.peek(&hash) {
+            Some(data) => Some(Arc::clone(data)),
+            None => ImageData::load_from_disk(&hash),
+        };
+        let data = match data {
+            Some(data) => data,
+            None => {
+                // The disk budget evicted the payload (or the spill
+                // failed after all); forget the id so that future
+                // placements report ENOENT without retrying.
+                self.kitty_img.spilled.remove(&image_id);
+                wezterm_blob_leases::image_disk_cache::note_restore_miss();
+                log::info!(
+                    "kitty image {image_id} was spilled to the image disk cache \
+                     but is no longer recoverable"
+                );
+                return None;
+            }
+        };
+        wezterm_blob_leases::image_disk_cache::note_restore_hit();
+        log::info!("kitty image {image_id} restored from the image disk cache");
+        // Recording fresh data also drops the spilled record
+        self.kitty_img
+            .record_id_to_data(image_id, Arc::clone(&data));
+        Some(data)
+    }
+
+    /// Explicitly forget an image: the client deleted it, so its data
+    /// must not survive in the on-disk image cache either.
+    fn kitty_forget_image(&mut self, image_id: u32) {
+        self.kitty_img.remove_data_for_id(image_id);
+        if let Some((hash, _)) = self.kitty_img.spilled.remove(&image_id) {
+            wezterm_blob_leases::image_disk_cache::remove(&hash);
+        }
+    }
+
     /// Enforce the configured kitty graphics storage budget, following
     /// the spec's storage quota recommendation: when the retained image
     /// data exceeds the budget, release the oldest images that no
     /// placement still references; clients then observe ENOENT if they
     /// reference a released id.
+    ///
+    /// When the on-disk image cache is enabled, released images are
+    /// spilled to it first, and a later placement of a released id
+    /// restores the payload instead of observing ENOENT; see
+    /// [`Self::kitty_img_lookup_or_restore`].
     ///
     /// Images whose placements still intersect the screen or scrollback
     /// are never released, so a well-behaved client never loses anything
@@ -822,6 +973,14 @@ impl TerminalState {
             return;
         }
 
+        // The disk cache is only ever consulted as the overflow
+        // destination of this budget; when it is disabled, released
+        // images are simply dropped as before.
+        let spill_to_disk = self.config.kitty_image_disk_cache_enabled();
+        if spill_to_disk {
+            self.configure_kitty_image_disk_cache();
+        }
+
         let referenced: HashSet<u32> = self
             .kitty_img
             .placements
@@ -843,23 +1002,32 @@ impl TerminalState {
         candidates.sort_unstable();
 
         let mut released = 0;
+        let mut spilled = 0;
         let before = self.kitty_img.used_memory;
         for (_, image_id) in candidates {
             if self.kitty_img.used_memory <= budget {
                 break;
             }
             released += 1;
+            if spill_to_disk && self.kitty_spill_image_to_disk(image_id) {
+                spilled += 1;
+                // Keep the number→id mapping so that a placement by
+                // image_number can also restore from the disk cache.
+            } else {
+                self.kitty_img
+                    .number_to_id
+                    .retain(|_, mapped| *mapped != image_id);
+            }
             self.kitty_img.remove_data_for_id(image_id);
-            self.kitty_img
-                .number_to_id
-                .retain(|_, mapped| *mapped != image_id);
         }
         if released > 0 {
             log::info!(
-                "kitty image storage {} exceeded budget {}; released {} image(s), now using {}",
+                "kitty image storage {} exceeded budget {}; released {} image(s), \
+                 {} of them spilled to the image disk cache, now using {}",
                 before,
                 budget,
                 released,
+                spilled,
                 self.kitty_img.used_memory
             );
         }
@@ -887,7 +1055,7 @@ impl TerminalState {
                 self.kitty_remove_placement(image_id, placement_id);
 
                 if delete {
-                    self.kitty_img.remove_data_for_id(image_id);
+                    self.kitty_forget_image(image_id);
                 }
             }
             KittyImageDelete::All { delete } => {
@@ -901,7 +1069,7 @@ impl TerminalState {
                 Some(image_id) => {
                     self.kitty_remove_placement(image_id, placement_id);
                     if delete {
-                        self.kitty_img.remove_data_for_id(image_id);
+                        self.kitty_forget_image(image_id);
                     }
                 }
                 None => {
@@ -1061,7 +1229,7 @@ impl TerminalState {
         drop(anim);
         if remove_still {
             self.kitty_remove_placement(image_id, None);
-            self.kitty_img.remove_data_for_id(image_id);
+            self.kitty_forget_image(image_id);
             return;
         }
         self.kitty_touch_image_placements(image_id);
@@ -1259,22 +1427,22 @@ impl TerminalState {
                     && info.virtual_rect.is_some()
                     && (pid == 0 || *pid_key == Some(pid))
             });
-        let ((_vid, vpid), info) = match found {
-            Some(entry) => entry,
+        // Copy out what is needed before the potential disk-cache
+        // restore below mutates the placement table's owner
+        let (vpid, cols_total, rows_total, z_index) = match found {
+            Some(((_vid, vpid), info)) => match info.virtual_rect {
+                Some(rect) => (*vpid, rect.0, rect.1, info.z_index),
+                None => return,
+            },
             None => return,
         };
-        let (cols_total, rows_total) = match info.virtual_rect {
-            Some(rect) => rect,
-            None => return,
-        };
-        let z_index = info.z_index;
-        let data = match self.kitty_img.id_to_data.get(&image_id) {
-            Some(data) => Arc::clone(data),
+        let data = match self.kitty_img_lookup_or_restore(image_id) {
+            Some(data) => data,
             None => return,
         };
 
         self.kitty_attach_placeholder_slice(
-            &data, cols_total, rows_total, row, col, x, y, z_index, image_id, *vpid,
+            &data, cols_total, rows_total, row, col, x, y, z_index, image_id, vpid,
         );
     }
 
@@ -1396,7 +1564,7 @@ impl TerminalState {
                 .collect();
             for image_id in &touched {
                 if !still_referenced.contains(image_id) {
-                    self.kitty_img.remove_data_for_id(*image_id);
+                    self.kitty_forget_image(*image_id);
                 }
             }
         }
@@ -1505,7 +1673,7 @@ impl TerminalState {
             })
         })? as usize;
 
-        let img = self.kitty_img.id_to_data.get(&image_id).ok_or_else(|| {
+        let img = self.kitty_img_lookup_or_restore(image_id).ok_or_else(|| {
             anyhow::Error::new(KittyProtocolError {
                 code: "ENOENT",
                 detail: format!("invalid image id {}", image_id),

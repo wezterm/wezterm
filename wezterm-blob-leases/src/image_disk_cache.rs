@@ -184,7 +184,12 @@ pub fn configure(enabled: bool, budget: usize, parent_dir: Option<&Path>) {
     match guard.as_mut() {
         Some(cache) => {
             if !enabled {
-                take_cache(&mut guard);
+                // Disabling tears the cache down, but only when it ever
+                // created a directory: repeated no-op calls stay cheap.
+                cache.enabled = false;
+                if cache.root.is_some() {
+                    take_cache(&mut guard);
+                }
                 return;
             }
             cache.enabled = true;

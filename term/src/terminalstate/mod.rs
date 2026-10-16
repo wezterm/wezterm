@@ -740,6 +740,13 @@ impl TerminalState {
         self.kitty_img.used_memory()
     }
 
+    /// Image ids whose payloads live only in the on-disk image cache;
+    /// for tests asserting on the spill/restore behavior.
+    #[cfg(test)]
+    pub(crate) fn kitty_spilled_image_ids(&self) -> Vec<u32> {
+        self.kitty_img.spilled_image_ids()
+    }
+
     /// Number of image payload entries held by the dedup cache; for tests.
     #[cfg(test)]
     pub(crate) fn image_cache_len(&self) -> usize {

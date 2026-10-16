@@ -33,6 +33,7 @@ terminfo.workspace = true
 unicode-normalization.workspace = true
 url.workspace = true
 wezterm-bidi.workspace = true
+wezterm-blob-leases = {workspace=true, features=["image_disk_cache"]}
 wezterm-dynamic = {workspace = true, features=["std"]}
 wezterm-cell = {workspace = true, features=["std", "use_image"]}
 wezterm-escape-parser = {workspace = true, features=["std", "use_image"]}
