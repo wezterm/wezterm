@@ -194,8 +194,10 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
         }
     }
 
-    /// Remove the entry with the smallest frequency value
-    fn evict_one(&mut self) {
+    /// Remove the entry with the smallest frequency value, returning it
+    /// to the caller so that it can account for any resources held by
+    /// the value.  Returns None when the cache is empty.
+    pub fn evict_one(&mut self) -> Option<(K, V)> {
         self.decay_least_recent();
 
         let mut cursor = self.frequency_index.lower_bound_mut(Bound::Included(&0));
@@ -210,7 +212,20 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
                 self.recency_index.cursor_mut_from_ptr(&*entry).remove();
             }
             self.len -= 1;
+            match Rc::try_unwrap(entry) {
+                Ok(entry) => Some((entry.key, entry.value)),
+                // An unexpected extra reference exists; the value is
+                // dropped either way, which is what eviction asked for.
+                Err(_) => None,
+            }
+        } else {
+            None
         }
+    }
+
+    /// The currently configured entry capacity
+    pub fn cap(&self) -> usize {
+        self.cap
     }
 
     pub fn clear(&mut self) {
