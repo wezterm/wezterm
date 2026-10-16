@@ -814,6 +814,10 @@ fn notify_on_panic() {
 fn terminate_with_error_message(err: &str) -> ! {
     log::error!("{}; terminating", err);
     fatal_toast_notification("Wezterm Error", &err);
+    // process::exit skips destructors, so remove the per-process temp
+    // storage explicitly rather than leaking it on the fatal path
+    wezterm_blob_leases::clear_storage();
+    wezterm_blob_leases::image_disk_cache::clear();
     std::process::exit(1);
 }
 
@@ -1249,12 +1253,10 @@ fn run() -> anyhow::Result<()> {
         }
     };
 
-    match sub {
+    let res = match sub {
         SubCommand::Start(start) => {
             log::trace!("Using configuration: {:#?}\nopts: {:#?}", config, opts);
-            let res = run_terminal_gui(start, None);
-            wezterm_blob_leases::clear_storage();
-            res
+            run_terminal_gui(start, None)
         }
         SubCommand::BlockingStart(_) => unreachable!(),
         SubCommand::Ssh(ssh) => run_ssh(ssh),
@@ -1277,5 +1279,11 @@ fn run() -> anyhow::Result<()> {
         ),
         SubCommand::LsFonts(cmd) => run_ls_fonts(config, &cmd),
         SubCommand::ShowKeys(cmd) => run_show_keys(config, &cmd),
-    }
+    };
+    // Tear down the per-process temp storage on every exit path, not
+    // just the plain `start` one: the ssh/serial/connect subcommands
+    // run the terminal model too and can have spilled image data.
+    wezterm_blob_leases::clear_storage();
+    wezterm_blob_leases::image_disk_cache::clear();
+    res
 }

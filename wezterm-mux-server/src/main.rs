@@ -66,10 +66,12 @@ struct Opt {
 fn main() {
     if let Err(err) = run() {
         wezterm_blob_leases::clear_storage();
+        wezterm_blob_leases::image_disk_cache::clear();
         log::error!("{:#}", err);
         std::process::exit(1);
     }
     wezterm_blob_leases::clear_storage();
+    wezterm_blob_leases::image_disk_cache::clear();
 }
 
 fn run() -> anyhow::Result<()> {
