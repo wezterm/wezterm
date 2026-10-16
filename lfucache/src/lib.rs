@@ -228,6 +228,46 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
         self.cap
     }
 
+    /// Evict every entry for which `pred` returns true, returning the
+    /// evicted items to the caller so that it can account for any
+    /// resources held by the values.  Used for entry-level idle
+    /// expiry, where frequency ordering alone cannot decide.
+    pub fn evict_where(&mut self, mut pred: impl FnMut(&K, &V) -> bool) -> Vec<(K, V)> {
+        // Split the borrow so the bucket cursor and the two indexes
+        // can be manipulated in the same loop
+        let LfuCache {
+            buckets,
+            frequency_index,
+            recency_index,
+            len,
+            ..
+        } = self;
+
+        let mut evicted = vec![];
+        for bucket in buckets.iter_mut() {
+            let mut cursor = bucket.front_mut();
+            while let Some(entry) = cursor.get() {
+                if !pred(&entry.key, &entry.value) {
+                    cursor.move_next();
+                    continue;
+                }
+                // Removing from all three indexes leaves the cursor
+                // pointing at the next entry, so the loop must not
+                // advance again for this element
+                unsafe {
+                    frequency_index.cursor_mut_from_ptr(entry).remove();
+                    recency_index.cursor_mut_from_ptr(entry).remove();
+                }
+                let entry = cursor.remove().expect("cursor was pointing at it");
+                *len -= 1;
+                if let Ok(entry) = Rc::try_unwrap(entry) {
+                    evicted.push((entry.key, entry.value));
+                }
+            }
+        }
+        evicted
+    }
+
     pub fn clear(&mut self) {
         self.frequency_index.clear();
         self.recency_index.clear();
@@ -350,6 +390,28 @@ mod test {
         last_tick: u32,
         key: &'a K,
         value: &'a V,
+    }
+
+    /// Predicate-driven eviction removes exactly the matching entries
+    /// and leaves the rest intact and retrievable; this is what the
+    /// image idle-expiry path relies on.
+    #[test]
+    fn evict_where_removes_matching_entries() {
+        let mut cache = LfuCacheU64::with_capacity(8);
+        for i in 0..6u64 {
+            cache.put(i, i);
+        }
+
+        let evicted = cache.evict_where(|k, _| *k % 2 == 0);
+        let mut keys: Vec<u64> = evicted.iter().map(|(k, _)| *k).collect();
+        keys.sort_unstable();
+        k9::assert_equal!(keys, vec![0, 2, 4]);
+        k9::assert_equal!(cache.len(), 3);
+
+        // Survivors remain retrievable; evicted keys are gone
+        assert!(cache.get(&1).is_some());
+        assert!(cache.get(&5).is_some());
+        assert!(cache.get(&0).is_none());
     }
 
     impl<'a, K, V> EntryData<'a, K, V> {
