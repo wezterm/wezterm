@@ -391,7 +391,32 @@ impl TerminalState {
         } else {
             let data = data.swap_out()?;
             let image_data = Arc::new(ImageData::with_data(data));
+            let len = image_data.len();
             self.image_cache.put(key, Arc::clone(&image_data));
+            self.image_cache_bytes += len;
+
+            // This cache only exists so that identical re-transmissions
+            // share one payload; eviction never affects correctness.
+            // Keep it inside the byte budget (and below the entry cap,
+            // which is enforced here rather than by the LruCache itself
+            // so that the byte accounting above stays exact), but
+            // retain a small number of recent entries so that clients
+            // working with a small set of images (eg: pdfterm's 4
+            // rotating image ids) keep hitting the dedup path.
+            let budget = self.config.image_dedup_cache_budget_bytes();
+            let cap = crate::terminalstate::IMAGE_CACHE_ENTRIES;
+            while (self.image_cache.len() >= cap || self.image_cache_bytes > budget)
+                && self.image_cache.len() > 4
+            {
+                match self.image_cache.pop_lru() {
+                    Some((_, evicted)) => {
+                        self.image_cache_bytes =
+                            self.image_cache_bytes.saturating_sub(evicted.len());
+                    }
+                    None => break,
+                }
+            }
+
             Ok(image_data)
         }
     }

@@ -56,7 +56,11 @@ fn kitty_image_with_zero_pixel_dimensions_does_not_panic() {
             pixel_height: 0,
             dpi: 0,
         },
-        Arc::new(TestTermConfig { scrollback: 0 }),
+        Arc::new(TestTermConfig {
+            scrollback: 0,
+            kitty_image_storage_budget_mb: None,
+            image_dedup_cache_budget_bytes: None,
+        }),
         "WezTerm",
         "O_o",
         Box::new(Vec::new()),
@@ -728,4 +732,142 @@ fn kitty_relative_placement_cycle_replies_ecycle_response() {
     term.print(b"\x1b[3;1H");
     term.print(b"\x1b_Ga=p,i=1,P=2,V=2\x1b\\");
     wait_for_output(&sink, "\x1b_Gi=1;ECYCLE");
+}
+
+/// Transmit an 11x11 RGBA image with `fill` in its RGB channels, so
+/// that each call yields distinct content (and a distinct dedup hash)
+/// while keeping every payload the same 484-byte size.
+fn transmit_rgba_11x11(term: &mut TestTerm, image_id: u32, fill: u8) {
+    let mut pixels = vec![fill; 11 * 11 * 4];
+    for px in pixels.chunks_exact_mut(4) {
+        px[3] = 0xff;
+    }
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&pixels);
+    let seq = format!("\x1b_Ga=t,t=d,f=32,s=11,v=11,i={image_id};{b64}\x1b\\");
+    term.print(seq.as_bytes());
+}
+
+/// Once the kitty graphics storage budget is exceeded, the oldest image
+/// that no placement references must be released.  A zero budget makes
+/// every transmission exceed it, without needing large test images.
+#[test]
+fn kitty_storage_budget_releases_oldest_unreferenced() {
+    let mut term = TestTerm::new_with_config(3, 10, 0, Some(0), None);
+
+    // a=t only stores the images; nothing is displayed, so both are
+    // prune candidates.
+    transmit_rgba_11x11(&mut term, 1, 0x10);
+    transmit_rgba_11x11(&mut term, 2, 0x20);
+
+    // Image 1 is the older unreferenced image: the budget prune that
+    // follows storing image 2 releases it, while image 2 itself is
+    // spared because it is the image being stored.
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![2]);
+}
+
+/// Images whose placements are still on screen must survive the budget
+/// prune: the spec allows freeing over-quota images, but a client must
+/// never lose something it can currently see.
+#[test]
+fn kitty_displayed_images_survive_budget_prune() {
+    let mut term = TestTerm::new_with_config(4, 10, 0, Some(0), None);
+
+    // a=T transmits and displays; the on-screen placement protects the
+    // image from the zero budget prune triggered by each transmission.
+    place_tiny_png(&mut term, 1, "");
+    term.print(b"\x1b[2;1H");
+    place_tiny_png(&mut term, 2, "");
+
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1, 2]);
+    assert!(!attached_image_ids(&term).is_empty());
+}
+
+/// d=a removes every placement; the delete path also enforces the
+/// storage budget so that a client exiting with a "delete all"
+/// (eg: pdfterm) releases its image data right away.
+#[test]
+fn kitty_delete_all_releases_orphaned_storage() {
+    let mut term = TestTerm::new_with_config(4, 10, 0, Some(0), None);
+
+    place_tiny_png(&mut term, 1, "");
+    term.print(b"\x1b[2;1H");
+    place_tiny_png(&mut term, 2, "");
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1, 2]);
+
+    term.print(b"\x1b_Ga=d,d=a,q=2\x1b\\");
+
+    k9::assert_equal!(term.kitty_stored_image_ids(), Vec::<u32>::new());
+    assert!(attached_image_ids(&term).is_empty());
+}
+
+/// Re-transmitting image id 0 replaces the stored payload; the
+/// accounting for the replaced payload must be dropped or used_memory
+/// would grow without bound for clients that stream via id 0.
+#[test]
+fn kitty_id_zero_retransmit_does_not_double_count() {
+    let mut term = TestTerm::new_with_config(3, 10, 0, None, None);
+
+    transmit_rgba_11x11(&mut term, 0, 0x10);
+    k9::assert_equal!(term.kitty_used_memory(), 11 * 11 * 4);
+
+    transmit_rgba_11x11(&mut term, 0, 0x20);
+    k9::assert_equal!(term.kitty_used_memory(), 11 * 11 * 4);
+}
+
+/// RIS (full reset) resets the device to its initial state, which
+/// includes any images retained on behalf of the kitty graphics
+/// protocol; previously only the DECSTR soft reset cleared them.
+#[test]
+fn kitty_ris_clears_image_storage() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    place_tiny_png(&mut term, 1, "");
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1]);
+
+    term.print(b"\x1bc");
+
+    k9::assert_equal!(term.kitty_stored_image_ids(), Vec::<u32>::new());
+    assert!(attached_image_ids(&term).is_empty());
+}
+
+/// Identical payloads transmitted under different ids must share one
+/// decoded payload via the content-addressed dedup cache.
+#[test]
+fn image_dedup_shares_identical_retransmissions() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    place_tiny_png(&mut term, 1, "");
+    let first = first_image(&term);
+
+    term.print(b"\x1b[2J\x1b[H");
+    place_tiny_png(&mut term, 2, "");
+    let second = first_image(&term);
+
+    assert!(
+        std::sync::Arc::ptr_eq(&first, &second),
+        "identical payload must reuse the same decoded image"
+    );
+}
+
+/// The dedup cache must respect its byte budget, but never shrink
+/// below a small floor of recent entries so that clients working with
+/// a handful of images (eg: pdfterm's 4 rotating ids) keep their
+/// dedup hits.
+#[test]
+fn image_dedup_budget_evicts_oldest_but_keeps_floor() {
+    // A 1-byte budget: every 484-byte image exceeds it
+    let mut term = TestTerm::new_with_config(3, 10, 0, None, Some(1));
+
+    for id in 1..=5u32 {
+        transmit_rgba_11x11(&mut term, id, 0x10 + id as u8);
+    }
+    // 5 distinct images were cached; eviction stopped at the floor
+    k9::assert_equal!(term.image_cache_len(), 4);
+
+    // Continued growth keeps hitting the budget and stays at the floor
+    for id in 6..=10u32 {
+        transmit_rgba_11x11(&mut term, id, 0x10 + id as u8);
+    }
+    k9::assert_equal!(term.image_cache_len(), 4);
 }

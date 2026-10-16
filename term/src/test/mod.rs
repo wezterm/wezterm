@@ -86,6 +86,10 @@ fn wait_for_output(sink: &Mutex<Vec<u8>>, want: &str) {
 #[derive(Debug)]
 struct TestTermConfig {
     scrollback: usize,
+    /// Override for the kitty graphics storage budget (MiB)
+    kitty_image_storage_budget_mb: Option<usize>,
+    /// Override for the image dedup cache byte budget
+    image_dedup_cache_budget_bytes: Option<usize>,
 }
 impl TerminalConfiguration for TestTermConfig {
     fn scrollback_size(&self) -> usize {
@@ -99,10 +103,32 @@ impl TerminalConfiguration for TestTermConfig {
     fn enable_kitty_graphics(&self) -> bool {
         true
     }
+
+    fn kitty_image_storage_budget_mb(&self) -> usize {
+        self.kitty_image_storage_budget_mb.unwrap_or(320)
+    }
+
+    fn image_dedup_cache_budget_bytes(&self) -> usize {
+        self.image_dedup_cache_budget_bytes
+            .unwrap_or(128 * 1024 * 1024)
+    }
 }
 
 impl TestTerm {
     fn new(height: usize, width: usize, scrollback: usize) -> Self {
+        Self::new_with_config(height, width, scrollback, None, None)
+    }
+
+    /// Like [`TestTerm::new`], with overrides for the image storage
+    /// budgets so that tests can exercise the budget eviction paths
+    /// with small images.
+    fn new_with_config(
+        height: usize,
+        width: usize,
+        scrollback: usize,
+        kitty_image_storage_budget_mb: Option<usize>,
+        image_dedup_cache_budget_bytes: Option<usize>,
+    ) -> Self {
         let _ = env_logger::Builder::new()
             .is_test(true)
             .filter_level(log::LevelFilter::Trace)
@@ -116,7 +142,11 @@ impl TestTerm {
                 pixel_height: height * 16,
                 dpi: 0,
             },
-            Arc::new(TestTermConfig { scrollback }),
+            Arc::new(TestTermConfig {
+                scrollback,
+                kitty_image_storage_budget_mb,
+                image_dedup_cache_budget_bytes,
+            }),
             "WezTerm",
             "O_o",
             Box::new(Vec::new()),
@@ -155,7 +185,11 @@ impl TestTerm {
                 pixel_height: height * 16,
                 dpi: 0,
             },
-            Arc::new(TestTermConfig { scrollback }),
+            Arc::new(TestTermConfig {
+                scrollback,
+                kitty_image_storage_budget_mb: None,
+                image_dedup_cache_budget_bytes: None,
+            }),
             "WezTerm",
             "O_o",
             Box::new(sink),

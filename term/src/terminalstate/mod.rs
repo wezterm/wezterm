@@ -252,6 +252,11 @@ impl ScreenOrAlt {
     }
 }
 
+/// Entry cap of the content-addressed image dedup cache.  Eviction at
+/// this cap is driven manually alongside the cache's byte budget (see
+/// `raw_image_to_image_data`) so that the byte accounting stays exact.
+pub(crate) const IMAGE_CACHE_ENTRIES: usize = 16;
+
 /// Manages the state for the terminal
 pub struct TerminalState {
     config: Arc<dyn TerminalConfiguration>,
@@ -371,6 +376,10 @@ pub struct TerminalState {
     writer: BufWriter<ThreadedWriter>,
 
     image_cache: lru::LruCache<[u8; 32], Arc<ImageData>>,
+    /// Total bytes of the payloads held by image_cache, used to keep
+    /// the dedup cache inside a byte budget; entries count 0 bytes once
+    /// their payload has been swapped out to a disk blob.
+    image_cache_bytes: usize,
     sixel_scrolls_right: bool,
 
     user_vars: HashMap<String, String>,
@@ -584,7 +593,8 @@ impl TerminalState {
             term_program: term_program.to_string(),
             term_version: term_version.to_string(),
             writer,
-            image_cache: lru::LruCache::new(NonZeroUsize::new(16).unwrap()),
+            image_cache: lru::LruCache::new(NonZeroUsize::new(IMAGE_CACHE_ENTRIES).unwrap()),
+            image_cache_bytes: 0,
             user_vars: HashMap::new(),
             kitty_img: Default::default(),
             kitty_placeholder_state: None,
@@ -715,6 +725,25 @@ impl TerminalState {
     /// the alternate screen).
     pub fn screen(&self) -> &Screen {
         &self.screen
+    }
+
+    /// Image ids currently retained by the kitty graphics storage;
+    /// for tests asserting on the storage budget behavior.
+    #[cfg(test)]
+    pub(crate) fn kitty_stored_image_ids(&self) -> Vec<u32> {
+        self.kitty_img.stored_image_ids()
+    }
+
+    /// Bytes counted against the kitty graphics storage budget; for tests.
+    #[cfg(test)]
+    pub(crate) fn kitty_used_memory(&self) -> usize {
+        self.kitty_img.used_memory()
+    }
+
+    /// Number of image payload entries held by the dedup cache; for tests.
+    #[cfg(test)]
+    pub(crate) fn image_cache_len(&self) -> usize {
+        self.image_cache.len()
     }
 
     /// Returns a mutable reference to the active screen (either the primary or

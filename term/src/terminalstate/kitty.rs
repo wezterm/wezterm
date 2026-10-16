@@ -29,48 +29,45 @@ pub struct KittyImageState {
     max_image_id: u32,
     number_to_id: HashMap<u32, u32>,
     id_to_data: HashMap<u32, Arc<ImageData>>,
+    /// Generation at which each image id was last (re)transmitted, so
+    /// that over-budget pruning can release the oldest images first.
+    id_generation: HashMap<u32, u64>,
+    next_generation: u64,
     placements: HashMap<(u32, Option<u32>), PlacementInfo>,
     used_memory: usize,
 }
 
 impl KittyImageState {
     fn remove_data_for_id(&mut self, image_id: u32) {
+        self.id_generation.remove(&image_id);
         if let Some(data) = self.id_to_data.remove(&image_id) {
             self.used_memory = self.used_memory.saturating_sub(data.len());
         }
     }
 
     fn record_id_to_data(&mut self, image_id: u32, data: Arc<ImageData>) {
-        if image_id != 0 {
-            self.remove_data_for_id(image_id);
-        }
-        self.prune_unreferenced();
+        // Replacing the payload for an id must first drop the accounting
+        // for the previous payload.  This also covers image id 0, which
+        // clients re-transmit for every frame, and which previously
+        // double-counted its payloads in used_memory forever.
+        self.remove_data_for_id(image_id);
         self.used_memory += data.len();
         self.id_to_data.insert(image_id, data);
+        self.id_generation.insert(image_id, self.next_generation);
+        self.next_generation += 1;
     }
 
-    fn prune_unreferenced(&mut self) {
-        let budget = 320 * 1024 * 1024; // FIXME: make this configurable
-        if self.used_memory > budget {
-            let referenced: HashSet<u32> = self.placements.keys().map(|(k, _)| *k).collect();
-            let target = self.used_memory - budget;
-            let mut freed = 0;
-            self.id_to_data.retain(|id, data| {
-                if referenced.contains(id) || freed > target {
-                    true
-                } else {
-                    freed += data.len();
-                    false
-                }
-            });
+    /// Test-only views of the storage accounting
+    #[cfg(test)]
+    pub(crate) fn stored_image_ids(&self) -> Vec<u32> {
+        let mut ids: Vec<u32> = self.id_to_data.keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
 
-            log::info!(
-                "using {} RAM for images, pruned {}",
-                self.used_memory,
-                freed
-            );
-            self.used_memory = self.used_memory.saturating_sub(freed);
-        }
+    #[cfg(test)]
+    pub(crate) fn used_memory(&self) -> usize {
+        self.used_memory
     }
 }
 
@@ -748,14 +745,21 @@ impl TerminalState {
                 .keys()
                 .map(|(id, _)| *id)
                 .collect();
-            self.kitty_img
-                .id_to_data
-                .retain(|id, _| referenced.contains(id));
-            self.kitty_img.used_memory = self.kitty_img.id_to_data.values().map(|d| d.len()).sum();
+            let ids: Vec<u32> = self.kitty_img.id_to_data.keys().copied().collect();
+            for image_id in ids {
+                if !referenced.contains(&image_id) {
+                    self.kitty_img.remove_data_for_id(image_id);
+                }
+            }
             self.kitty_img
                 .number_to_id
                 .retain(|_, id| referenced.contains(id));
         }
+        // Dropping every non-virtual placement turns the affected images
+        // into prune candidates; check the budget right away so that a
+        // client exiting with a "delete all" (eg: pdfterm) releases
+        // excess image data without waiting for the next transmission.
+        self.kitty_prune_over_budget(None);
     }
 
     /// A terminal reset clears everything, virtual placements included
@@ -764,10 +768,101 @@ impl TerminalState {
             self.kitty_remove_placement_from_model(image_id, p, info);
         }
         self.kitty_img.id_to_data.clear();
+        self.kitty_img.id_generation.clear();
         self.kitty_img.used_memory = 0;
         self.kitty_img.number_to_id.clear();
         self.kitty_img.accumulator.clear();
         self.kitty_placeholder_state = None;
+    }
+
+    /// Whether any row of the placement still exists in the screen or
+    /// the scrollback.  Rows form one contiguous range, so once both
+    /// end rows have scrolled out of the scrollback the whole
+    /// placement is gone from the model.
+    fn placement_rows_in_model(screen: &crate::Screen, info: &PlacementInfo) -> bool {
+        if info.rows == 0 {
+            return false;
+        }
+        let last = info.first_row + info.rows as StableRowIndex - 1;
+        screen.stable_row_to_phys(info.first_row).is_some()
+            || screen.stable_row_to_phys(last).is_some()
+    }
+
+    /// Enforce the configured kitty graphics storage budget, following
+    /// the spec's storage quota recommendation: when the retained image
+    /// data exceeds the budget, release the oldest images that no
+    /// placement still references; clients then observe ENOENT if they
+    /// reference a released id.
+    ///
+    /// Images whose placements still intersect the screen or scrollback
+    /// are never released, so a well-behaved client never loses anything
+    /// it can currently see.  `keep` spares an image that is about to be
+    /// placed (the transmit-and-display flow prunes between storing the
+    /// image and creating its placement).
+    ///
+    /// Placement records whose rows have scrolled out of the scrollback
+    /// no longer correspond to any cells; they are dropped here so that
+    /// they cannot pin their images (and the placement table) forever.
+    fn kitty_prune_over_budget(&mut self, keep: Option<u32>) {
+        let stale: Vec<(u32, Option<u32>)> = self
+            .kitty_img
+            .placements
+            .iter()
+            .filter(|(_, info)| {
+                info.virtual_rect.is_none() && !Self::placement_rows_in_model(self.screen(), info)
+            })
+            .map(|(key, _)| *key)
+            .collect();
+        for key in stale {
+            self.kitty_img.placements.remove(&key);
+        }
+
+        let budget = self.config.kitty_image_storage_budget_mb() as usize * 1024 * 1024;
+        if self.kitty_img.used_memory <= budget {
+            return;
+        }
+
+        let referenced: HashSet<u32> = self
+            .kitty_img
+            .placements
+            .keys()
+            .map(|(id, _)| *id)
+            .collect();
+        let mut candidates: Vec<(u64, u32)> = self
+            .kitty_img
+            .id_to_data
+            .keys()
+            .filter(|id| Some(**id) != keep && !referenced.contains(*id))
+            .map(|id| {
+                (
+                    self.kitty_img.id_generation.get(id).copied().unwrap_or(0),
+                    *id,
+                )
+            })
+            .collect();
+        candidates.sort_unstable();
+
+        let mut released = 0;
+        let before = self.kitty_img.used_memory;
+        for (_, image_id) in candidates {
+            if self.kitty_img.used_memory <= budget {
+                break;
+            }
+            released += 1;
+            self.kitty_img.remove_data_for_id(image_id);
+            self.kitty_img
+                .number_to_id
+                .retain(|_, mapped| *mapped != image_id);
+        }
+        if released > 0 {
+            log::info!(
+                "kitty image storage {} exceeded budget {}; released {} image(s), now using {}",
+                before,
+                budget,
+                released,
+                self.kitty_img.used_memory
+            );
+        }
     }
 
     /// Handle a kitty graphics protocol delete command.
@@ -869,6 +964,10 @@ impl TerminalState {
                 self.kitty_delete_frames(image_id, image_number, frame_number, delete, verbosity);
             }
         }
+
+        // Deleting placements can orphan image data; enforce the storage
+        // budget now rather than at the next transmission.
+        self.kitty_prune_over_budget(None);
     }
 
     /// d=f: delete animation frames. The 1-based frame number comes
@@ -1817,6 +1916,7 @@ impl TerminalState {
             .raw_image_to_image_data(img)
             .context("storing image data")?;
         self.kitty_img.record_id_to_data(image_id, img);
+        self.kitty_prune_over_budget(Some(image_id));
 
         if image_number.is_some() {
             self.kitty_send_response(

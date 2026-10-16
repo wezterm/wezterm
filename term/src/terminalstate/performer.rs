@@ -738,6 +738,10 @@ impl<'a> Performer<'a> {
                 self.accumulating_title.take();
                 self.progress = Progress::default();
 
+                // RIS resets the device to its initial state, and that
+                // includes any images retained on behalf of the kitty
+                // graphics protocol.
+                self.kitty_reset_all();
                 self.screen.full_reset();
                 self.screen.activate_alt_screen(seqno);
                 self.erase_in_display(EraseInDisplay::EraseDisplay);

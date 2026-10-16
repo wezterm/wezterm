@@ -39,6 +39,7 @@ wezterm-escape-parser = {workspace = true, features=["std", "use_image"]}
 wezterm-surface = {workspace = true, features=["std", "appdata", "use_image"]}
 
 [dev-dependencies]
+base64 = {workspace = true, default-features = false, features = ["alloc"]}
 env_logger.workspace = true
 k9.workspace = true
 
