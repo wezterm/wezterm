@@ -15,6 +15,7 @@ use ordered_float::NotNan;
 #[cfg(feature = "use_serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 #[cfg(feature = "std")]
@@ -263,6 +264,19 @@ pub enum ImageDataType {
         #[cfg_attr(feature = "use_serde", serde(default))]
         control: AnimationControl,
     },
+    /// A pixel payload (static or animated) that was swapped out to
+    /// the image disk cache to reduce the memory footprint; the hash
+    /// is the cache key the payload is stored under.  Cells and
+    /// placements keep referencing the image as-is: [`ImageData::data`]
+    /// reads the pixels back on demand.
+    DiskBacked {
+        /// Content hash of the swapped payload; the disk cache key
+        hash: [u8; 32],
+        width: u32,
+        height: u32,
+        /// Frame count of the swapped payload (1 for static images)
+        frame_count: u32,
+    },
 }
 
 /// Runtime animation control state for an [`ImageDataType::AnimRgba8`],
@@ -333,6 +347,18 @@ impl std::fmt::Debug for ImageDataType {
                 .field("durations", durations)
                 .field("hashes", hashes)
                 .finish(),
+            Self::DiskBacked {
+                hash,
+                width,
+                height,
+                frame_count,
+            } => fmt
+                .debug_struct("DiskBacked")
+                .field("hash", &format_args!("{}", HexSlice(hash)))
+                .field("width", width)
+                .field("height", height)
+                .field("frame_count", frame_count)
+                .finish(),
         }
     }
 }
@@ -379,6 +405,7 @@ impl ImageDataType {
             ImageDataType::EncodedLease(lease) => lease.content_id().as_hash_bytes(),
             ImageDataType::Rgba8 { hash, .. } => *hash,
             ImageDataType::EncodedFile(data) => ImageDataType::hash_bytes(data),
+            ImageDataType::DiskBacked { hash, .. } => *hash,
             ImageDataType::AnimRgba8 {
                 frames, durations, ..
             } => {
@@ -393,6 +420,38 @@ impl ImageDataType {
                 }
                 hasher.finalize().into()
             }
+        }
+    }
+
+    /// The DiskBacked marker that can stand in for this payload once
+    /// its bytes are on the disk cache.  None for payloads that are
+    /// already on disk in another form (encoded leases manage their
+    /// own storage, and DiskBacked needs no marker).
+    fn disk_backed_marker(&self) -> Option<Self> {
+        match self {
+            Self::Rgba8 {
+                width,
+                height,
+                hash,
+                ..
+            } => Some(Self::DiskBacked {
+                hash: *hash,
+                width: *width,
+                height: *height,
+                frame_count: 1,
+            }),
+            Self::AnimRgba8 {
+                width,
+                height,
+                frames,
+                ..
+            } => Some(Self::DiskBacked {
+                hash: self.compute_hash(),
+                width: *width,
+                height: *height,
+                frame_count: frames.len() as u32,
+            }),
+            _ => None,
         }
     }
 
@@ -426,7 +485,8 @@ impl ImageDataType {
             ImageDataType::EncodedFile(data) => Ok(dimensions_for_data(data)?),
             ImageDataType::EncodedLease(lease) => Ok(dimensions_for_data(&lease.get_data()?)?),
             ImageDataType::AnimRgba8 { width, height, .. }
-            | ImageDataType::Rgba8 { width, height, .. } => Ok((*width, *height)),
+            | ImageDataType::Rgba8 { width, height, .. }
+            | ImageDataType::DiskBacked { width, height, .. } => Ok((*width, *height)),
         }
     }
 
@@ -457,6 +517,19 @@ impl ImageDataType {
     #[cfg(feature = "std")]
     pub fn from_disk_bytes(buf: &[u8]) -> Option<Self> {
         disk_format::decode(buf)
+    }
+
+    /// Reconstruct a payload previously spilled to the image disk
+    /// cache under `hash`; the reconstruction must hash identically
+    /// to the key.  Returns None when nothing valid is cached.
+    #[cfg(feature = "std")]
+    pub fn load_from_disk(hash: &[u8; 32]) -> Option<Self> {
+        let bytes = wezterm_blob_leases::image_disk_cache::load(hash)?;
+        let data = Self::from_disk_bytes(&bytes)?;
+        if &data.compute_hash() != hash {
+            return None;
+        }
+        Some(data)
     }
 
     /// Decode an encoded file into either an Rgba8 or AnimRgba8 variant
@@ -610,6 +683,21 @@ pub enum ImageCellError {
 pub struct ImageData {
     data: Mutex<ImageDataType>,
     hash: [u8; 32],
+    /// Monotonic stamp of the most recent disk read-back of this
+    /// payload, used to order swap-out candidates so that a freshly
+    /// displayed image is not immediately swapped out again.
+    /// Runtime state only; never serialized.
+    #[cfg_attr(feature = "use_serde", serde(skip))]
+    restored_tick: AtomicU64,
+}
+
+/// Monotonic source of read-back stamps for swapped-out images.
+#[cfg(feature = "std")]
+static RESTORE_TICK: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "std")]
+fn next_restore_tick() -> u64 {
+    RESTORE_TICK.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 struct HexSlice<'a>(&'a [u8]);
@@ -649,6 +737,7 @@ impl ImageData {
         Self {
             data: Mutex::new(data),
             hash,
+            restored_tick: AtomicU64::new(0),
         }
     }
 
@@ -657,37 +746,102 @@ impl ImageData {
         Self {
             data: Mutex::new(data),
             hash,
+            restored_tick: AtomicU64::new(0),
         }
     }
 
-    /// Returns the in-memory footprint
+    /// Returns the in-memory footprint.  Peeks at the payload without
+    /// triggering a disk read-back, so that accounting never drags
+    /// pixels into RAM; a disk-backed payload counts as zero.
     pub fn len(&self) -> usize {
-        match &*self.data() {
+        match &*self.peek_data() {
             ImageDataType::EncodedFile(d) => d.len(),
             ImageDataType::EncodedLease(_) => 0,
             ImageDataType::Rgba8 { data, .. } => data.len(),
             ImageDataType::AnimRgba8 { frames, .. } => frames.len() * frames[0].len(),
+            ImageDataType::DiskBacked { .. } => 0,
         }
     }
 
+    /// Access the payload, reading it back from the image disk cache
+    /// first when it was swapped out.  Every holder of this image
+    /// shares the same payload, so one read-back restores it for all
+    /// of them.  A payload whose disk copy is gone degrades to a
+    /// placeholder rather than retrying the read on every access.
     pub fn data(&self) -> MutexGuard<'_, ImageDataType> {
+        #[cfg(feature = "std")]
+        self.restore_if_swapped();
         self.data.lock().unwrap()
+    }
+
+    /// Lock the payload without any read-back; for internal callers
+    /// (accounting, swap-out) that must not touch the disk.
+    fn peek_data(&self) -> MutexGuard<'_, ImageDataType> {
+        self.data.lock().unwrap()
+    }
+
+    #[cfg(feature = "std")]
+    fn restore_if_swapped(&self) {
+        let hash = match &*self.peek_data() {
+            ImageDataType::DiskBacked { hash, .. } => *hash,
+            _ => return,
+        };
+        // Reading the payload back is the point where the image is
+        // being displayed again; stamp it so that swap-out candidates
+        // treat it as most recently used.
+        self.restored_tick
+            .store(next_restore_tick(), Ordering::Relaxed);
+        let restored = match ImageDataType::load_from_disk(&hash) {
+            Some(data) => data,
+            None => {
+                log::error!(
+                    "image {} was swapped to the image disk cache but is no \
+                     longer recoverable; degrading to a placeholder",
+                    HexSlice(&hash)
+                );
+                ImageDataType::placeholder()
+            }
+        };
+        let mut guard = self.data.lock().unwrap();
+        if matches!(&*guard, ImageDataType::DiskBacked { .. }) {
+            *guard = restored;
+        }
+        // Otherwise another thread restored it while we were loading;
+        // keep their equally fresh copy
     }
 
     pub fn hash(&self) -> [u8; 32] {
         self.hash
     }
 
+    /// Ordering stamp of the most recent disk read-back of this
+    /// payload (0 = never read back).
+    pub fn restored_tick(&self) -> u64 {
+        self.restored_tick.load(Ordering::Relaxed)
+    }
+
+    /// Whether the payload is currently swapped out to the image disk
+    /// cache.  Peeks; never triggers a read-back.
+    #[cfg(feature = "std")]
+    pub fn is_disk_backed(&self) -> bool {
+        matches!(&*self.peek_data(), ImageDataType::DiskBacked { .. })
+    }
+
     /// Write the payload to the image disk cache under this image's
     /// content hash, so that it can be recovered with
     /// [`Self::load_from_disk`] after the in-memory copy is released.
-    /// Returns true when the payload is now on disk.
+    /// Returns true when the payload is now on disk; an already
+    /// swapped payload stays recoverable under the same key.
     #[cfg(feature = "std")]
     pub fn spill_to_disk(&self) -> bool {
-        match self.data().to_disk_bytes() {
-            Some(bytes) => wezterm_blob_leases::image_disk_cache::store(self.hash, &bytes),
-            None => false,
+        let guard = self.peek_data();
+        if matches!(&*guard, ImageDataType::DiskBacked { .. }) {
+            return true;
         }
+        let Some(bytes) = guard.to_disk_bytes() else {
+            return false;
+        };
+        wezterm_blob_leases::image_disk_cache::store(self.hash, &bytes)
     }
 
     /// Reconstruct an image previously written by [`Self::spill_to_disk`].
@@ -695,12 +849,34 @@ impl ImageData {
     /// payload fails validation.
     #[cfg(feature = "std")]
     pub fn load_from_disk(hash: &[u8; 32]) -> Option<Arc<Self>> {
-        let bytes = wezterm_blob_leases::image_disk_cache::load(hash)?;
-        let data = ImageDataType::from_disk_bytes(&bytes)?;
-        if &data.compute_hash() != hash {
-            return None;
+        Some(Arc::new(Self::with_data(ImageDataType::load_from_disk(
+            hash,
+        )?)))
+    }
+
+    /// Swap the pixel payload out to the image disk cache, leaving a
+    /// lightweight [`ImageDataType::DiskBacked`] marker in its place.
+    /// References held by cells and placements stay valid: a later
+    /// [`Self::data`] call reads the pixels back.  Returns true when
+    /// the payload is now disk-backed.  Payloads already on disk (in
+    /// either form) are left alone, and this never triggers a
+    /// read-back of a swapped payload.
+    #[cfg(feature = "std")]
+    pub fn swap_out_to_disk(&self) -> bool {
+        let mut guard = self.peek_data();
+        let marker = match guard.disk_backed_marker() {
+            Some(marker) => marker,
+            None => return matches!(&*guard, ImageDataType::DiskBacked { .. }),
+        };
+        let hash = guard.compute_hash();
+        let Some(bytes) = guard.to_disk_bytes() else {
+            return false;
+        };
+        if !wezterm_blob_leases::image_disk_cache::store(hash, &bytes) {
+            return false;
         }
-        Some(Arc::new(Self::with_data(data)))
+        *guard = marker;
+        true
     }
 }
 
@@ -925,6 +1101,10 @@ mod disk_format {
                 w.put_duration(&Duration::ZERO);
                 w.put_bytes(&data);
             }
+            // Already on the disk cache; a marker needs no payload
+            ImageDataType::DiskBacked { .. } => {
+                return None;
+            }
         }
         Some(w.finish())
     }
@@ -1125,6 +1305,127 @@ mod disk_cache_tests {
         assert!(
             ImageDataType::from_disk_bytes(&bad_dims).is_none(),
             "dimension mismatch"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod swap_out_tests {
+    use super::*;
+
+    /// The image disk cache is a process-global singleton; hold this
+    /// lock so that tests don't fight over it.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct Serial {
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    fn setup_cache() -> Serial {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        wezterm_blob_leases::image_disk_cache::clear();
+        wezterm_blob_leases::image_disk_cache::configure(true, usize::MAX, None);
+        Serial { _guard }
+    }
+
+    fn sample_rgba() -> ImageDataType {
+        let (width, height) = (3u32, 2u32);
+        let data: Vec<u8> = (0..width * height * 4).map(|i| i as u8).collect();
+        ImageDataType::new_single_frame(width, height, data)
+    }
+
+    fn sample_anim() -> ImageDataType {
+        let (width, height) = (2u32, 2u32);
+        let frame_len = (width * height * 4) as usize;
+        let frames = vec![vec![1u8; frame_len], vec![2u8; frame_len]];
+        let hashes: Vec<[u8; 32]> = frames
+            .iter()
+            .map(|f| ImageDataType::hash_bytes(f))
+            .collect();
+        ImageDataType::AnimRgba8 {
+            width,
+            height,
+            durations: vec![Duration::from_millis(500), Duration::from_millis(250)],
+            frames,
+            hashes,
+            control: AnimationControl {
+                running: false,
+                loading: true,
+                loop_count: Some(3),
+                loops_done: 1,
+                paused_frame: Some(2),
+            },
+        }
+    }
+
+    /// swap_out_to_disk parks a static pixel payload on the disk cache;
+    /// accounting sees no footprint while data() reads the pixels back
+    /// in place and stamps the read-back.
+    #[test]
+    fn swap_out_and_read_back_rgba() {
+        let _serial = setup_cache();
+        let image = ImageData::with_data(sample_rgba());
+        let payload_len = image.len();
+        assert!(image.swap_out_to_disk());
+
+        assert!(image.is_disk_backed());
+        assert_eq!(image.len(), 0, "disk-backed payload has no footprint");
+        assert_eq!(image.restored_tick(), 0, "not read back yet");
+        // Dimensions come from the marker without dragging pixels back
+        assert_eq!(image.peek_data().dimensions().unwrap(), (3, 2));
+        assert_eq!(image.len(), 0);
+
+        // Accessing the payload reads it back transparently
+        drop(image.data());
+        assert!(!image.is_disk_backed());
+        assert_eq!(image.len(), payload_len);
+        assert!(image.restored_tick() > 0, "read-back stamped");
+        assert_eq!(*image.data(), sample_rgba());
+    }
+
+    /// Animated payloads survive a swap/read-back round trip with
+    /// durations and playback state intact.
+    #[test]
+    fn swap_out_and_read_back_anim() {
+        let _serial = setup_cache();
+        let image = ImageData::with_data(sample_anim());
+        assert!(image.swap_out_to_disk());
+        assert!(image.is_disk_backed());
+
+        drop(image.data());
+
+        assert!(!image.is_disk_backed());
+        assert_eq!(*image.data(), sample_anim());
+    }
+
+    /// Encoded payloads keep their own on-disk management (blob
+    /// leases) and are not swapped by swap_out_to_disk.
+    #[test]
+    fn swap_out_leaves_encoded_payloads_alone() {
+        let _serial = setup_cache();
+        let image = ImageData::with_data(ImageDataType::EncodedFile(b"png-ish".to_vec()));
+        assert!(!image.swap_out_to_disk());
+        assert!(!image.is_disk_backed());
+    }
+
+    /// A swapped payload whose disk copy vanished (quota eviction)
+    /// degrades to a placeholder rather than retrying the read on
+    /// every access.
+    #[test]
+    fn read_back_failure_degrades_to_placeholder() {
+        let _serial = setup_cache();
+        let image = ImageData::with_data(sample_rgba());
+        assert!(image.swap_out_to_disk());
+        let hash = image.hash();
+        wezterm_blob_leases::image_disk_cache::remove(&hash);
+
+        drop(image.data());
+
+        assert!(!image.is_disk_backed());
+        assert_eq!(
+            image.len(),
+            8 * 8 * 4,
+            "placeholder footprint after failed read-back"
         );
     }
 }
