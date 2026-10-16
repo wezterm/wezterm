@@ -1957,13 +1957,18 @@ impl KeyEvent {
                 }
 
                 // Prefer the layout-accurate unshifted key reported by
-                // the OS when available, else assume the US layout
+                // the OS when available, else assume the US layout.
+                // Layouts report control characters as the unshifted form
+                // of non-text keys (eg: the unshifted form of Backspace is
+                // \x08); using those as the primary code point would encode
+                // Backspace as CSI 8 u instead of its functional key code
+                // 127, so only accept printable text here.
                 let c = self
                     .raw
                     .as_ref()
                     .and_then(|raw| raw.layout_unshifted.as_ref())
                     .and_then(|k| match k {
-                        KeyCode::Char(c) => Some(*c),
+                        KeyCode::Char(c) if !c.is_control() => Some(*c),
                         _ => None,
                     })
                     .unwrap_or_else(|| us_layout_unshift(shifted_key));
@@ -3450,5 +3455,38 @@ mod kitty_keyboard_extensions_tests {
             .encode_kitty(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES),
             "你好".to_string()
         );
+    }
+
+    /// Backspace must be encoded with its functional key code (127) even
+    /// when the OS layout reports a control character (\x08) as the
+    /// unshifted form of the key, as the X11 backend does when built with
+    /// the kitty-x11-keyboard feature.  CSI 8 u is the text codepoint for
+    /// CTRL+H and is not recognizable as Backspace by kitty-aware apps.
+    #[test]
+    fn encode_kitty_backspace_ignores_control_layout_unshifted() {
+        let flags = KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+        let ev = KeyEvent {
+            key: KeyCode::Char('\x08'),
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: Some(RawKeyEvent {
+                key: KeyCode::Physical(PhysKeyCode::Backspace),
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                phys_code: Some(PhysKeyCode::Backspace),
+                layout_unshifted: Some(KeyCode::Char('\x08')),
+                raw_code: 22,
+                #[cfg(windows)]
+                scan_code: 0,
+                repeat_count: 1,
+                key_is_down: true,
+                handled: Handled::new(),
+            }),
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+        assert_eq!(ev.encode_kitty(flags), "\x1b[127;1u".to_string());
     }
 }
