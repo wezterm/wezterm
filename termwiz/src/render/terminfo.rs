@@ -607,9 +607,11 @@ impl TerminfoRenderer {
                             match &*image.image.data() {
                                 ImageDataType::EncodedFile(data) => data.to_vec(),
                                 ImageDataType::EncodedLease(lease) => lease.get_data()?,
-                                ImageDataType::AnimRgba8 { .. } | ImageDataType::Rgba8 { .. } => {
-                                    unimplemented!()
-                                }
+                                // data() reads swapped pixels back, so
+                                // DiskBacked never survives to here
+                                ImageDataType::AnimRgba8 { .. }
+                                | ImageDataType::Rgba8 { .. }
+                                | ImageDataType::DiskBacked { .. } => unimplemented!(),
                             }
                         } else {
                             // TODO: slice out the requested region of the image,

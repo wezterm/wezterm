@@ -878,7 +878,9 @@ fn image_dedup_budget_evicts_oldest_but_keeps_floor() {
 /// on both entry and release so each test starts and ends empty.
 static DISK_CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-struct DiskCacheSerial(std::sync::MutexGuard<'static, ()>);
+/// Holds the test lock alive for the duration of a test; releasing it
+/// also clears the cache.
+struct DiskCacheSerial(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
 
 impl Drop for DiskCacheSerial {
     fn drop(&mut self) {
@@ -1024,4 +1026,108 @@ fn kitty_disk_quota_eviction_makes_restore_fail() {
     term.print(b"\x1b_Ga=p,i=3\x1b\\");
     k9::assert_equal!(term.kitty_stored_image_ids(), vec![3, 6]);
     k9::assert_equal!(term.kitty_spilled_image_ids(), vec![1, 4, 5]);
+}
+
+/// Transmit (a=t, store only) a w×h RGBA image under a client-chosen
+/// id, sized so that a few images exceed the 1 MiB granularity of the
+/// kitty storage budget.
+fn transmit_rgba_wh(term: &mut TestTerm, image_id: u32, w: u32, h: u32, fill: u8) {
+    transmit_rgba_wh_action(term, "a=t", image_id, w, h, fill)
+}
+
+/// Transmit-and-display (a=T) the same, so the image is referenced by
+/// a placement and cannot be dropped by the budget prune.
+fn place_rgba_wh(term: &mut TestTerm, image_id: u32, fill: u8) {
+    transmit_rgba_wh_action(term, "a=T", image_id, 400, 250, fill)
+}
+
+fn transmit_rgba_wh_action(
+    term: &mut TestTerm,
+    action: &str,
+    image_id: u32,
+    w: u32,
+    h: u32,
+    fill: u8,
+) {
+    let mut pixels = vec![fill; (w * h * 4) as usize];
+    for px in pixels.chunks_exact_mut(4) {
+        px[3] = 0xff;
+    }
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&pixels);
+    let seq = format!("\x1b_G{action},t=d,f=32,s={w},v={h},i={image_id};{b64}\x1b\\");
+    term.print(seq.as_bytes());
+}
+
+/// When the storage budget is exceeded but every stored image is
+/// referenced by a placement, their payloads are swapped out to the
+/// disk cache instead of the images being dropped: the ids stay
+/// stored, and reading the payload brings the pixels back.
+#[test]
+fn kitty_over_budget_swaps_referenced_images() {
+    let _serial = lock_disk_cache();
+    // A 1 MiB budget (the option's finest granularity) vs 400 KiB images
+    let mut term =
+        TestTerm::new_with_disk_cache(60, 80, 0, Some(1), None, Some(Default::default()));
+
+    // a=T transmits and displays: both images are referenced, and two
+    // of them fit the budget, so nothing happens yet
+    place_rgba_wh(&mut term, 1, 0x11);
+    term.print(b"\x1b[17;1H");
+    place_rgba_wh(&mut term, 2, 0x22);
+    k9::assert_equal!(term.kitty_disk_backed_ids(), Vec::<u32>::new());
+
+    // Storing a third image exceeds the budget; nothing can be
+    // released (all referenced), so the oldest payload is swapped out
+    transmit_rgba_wh(&mut term, 3, 400, 250, 0x33);
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1, 2, 3]);
+    k9::assert_equal!(term.kitty_disk_backed_ids(), vec![1]);
+    k9::assert_equal!(term.kitty_spilled_image_ids(), Vec::<u32>::new());
+    k9::assert_equal!(term.kitty_used_memory(), 2 * 400 * 250 * 4);
+
+    // The swapped image stays usable: accessing the payload reads the
+    // pixels back
+    let img = term.kitty_image_data(1).unwrap();
+    assert!(img.is_disk_backed());
+    drop(img.data());
+    assert!(!img.is_disk_backed());
+    k9::assert_equal!(img.len(), 400 * 250 * 4);
+}
+
+/// A swapped payload that was read back counts as freshly displayed:
+/// the next budget enforcement swaps other, less recently touched
+/// images first, so viewing an image does not ping-pong it straight
+/// back out to disk.
+#[test]
+fn kitty_recently_read_back_image_is_swapped_last() {
+    let _serial = lock_disk_cache();
+    let mut term =
+        TestTerm::new_with_disk_cache(60, 80, 0, Some(1), None, Some(Default::default()));
+
+    place_rgba_wh(&mut term, 1, 0x11);
+    term.print(b"\x1b[17;1H");
+    place_rgba_wh(&mut term, 2, 0x22);
+    term.print(b"\x1b[33;1H");
+    place_rgba_wh(&mut term, 3, 0x33);
+    // Over the 1 MiB budget with everything referenced: the oldest
+    // image (1) was swapped, not dropped
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1, 2, 3]);
+    k9::assert_equal!(term.kitty_disk_backed_ids(), vec![1]);
+
+    // Reading image 1's payload back is the "displayed again" signal
+    let img = term.kitty_image_data(1).unwrap();
+    drop(img.data());
+    drop(img);
+
+    // Over the budget again with a fourth image: the middle images are
+    // swapped, while the just-viewed image 1 stays in memory despite
+    // having the oldest generation
+    term.print(b"\x1b[49;1H");
+    place_rgba_wh(&mut term, 4, 0x44);
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1, 2, 3, 4]);
+    k9::assert_equal!(term.kitty_disk_backed_ids(), vec![2, 3]);
+    assert!(
+        !term.kitty_image_data(1).unwrap().is_disk_backed(),
+        "the recently read-back image must not be swapped again"
+    );
 }

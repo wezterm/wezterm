@@ -747,6 +747,20 @@ impl TerminalState {
         self.kitty_img.spilled_image_ids()
     }
 
+    /// Image ids whose stored payloads are currently swapped out to
+    /// the image disk cache; for tests asserting on the swap-out
+    /// behavior.
+    #[cfg(test)]
+    pub(crate) fn kitty_disk_backed_ids(&self) -> Vec<u32> {
+        self.kitty_img.disk_backed_ids()
+    }
+
+    /// The stored image data for an id; for tests.
+    #[cfg(test)]
+    pub(crate) fn kitty_image_data(&self, image_id: u32) -> Option<std::sync::Arc<ImageData>> {
+        self.kitty_img.image_data(image_id)
+    }
+
     /// Number of image payload entries held by the dedup cache; for tests.
     #[cfg(test)]
     pub(crate) fn image_cache_len(&self) -> usize {

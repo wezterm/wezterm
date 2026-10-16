@@ -107,6 +107,26 @@ impl KittyImageState {
         ids
     }
 
+    /// Image ids whose stored payloads are currently swapped out to
+    /// the image disk cache; for tests.
+    #[cfg(test)]
+    pub(crate) fn disk_backed_ids(&self) -> Vec<u32> {
+        let mut ids: Vec<u32> = self
+            .id_to_data
+            .iter()
+            .filter(|(_, data)| data.is_disk_backed())
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// The stored image data for an id; for tests.
+    #[cfg(test)]
+    pub(crate) fn image_data(&self, image_id: u32) -> Option<Arc<ImageData>> {
+        self.id_to_data.get(&image_id).map(Arc::clone)
+    }
+
     #[cfg(test)]
     pub(crate) fn used_memory(&self) -> usize {
         self.used_memory
@@ -968,6 +988,16 @@ impl TerminalState {
             self.kitty_img.placements.remove(&key);
         }
 
+        // Disk read-backs happen wherever pixels are rendered, outside
+        // of the incremental accounting below; recompute the total so
+        // that the budget decision always sees reality.
+        self.kitty_img.used_memory = self
+            .kitty_img
+            .id_to_data
+            .values()
+            .map(|data| data.len())
+            .sum();
+
         let budget = self.config.kitty_image_storage_budget_mb() as usize * 1024 * 1024;
         if self.kitty_img.used_memory <= budget {
             return;
@@ -1030,6 +1060,64 @@ impl TerminalState {
                 spilled,
                 self.kitty_img.used_memory
             );
+        }
+
+        // Everything still stored is referenced (or was just kept).
+        // Rather than dropping images a client can currently see, swap
+        // their pixel payloads out to the disk cache; rendering reads
+        // pixels back on demand, so nothing the client displays is
+        // lost.  Candidates are ordered so that images never read back
+        // since their last swap go first (oldest transmission first),
+        // while a read-back — the image was displayed again — always
+        // defers the swap behind those, most recent read-back last.
+        // Viewing an image therefore never ping-pongs it straight
+        // back out to disk.
+        if spill_to_disk && self.kitty_img.used_memory > budget {
+            let mut candidates: Vec<(u64, u64, u32)> = self
+                .kitty_img
+                .id_to_data
+                .keys()
+                .filter(|id| Some(**id) != keep)
+                .map(|id| {
+                    let generation = self.kitty_img.id_generation.get(id).copied().unwrap_or(0);
+                    let restored = self
+                        .kitty_img
+                        .id_to_data
+                        .get(id)
+                        .map(|data| data.restored_tick())
+                        .unwrap_or(0);
+                    // Images never read back since their last swap are
+                    // the coldest, ordered by transmission age; a
+                    // read-back (ie: the image was displayed again)
+                    // always ranks after those, most recent last
+                    (restored, generation, *id)
+                })
+                .collect();
+            candidates.sort_unstable();
+
+            let mut swapped = 0;
+            for (_, _, image_id) in candidates {
+                if self.kitty_img.used_memory <= budget {
+                    break;
+                }
+                let Some(data) = self.kitty_img.id_to_data.get(&image_id) else {
+                    continue;
+                };
+                let before = data.len();
+                if data.swap_out_to_disk() {
+                    // The marker reports zero footprint
+                    self.kitty_img.used_memory -= before;
+                    swapped += 1;
+                }
+            }
+            if swapped > 0 {
+                log::info!(
+                    "kitty image storage still over budget after releases; swapped {} \
+                     referenced image(s) to the image disk cache, now using {}",
+                    swapped,
+                    self.kitty_img.used_memory
+                );
+            }
         }
     }
 
@@ -1195,6 +1283,19 @@ impl TerminalState {
                 );
                 return;
             }
+            ImageDataType::DiskBacked { .. } => {
+                // data() reads swapped pixels back, so this arm is not
+                // reachable in practice
+                self.kitty_send_response(
+                    verbosity,
+                    false,
+                    Some(image_id),
+                    image_number,
+                    None,
+                    "EINVAL:cannot delete frames of a swapped image".to_string(),
+                );
+                return;
+            }
             ImageDataType::Rgba8 { .. } => {
                 // A still image has no animation frames; the uppercase
                 // form removes the image itself, like kitty does
@@ -1274,6 +1375,9 @@ impl TerminalState {
             }
             ImageDataType::Rgba8 { .. } => 1,
             ImageDataType::AnimRgba8 { frames, .. } => frames.len(),
+            // data() reads swapped pixels back, so this is unreachable
+            // in practice; without pixels there are no frames to name
+            ImageDataType::DiskBacked { frame_count, .. } => *frame_count as usize,
         };
 
         // Validate the frame references up front so that the command
@@ -1340,6 +1444,8 @@ impl TerminalState {
             // A still image: only the frame selection is meaningful and
             // there is nothing to seek in a single frame image
             ImageDataType::Rgba8 { .. } => {}
+            // data() reads swapped pixels back, so unreachable
+            ImageDataType::DiskBacked { .. } => {}
             ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => unreachable!(),
         }
         drop(anim);
@@ -1685,6 +1791,8 @@ impl TerminalState {
             ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => {
                 anyhow::bail!("invalid image type")
             }
+            // data() reads swapped pixels back, so unreachable
+            ImageDataType::DiskBacked { .. } => anyhow::bail!("invalid image type"),
             ImageDataType::Rgba8 {
                 width,
                 height,
@@ -1837,6 +1945,10 @@ impl TerminalState {
 
         match &mut *anim {
             ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => {
+                anyhow::bail!("Expected decoded image for image id {}", image_id)
+            }
+            // data() reads swapped pixels back, so unreachable
+            ImageDataType::DiskBacked { .. } => {
                 anyhow::bail!("Expected decoded image for image id {}", image_id)
             }
             ImageDataType::Rgba8 {

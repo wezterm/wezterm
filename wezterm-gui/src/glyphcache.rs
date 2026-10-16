@@ -249,6 +249,8 @@ impl<'a> BitmapImage for DecodedImageHandle<'a> {
         match &*self.h {
             ImageDataType::Rgba8 { data, .. } => data.as_ptr(),
             ImageDataType::AnimRgba8 { frames, .. } => frames[self.current_frame].as_ptr(),
+            // data() reads swapped pixels back, so unreachable
+            ImageDataType::DiskBacked { .. } => unreachable!(),
             ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => unreachable!(),
         }
     }
@@ -260,7 +262,10 @@ impl<'a> BitmapImage for DecodedImageHandle<'a> {
     fn image_dimensions(&self) -> (usize, usize) {
         match &*self.h {
             ImageDataType::Rgba8 { width, height, .. }
-            | ImageDataType::AnimRgba8 { width, height, .. } => (*width as usize, *height as usize),
+            | ImageDataType::AnimRgba8 { width, height, .. }
+            | ImageDataType::DiskBacked { width, height, .. } => {
+                (*width as usize, *height as usize)
+            }
             ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => unreachable!(),
         }
     }
@@ -988,6 +993,9 @@ impl GlyphCache {
         };
 
         match &*handle.h {
+            // data() reads swapped pixels back, so DiskBacked is
+            // unreachable here
+            ImageDataType::DiskBacked { .. } => unreachable!(),
             ImageDataType::Rgba8 { hash, .. } => {
                 if let Some(sprite) = frame_cache.get(hash) {
                     return Ok((sprite.clone(), None, LoadState::Loaded));
