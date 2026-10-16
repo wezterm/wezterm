@@ -89,6 +89,20 @@ use prevcursor::PrevCursorPos;
 
 const ATLAS_SIZE: usize = 128;
 
+/// How long an image can go undrawn before the render cache drops it.
+/// Once the application that displayed a set of images exits, nothing
+/// displaces them by insertion pressure anymore, and the terminal
+/// model has already released its references -- the render cache is
+/// then the last holder of the pixels, so idle expiry is what finally
+/// returns that memory.  Images scrolled back into view refresh their
+/// timestamp on every frame they are drawn in, so visible images are
+/// never expired.
+pub(crate) const IMAGE_IDLE_EVICTION: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Interval of the idle-image sweep timer; see
+/// [`TermWindow::schedule_next_image_sweep`].
+const IMAGE_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
 lazy_static::lazy_static! {
     static ref WINDOW_CLASS: Mutex<String> = Mutex::new(wezterm_gui_subcommands::DEFAULT_WINDOW_CLASS.to_owned());
     static ref POSITION: Mutex<Option<GuiPosition>> = Mutex::new(None);
@@ -144,6 +158,9 @@ pub enum TermWindowNotif {
     },
     MuxNotification(MuxNotification),
     EmitStatusUpdate,
+    /// Fired by the image-sweep timer: drop render-cache images that
+    /// have not been drawn recently, then schedule the next sweep
+    SweepIdleImages,
     Apply(Box<dyn FnOnce(&mut TermWindow) + Send + Sync>),
     SwitchToMuxWindow(MuxWindowId),
     SetInnerSize {
@@ -436,6 +453,8 @@ pub struct TermWindow {
     line_quad_cache: RefCell<LfuCache<LineQuadCacheKey, LineQuadCacheValue>>,
 
     last_status_call: Instant,
+    /// When the next idle-image sweep timer is due to fire
+    last_image_sweep: Instant,
     cursor_blink_state: RefCell<ColorEase>,
     blink_state: RefCell<ColorEase>,
     rapid_blink_state: RefCell<ColorEase>,
@@ -759,6 +778,7 @@ impl TermWindow {
                 &config,
             )),
             last_status_call: Instant::now(),
+            last_image_sweep: Instant::now(),
             cursor_blink_state: RefCell::new(ColorEase::new(
                 config.cursor_blink_rate,
                 config.cursor_blink_ease_in,
@@ -1323,6 +1343,18 @@ impl TermWindow {
             },
             TermWindowNotif::EmitStatusUpdate => {
                 self.emit_status_event();
+            }
+            TermWindowNotif::SweepIdleImages => {
+                if let Some(state) = self.render_state.as_mut() {
+                    state
+                        .glyph_cache
+                        .borrow_mut()
+                        .evict_stale_images(Instant::now(), IMAGE_IDLE_EVICTION);
+                }
+                // The trim returns whatever the evictions just freed
+                // from the allocator arenas back to the OS
+                crate::termwindow::render::paint::malloc_trim_periodic();
+                self.schedule_next_image_sweep();
             }
             TermWindowNotif::GetSelectionForPane { pane_id, tx } => {
                 let mux = Mux::get();
@@ -2104,6 +2136,30 @@ impl TermWindow {
                 promise::spawn::spawn(async move {
                     Timer::at(target).await;
                     window.notify(TermWindowNotif::EmitStatusUpdate);
+                })
+                .detach();
+            }
+        }
+    }
+
+    /// Periodically drop render-cache images that have not been drawn
+    /// for a while, so that the memory of an exited application's
+    /// images is returned even though nothing displaces them anymore.
+    ///
+    /// This cannot hang off the paint loop: an idle window renders no
+    /// frames at all, and idle is precisely when the sweep is needed.
+    /// Like the status update above, this is a self-rescheduling timer.
+    fn schedule_next_image_sweep(&mut self) {
+        if let Some(window) = self.window.as_ref() {
+            let now = Instant::now();
+            if self.last_image_sweep <= now {
+                let target = now + IMAGE_SWEEP_INTERVAL;
+                self.last_image_sweep = target;
+
+                let window = window.clone();
+                promise::spawn::spawn(async move {
+                    Timer::at(target).await;
+                    window.notify(TermWindowNotif::SweepIdleImages);
                 })
                 .detach();
             }

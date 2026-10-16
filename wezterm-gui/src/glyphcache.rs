@@ -542,9 +542,22 @@ pub struct DecodedImage {
     applied_seek: RefCell<Option<u32>>,
     image: Arc<ImageData>,
     frames: RefCell<Option<FrameState>>,
+    /// Time of the last render that used this image.  The paint loop
+    /// evicts entries idle for too long, so that memory is returned
+    /// once the application that displayed the images exits; images
+    /// still on screen refresh this on every frame they are drawn in.
+    last_use: RefCell<Instant>,
 }
 
 impl DecodedImage {
+    fn last_use(&self) -> Instant {
+        *self.last_use.borrow()
+    }
+
+    fn touch(&self) {
+        *self.last_use.borrow_mut() = Instant::now();
+    }
+
     fn placeholder() -> Self {
         let image = ImageData::with_data(ImageDataType::placeholder());
         Self {
@@ -553,6 +566,7 @@ impl DecodedImage {
             applied_seek: RefCell::new(None),
             image: Arc::new(image),
             frames: RefCell::new(None),
+            last_use: RefCell::new(Instant::now()),
         }
     }
 
@@ -564,6 +578,7 @@ impl DecodedImage {
                 applied_seek: RefCell::new(None),
                 image: Arc::clone(image_data),
                 frames: RefCell::new(Some(FrameState::new(rx))),
+                last_use: RefCell::new(Instant::now()),
             },
             Err(err) => {
                 log::error!("failed to start FrameDecoder: {err:#}");
@@ -597,6 +612,7 @@ impl DecodedImage {
                     applied_seek: RefCell::new(None),
                     image: Arc::clone(image_data),
                     frames: RefCell::new(None),
+                    last_use: RefCell::new(Instant::now()),
                 }
             }
 
@@ -606,6 +622,7 @@ impl DecodedImage {
                 applied_seek: RefCell::new(None),
                 image: Arc::clone(image_data),
                 frames: RefCell::new(None),
+                last_use: RefCell::new(Instant::now()),
             },
         }
     }
@@ -1244,6 +1261,8 @@ impl GlyphCache {
         let hash = image_data.hash();
 
         if let Some(decoded) = self.image_cache.get(&hash) {
+            // Drawing the image keeps it eligible for idle retention
+            decoded.touch();
             Self::cached_image_impl(
                 &mut self.frame_cache,
                 &mut self.atlas,
@@ -1268,6 +1287,30 @@ impl GlyphCache {
             self.evict_images_over_budget();
             Ok(res)
         }
+    }
+
+    /// Evict images that have not been drawn within `idle`.
+    ///
+    /// This complements the byte budget: once the application that
+    /// displayed a set of images exits, no new image displaces them by
+    /// insertion pressure anymore, and the terminal model has already
+    /// released its references -- the render cache is then the last
+    /// holder of the pixels, so idle expiry is what finally returns
+    /// that memory.  Images scrolled back into view keep refreshing
+    /// their timestamp on every frame they are drawn in, so visible
+    /// images are never expired.
+    pub fn evict_stale_images(&mut self, now: Instant, idle: Duration) -> usize {
+        let evicted = self
+            .image_cache
+            .evict_where(|_, decoded| now.duration_since(decoded.last_use()) > idle);
+        let count = evicted.len();
+        for (_, decoded) in evicted {
+            self.image_cache_bytes = self.image_cache_bytes.saturating_sub(decoded.image.len());
+        }
+        if count > 0 {
+            log::debug!("evicted {count} idle image(s) from the render cache");
+        }
+        count
     }
 
     /// Enforce the image cache budgets.  Entry-cap eviction is done here

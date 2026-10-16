@@ -18,7 +18,7 @@ pub enum AllowImage {
 /// as decoding a long stream of large images; malloc_trim releases the
 /// unused arena pages.  Throttled because it walks every arena.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn malloc_trim_periodic() {
+pub(crate) fn malloc_trim_periodic() {
     use std::sync::Mutex;
     static NEXT_TRIM: Mutex<Option<Instant>> = Mutex::new(None);
     let mut next = NEXT_TRIM.lock().unwrap();
@@ -31,11 +31,15 @@ fn malloc_trim_periodic() {
 }
 
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-fn malloc_trim_periodic() {}
+pub(crate) fn malloc_trim_periodic() {}
 
 impl crate::TermWindow {
     pub fn paint_impl(&mut self, frame: &mut RenderFrame) {
         malloc_trim_periodic();
+        // Kick off the self-rescheduling idle-image sweep timer; an
+        // idle window renders no frames, so the sweep itself cannot
+        // live in this loop
+        self.schedule_next_image_sweep();
         self.num_frames += 1;
         // If nothing on screen needs animating, then we can avoid
         // invalidating as frequently
