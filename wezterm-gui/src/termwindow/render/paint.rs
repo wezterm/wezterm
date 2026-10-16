@@ -13,8 +13,29 @@ pub enum AllowImage {
     No,
 }
 
+/// Hand freed heap back to the OS.  glibc retains freed memory in its
+/// per-arena free lists, so RSS stays high after transient spikes such
+/// as decoding a long stream of large images; malloc_trim releases the
+/// unused arena pages.  Throttled because it walks every arena.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn malloc_trim_periodic() {
+    use std::sync::Mutex;
+    static NEXT_TRIM: Mutex<Option<Instant>> = Mutex::new(None);
+    let mut next = NEXT_TRIM.lock().unwrap();
+    let now = Instant::now();
+    if next.map_or(true, |at| now >= at) {
+        *next = Some(now + Duration::from_secs(60));
+        drop(next);
+        unsafe { libc::malloc_trim(0) };
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn malloc_trim_periodic() {}
+
 impl crate::TermWindow {
     pub fn paint_impl(&mut self, frame: &mut RenderFrame) {
+        malloc_trim_periodic();
         self.num_frames += 1;
         // If nothing on screen needs animating, then we can avoid
         // invalidating as frequently
