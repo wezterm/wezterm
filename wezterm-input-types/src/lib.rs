@@ -1731,6 +1731,17 @@ impl KeyEvent {
             return String::new();
         }
 
+        // Text composed by an IME (or via dead key composition) is not a key
+        // press; it must reach the pty as plain text even while the kitty
+        // keyboard protocol is active.  This mirrors the multi-char composed
+        // path in the gui layer, which writes the text directly to the pane
+        // instead of encoding it as a key event.  Without this, a single-char
+        // commit (normalized to Composed upstream) would be encoded as an
+        // empty string and silently dropped.
+        if let Composed(text) = &self.key {
+            return text.to_string();
+        }
+
         if self.modifiers.is_empty()
             && !flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
             && self.key_is_down
@@ -3390,5 +3401,54 @@ mod kitty_keyboard_extensions_tests {
         };
         // base z, shifted Z; the phys_code agrees so no third field
         assert_eq!(ev.encode_kitty(flags), "\x1b[122:90;2u");
+    }
+
+    /// IME committed text is delivered as text rather than as a key event,
+    /// regardless of which kitty keyboard protocol flags are active.
+    /// A single-char commit is normalized to Composed("你") upstream and
+    /// used to be encoded as an empty string, silently dropping the text.
+    #[test]
+    fn encode_kitty_composed_ime_text_is_delivered_as_text() {
+        for flags in [
+            KittyKeyboardFlags::NONE,
+            KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
+            KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES,
+            KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                | KittyKeyboardFlags::REPORT_EVENT_TYPES
+                | KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT,
+        ] {
+            assert_eq!(
+                KeyEvent {
+                    key: KeyCode::Composed("你".into()),
+                    modifiers: Modifiers::NONE,
+                    leds: KeyboardLedStatus::empty(),
+                    repeat_count: 1,
+                    key_is_down: true,
+                    raw: None,
+                    #[cfg(windows)]
+                    win32_uni_char: None,
+                }
+                .encode_kitty(flags),
+                "你".to_string(),
+                "single-char IME commit must not be swallowed with flags {:?}",
+                flags
+            );
+        }
+
+        // Multi-char commits take the same path when they reach the encoder
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::Composed("你好".into()),
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES),
+            "你好".to_string()
+        );
     }
 }
