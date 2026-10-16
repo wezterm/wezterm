@@ -1131,3 +1131,86 @@ fn kitty_recently_read_back_image_is_swapped_last() {
         "the recently read-back image must not be swapped again"
     );
 }
+
+/// Leaving the alternate screen ends the client application's session:
+/// image data with no placement left (the client deleted its placements
+/// on the way out) is released, together with the dedup cache, instead
+/// of being retained until the storage budget is exceeded.
+#[test]
+fn kitty_alt_screen_exit_releases_orphaned_images() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    term.print(b"\x1b[?1049h");
+    place_tiny_png(&mut term, 1, "");
+    term.print(b"\x1b_Ga=d,d=a,q=2\x1b\\");
+    // The lowercase delete-all keeps the data around, as before
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1]);
+    assert!(term.image_cache_len() >= 1);
+
+    term.print(b"\x1b[?1049l");
+    k9::assert_equal!(term.kitty_stored_image_ids(), Vec::<u32>::new());
+    k9::assert_equal!(term.image_cache_len(), 0);
+}
+
+/// A client killed without a delete-all leaves its placements on the
+/// abandoned alternate screen; leaving the screen still releases the
+/// data, because those rows are no longer part of the active screen.
+#[test]
+fn kitty_alt_screen_exit_releases_images_left_by_killed_client() {
+    let mut term = TestTerm::new(3, 10, 0);
+
+    term.print(b"\x1b[?1049h");
+    place_tiny_png(&mut term, 1, "");
+    term.print(b"\x1b[?1049l");
+
+    k9::assert_equal!(term.kitty_stored_image_ids(), Vec::<u32>::new());
+    k9::assert_equal!(term.image_cache_len(), 0);
+}
+
+/// Images drawn by clients that never use the alternate screen (ie:
+/// living in the primary screen or scrollback) survive an unrelated
+/// alt-screen session coming and going.
+#[test]
+fn kitty_alt_screen_exit_keeps_scrollback_images() {
+    let mut term = TestTerm::new(3, 10, 10);
+
+    place_tiny_png(&mut term, 1, "");
+    term.print(b"\x1b[?1049h");
+    term.print(b"\x1b[?1049l");
+
+    k9::assert_equal!(term.kitty_stored_image_ids(), vec![1]);
+    assert!(
+        attached_image_ids(&term)
+            .iter()
+            .any(|(_, id)| *id == Some(1)),
+        "the image must still be displayed"
+    );
+}
+
+/// With the disk cache enabled, the alt-screen sweep also removes the
+/// on-disk copies (both those of stored images and those a budget
+/// prune spilled earlier): re-placing a released id observes ENOENT
+/// rather than restoring the payload.
+#[test]
+fn kitty_alt_screen_exit_removes_disk_cache_copies() {
+    let _serial = lock_disk_cache();
+    let mut term = TestTerm::new_with_disk_cache(3, 10, 0, Some(0), None, Some(Default::default()));
+
+    // Zero storage budget: storing image 2 releases and spills image 1
+    transmit_rgba_11x11(&mut term, 1, 0x10);
+    transmit_rgba_11x11(&mut term, 2, 0x20);
+    k9::assert_equal!(term.kitty_spilled_image_ids(), vec![1]);
+
+    term.print(b"\x1b[?1049h");
+    term.print(b"\x1b_Ga=d,d=a,q=2\x1b\\");
+    term.print(b"\x1b[?1049l");
+
+    // Everything was released and nothing is recoverable from disk
+    k9::assert_equal!(term.kitty_stored_image_ids(), Vec::<u32>::new());
+    k9::assert_equal!(term.kitty_spilled_image_ids(), Vec::<u32>::new());
+
+    term.print(b"\x1b[1;1H");
+    term.print(b"\x1b_Ga=p,i=1\x1b\\");
+    k9::assert_equal!(term.kitty_stored_image_ids(), Vec::<u32>::new());
+    assert!(attached_image_ids(&term).is_empty());
+}

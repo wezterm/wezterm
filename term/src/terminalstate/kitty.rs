@@ -199,6 +199,7 @@ impl TerminalState {
                     parent: None,
                     parent_offsets: (0, 0),
                     virtual_rect: Some((cols, rows)),
+                    on_alt_screen: self.is_alt_screen_active(),
                 },
             );
             return Ok(());
@@ -862,6 +863,108 @@ impl TerminalState {
             || screen.stable_row_to_phys(last).is_some()
     }
 
+    /// Drop placement records whose rows no longer exist in the active
+    /// screen or the scrollback, so that they cannot pin their images
+    /// (and the placement table) forever.
+    fn kitty_drop_stale_placements(&mut self) {
+        let stale: Vec<(u32, Option<u32>)> = self
+            .kitty_img
+            .placements
+            .iter()
+            .filter(|(_, info)| {
+                info.virtual_rect.is_none() && !Self::placement_rows_in_model(self.screen(), info)
+            })
+            .map(|(key, _)| *key)
+            .collect();
+        for key in stale {
+            self.kitty_img.placements.remove(&key);
+        }
+    }
+
+    /// The end of an alternate-screen session is, from the terminal's
+    /// perspective, the end of the client application that ran there:
+    /// a full-screen client (eg: a PDF viewer) leaves with a "delete
+    /// all placements" followed by leaving the alternate screen.
+    ///
+    /// Image data with no placement left at that boundary will not be
+    /// reused: a relaunched client retransmits everything, and a dedup
+    /// hit would only save one pixel-buffer copy anyway.  Release it,
+    /// along with any copy left in the on-disk image cache, instead of
+    /// retaining it until the storage budget is exceeded.  The dedup
+    /// cache is cleared for the same reason: its payoff is limited to
+    /// repeated transmissions within a session, and the session that
+    /// owned these payloads just ended.
+    ///
+    /// Images whose placements still intersect the active screen or
+    /// the scrollback (eg: those drawn by clients that never use the
+    /// alternate screen) are never released.
+    pub(crate) fn kitty_sweep_orphaned_images(&mut self) {
+        if self.kitty_img.id_to_data.is_empty()
+            && self.image_cache.is_empty()
+            && self.kitty_img.spilled.is_empty()
+        {
+            return;
+        }
+        // Placements created on the abandoned alternate screen (eg: by
+        // a client killed without a delete-all) belong to rows that are
+        // no longer part of the active screen, even though their row
+        // numbers may coincide with primary-screen rows; drop them
+        // first so that they cannot pin their images.
+        let alt_placements: Vec<(u32, Option<u32>)> = self
+            .kitty_img
+            .placements
+            .iter()
+            .filter(|(_, info)| info.on_alt_screen)
+            .map(|(key, _)| *key)
+            .collect();
+        for key in alt_placements {
+            self.kitty_img.placements.remove(&key);
+        }
+        // Placement records for rows that scrolled out of the
+        // scrollback pin their images just the same
+        self.kitty_drop_stale_placements();
+
+        let referenced: HashSet<u32> = self
+            .kitty_img
+            .placements
+            .keys()
+            .map(|(id, _)| *id)
+            .collect();
+        let orphans: Vec<u32> = self
+            .kitty_img
+            .id_to_data
+            .keys()
+            .filter(|id| !referenced.contains(*id))
+            .copied()
+            .collect();
+        let swept = orphans.len();
+        for image_id in orphans {
+            self.kitty_img
+                .number_to_id
+                .retain(|_, mapped| *mapped != image_id);
+            // Forget also removes any on-disk image cache copy
+            self.kitty_forget_image(image_id);
+        }
+
+        // Copies spilled for ids that are no longer stored (released by
+        // a budget prune earlier in the session) are equally a product
+        // of the session that just ended: remove them too.
+        let spilled = std::mem::take(&mut self.kitty_img.spilled);
+        for (hash, _) in spilled.values() {
+            wezterm_blob_leases::image_disk_cache::remove(hash);
+        }
+
+        self.image_cache.clear();
+        self.image_cache_bytes = 0;
+
+        if swept > 0 {
+            log::debug!(
+                "alternate screen session ended; released {swept} kitty image(s) \
+                 and cleared the dedup cache"
+            );
+        }
+    }
+
     /// Propagate the current configuration to the global on-disk image
     /// cache.  Cheap and idempotent, so it is safe to call from the
     /// budget prune and restore paths; config reloads take effect on
@@ -975,18 +1078,7 @@ impl TerminalState {
     /// no longer correspond to any cells; they are dropped here so that
     /// they cannot pin their images (and the placement table) forever.
     fn kitty_prune_over_budget(&mut self, keep: Option<u32>) {
-        let stale: Vec<(u32, Option<u32>)> = self
-            .kitty_img
-            .placements
-            .iter()
-            .filter(|(_, info)| {
-                info.virtual_rect.is_none() && !Self::placement_rows_in_model(self.screen(), info)
-            })
-            .map(|(key, _)| *key)
-            .collect();
-        for key in stale {
-            self.kitty_img.placements.remove(&key);
-        }
+        self.kitty_drop_stale_placements();
 
         // Disk read-backs happen wherever pixels are rendered, outside
         // of the incremental accounting below; recompute the total so

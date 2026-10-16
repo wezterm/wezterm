@@ -1863,6 +1863,9 @@ impl TerminalState {
                     self.pen = CellAttributes::default();
                     self.erase_in_display(EraseInDisplay::EraseDisplay);
                     self.screen.activate_primary_screen(self.seqno);
+                    // Leaving the alternate screen ends the client
+                    // application's session: release its image storage
+                    self.kitty_sweep_orphaned_images();
                 }
             }
 
@@ -1872,6 +1875,9 @@ impl TerminalState {
                 if self.screen.is_alt_screen_active() {
                     self.screen.activate_primary_screen(self.seqno);
                     self.pen = CellAttributes::default();
+                    // Leaving the alternate screen ends the client
+                    // application's session: release its image storage
+                    self.kitty_sweep_orphaned_images();
                 }
             }
 
@@ -2079,6 +2085,9 @@ impl TerminalState {
                 if self.screen.is_alt_screen_active() {
                     self.screen.activate_primary_screen(self.seqno);
                     self.dec_restore_cursor();
+                    // Leaving the alternate screen ends the client
+                    // application's session: release its image storage
+                    self.kitty_sweep_orphaned_images();
                 }
             }
             Mode::SaveDecPrivateMode(DecPrivateMode::Code(n))

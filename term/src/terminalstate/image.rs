@@ -26,6 +26,12 @@ pub struct PlacementInfo {
     /// For virtual placements: the (cols, rows) rectangle that unicode
     /// placeholder text may occupy
     pub virtual_rect: Option<(usize, usize)>,
+    /// Whether the placement was created while the alternate screen was
+    /// active.  Alternate- and primary-screen rows share the same
+    /// stable row number space, so this (rather than row ranges) is
+    /// what identifies placements that belong to a session which ends
+    /// when its client leaves the alternate screen.
+    pub on_alt_screen: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -377,6 +383,7 @@ impl TerminalState {
             parent: None,
             parent_offsets: (0, 0),
             virtual_rect: None,
+            on_alt_screen: self.is_alt_screen_active(),
         })
     }
 
