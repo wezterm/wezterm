@@ -792,8 +792,15 @@ impl ImageData {
         self.restored_tick
             .store(next_restore_tick(), Ordering::Relaxed);
         let restored = match ImageDataType::load_from_disk(&hash) {
-            Some(data) => data,
+            Some(data) => {
+                // Account the read-back as a restore, mirroring the
+                // spill counter; the by-id restore path builds its
+                // image directly and is counted by its caller
+                wezterm_blob_leases::image_disk_cache::note_restore_hit();
+                data
+            }
             None => {
+                wezterm_blob_leases::image_disk_cache::note_restore_miss();
                 log::error!(
                     "image {} was swapped to the image disk cache but is no \
                      longer recoverable; degrading to a placeholder",
