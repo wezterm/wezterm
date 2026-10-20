@@ -1,0 +1,45 @@
+name: x11-keyboard-test
+
+# No branch filter on purpose: this workflow only exists in this fork, so
+# it runs on pushes to any fork branch (and fork PRs) whose changes touch
+# the keyboard path; upstream's main is never targeted.
+on:
+  pull_request:
+    paths:
+      - "window/**"
+      - "wezterm-input-types/**"
+      - "wezterm-gui/**"
+      - "ci/test-x11-keyboard.sh"
+      - ".github/workflows/x11_keyboard_test.yml"
+  push:
+    paths:
+      - "window/**"
+      - "wezterm-input-types/**"
+      - "wezterm-gui/**"
+      - "ci/test-x11-keyboard.sh"
+      - ".github/workflows/x11_keyboard_test.yml"
+
+jobs:
+  x11-keyboard-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: "Install Rust"
+        uses: dtolnay/rust-toolchain@stable
+      - name: "Cache cargo"
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+          key: "x11-keyboard-test-${{ runner.os }}"
+      - name: "Install system deps"
+        run: |
+          ./get-deps
+          sudo apt-get install -y xvfb xdotool x11-utils libxtst6
+      - name: Build
+        run: |
+          source $HOME/.cargo/env
+          cargo build -p wezterm-gui
+      - name: "Run the X11 keyboard integration test"
+        run: bash ci/test-x11-keyboard.sh target/debug/wezterm-gui

@@ -112,6 +112,21 @@ match expectations](https://github.com/wezterm/wezterm/blob/fd532a8c2fb3b5659359
 Please also make a point of adding comments to your tests to help
 clarify the intent of the test!
 
+### Testing the X11 keyboard path
+
+Changes to the X11 keyboard handling can be exercised end-to-end with
+`ci/test-x11-keyboard.sh`.  It drives an isolated `Xvfb`, injects raw
+keycodes through XTEST and asserts how the kitty keyboard protocol
+encodes the keypad depending on the NumLock state.  You need
+`xvfb`, `xdotool`, `xev` (from `x11-utils`) and `python3` installed:
+
+```console
+$ cargo build --release -p wezterm-gui
+$ bash ci/test-x11-keyboard.sh target/release/wezterm-gui
+```
+
+The same test runs in CI via the `x11-keyboard-test` workflow.
+
 ### Testing in a NixOS VM
 
 If you need to test WezTerm in a clean desktop environment (e.g. to reproduce a
