@@ -772,6 +772,20 @@ impl Keyboard {
         let phys_code_map = build_physkeycode_map(&keymap);
         let label = "selected";
 
+        // state_new_from_device() applies the server's current state, so
+        // serializing it back gives us the initial latched/locked modifiers
+        // (eg: a NumLock that was already locked when we started); without
+        // this the cache stays empty until the first XkbStateNotify event
+        // arrives.
+        let initial_xcb_state = StateFromXcbStateNotify {
+            depressed_mods: state.serialize_mods(xkb::STATE_MODS_DEPRESSED),
+            latched_mods: state.serialize_mods(xkb::STATE_MODS_LATCHED),
+            locked_mods: state.serialize_mods(xkb::STATE_MODS_LOCKED),
+            depressed_layout: state.serialize_layout(xkb::STATE_LAYOUT_DEPRESSED),
+            latched_layout: state.serialize_layout(xkb::STATE_LAYOUT_LATCHED),
+            locked_layout: state.serialize_layout(xkb::STATE_LAYOUT_LOCKED),
+        };
+
         let kbd = Keyboard {
             context,
             device_id,
@@ -784,7 +798,7 @@ impl Keyboard {
             }),
             phys_code_map: RefCell::new(phys_code_map),
             mods_leds: RefCell::new(Default::default()),
-            last_xcb_state: RefCell::new(Default::default()),
+            last_xcb_state: RefCell::new(initial_xcb_state),
             label,
         };
 
@@ -858,10 +872,14 @@ impl Keyboard {
             "merge_current_xcb_modifiers({}); state before={state:?}, mods={mods:?}",
             self.label
         );
+        // The event mask only carries the effective modifier set; latched and
+        // locked components (eg: NumLock) come from the cached xcb state.
+        // Without them, LED indicators, which derive from the locked
+        // component, would never light up.
         self.state.borrow_mut().update_mask(
             mods,
-            0,
-            0,
+            state.latched_mods,
+            state.locked_mods,
             state.depressed_layout,
             state.latched_layout,
             state.locked_layout,
@@ -1037,4 +1055,47 @@ fn build_physkeycode_map(keymap: &xkb::Keymap) -> HashMap<xkb::Keycode, PhysKeyC
     }
 
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A key event mask only carries the effective modifier set, so
+    /// merge_current_xcb_modifiers() must take the latched/locked components
+    /// from the xcb state cached by update_state().  The LED indicators
+    /// derive from the locked component, and those LEDs decide whether the
+    /// kitty keyboard protocol encodes the keypad as digits or as navigation
+    /// keys, so dropping the locked component turns keypad digits into
+    /// End/Delete/Insert/Home for every app that enables the protocol.
+    #[test]
+    fn merge_current_xcb_modifiers_keeps_locked_modifiers() {
+        let selected = match Keyboard::new_default() {
+            Ok(kbd) => kbd,
+            // compiling the system default keymap needs xkeyboard-config
+            Err(err) => {
+                eprintln!("skipping: no system default keymap: {err:#}");
+                return;
+            }
+        };
+        let kbd = KeyboardWithFallback::new(selected).expect("fallback keyboard");
+
+        // with no lock cached the Num Lock LED must stay off
+        kbd.merge_current_xcb_modifiers(0);
+        assert!(!kbd.get_led_status().contains(KeyboardLedStatus::NUM_LOCK));
+
+        // the user locks NumLock: the StateNotify caches Mod2 (0x10) in the
+        // locked component ...
+        kbd.selected.last_xcb_state.borrow_mut().locked_mods = 0x10;
+
+        // ... and the following keypad event carries the effective mask,
+        // which includes the locked bit in the depressed slot
+        kbd.merge_current_xcb_modifiers(0x10);
+        assert!(kbd.get_led_status().contains(KeyboardLedStatus::NUM_LOCK));
+
+        // the lock must still be reported once the event was processed and
+        // the regular state has been restored
+        kbd.reapply_last_xcb_state();
+        assert!(kbd.get_led_status().contains(KeyboardLedStatus::NUM_LOCK));
+    }
 }
