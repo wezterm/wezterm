@@ -1,4 +1,5 @@
 use crate::tabbar::TabBarItem;
+use crate::termwindow::contextmenu::ContextMenu;
 use crate::termwindow::{
     GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
 };
@@ -43,7 +44,9 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::ContextMenu
+            | UIItemType::ContextMenuItem(_) => {}
         }
     }
 
@@ -54,7 +57,9 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::ContextMenu
+            | UIItemType::ContextMenuItem(_) => {}
         }
     }
 
@@ -66,6 +71,14 @@ impl super::TermWindow {
         };
 
         self.current_mouse_event.replace(event.clone());
+
+        if let Some(menu) = self
+            .get_modal()
+            .and_then(|modal| modal.downcast_rc::<ContextMenu>().ok())
+        {
+            self.mouse_event_context_menu(&menu, event, context);
+            return;
+        }
 
         let border = self.get_os_border();
 
@@ -244,6 +257,50 @@ impl super::TermWindow {
         }
     }
 
+    /// While the menu is open it takes every mouse event, so nothing reaches
+    /// the terminal or the tab bar underneath. A press outside the menu closes
+    /// it and goes no further, which is what menus do on every platform.
+    fn mouse_event_context_menu(
+        &mut self,
+        menu: &ContextMenu,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        let hit = self.resolve_ui_item(&event).map(|item| item.item_type);
+        let entry = match hit {
+            Some(UIItemType::ContextMenuItem(idx)) => Some(idx),
+            _ => None,
+        };
+        let inside = entry.is_some() || hit == Some(UIItemType::ContextMenu);
+
+        match event.kind {
+            WMEK::Move => {
+                menu.pointer_moved((event.coords.x, event.coords.y));
+                if menu.hover(entry) {
+                    context.invalidate();
+                }
+            }
+            WMEK::Press(_) => {
+                if inside {
+                    menu.arm();
+                } else {
+                    self.cancel_modal();
+                }
+            }
+            WMEK::Release(ref press) => {
+                // The press may have happened before the menu opened (it is
+                // the press that opened it), so finish its bookkeeping here.
+                self.current_mouse_capture = None;
+                self.current_mouse_buttons.retain(|p| p != press);
+                if let (Some(idx), true) = (entry, menu.is_armed()) {
+                    self.choose_context_menu_entry(menu, idx);
+                }
+            }
+            _ => {}
+        }
+        context.set_cursor(Some(CursorIcon::Default));
+    }
+
     pub fn mouse_leave_impl(&mut self, context: &dyn WindowOps) {
         self.current_mouse_event = None;
         self.update_title();
@@ -382,6 +439,9 @@ impl super::TermWindow {
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
             }
+            // While the menu is open, mouse_event_context_menu takes the
+            // events before they get this far.
+            UIItemType::ContextMenu | UIItemType::ContextMenuItem(_) => {}
         }
     }
 
@@ -526,11 +586,15 @@ impl super::TermWindow {
                 TabBarItem::NewTabButton { .. } => {
                     self.do_new_tab_button_click(MousePress::Right);
                 }
-                TabBarItem::Tab { .. }
-                | TabBarItem::None
-                | TabBarItem::LeftStatus
-                | TabBarItem::RightStatus
-                | TabBarItem::WindowButton(_) => {}
+                // The tab bar stands in for the title bar, so a right-click
+                // on it opens the menu for the tab and the window.
+                TabBarItem::Tab { tab_idx, .. } => {
+                    self.show_tab_bar_menu(Some(tab_idx), (event.coords.x, event.coords.y));
+                }
+                TabBarItem::None | TabBarItem::LeftStatus | TabBarItem::RightStatus => {
+                    self.show_tab_bar_menu(None, (event.coords.x, event.coords.y));
+                }
+                TabBarItem::WindowButton(_) => {}
             },
             WMEK::Move => match item {
                 TabBarItem::None | TabBarItem::LeftStatus | TabBarItem::RightStatus => {
