@@ -1721,8 +1721,20 @@ impl KeyEvent {
         {
             // Check for simple text generating keys
             match &self.key {
+                // Plain Backspace keeps the legacy DEL byte here, including with
+                // DISAMBIGUATE_ESCAPE_CODES: the spec explicitly exempts
+                // Enter, Tab and Backspace from disambiguation so that a user
+                // can still type `reset` at the shell after a program exits
+                // without resetting the keyboard mode.  Backspace is only
+                // CSI-u encoded when it has modifiers or when
+                // REPORT_ALL_KEYS_AS_ESCAPE_CODES is set.
+                // https://sw.kovidgoyal.net/kitty/keyboard-protocol/#disambiguate
                 Char('\x08') => return '\x7f'.to_string(),
-                Char('\x7f') => return '\x08'.to_string(),
+                // Delete has no single-byte legacy encoding; legacy and
+                // DISAMBIGUATE modes both use CSI 3 ~ (kitty omits the modifier
+                // parameter when there are no modifiers).  Delete with modifiers
+                // is encoded as CSI below.
+                Char('\x7f') => return "\x1b[3~".to_string(),
                 // With DISAMBIGUATE_ESCAPE_CODES, ESC must not be sent as a
                 // raw \x1b byte — the entire point of the flag is to eliminate
                 // that ambiguity.  Let it fall through to the CSI-u path below
@@ -2529,6 +2541,8 @@ mod test {
             "\x1b[105;8u".to_string()
         );
 
+        // Plain Backspace keeps the legacy DEL byte even with
+        // DISAMBIGUATE_ESCAPE_CODES; the spec exempts it from disambiguation.
         assert_eq!(
             KeyEvent {
                 key: KeyCode::Char('\x08'),
@@ -2557,6 +2571,38 @@ mod test {
             }
             .encode_kitty(flags),
             "\x1b[127;5u".to_string()
+        );
+
+        // Test Delete key encoding with DISAMBIGUATE_ESCAPE_CODES
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::Char('\x7f'),
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags),
+            "\x1b[3~".to_string()
+        );
+
+        // Test Delete key with modifiers
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::Char('\x7f'),
+                modifiers: Modifiers::CTRL,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags),
+            "\x1b[3;5~".to_string()
         );
     }
 
@@ -3271,5 +3317,37 @@ mod test {
             .encode_kitty(flags),
             "\x1b[27;1:3u".to_string()
         );
+    }
+
+    #[test]
+    fn test_legacy_backspace_delete() {
+        // Test without DISAMBIGUATE_ESCAPE_CODES (legacy behavior)
+        let flags = KittyKeyboardFlags::empty();
+
+        // Backspace should send \x7f (DEL)
+        let backspace_event = KeyEvent {
+            key: KeyCode::Char('\x08'),
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+        assert_eq!(backspace_event.encode_kitty(flags), "\x7f".to_string());
+
+        // Delete should send \x1b[3~ (traditional CSI without modifier)
+        let delete_event = KeyEvent {
+            key: KeyCode::Char('\x7f'),
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+        assert_eq!(delete_event.encode_kitty(flags), "\x1b[3~".to_string());
     }
 }
