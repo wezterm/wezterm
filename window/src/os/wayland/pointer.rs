@@ -22,7 +22,7 @@ use super::WaylandConnection;
 impl PointerHandler for WaylandState {
     fn pointer_frame(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         _qh: &QueueHandle<Self>,
         pointer: &WlPointer,
         events: &[PointerEvent],
@@ -57,7 +57,7 @@ impl PointerHandler for WaylandState {
                 }
             }
         }
-        self.pointer_window_frame(pointer, events);
+        self.pointer_window_frame(conn, pointer, events);
     }
 }
 
@@ -197,7 +197,12 @@ fn event_serial(event: &PointerEvent) -> Option<u32> {
 }
 
 impl WaylandState {
-    fn pointer_window_frame(&mut self, pointer: &WlPointer, events: &[PointerEvent]) {
+    fn pointer_window_frame(
+        &mut self,
+        conn: &Connection,
+        pointer: &WlPointer,
+        events: &[PointerEvent],
+    ) {
         let windows = self.windows.borrow();
 
         for evt in events {
@@ -216,24 +221,24 @@ impl WaylandState {
                 let mut inner = windows.get(&wid).unwrap().borrow_mut();
 
                 match evt.kind {
-                    PointerEventKind::Enter { .. } => {
-                        inner.window_frame.click_point_moved(
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        // The frame names the cursor for the part under the pointer:
+                        // a resize arrow on a border, so the edge shows it can be dragged.
+                        if let Some(cursor) = inner.window_frame.click_point_moved(
                             Duration::ZERO,
                             &evt.surface.id(),
                             x,
                             y,
-                        );
+                        ) {
+                            if let Some(themed) = self.pointer.as_ref() {
+                                if let Err(err) = themed.set_cursor(conn, cursor) {
+                                    log::error!("set_cursor over the window frame: {}", err);
+                                }
+                            }
+                        }
                     }
                     PointerEventKind::Leave { .. } => {
                         inner.window_frame.click_point_left();
-                    }
-                    PointerEventKind::Motion { .. } => {
-                        inner.window_frame.click_point_moved(
-                            Duration::ZERO,
-                            &evt.surface.id(),
-                            x,
-                            y,
-                        );
                     }
                     PointerEventKind::Press { button, serial, .. }
                     | PointerEventKind::Release { button, serial, .. } => {
