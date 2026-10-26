@@ -113,9 +113,15 @@ macro_rules! rpc {
     };
 }
 
-fn process_unilateral_inner(pane_id: PaneId, local_domain_id: DomainId, decoded: DecodedPdu) {
+fn process_unilateral_inner(
+    pane_id: PaneId,
+    local_domain_id: DomainId,
+    decoded: DecodedPdu,
+    pane_focus_ticket: Option<u64>,
+) {
     promise::spawn::spawn(async move {
-        process_unilateral_inner_async(pane_id, local_domain_id, decoded).await?;
+        process_unilateral_inner_async(pane_id, local_domain_id, decoded, pane_focus_ticket)
+            .await?;
         Ok::<(), anyhow::Error>(())
     })
     .detach();
@@ -125,6 +131,7 @@ async fn process_unilateral_inner_async(
     pane_id: PaneId,
     local_domain_id: DomainId,
     decoded: DecodedPdu,
+    pane_focus_ticket: Option<u64>,
 ) -> anyhow::Result<()> {
     let mux = match Mux::try_get() {
         Some(mux) => mux,
@@ -188,6 +195,11 @@ async fn process_unilateral_inner_async(
             decoded.pdu
         )
     })?;
+    if let Some(ticket) = pane_focus_ticket {
+        if !client_domain.is_current_pane_focus_ticket(ticket) {
+            return Ok(());
+        }
+    }
     client_pane.process_unilateral(decoded.pdu).await
 }
 
@@ -321,8 +333,21 @@ fn process_unilateral(
     }
 
     if let Some(pane_id) = decoded.pdu.pane_id() {
+        let pane_focus_ticket = if matches!(&decoded.pdu, Pdu::PaneFocused(_)) {
+            if let Some(domain) = Mux::try_get().and_then(|mux| mux.get_domain(local_domain_id)) {
+                if let Some(domain) = domain.downcast_ref::<ClientDomain>() {
+                    Some(domain.next_pane_focus_ticket())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         promise::spawn::spawn_into_main_thread(async move {
-            process_unilateral_inner(pane_id, local_domain_id, decoded)
+            process_unilateral_inner(pane_id, local_domain_id, decoded, pane_focus_ticket)
         })
         .detach();
     } else {
@@ -1087,6 +1112,10 @@ impl Client {
                             Ok(_) => {
                                 backoff = BASE_INTERVAL;
                                 log::error!("Reconnected!");
+                                // The reader resumes only after this branch, so
+                                // invalidate old-socket focus work before any
+                                // PDU from the new connection can be received.
+                                ClientDomain::invalidate_pane_focus_tickets(local_domain_id);
                                 promise::spawn::spawn_into_main_thread(async move {
                                     ClientDomain::reattach(local_domain_id, ui).await.ok();
                                 })
@@ -1377,6 +1406,7 @@ impl Client {
     rpc!(list_clients, GetClientList = (), GetClientListResponse);
     rpc!(set_window_workspace, SetWindowWorkspace, UnitResponse);
     rpc!(set_focused_pane_id, SetFocusedPane, UnitResponse);
+    rpc!(acknowledge_pane_focus, PaneFocusAcknowledged, UnitResponse);
     rpc!(get_image_cell, GetImageCell, GetImageCellResponse);
     rpc!(set_configured_palette_for_pane, SetPalette, UnitResponse);
     rpc!(set_tab_title, TabTitleChanged, UnitResponse);
