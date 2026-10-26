@@ -1,0 +1,41 @@
+[package]
+name = "env-bootstrap"
+version = "0.1.0"
+authors = ["Wez Furlong <wez@wezfurlong.org>"]
+edition = "2018"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+backtrace.workspace = true
+battery.workspace = true
+chrono.workspace = true
+color-funcs.workspace = true
+config.workspace = true
+dirs-next.workspace = true
+env_logger = "0.10" # Note: we rely on filter::Builder which is gone in 0.11
+filesystem.workspace = true
+lazy_static.workspace = true
+libc.workspace = true
+log.workspace = true
+logging.workspace = true
+mux-lua.workspace = true
+plugin.workspace = true
+procinfo-funcs.workspace = true
+serde-funcs.workspace = true
+share-data.workspace = true
+spawn-funcs.workspace = true
+ssh-funcs.workspace = true
+termwiz-funcs.workspace = true
+termwiz.workspace = true
+time-funcs.workspace = true
+url-funcs.workspace = true
+wezterm-version.workspace = true
+
+[target."cfg(windows)".dependencies]
+winapi.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation.workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "rangeset"
+version = "0.1.0"
+authors = ["Wez Furlong <wez@wezfurlong.org>"]
+edition = "2018"
+publish = false
+
+[dependencies]
+num.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "rangeset"
+harness = false
+

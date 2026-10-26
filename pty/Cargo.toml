@@ -1,0 +1,40 @@
+[package]
+name = "portable-pty"
+version = "0.9.0"
+authors = ["Wez Furlong"]
+edition = "2018"
+repository = "https://github.com/wezterm/wezterm"
+description = "Cross platform pty interface"
+license = "MIT"
+documentation = "https://docs.rs/portable-pty"
+
+[dependencies]
+anyhow.workspace = true
+downcast-rs.workspace = true
+filedescriptor.workspace = true
+libc.workspace = true
+log.workspace = true
+nix = {workspace=true, features=["term", "fs"]}
+serde = {workspace=true, optional=true, features=["derive"]}
+serial2.workspace = true
+shell-words.workspace = true
+
+[features]
+default = []
+serde_support = ["serde"]
+
+[target."cfg(windows)".dependencies]
+bitflags.workspace = true
+lazy_static.workspace = true
+shared_library.workspace = true
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Environment",
+    "Win32_System_Threading",
+] }
+winreg.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+smol.workspace = true

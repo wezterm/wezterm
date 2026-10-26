@@ -1,0 +1,28 @@
+[package]
+name = "sync-color-schemes"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow.workspace = true
+color-funcs.workspace = true
+config.workspace = true
+env_logger.workspace = true
+futures.workspace = true
+lazy_static.workspace = true
+libflate.workspace = true
+log.workspace = true
+reqwest.workspace = true
+rusqlite = {workspace=true, features=["bundled", "blob"]}
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sqlite-cache.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+tokio = { workspace=true, features = ["rt-multi-thread", "sync", "macros"] }
+toml.workspace = true
+wezterm-dynamic.workspace = true

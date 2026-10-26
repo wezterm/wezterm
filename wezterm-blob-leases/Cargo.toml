@@ -1,0 +1,22 @@
+[package]
+name = "wezterm-blob-leases"
+version = "0.1.1"
+edition = "2021"
+repository = "https://github.com/wezterm/wezterm"
+description = "Manage image blob caching/leasing for wezterm"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+getrandom.workspace = true
+serde = {workspace=true, features=["derive"], optional=true}
+sha2.workspace = true
+tempfile = {workspace=true, optional=true}
+thiserror.workspace = true
+uuid = {workspace=true, features=["v4", "rng"]}
+
+[features]
+default = []
+serde = ["dep:serde", "uuid/serde"]
+simple_tempdir = ["dep:tempfile"]

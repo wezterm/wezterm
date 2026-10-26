@@ -1,0 +1,36 @@
+name: Nix / Update flake.lock
+on:
+  workflow_dispatch:
+  schedule:
+    # once a month
+    - cron: '0 0 1 * *'
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    if: github.repository == 'wezterm/wezterm'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3.21.1
+
+      - name: Cache build artifacts
+        uses: DeterminateSystems/flakehub-cache-action@v3
+
+      - name: Check flake
+        # note: waiting for a release with node24 upgrade
+        # see: https://github.com/DeterminateSystems/flake-checker-action/pull/110
+        uses: DeterminateSystems/flake-checker-action@main
+
+      - name: Update flake.lock
+        uses: DeterminateSystems/update-flake-lock@v28
+        with:
+          token: "${{ secrets.FLAKE_LOCK_GH_PAT }}"
+          pr-title: 'nix: Update flake.lock'
+          pr-labels: |
+            dependencies
+            automated
+          pr-reviewers: bew
+          path-to-flake-dir: 'nix/'

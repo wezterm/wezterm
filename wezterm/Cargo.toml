@@ -1,0 +1,61 @@
+[package]
+name = "wezterm"
+version = "0.1.0"
+authors = ["Wez Furlong <wez@wezfurlong.org>"]
+edition = "2018"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+clap_complete_fig.workspace = true
+codec.workspace = true
+config.workspace = true
+env-bootstrap.workspace = true
+filedescriptor.workspace = true
+hostname.workspace = true
+humantime.workspace = true
+image.workspace = true
+libc.workspace = true
+log.workspace = true
+mux.workspace = true
+portable-pty.workspace = true
+promise.workspace  =true
+serde.workspace = true
+serde_json.workspace = true
+shell-words.workspace = true
+smol.workspace = true
+tabout.workspace = true
+tempfile.workspace = true
+termwiz-funcs.workspace = true
+termwiz.workspace = true
+textwrap.workspace  =true
+umask.workspace = true
+url.workspace = true
+wezterm-client.workspace = true
+wezterm-gui-subcommands.workspace = true
+wezterm-term.workspace = true
+
+[target."cfg(unix)".dependencies]
+termios.workspace = true
+
+[target."cfg(windows)".dependencies.winapi]
+features = [
+    "winbase",
+    "winerror",
+    "winnls",
+    "winuser",
+    "consoleapi",
+    "handleapi",
+    "fileapi",
+    "synchapi",
+]
+workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+cc.workspace = true
+embed-resource.workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "codec"
+version = "0.1.0"
+authors = ["Wez Furlong <wez@wezfurlong.org>"]
+edition = "2018"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow.workspace = true
+config.workspace = true
+leb128.workspace = true
+log.workspace = true
+metrics.workspace = true
+mux.workspace = true
+portable-pty = { workspace = true, features = ["serde_support"]}
+rangeset.workspace = true
+serde = {workspace=true, features = ["rc", "derive"]}
+smol.workspace = true
+termwiz.workspace = true
+thiserror.workspace = true
+varbincode.workspace = true
+wezterm-term = { workspace=true, features=["use_serde"] }
+zstd.workspace = true
+
+[dev-dependencies]
+base91.workspace = true

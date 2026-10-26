@@ -1,0 +1,86 @@
+[package]
+authors = ["Wez Furlong"]
+name = "termwiz"
+version = "0.24.0"
+edition = "2018"
+repository = "https://github.com/wezterm/wezterm"
+description = "Terminal Wizardry for Unix and Windows"
+license = "MIT"
+documentation = "https://docs.rs/termwiz"
+keywords = ["terminal", "readline", "console", "curses"]
+readme = "README.md"
+
+[dependencies]
+anyhow.workspace = true
+bitflags = "2.0"
+cassowary = {workspace=true, optional=true}
+fancy-regex.workspace = true
+filedescriptor.workspace = true
+finl_unicode.workspace = true
+fixedbitset.workspace = true
+fnv = {workspace=true, optional=true}
+image = {workspace=true, optional=true}
+libc.workspace = true
+log.workspace = true
+memmem.workspace = true
+num-derive.workspace = true
+num-traits.workspace = true
+ordered-float = {workspace = true, features=["std"]}
+pest = {workspace=true, optional=true}
+pest_derive = {workspace=true, optional=true}
+phf.workspace = true
+serde = {workspace=true, features = ["rc", "derive"], optional=true}
+sha2 = {workspace=true, optional=true}
+siphasher.workspace = true
+terminfo.workspace = true
+thiserror.workspace = true
+ucd-trie.workspace = true
+unicode-segmentation.workspace = true
+vtparse.workspace = true
+wezterm-bidi.workspace = true
+wezterm-blob-leases = {workspace=true, optional=true}
+wezterm-cell = {workspace = true, features=["std"]}
+wezterm-char-props.workspace = true
+wezterm-color-types = {workspace = true, features=["std"]}
+wezterm-dynamic = {workspace = true, features=["std"]}
+wezterm-escape-parser = {workspace = true, features=["std"]}
+wezterm-input-types.workspace = true
+wezterm-surface = {workspace = true, features=["std", "appdata"]}
+
+[features]
+default = ["image", "tmux_cc"]
+widgets = ["cassowary", "fnv"]
+use_serde = ["serde", "wezterm-color-types/use_serde", "wezterm-blob-leases/serde", "bitflags/serde", "wezterm-input-types/serde", "wezterm-escape-parser/use_serde", "wezterm-cell/use_serde", "wezterm-surface/use_serde"]
+use_image = ["image", "dep:image", "wezterm-escape-parser/use_image", "wezterm-escape-parser/kitty-shm", "wezterm-cell/use_image", "wezterm-surface/use_image"]
+image = ["sha2", "wezterm-blob-leases", "wezterm-escape-parser/image"]
+tmux_cc = ["pest", "pest_derive", "wezterm-escape-parser/tmux_cc"]
+docs = ["widgets", "use_serde", "image", "tmux_cc"]
+
+[dev-dependencies]
+criterion.workspace = true
+env_logger.workspace = true
+k9.workspace = true
+
+[target."cfg(unix)".dependencies]
+signal-hook.workspace = true
+termios.workspace = true
+nix = {workspace=true, features=["mman", "fs"]}
+
+[target."cfg(windows)".dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[package.metadata.docs.rs]
+features = ["docs"]
+rustdoc-args = ["--cfg", "feature=\"docs\""]
+
+[[bench]]
+name = "cell"
+harness = false
+

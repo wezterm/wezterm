@@ -1,0 +1,100 @@
+[package]
+name = "window"
+version = "0.1.0"
+authors = ["Wez Furlong"]
+edition = "2018"
+repository = "https://github.com/wezterm/wezterm"
+description = "Cross platform window setup and render"
+license = "MIT"
+build = "build.rs"
+
+[dev-dependencies]
+k9.workspace = true
+
+[build-dependencies]
+gl_generator.workspace = true
+
+[features]
+wayland = ["wayland-client", "smithay-client-toolkit", "wayland-egl", "wayland-protocols", "wayland-backend", "wayland-protocols-plasma"]
+
+[dependencies]
+async-channel.workspace = true
+async-io.workspace = true
+async-task.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+config.workspace = true
+cursor-icon.workspace = true
+downcast-rs.workspace = true
+thiserror.workspace = true
+bitflags.workspace = true
+euclid.workspace = true
+guillotiere.workspace = true
+lazy_static.workspace = true
+libloading.workspace = true
+line_drawing.workspace = true
+log.workspace = true
+metrics.workspace = true
+promise.workspace = true
+raw-window-handle.workspace = true
+resize.workspace = true
+serde = {workspace=true, features = ["rc", "derive"]}
+tiny-skia.workspace = true
+glium.workspace = true
+url.workspace = true
+wezterm-bidi.workspace = true
+wezterm-color-types.workspace = true
+wezterm-font.workspace = true
+wezterm-input-types.workspace = true
+
+[target."cfg(windows)".dependencies]
+clipboard-win = { workspace = true, features = ["std"] }
+shared_library.workspace = true
+winapi = { workspace=true, features = [
+    "dwmapi",
+    "handleapi",
+    "imm",
+    "libloaderapi",
+    "shellscalingapi",
+    "synchapi",
+    "sysinfoapi",
+    "winerror",
+    "winuser",
+]}
+windows = { workspace=true, features = [
+    "UI_ViewManagement",
+    "Win32_Devices_Display",
+]}
+winreg.workspace = true
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+dirs-next.workspace = true
+filedescriptor.workspace = true
+futures-lite.workspace = true
+futures-util.workspace = true
+libc.workspace = true
+mio = {workspace=true, features=["os-ext"]}
+x11 = {workspace=true, features = ["xlib_xcb", "xlib"]}
+xcb = {workspace=true, features=["render", "randr", "dri2", "xkb", "xlib_xcb", "present", "as-raw-xcb-connection"]}
+xcb-imdkit.workspace = true
+xkbcommon = { workspace=true, features = ["x11", "wayland"] }
+zbus.workspace = true
+zvariant.workspace = true
+
+smithay-client-toolkit = {workspace=true, default-features=false, optional=true}
+wayland-backend = {workspace=true, features=["client_system", "rwh_06"], optional=true}
+wayland-protocols = {workspace=true, optional=true}
+wayland-protocols-plasma = {workspace=true, optional=true}
+wayland-client = {workspace=true, optional=true}
+wayland-egl = {workspace=true, optional=true}
+
+[target.'cfg(target_os="macos")'.dependencies]
+cgl.workspace = true
+cocoa.workspace = true
+core-foundation.workspace = true
+core-graphics.workspace = true
+objc.workspace = true
+objc2-core-graphics.workspace = true
+plist.workspace = true
+shlex.workspace = true

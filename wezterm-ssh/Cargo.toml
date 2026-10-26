@@ -1,0 +1,57 @@
+[package]
+name = "wezterm-ssh"
+version = "0.4.0"
+authors = ["Wez Furlong <wez@wezfurlong.org>"]
+edition = "2018"
+repository = "https://github.com/wezterm/wezterm"
+description = "More convenient higher level wrapper around libssh2"
+license = "MIT"
+documentation = "https://docs.rs/wezterm-ssh"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["libssh-rs", "ssh2"]
+vendored-openssl = ["ssh2/vendored-openssl", "libssh-rs/vendored-openssl"]
+vendored-openssl-ssh2 = ["ssh2/vendored-openssl"]
+vendored-openssl-libssh-rs = ["libssh-rs/vendored-openssl"]
+
+[dependencies]
+anyhow.workspace = true
+base64 = {workspace = true, features=["std"]}
+bitflags.workspace = true
+camino.workspace = true
+dirs-next.workspace = true
+filedescriptor.workspace = true
+filenamegen.workspace = true
+gethostname.workspace = true
+hex = { workspace = true, features = ["std"] }
+libc.workspace = true
+libssh-rs = {workspace=true, features=["vendored"], optional = true}
+#libssh-rs = {path="../../libssh-rs/libssh-rs", features=["vendored"], optional = true}
+log.workspace = true
+portable-pty.workspace = true
+regex.workspace = true
+smol.workspace = true
+socket2.workspace = true
+sha2.workspace = true
+ssh2 = {workspace=true, features=["openssl-on-win32"], optional = true}
+thiserror.workspace = true
+wezterm-uds.workspace = true
+
+# Not used directly, but is used to centralize the openssl vendor feature selection
+async_ossl.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+passfd.workspace = true
+
+[dev-dependencies]
+assert_fs.workspace = true
+clap.workspace = true
+env_logger.workspace = true
+k9.workspace = true
+predicates.workspace = true
+rstest.workspace = true
+shell-words.workspace = true
+termwiz.workspace = true
+whoami.workspace = true

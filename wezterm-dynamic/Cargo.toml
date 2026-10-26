@@ -1,0 +1,20 @@
+[package]
+name = "wezterm-dynamic"
+version = "0.2.1"
+edition = "2021"
+repository = "https://github.com/wezterm/wezterm"
+description = "config serialization for wezterm via dynamic json-like data values"
+license = "MIT"
+
+[features]
+std = ["thiserror/std", "dep:strsim", "ordered-float/std"]
+
+[dependencies]
+log.workspace = true
+ordered-float = {workspace = true, features=["libm"]}
+strsim = {workspace = true, optional=true}
+thiserror = {version="2.0", default-features=false}
+wezterm-dynamic-derive.workspace = true
+
+[dev-dependencies]
+maplit.workspace = true

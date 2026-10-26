@@ -1,0 +1,28 @@
+[package]
+name = "procinfo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["lua"]
+lua = ["dep:luahelper", "dep:wezterm-dynamic"]
+
+[dependencies]
+libc.workspace = true
+log.workspace = true
+luahelper = { workspace=true, optional = true }
+wezterm-dynamic = { workspace=true, optional = true, features=["std"]}
+
+[target."cfg(windows)".dependencies]
+ntapi.workspace = true
+winapi = { workspace=true, features = [
+    "handleapi",
+    "memoryapi",
+    "psapi",
+    "processthreadsapi",
+    "shellapi",
+    "tlhelp32",
+]}
+

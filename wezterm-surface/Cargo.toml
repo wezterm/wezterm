@@ -1,0 +1,39 @@
+[package]
+authors = ["Wez Furlong"]
+name = "wezterm-surface"
+version = "0.1.0"
+edition = "2018"
+repository = "https://github.com/wezterm/wezterm"
+description = "Surface and Line types for terminals"
+license = "MIT"
+documentation = "https://docs.rs/wezterm-surface"
+keywords = ["terminal", "surface", "line"]
+
+[dependencies]
+bitflags = "2.0"
+fancy-regex.workspace = true
+finl_unicode.workspace = true
+fixedbitset.workspace = true
+ordered-float.workspace = true
+serde = {workspace=true, optional=true}
+siphasher.workspace = true
+unicode-segmentation.workspace = true
+wezterm-bidi.workspace = true
+wezterm-blob-leases = {workspace=true, optional=true}
+wezterm-cell = {workspace = true}
+wezterm-char-props.workspace = true
+wezterm-color-types = {workspace = true}
+wezterm-dynamic = {workspace = true}
+wezterm-escape-parser = {workspace = true}
+wezterm-input-types.workspace = true
+
+[features]
+default = []
+std = ["fancy-regex/std", "wezterm-cell/std", "wezterm-dynamic/std", "wezterm-escape-parser/std", "fixedbitset/std", "fancy-regex/perf", "fancy-regex/unicode"]
+appdata = ["std"]
+use_serde = ["serde"] #, "wezterm-color-types/use_serde", "wezterm-blob-leases/serde", "bitflags/serde", "wezterm-input-types/serde", "wezterm-escape-parser/use_serde", "wezterm-cell/use_serde"]
+use_image = ["wezterm-cell/use_image"] # "image", "dep:image", "wezterm-escape-parser/use_image", "wezterm-escape-parser/kitty-shm", "wezterm-cell/use_image"]
+
+[dev-dependencies]
+k9.workspace = true
+

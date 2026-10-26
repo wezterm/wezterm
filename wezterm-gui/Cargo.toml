@@ -1,0 +1,128 @@
+[package]
+name = "wezterm-gui"
+version = "0.1.0"
+authors = ["Wez Furlong <wez@wezfurlong.org>"]
+edition = "2018"
+build = "build.rs"
+resolver = "2"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["vendored-fonts", "wayland"]
+wayland = ["window/wayland"]
+distro-defaults = ["config/distro-defaults"]
+vendor-nerd-font-symbols-font = ["wezterm-font/vendor-nerd-font-symbols"]
+vendor-jetbrains-font = ["wezterm-font/vendor-jetbrains"]
+vendor-roboto-font = ["wezterm-font/vendor-roboto"]
+vendor-noto-emoji-font = ["wezterm-font/vendor-noto-emoji"]
+vendored-fonts = [
+  "vendor-nerd-font-symbols-font",
+  "vendor-jetbrains-font",
+  "vendor-roboto-font",
+  "vendor-noto-emoji-font"
+]
+dhat-heap = ["dhat"]    # if you are doing heap profiling
+dhat-ad-hoc = ["dhat"]  # if you are doing ad hoc profiling
+
+[build-dependencies]
+anyhow.workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+cc.workspace = true
+embed-resource.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bitflags.workspace = true
+bytemuck.workspace = true
+chrono.workspace = true
+clap.workspace = true
+codec.workspace = true
+colorgrad.workspace = true
+config.workspace = true
+dhat = {workspace=true, optional=true}
+dirs-next.workspace = true
+downcast-rs.workspace = true
+emojis.workspace = true
+env-bootstrap.workspace = true
+euclid.workspace = true
+fastrand.workspace = true
+filedescriptor.workspace = true
+finl_unicode.workspace = true
+frecency.workspace = true
+futures.workspace = true
+hdrhistogram.workspace = true
+http_req.workspace = true
+image.workspace = true
+lazy_static.workspace = true
+lfucache.workspace = true
+libc.workspace = true
+log.workspace = true
+luahelper.workspace = true
+metrics.workspace = true
+mlua = {workspace=true, features=["send", "serialize"]}
+mux-lua.workspace = true
+mux.workspace = true
+nucleo-matcher.workspace = true
+ordered-float.workspace = true
+parking_lot.workspace = true
+portable-pty = { workspace=true, features = ["serde_support"]}
+promise.workspace = true
+rangeset.workspace = true
+ratelim.workspace = true
+rayon.workspace = true
+regex.workspace = true
+serde = {workspace=true, features = ["rc", "derive"]}
+serde_json.workspace = true
+shlex.workspace = true
+smol.workspace = true
+tabout.workspace = true
+tempfile.workspace = true
+terminfo.workspace = true
+termwiz-funcs.workspace = true
+termwiz.workspace = true
+textwrap.workspace = true
+thiserror.workspace = true
+tiny-skia.workspace = true
+umask.workspace = true
+unicode-normalization.workspace = true
+unicode-segmentation.workspace = true
+url-funcs.workspace = true
+url.workspace = true
+walkdir.workspace = true
+wezterm-bidi.workspace = true
+wezterm-blob-leases = { workspace=true, features=["simple_tempdir"] }
+wezterm-client.workspace = true
+wezterm-dynamic.workspace = true
+wezterm-font.workspace = true
+wezterm-gui-subcommands.workspace = true
+wezterm-mux-server-impl.workspace = true
+wezterm-open-url.workspace = true
+wezterm-ssh.workspace = true
+wezterm-term.workspace = true
+wezterm-toast-notification.workspace = true
+wgpu.workspace = true
+window-funcs.workspace = true
+window.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+shared_library.workspace = true
+winapi = { workspace=true, features = [
+    "winuser",
+    "consoleapi",
+    "handleapi",
+    "fileapi",
+    "namedpipeapi",
+    "synchapi",
+    "winsock2",
+]}
+windows = { workspace=true, features = [
+    "Win32_UI_Shell",
+]}
+
+[dev-dependencies]
+benchmarking.workspace = true
+env_logger.workspace = true
+k9.workspace = true
