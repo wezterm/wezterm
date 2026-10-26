@@ -37,6 +37,24 @@ use wezterm_term::{
 
 const PROC_INFO_CACHE_TTL: Duration = Duration::from_millis(300);
 
+/// The search pattern after case handling and regex compilation.
+enum CompiledPattern {
+    CaseSensitiveString(String),
+    CaseInSensitiveString(String),
+    Regex(Regex),
+}
+
+/// Maps byte offsets in a logical-line haystack back to terminal coordinates.
+///
+/// The byte offset is the start of a visible cell. The final coordinate may be
+/// synthesized when a match ends at the end of the haystack.
+#[derive(Copy, Clone, Debug)]
+struct SearchCoord {
+    byte_idx: usize,
+    grapheme_idx: usize,
+    stable_row: StableRowIndex,
+}
+
 #[derive(Debug)]
 enum ProcessState {
     Running {
@@ -643,6 +661,11 @@ impl Pane for LocalPane {
         term.get_semantic_zones()
     }
 
+    /// Search the terminal screen, returning at most `limit` matches.
+    ///
+    /// The callback-based screen iterator uses the boolean returned by
+    /// `search_logical_line` to stop once the limit is reached, including when
+    /// several matches occur on the same logical line.
     async fn search(
         &self,
         pattern: Pattern,
@@ -651,12 +674,6 @@ impl Pane for LocalPane {
     ) -> anyhow::Result<Vec<SearchResult>> {
         let term = self.terminal.lock();
         let screen = term.screen();
-
-        enum CompiledPattern {
-            CaseSensitiveString(String),
-            CaseInSensitiveString(String),
-            Regex(Regex),
-        }
 
         let pattern = match pattern {
             Pattern::CaseSensitiveString(s) => CompiledPattern::CaseSensitiveString(s),
@@ -679,168 +696,190 @@ impl Pane for LocalPane {
         let mut uniq_matches: HashMap<String, usize> = HashMap::new();
 
         screen.for_each_logical_line_in_stable_range(range, |sr, lines| {
-            if let Some(limit) = limit {
-                if results.len() == limit as usize {
-                    // We've reach the limit, stop iteration.
-                    return false;
-                }
-            }
-
-            if lines.is_empty() {
-                // Nothing to do on this iteration, carry on with the next.
-                return true;
-            }
-            let haystack = if lines.len() == 1 {
-                lines[0].as_str()
-            } else {
-                let mut s = String::new();
-                for line in lines {
-                    s.push_str(&line.as_str());
-                }
-                Cow::Owned(s)
-            };
-            let stable_idx = sr.start;
-
-            if haystack.is_empty() {
-                return true;
-            }
-
-            let haystack = match &pattern {
-                CompiledPattern::CaseInSensitiveString(_) => Cow::Owned(haystack.to_lowercase()),
-                _ => haystack,
-            };
-            let mut coords = None;
-
-            match &pattern {
-                CompiledPattern::CaseInSensitiveString(s)
-                | CompiledPattern::CaseSensitiveString(s) => {
-                    for (idx, s) in haystack.match_indices(s) {
-                        found_match(
-                            s,
-                            idx,
-                            lines,
-                            stable_idx,
-                            &mut uniq_matches,
-                            &mut coords,
-                            &mut results,
-                        );
-                    }
-                }
-                CompiledPattern::Regex(re) => {
-                    // Allow for the regex to contain captures
-                    for capture_res in re.captures_iter(&haystack) {
-                        match capture_res {
-                            Ok(c) => {
-                                // Look for the captures in reverse order, as index==0 is
-                                // the whole matched string.  We can't just call
-                                // `c.iter().rev()` as the capture iterator isn't double-ended.
-                                for idx in (0..c.len()).rev() {
-                                    if let Some(m) = c.get(idx) {
-                                        found_match(
-                                            m.as_str(),
-                                            m.start(),
-                                            lines,
-                                            stable_idx,
-                                            &mut uniq_matches,
-                                            &mut coords,
-                                            &mut results,
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                // On errors like max backtracking limit reached, fancy_regex does
-                                // NOT advance the iterator position, so silently ignoring Err
-                                // would loop forever.
-                                log::warn!("line {stable_idx} search error: {err}");
-                                log::warn!("stopping collecting matches on line {stable_idx}");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Keep iterating
-            true
+            search_logical_line(
+                &pattern,
+                sr.start,
+                lines,
+                limit,
+                &mut uniq_matches,
+                &mut results,
+            )
         });
-
-        #[derive(Copy, Clone, Debug)]
-        struct Coord {
-            byte_idx: usize,
-            grapheme_idx: usize,
-            stable_row: StableRowIndex,
-        }
-
-        fn found_match(
-            text: &str,
-            byte_idx: usize,
-            lines: &[&Line],
-            stable_idx: StableRowIndex,
-            uniq_matches: &mut HashMap<String, usize>,
-            coords: &mut Option<Vec<Coord>>,
-            results: &mut Vec<SearchResult>,
-        ) {
-            if coords.is_none() {
-                coords.replace(make_coords(lines, stable_idx));
-            }
-            let coords = coords.as_ref().unwrap();
-
-            let match_id = match uniq_matches.get(text).copied() {
-                Some(id) => id,
-                None => {
-                    let id = uniq_matches.len();
-                    uniq_matches.insert(text.to_owned(), id);
-                    id
-                }
-            };
-            let (start_x, start_y) = haystack_idx_to_coord(byte_idx, coords);
-            let (end_x, end_y) = haystack_idx_to_coord(byte_idx + text.len(), coords);
-            results.push(SearchResult {
-                start_x,
-                start_y,
-                end_x,
-                end_y,
-                match_id,
-            });
-        }
-
-        fn make_coords(lines: &[&Line], stable_row: StableRowIndex) -> Vec<Coord> {
-            let mut byte_idx = 0;
-            let mut coords = vec![];
-
-            for (row_idx, line) in lines.iter().enumerate() {
-                for cell in line.visible_cells() {
-                    coords.push(Coord {
-                        byte_idx,
-                        grapheme_idx: cell.cell_index(),
-                        stable_row: stable_row + row_idx as StableRowIndex,
-                    });
-                    byte_idx += cell.str().len();
-                }
-            }
-
-            coords
-        }
-
-        fn haystack_idx_to_coord(idx: usize, coords: &[Coord]) -> (usize, StableRowIndex) {
-            let c = coords
-                .binary_search_by(|ele| ele.byte_idx.cmp(&idx))
-                .or_else(|i| -> Result<usize, usize> { Ok(i) })
-                .unwrap();
-            let coord = coords.get(c).map(|c| *c).unwrap_or_else(|| {
-                let last = coords.last().unwrap();
-                Coord {
-                    grapheme_idx: last.grapheme_idx + 1,
-                    ..*last
-                }
-            });
-            (coord.grapheme_idx, coord.stable_row)
-        }
 
         Ok(results)
     }
+}
+
+/// Collect matches from one logical line, stopping as soon as the global limit
+/// is reached. Returning `false` tells the screen iterator to stop as well.
+///
+/// Regex searches use the last participating capture, matching the existing
+/// pane-search behavior; regex errors stop collection for the current search.
+fn search_logical_line(
+    pattern: &CompiledPattern,
+    stable_idx: StableRowIndex,
+    lines: &[&Line],
+    limit: Option<u32>,
+    uniq_matches: &mut HashMap<String, usize>,
+    results: &mut Vec<SearchResult>,
+) -> bool {
+    if limit.is_some_and(|limit| results.len() >= limit as usize) {
+        return false;
+    }
+
+    if lines.is_empty() {
+        // Nothing to do on this iteration, carry on with the next.
+        return true;
+    }
+    let haystack = if lines.len() == 1 {
+        lines[0].as_str()
+    } else {
+        let mut s = String::new();
+        for line in lines {
+            s.push_str(&line.as_str());
+        }
+        Cow::Owned(s)
+    };
+
+    if haystack.is_empty() {
+        return true;
+    }
+
+    let haystack = match pattern {
+        CompiledPattern::CaseInSensitiveString(_) => Cow::Owned(haystack.to_lowercase()),
+        _ => haystack,
+    };
+    let mut coords = None;
+
+    match pattern {
+        CompiledPattern::CaseInSensitiveString(s) | CompiledPattern::CaseSensitiveString(s) => {
+            for (idx, s) in haystack.match_indices(s) {
+                found_match(
+                    s,
+                    idx,
+                    lines,
+                    stable_idx,
+                    uniq_matches,
+                    &mut coords,
+                    results,
+                );
+                if limit.is_some_and(|limit| results.len() >= limit as usize) {
+                    return false;
+                }
+            }
+        }
+        CompiledPattern::Regex(re) => {
+            // Allow for the regex to contain captures
+            for capture_res in re.captures_iter(&haystack) {
+                match capture_res {
+                    Ok(c) => {
+                        // Look for the captures in reverse order, as index==0 is
+                        // the whole matched string.  We can't just call
+                        // `c.iter().rev()` as the capture iterator isn't double-ended.
+                        for idx in (0..c.len()).rev() {
+                            if let Some(m) = c.get(idx) {
+                                found_match(
+                                    m.as_str(),
+                                    m.start(),
+                                    lines,
+                                    stable_idx,
+                                    uniq_matches,
+                                    &mut coords,
+                                    results,
+                                );
+                                break;
+                            }
+                        }
+                        if limit.is_some_and(|limit| results.len() >= limit as usize) {
+                            return false;
+                        }
+                    }
+                    Err(err) => {
+                        // On errors like max backtracking limit reached, fancy_regex does
+                        // NOT advance the iterator position, so silently ignoring Err
+                        // would loop forever.
+                        log::warn!("line {stable_idx} search error: {err}");
+                        log::warn!("stopping collecting matches on line {stable_idx}");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    true
+}
+
+/// Append one match after converting its byte range into terminal coordinates.
+/// Match IDs are assigned by distinct matched text and are shared across lines.
+fn found_match(
+    text: &str,
+    byte_idx: usize,
+    lines: &[&Line],
+    stable_idx: StableRowIndex,
+    uniq_matches: &mut HashMap<String, usize>,
+    coords: &mut Option<Vec<SearchCoord>>,
+    results: &mut Vec<SearchResult>,
+) {
+    if coords.is_none() {
+        coords.replace(make_coords(lines, stable_idx));
+    }
+    let coords = coords.as_ref().unwrap();
+
+    let match_id = match uniq_matches.get(text).copied() {
+        Some(id) => id,
+        None => {
+            let id = uniq_matches.len();
+            uniq_matches.insert(text.to_owned(), id);
+            id
+        }
+    };
+    let (start_x, start_y) = haystack_idx_to_coord(byte_idx, coords);
+    let (end_x, end_y) = haystack_idx_to_coord(byte_idx + text.len(), coords);
+    results.push(SearchResult {
+        start_x,
+        start_y,
+        end_x,
+        end_y,
+        match_id,
+    });
+}
+
+/// Build byte-offset-to-cell mappings for the physical lines in one logical line.
+fn make_coords(lines: &[&Line], stable_row: StableRowIndex) -> Vec<SearchCoord> {
+    let mut byte_idx = 0;
+    let mut coords = vec![];
+
+    for (row_idx, line) in lines.iter().enumerate() {
+        for cell in line.visible_cells() {
+            coords.push(SearchCoord {
+                byte_idx,
+                grapheme_idx: cell.cell_index(),
+                stable_row: stable_row + row_idx as StableRowIndex,
+            });
+            byte_idx += cell.str().len();
+        }
+    }
+
+    coords
+}
+
+/// Convert a byte offset in a logical-line haystack into a cell and stable row.
+/// Offsets between cells resolve to the following cell; an end offset resolves
+/// to one cell past the final visible cell.
+fn haystack_idx_to_coord(idx: usize, coords: &[SearchCoord]) -> (usize, StableRowIndex) {
+    let c = coords
+        .binary_search_by(|ele| ele.byte_idx.cmp(&idx))
+        .or_else(|i| -> Result<usize, usize> { Ok(i) })
+        .unwrap();
+    let coord = coords.get(c).map(|c| *c).unwrap_or_else(|| {
+        let last = coords.last().unwrap();
+        SearchCoord {
+            grapheme_idx: last.grapheme_idx + 1,
+            ..*last
+        }
+    });
+    (coord.grapheme_idx, coord.stable_row)
 }
 
 struct LocalPaneDCSHandler {
@@ -1159,5 +1198,80 @@ impl Drop for LocalPane {
         if let ProcessState::Running { signaller, .. } = &mut *self.process.lock() {
             let _ = signaller.kill();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn search_lines(text: &str, pattern: CompiledPattern, limit: Option<u32>) -> Vec<SearchResult> {
+        let line = Line::from_text(text, &Default::default(), 1, None);
+        let lines = [&line];
+        let mut uniq_matches = HashMap::new();
+        let mut results = vec![];
+
+        search_logical_line(&pattern, 0, &lines, limit, &mut uniq_matches, &mut results);
+
+        results
+    }
+
+    #[test]
+    fn search_respects_limit_with_many_string_matches_on_one_line() {
+        let pattern = CompiledPattern::CaseSensitiveString("foo".to_string());
+        let haystack = "foo foo foo foo foo foo foo foo foo foo";
+        assert_eq!(search_lines(haystack, pattern, Some(1)).len(), 1);
+
+        let pattern = CompiledPattern::CaseSensitiveString("foo".to_string());
+        assert_eq!(search_lines(haystack, pattern, Some(5)).len(), 5);
+    }
+
+    #[test]
+    fn search_respects_limit_with_many_regex_matches_on_one_line() {
+        let pattern = CompiledPattern::Regex(Regex::new("(foo)").unwrap());
+        let haystack = "foo foo foo foo foo foo foo foo foo foo";
+        assert_eq!(search_lines(haystack, pattern, Some(5)).len(), 5);
+    }
+
+    #[test]
+    fn search_respects_limit_across_logical_lines() {
+        let first = Line::from_text("foo foo foo foo", &Default::default(), 1, None);
+        let second = Line::from_text("foo foo foo foo", &Default::default(), 1, None);
+        let first_lines = [&first];
+        let second_lines = [&second];
+        let pattern = CompiledPattern::CaseSensitiveString("foo".to_string());
+        let mut uniq_matches = HashMap::new();
+        let mut results = vec![];
+
+        assert!(search_logical_line(
+            &pattern,
+            0,
+            &first_lines,
+            Some(5),
+            &mut uniq_matches,
+            &mut results,
+        ));
+        assert!(!search_logical_line(
+            &pattern,
+            1,
+            &second_lines,
+            Some(5),
+            &mut uniq_matches,
+            &mut results,
+        ));
+        assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn search_limit_zero_returns_no_results() {
+        let pattern = CompiledPattern::CaseSensitiveString("foo".to_string());
+        assert_eq!(search_lines("foo foo", pattern, Some(0)).len(), 0);
+    }
+
+    #[test]
+    fn search_without_limit_returns_all_results() {
+        let pattern = CompiledPattern::CaseSensitiveString("foo".to_string());
+        let haystack = "foo foo foo foo foo foo foo foo foo foo";
+        assert_eq!(search_lines(haystack, pattern, None).len(), 10);
     }
 }
