@@ -805,9 +805,14 @@ impl TabInner {
         }
         self.pane.replace(cursor.tree());
         self.zoomed = zoomed;
+        // The tree, its split sizes and the size are the server's, and the panes
+        // learn their sizes from the server's updates. Resizing them here would
+        // ask the server for the size it just reported, undoing any resize asked
+        // for since: while a window is resized, each size the server applies
+        // would be sent back to it, and the panes would bounce between sizes,
+        // ending at a stale one.
         self.size = size;
-
-        self.resize(size);
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
 
         log::debug!(
             "sync tab: {:#?} zoomed: {} {:#?}",
