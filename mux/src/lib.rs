@@ -91,6 +91,18 @@ pub enum MuxNotification {
         window_id: WindowId,
         title: String,
     },
+    /// A tab variable was set (`value` is Some) or removed (None).
+    TabVarChanged {
+        tab_id: TabId,
+        name: String,
+        value: Option<String>,
+    },
+    /// A window variable was set (`value` is Some) or removed (None).
+    WindowVarChanged {
+        window_id: WindowId,
+        name: String,
+        value: Option<String>,
+    },
     WorkspaceRenamed {
         old_workspace: String,
         new_workspace: String,

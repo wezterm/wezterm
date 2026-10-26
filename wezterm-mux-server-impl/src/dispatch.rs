@@ -190,6 +190,34 @@ where
                     .await?;
                 stream.flush().await.context("flushing PDU to client")?;
             }
+            Ok(Item::Notif(MuxNotification::TabVarChanged {
+                tab_id,
+                name,
+                value,
+            })) => {
+                Pdu::TabVarChanged(codec::TabVarChanged {
+                    tab_id,
+                    name,
+                    value,
+                })
+                .encode_async(&mut stream, 0)
+                .await?;
+                stream.flush().await.context("flushing PDU to client")?;
+            }
+            Ok(Item::Notif(MuxNotification::WindowVarChanged {
+                window_id,
+                name,
+                value,
+            })) => {
+                Pdu::WindowVarChanged(codec::WindowVarChanged {
+                    window_id,
+                    name,
+                    value,
+                })
+                .encode_async(&mut stream, 0)
+                .await?;
+                stream.flush().await.context("flushing PDU to client")?;
+            }
             Ok(Item::Notif(MuxNotification::WorkspaceRenamed {
                 old_workspace,
                 new_workspace,

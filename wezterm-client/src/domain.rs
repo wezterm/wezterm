@@ -338,6 +338,50 @@ fn mux_notify_client_domain(local_domain_id: DomainId, notif: MuxNotification) -
             })
             .detach();
         }
+        // A variable set here, from Lua, on a tab or window of the server: set it there.
+        // Changes the server reports are mirrored with sync_var, which does not notify.
+        MuxNotification::TabVarChanged {
+            tab_id,
+            name,
+            value,
+        } => {
+            if let Some(remote_tab_id) = client_domain.local_to_remote_tab_id(tab_id) {
+                if let Some(inner) = client_domain.inner() {
+                    promise::spawn::spawn(async move {
+                        inner
+                            .client
+                            .set_tab_var(codec::TabVarChanged {
+                                tab_id: remote_tab_id,
+                                name,
+                                value,
+                            })
+                            .await
+                    })
+                    .detach();
+                }
+            }
+        }
+        MuxNotification::WindowVarChanged {
+            window_id,
+            name,
+            value,
+        } => {
+            if let Some(remote_window_id) = client_domain.local_to_remote_window_id(window_id) {
+                if let Some(inner) = client_domain.inner() {
+                    promise::spawn::spawn(async move {
+                        inner
+                            .client
+                            .set_window_var(codec::WindowVarChanged {
+                                window_id: remote_window_id,
+                                name,
+                                value,
+                            })
+                            .await
+                    })
+                    .detach();
+                }
+            }
+        }
         MuxNotification::TabTitleChanged { tab_id, title } => {
             if let Some(remote_tab_id) = client_domain.local_to_remote_tab_id(tab_id) {
                 if let Some(inner) = client_domain.inner() {
@@ -491,6 +535,38 @@ impl ClientDomain {
         }
     }
 
+    /// A variable of a window of the server changed: mirror it, without sending it back.
+    pub fn process_remote_window_var_change(
+        &self,
+        remote_window_id: WindowId,
+        name: &str,
+        value: Option<&str>,
+    ) {
+        if let Some(inner) = self.inner() {
+            if let Some(local_window_id) = inner.remote_to_local_window(remote_window_id) {
+                if let Some(mut window) = Mux::get().get_window_mut(local_window_id) {
+                    window.sync_var(name, value);
+                }
+            }
+        }
+    }
+
+    /// A variable of a tab of the server changed: mirror it, without sending it back.
+    pub fn process_remote_tab_var_change(
+        &self,
+        remote_tab_id: TabId,
+        name: &str,
+        value: Option<&str>,
+    ) {
+        if let Some(inner) = self.inner() {
+            if let Some(local_tab_id) = inner.remote_to_local_tab_id(remote_tab_id) {
+                if let Some(tab) = Mux::get().get_tab(local_tab_id) {
+                    tab.sync_var(name, value);
+                }
+            }
+        }
+    }
+
     pub fn process_remote_tab_title_change(&self, remote_tab_id: TabId, title: String) {
         if let Some(inner) = self.inner() {
             if let Some(local_tab_id) = inner.remote_to_local_tab_id(remote_tab_id) {
@@ -537,7 +613,19 @@ impl ClientDomain {
             .copied()
             .collect();
 
-        for (tabroot, tab_title) in panes.tabs.into_iter().zip(panes.tab_titles.iter()) {
+        anyhow::ensure!(
+            panes.tab_titles.len() == panes.tabs.len() && panes.tab_vars.len() == panes.tabs.len(),
+            "the server listed {} tabs with {} titles and {} sets of variables",
+            panes.tabs.len(),
+            panes.tab_titles.len(),
+            panes.tab_vars.len()
+        );
+        for ((tabroot, tab_title), tab_vars) in panes
+            .tabs
+            .into_iter()
+            .zip(panes.tab_titles.iter())
+            .zip(panes.tab_vars.into_iter())
+        {
             let root_size = match tabroot.root_size() {
                 Some(size) => size,
                 None => continue,
@@ -574,6 +662,7 @@ impl ClientDomain {
                 }
 
                 tab.set_title(tab_title);
+                tab.sync_vars(tab_vars);
 
                 log::debug!("domain: {} tree: {:#?}", inner.local_domain_id, tabroot);
                 let mut workspace = None;
@@ -675,6 +764,15 @@ impl ClientDomain {
                     .get_window_mut(local_window_id)
                     .expect("no such window!?");
                 window.set_title(&window_title);
+            }
+        }
+
+        for (remote_window_id, window_vars) in panes.window_vars {
+            if let Some(local_window_id) = inner.remote_to_local_window(remote_window_id) {
+                let mut window = mux
+                    .get_window_mut(local_window_id)
+                    .expect("no such window!?");
+                window.sync_vars(window_vars);
             }
         }
 

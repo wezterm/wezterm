@@ -1,6 +1,7 @@
 use crate::cli::CliOutputFormatKind;
 use clap::Parser;
 use serde::Serializer as _;
+use std::collections::BTreeMap;
 use tabout::{tabulate_output, Alignment, Column};
 use wezterm_client::client::Client;
 use wezterm_term::TerminalSize;
@@ -20,7 +21,19 @@ impl ListCommand {
         let mut output_items = vec![];
         let panes = client.list_panes().await?;
 
-        for (tabroot, tab_title) in panes.tabs.into_iter().zip(panes.tab_titles.iter()) {
+        anyhow::ensure!(
+            panes.tab_titles.len() == panes.tabs.len() && panes.tab_vars.len() == panes.tabs.len(),
+            "the server listed {} tabs with {} titles and {} sets of variables",
+            panes.tabs.len(),
+            panes.tab_titles.len(),
+            panes.tab_vars.len()
+        );
+        for ((tabroot, tab_title), tab_vars) in panes
+            .tabs
+            .into_iter()
+            .zip(panes.tab_titles.iter())
+            .zip(panes.tab_vars.iter())
+        {
             let mut cursor = tabroot.into_tree().cursor();
 
             loop {
@@ -30,10 +43,18 @@ impl ListCommand {
                         .get(&entry.window_id)
                         .map(|s| s.as_str())
                         .unwrap_or("");
+                    let window_vars = panes.window_vars.get(&entry.window_id).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "the server listed no variables for window {}",
+                            entry.window_id
+                        )
+                    })?;
                     output_items.push(CliListResultItem::from(
                         entry.clone(),
                         tab_title,
+                        tab_vars,
                         window_title,
+                        window_vars,
                     ));
                 }
                 match cursor.preorder_next() {
@@ -135,14 +156,24 @@ struct CliListResultItem {
     /// Number of rows from the top of the tab area to the top of this pane
     top_row: usize,
     tab_title: String,
+    /// The tab's variables (`wezterm cli set-tab-var`)
+    tab_vars: BTreeMap<String, String>,
     window_title: String,
+    /// The window's variables (`wezterm cli set-window-var`)
+    window_vars: BTreeMap<String, String>,
     is_active: bool,
     is_zoomed: bool,
     tty_name: Option<String>,
 }
 
 impl CliListResultItem {
-    fn from(pane: mux::tab::PaneEntry, tab_title: &str, window_title: &str) -> CliListResultItem {
+    fn from(
+        pane: mux::tab::PaneEntry,
+        tab_title: &str,
+        tab_vars: &BTreeMap<String, String>,
+        window_title: &str,
+        window_vars: &BTreeMap<String, String>,
+    ) -> CliListResultItem {
         let mux::tab::PaneEntry {
             window_id,
             tab_id,
@@ -193,7 +224,9 @@ impl CliListResultItem {
             left_col,
             top_row,
             tab_title: tab_title.to_string(),
+            tab_vars: tab_vars.clone(),
             window_title: window_title.to_string(),
+            window_vars: window_vars.clone(),
             is_active: is_active_pane,
             is_zoomed: is_zoomed_pane,
             tty_name,
