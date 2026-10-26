@@ -297,6 +297,41 @@ fn compute_tab_title(
     }
 }
 
+/// Widths for tabs that want `wanted` cells each, sharing `available` cells.
+/// When they do not all fit, the width goes where it is needed: a tab whose
+/// title is shorter than an even share keeps its full width, and the cells it
+/// leaves are shared among the longer titles, which are clamped to a common
+/// width (the leftmost of them get one more cell when the division is uneven).
+fn tab_widths(wanted: &[usize], available: usize) -> Vec<usize> {
+    if wanted.iter().sum::<usize>() <= available {
+        return wanted.to_vec();
+    }
+    let mut ascending = wanted.to_vec();
+    ascending.sort_unstable();
+    let mut remaining = available;
+    let mut clamp = 0;
+    for (shorter, &width) in ascending.iter().enumerate() {
+        let share = remaining / (ascending.len() - shorter);
+        if width > share {
+            clamp = share;
+            break;
+        }
+        remaining -= width;
+    }
+    let mut widths: Vec<usize> = wanted.iter().map(|&width| width.min(clamp)).collect();
+    let mut spare = available - widths.iter().sum::<usize>();
+    for (width, &want) in widths.iter_mut().zip(wanted) {
+        if spare == 0 {
+            break;
+        }
+        if want > *width {
+            *width += 1;
+            spare -= 1;
+        }
+    }
+    widths
+}
+
 fn is_tab_hover(mouse_x: Option<usize>, x: usize, tab_title_len: usize) -> bool {
     return mouse_x
         .map(|mouse_x| mouse_x >= x && mouse_x < x + tab_title_len)
@@ -487,19 +522,20 @@ impl TabBarState {
         } else {
             vec![]
         };
-        let titles_len: usize = tab_titles.iter().map(|s| s.len).sum();
         let number_of_tabs = tab_titles.len();
 
         let available_cells =
             title_width.saturating_sub(number_of_tabs.saturating_sub(1) + new_tab.len());
-        let tab_width_max = if config.use_fancy_tab_bar || available_cells >= titles_len {
-            // We can render each title with its full width
-            usize::max_value()
+        let wanted: Vec<usize> = tab_titles
+            .iter()
+            .map(|title| title.len.min(config.tab_max_width))
+            .collect();
+        let widths = if config.use_fancy_tab_bar {
+            // The fancy tab bar lays out its own widths
+            wanted
         } else {
-            // We need to clamp the length to balance them out
-            available_cells / number_of_tabs
-        }
-        .min(config.tab_max_width);
+            tab_widths(&wanted, available_cells)
+        };
 
         let mut line = Line::with_width(0, SEQ_ZERO);
 
@@ -544,6 +580,7 @@ impl TabBarState {
         }
 
         for (tab_idx, tab_title) in tab_titles.iter().enumerate() {
+            let tab_width_max = widths[tab_idx];
             let tab_title_len = tab_title.len.min(tab_width_max);
             let active = tab_idx == active_tab_no;
             let hover = !active && is_tab_hover(mouse_x, x, tab_title_len);
@@ -823,4 +860,40 @@ pub fn parse_status_text(text: &str, default_cell: CellAttributes) -> Line {
     });
     flush_print(&mut print_buffer, &mut cells, &pen);
     Line::from_cells(cells, SEQ_ZERO)
+}
+
+#[cfg(test)]
+mod test {
+    use super::tab_widths;
+
+    #[test]
+    fn titles_that_fit_keep_their_width() {
+        assert_eq!(tab_widths(&[10, 30, 5], 45), vec![10, 30, 5]);
+        assert_eq!(tab_widths(&[10, 30, 5], 100), vec![10, 30, 5]);
+    }
+
+    #[test]
+    fn short_titles_leave_their_room_to_long_ones() {
+        // An even share would be 20 each, leaving 15 cells of the two short tabs unused.
+        assert_eq!(tab_widths(&[5, 50, 10, 40], 80), vec![5, 33, 10, 32]);
+        assert_eq!(tab_widths(&[5, 50, 10, 40], 80).iter().sum::<usize>(), 80);
+    }
+
+    #[test]
+    fn long_titles_share_evenly_with_the_remainder_going_left() {
+        assert_eq!(tab_widths(&[30, 30, 30], 50), vec![17, 17, 16]);
+        assert_eq!(tab_widths(&[30, 8, 30, 30], 50), vec![14, 8, 14, 14]);
+    }
+
+    #[test]
+    fn a_title_that_wants_less_than_its_share_is_not_widened() {
+        assert_eq!(tab_widths(&[16, 17, 40], 50), vec![16, 17, 17]);
+    }
+
+    #[test]
+    fn too_little_room_for_every_tab() {
+        assert_eq!(tab_widths(&[9, 9, 9], 2), vec![1, 1, 0]);
+        assert_eq!(tab_widths(&[9, 9], 0), vec![0, 0]);
+        assert_eq!(tab_widths(&[], 10), Vec::<usize>::new());
+    }
 }
