@@ -284,12 +284,19 @@ impl WaylandWindow {
         }
 
         window.set_min_size(Some((32, 32)));
+        // The window geometry is the frame with the surface inside it: location() is the
+        // frame's top left corner relative to the surface, and add_borders its size.
         let (x, y) = window_frame.location();
         let surface_width = dimensions.pixels_to_surface(dimensions.pixel_width as i32);
         let surface_height = dimensions.pixels_to_surface(dimensions.pixel_height as i32);
-        window
-            .xdg_surface()
-            .set_window_geometry(x, y, surface_width, surface_height);
+        let (geometry_width, geometry_height) =
+            window_frame.add_borders(surface_width as u32, surface_height as u32);
+        window.xdg_surface().set_window_geometry(
+            x,
+            y,
+            geometry_width as i32,
+            geometry_height as i32,
+        );
         window.commit();
 
         let pending_mouse = PendingMouse::create(window_id);
@@ -863,6 +870,15 @@ impl WaylandWindowInner {
             self.window_frame.update_state(window_config.state);
             self.window_frame
                 .update_wm_capabilities(window_config.capabilities);
+            if let (Some(width), Some(height)) = window_config.new_size {
+                // The surface gets what the frame leaves of the suggested window geometry
+                // (all of it when the frame is hidden, or the window is fullscreen).
+                let (width, height) = self.window_frame.subtract_borders(width, height);
+                pending.configure.replace((
+                    width.map_or(1, NonZeroU32::get),
+                    height.map_or(1, NonZeroU32::get),
+                ));
+            }
         }
 
         if let Some((mut w, mut h)) = pending.configure.take() {
@@ -916,11 +932,14 @@ impl WaylandWindowInner {
                 let (x, y) = self.window_frame.location();
                 let surface_width = self.pixels_to_surface(pixel_width);
                 let surface_height = self.pixels_to_surface(pixel_height);
+                let (geometry_width, geometry_height) = self
+                    .window_frame
+                    .add_borders(surface_width as u32, surface_height as u32);
                 self.window
                     .as_mut()
                     .unwrap()
                     .xdg_surface()
-                    .set_window_geometry(x, y, surface_width, surface_height);
+                    .set_window_geometry(x, y, geometry_width as i32, geometry_height as i32);
                 // Compute the new pixel dimensions
                 let new_dimensions = Dimensions {
                     pixel_width: pixel_width.try_into().unwrap(),
@@ -1395,18 +1414,18 @@ impl WaylandState {
                 }
             }
             WaylandWindowEvent::Request(configure) => {
-                pending_event.window_configure.replace(configure.clone());
-                // TODO: This should the new queue function
-                // p.queue_configure(&configure)
-                //
-                let mut changed;
+                // A size the compositor suggests is that of the window geometry, which
+                // includes the frame when we draw one. dispatch_pending_event takes the
+                // frame off, once it has shown or hidden the frame for this configure.
+                let first = pending_event
+                    .window_configure
+                    .replace(configure.clone())
+                    .is_none();
                 pending_event.had_configure_event = true;
-                if let (Some(w), Some(h)) = configure.new_size {
-                    changed = pending_event.configure.is_none();
-                    pending_event.configure.replace((w.get(), h.get()));
-                } else {
-                    changed = true;
-                }
+                let mut changed = match configure.new_size {
+                    (Some(_), Some(_)) => first,
+                    _ => true,
+                };
 
                 let mut state = WindowState::default();
                 if configure.state.contains(SCTKWindowState::FULLSCREEN) {
