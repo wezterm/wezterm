@@ -50,6 +50,56 @@ pub struct ClientPane {
     config: Mutex<Option<Arc<dyn TerminalConfiguration>>>,
     unseen_output: Mutex<bool>,
     progress: Mutex<Progress>,
+    resizes: Arc<Mutex<Resizes>>,
+}
+
+/// The sizes this client asks the server to give a pane. They are sent one at a
+/// time, the next only once the server has applied the last, and only the most
+/// recent size waits to be sent: requests sent together could be applied in any
+/// order, and an earlier size could be the one the pane is left at.
+struct Resizes {
+    /// The size most recently asked for.
+    wanted: TerminalSize,
+    /// The size the server last applied at our request; None once the server
+    /// reports another size, which a request must then put right.
+    applied: Option<TerminalSize>,
+    in_flight: bool,
+}
+
+/// Send `resizes.wanted` until the server has applied it, one request at a time.
+async fn send_resizes(
+    client: Arc<ClientInner>,
+    remote_tab_id: TabId,
+    remote_pane_id: PaneId,
+    resizes: Arc<Mutex<Resizes>>,
+) {
+    loop {
+        let size = {
+            let mut state = resizes.lock();
+            if Some(state.wanted) == state.applied {
+                state.in_flight = false;
+                return;
+            }
+            state.wanted
+        };
+        let result = client
+            .client
+            .resize(Resize {
+                containing_tab_id: remote_tab_id,
+                pane_id: remote_pane_id,
+                size,
+            })
+            .await;
+        let mut state = resizes.lock();
+        match result {
+            Ok(_) => state.applied = Some(size),
+            Err(err) => {
+                log::error!("resizing remote pane {remote_pane_id} to {size:?}: {err:#}");
+                state.in_flight = false;
+                return;
+            }
+        }
+    }
 }
 
 impl ClientPane {
@@ -128,6 +178,12 @@ impl ClientPane {
             clipboard: Mutex::new(None),
             mouse_grabbed: Mutex::new(false),
             alt_screen_active: Mutex::new(false),
+            // The server made the pane at this size.
+            resizes: Arc::new(Mutex::new(Resizes {
+                wanted: size,
+                applied: Some(size),
+                in_flight: false,
+            })),
             ignore_next_kill: Mutex::new(false),
             unseen_output: Mutex::new(false),
             user_vars: Mutex::new(HashMap::new()),
@@ -396,11 +452,11 @@ impl Pane for ClientPane {
         let cols = size.cols as usize;
         let rows = size.rows as usize;
 
-        if inner.dimensions.cols != cols
+        let server_differs = inner.dimensions.cols != cols
             || inner.dimensions.viewport_rows != rows
             || inner.dimensions.pixel_width != size.pixel_width
-            || inner.dimensions.pixel_height != size.pixel_height
-        {
+            || inner.dimensions.pixel_height != size.pixel_height;
+        if server_differs {
             inner.dimensions.cols = cols;
             inner.dimensions.viewport_rows = rows;
             inner.dimensions.pixel_width = size.pixel_width;
@@ -408,22 +464,32 @@ impl Pane for ClientPane {
 
             // Invalidate any cached rows on a resize
             inner.make_all_stale();
-
-            let client = Arc::clone(&self.client);
-            let remote_pane_id = self.remote_pane_id;
-            let remote_tab_id = self.remote_tab_id;
-            promise::spawn::spawn(async move {
-                client
-                    .client
-                    .resize(Resize {
-                        containing_tab_id: remote_tab_id,
-                        pane_id: remote_pane_id,
-                        size,
-                    })
-                    .await
-            })
-            .detach();
             inner.update_last_send();
+        }
+        drop(inner);
+        drop(render);
+
+        // The dimensions above follow the server's, which lag behind our requests
+        // while one is in flight; then only a new size has anything to send.
+        // Otherwise a server whose pane is another size (another client resized
+        // it) is told ours again.
+        let mut resizes = self.resizes.lock();
+        if resizes.wanted == size && (resizes.in_flight || !server_differs) {
+            return Ok(());
+        }
+        resizes.wanted = size;
+        if !resizes.in_flight {
+            if server_differs {
+                resizes.applied = None;
+            }
+            resizes.in_flight = true;
+            promise::spawn::spawn(send_resizes(
+                Arc::clone(&self.client),
+                self.remote_tab_id,
+                self.remote_pane_id,
+                Arc::clone(&self.resizes),
+            ))
+            .detach();
         }
         Ok(())
     }
