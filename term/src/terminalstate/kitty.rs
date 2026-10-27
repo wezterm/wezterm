@@ -1,6 +1,6 @@
 use crate::terminalstate::image::*;
 use crate::terminalstate::{ImageAttachParams, PlacementInfo};
-use crate::{StableRowIndex, TerminalState};
+use crate::{StableRowIndex, TerminalState, VisibleRowIndex};
 use ::image::{
     DynamicImage, GenericImage, GenericImageView, ImageBuffer, RgbImage, Rgba, RgbaImage,
 };
@@ -9,13 +9,87 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
-use wezterm_cell::image::ImageDataType;
+use wezterm_cell::color::ColorAttribute;
+use wezterm_cell::image::{ImageCell, ImageDataType, TextureCoordinate};
+use wezterm_cell::{Cell, CellAttributes};
 use wezterm_escape_parser::apc::{
     KittyFrameCompositionMode, KittyImage, KittyImageCompression, KittyImageData, KittyImageDelete,
     KittyImageFormat, KittyImageFrame, KittyImageFrameCompose, KittyImagePlacement,
     KittyImageTransmit, KittyImageVerbosity,
 };
 use wezterm_surface::change::ImageData;
+use wezterm_surface::SequenceNo;
+
+/// The placeholder character used to reference virtual placements.
+/// <https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders>
+pub(crate) const KITTY_UNICODE_PLACEHOLDER: char = '\u{10EEEE}';
+
+/// The combining characters used to encode row, column and
+/// most-significant-image-id-byte values on kitty image placeholder cells.
+/// The value encoded by a combining character is its index in this table,
+/// which mirrors rowcolumn-diacritics.txt from the kitty source and must
+/// remain sorted so that we can binary search it.
+#[rustfmt::skip]
+const KITTY_ROW_COLUMN_DIACRITICS: &[u32] = &[
+    0x00305, 0x0030d, 0x0030e, 0x00310, 0x00312, 0x0033d, 0x0033e, 0x0033f, 0x00346, 0x0034a, 0x0034b, 0x0034c,
+    0x00350, 0x00351, 0x00352, 0x00357, 0x0035b, 0x00363, 0x00364, 0x00365, 0x00366, 0x00367, 0x00368, 0x00369,
+    0x0036a, 0x0036b, 0x0036c, 0x0036d, 0x0036e, 0x0036f, 0x00483, 0x00484, 0x00485, 0x00486, 0x00487, 0x00592,
+    0x00593, 0x00594, 0x00595, 0x00597, 0x00598, 0x00599, 0x0059c, 0x0059d, 0x0059e, 0x0059f, 0x005a0, 0x005a1,
+    0x005a8, 0x005a9, 0x005ab, 0x005ac, 0x005af, 0x005c4, 0x00610, 0x00611, 0x00612, 0x00613, 0x00614, 0x00615,
+    0x00616, 0x00617, 0x00657, 0x00658, 0x00659, 0x0065a, 0x0065b, 0x0065d, 0x0065e, 0x006d6, 0x006d7, 0x006d8,
+    0x006d9, 0x006da, 0x006db, 0x006dc, 0x006df, 0x006e0, 0x006e1, 0x006e2, 0x006e4, 0x006e7, 0x006e8, 0x006eb,
+    0x006ec, 0x00730, 0x00732, 0x00733, 0x00735, 0x00736, 0x0073a, 0x0073d, 0x0073f, 0x00740, 0x00741, 0x00743,
+    0x00745, 0x00747, 0x00749, 0x0074a, 0x007eb, 0x007ec, 0x007ed, 0x007ee, 0x007ef, 0x007f0, 0x007f1, 0x007f3,
+    0x00816, 0x00817, 0x00818, 0x00819, 0x0081b, 0x0081c, 0x0081d, 0x0081e, 0x0081f, 0x00820, 0x00821, 0x00822,
+    0x00823, 0x00825, 0x00826, 0x00827, 0x00829, 0x0082a, 0x0082b, 0x0082c, 0x0082d, 0x00951, 0x00953, 0x00954,
+    0x00f82, 0x00f83, 0x00f86, 0x00f87, 0x0135d, 0x0135e, 0x0135f, 0x017dd, 0x0193a, 0x01a17, 0x01a75, 0x01a76,
+    0x01a77, 0x01a78, 0x01a79, 0x01a7a, 0x01a7b, 0x01a7c, 0x01b6b, 0x01b6d, 0x01b6e, 0x01b6f, 0x01b70, 0x01b71,
+    0x01b72, 0x01b73, 0x01cd0, 0x01cd1, 0x01cd2, 0x01cda, 0x01cdb, 0x01ce0, 0x01dc0, 0x01dc1, 0x01dc3, 0x01dc4,
+    0x01dc5, 0x01dc6, 0x01dc7, 0x01dc8, 0x01dc9, 0x01dcb, 0x01dcc, 0x01dd1, 0x01dd2, 0x01dd3, 0x01dd4, 0x01dd5,
+    0x01dd6, 0x01dd7, 0x01dd8, 0x01dd9, 0x01dda, 0x01ddb, 0x01ddc, 0x01ddd, 0x01dde, 0x01ddf, 0x01de0, 0x01de1,
+    0x01de2, 0x01de3, 0x01de4, 0x01de5, 0x01de6, 0x01dfe, 0x020d0, 0x020d1, 0x020d4, 0x020d5, 0x020d6, 0x020d7,
+    0x020db, 0x020dc, 0x020e1, 0x020e7, 0x020e9, 0x020f0, 0x02cef, 0x02cf0, 0x02cf1, 0x02de0, 0x02de1, 0x02de2,
+    0x02de3, 0x02de4, 0x02de5, 0x02de6, 0x02de7, 0x02de8, 0x02de9, 0x02dea, 0x02deb, 0x02dec, 0x02ded, 0x02dee,
+    0x02def, 0x02df0, 0x02df1, 0x02df2, 0x02df3, 0x02df4, 0x02df5, 0x02df6, 0x02df7, 0x02df8, 0x02df9, 0x02dfa,
+    0x02dfb, 0x02dfc, 0x02dfd, 0x02dfe, 0x02dff, 0x0a66f, 0x0a67c, 0x0a67d, 0x0a6f0, 0x0a6f1, 0x0a8e0, 0x0a8e1,
+    0x0a8e2, 0x0a8e3, 0x0a8e4, 0x0a8e5, 0x0a8e6, 0x0a8e7, 0x0a8e8, 0x0a8e9, 0x0a8ea, 0x0a8eb, 0x0a8ec, 0x0a8ed,
+    0x0a8ee, 0x0a8ef, 0x0a8f0, 0x0a8f1, 0x0aab0, 0x0aab2, 0x0aab3, 0x0aab7, 0x0aab8, 0x0aabe, 0x0aabf, 0x0aac1,
+    0x0fe20, 0x0fe21, 0x0fe22, 0x0fe23, 0x0fe24, 0x0fe25, 0x0fe26, 0x10a0f, 0x10a38, 0x1d185, 0x1d186, 0x1d187,
+    0x1d188, 0x1d189, 0x1d1aa, 0x1d1ab, 0x1d1ac, 0x1d1ad, 0x1d242, 0x1d243, 0x1d244,
+];
+
+/// Returns the row/column/id value encoded by a placeholder diacritic
+fn diacritic_value(c: char) -> Option<u32> {
+    KITTY_ROW_COLUMN_DIACRITICS
+        .binary_search(&(c as u32))
+        .ok()
+        .map(|idx| idx as u32)
+}
+
+/// Decodes the 24-bit id that placeholder cells smuggle through a color
+/// attribute: a true color carries it in the rgb bits, while a palette
+/// index carries the low 8 bits.
+fn color_encoded_id(color: ColorAttribute) -> Option<u32> {
+    match color {
+        ColorAttribute::TrueColorWithPaletteFallback(c, _)
+        | ColorAttribute::TrueColorWithDefaultFallback(c) => {
+            let (r, g, b, _) = c.to_srgb_u8();
+            Some(((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
+        }
+        ColorAttribute::PaletteIndex(idx) => Some(idx as u32),
+        ColorAttribute::Default => None,
+    }
+}
+
+/// A kitty virtual placement (`U=1`): remembers how the image is to be
+/// mapped onto a grid of cells. The image is only displayed where the
+/// application prints placeholder cells referencing it.
+#[derive(Debug, Clone, Copy)]
+struct KittyVirtualPlacement {
+    cols: usize,
+    rows: usize,
+    z_index: i32,
+}
 
 #[derive(Debug, Default)]
 pub struct KittyImageState {
@@ -24,6 +98,7 @@ pub struct KittyImageState {
     number_to_id: HashMap<u32, u32>,
     id_to_data: HashMap<u32, Arc<ImageData>>,
     placements: HashMap<(u32, Option<u32>), PlacementInfo>,
+    virtual_placements: HashMap<(u32, Option<u32>), KittyVirtualPlacement>,
     used_memory: usize,
 }
 
@@ -46,7 +121,12 @@ impl KittyImageState {
     fn prune_unreferenced(&mut self) {
         let budget = 320 * 1024 * 1024; // FIXME: make this configurable
         if self.used_memory > budget {
-            let referenced: HashSet<u32> = self.placements.keys().map(|(k, _)| *k).collect();
+            let referenced: HashSet<u32> = self
+                .placements
+                .keys()
+                .chain(self.virtual_placements.keys())
+                .map(|(k, _)| *k)
+                .collect();
             let target = self.used_memory - budget;
             let mut freed = 0;
             self.id_to_data.retain(|id, data| {
@@ -100,7 +180,7 @@ impl TerminalState {
             placement,
             verbosity
         );
-        if image_id != 0 {
+        if image_id != 0 && !placement.unicode_placeholder {
             self.kitty_remove_placement(image_id, placement.placement_id);
         }
         let img = Arc::clone(self.kitty_img.id_to_data.get(&image_id).ok_or_else(|| {
@@ -112,6 +192,10 @@ impl TerminalState {
         })?);
 
         let (image_width, image_height) = img.data().dimensions()?;
+
+        if placement.unicode_placeholder {
+            return self.kitty_img_place_virtual(image_id, placement, image_width, image_height);
+        }
 
         let info = self.assign_image_to_cells(ImageAttachParams {
             image_width,
@@ -143,6 +227,196 @@ impl TerminalState {
         );
 
         Ok(())
+    }
+
+    /// Record a virtual placement (`U=1`). It doesn't touch the cell model
+    /// or the cursor; the image shows up wherever the application later
+    /// prints U+10EEEE placeholder cells that reference it.
+    fn kitty_img_place_virtual(
+        &mut self,
+        image_id: u32,
+        placement: KittyImagePlacement,
+        image_width: u32,
+        image_height: u32,
+    ) -> anyhow::Result<()> {
+        let (cols, rows) = match (placement.columns, placement.rows) {
+            (Some(c), Some(r)) => (c as usize, r as usize),
+            (c, r) => {
+                // The client left the grid size up to us; size it the same
+                // way a regular placement would be, from the cell geometry.
+                let cell_pixel_width = self.pixel_width / self.screen().physical_cols;
+                let cell_pixel_height = self.pixel_height / self.screen().physical_rows;
+                anyhow::ensure!(
+                    cell_pixel_width != 0 && cell_pixel_height != 0,
+                    "virtual placement has no explicit grid and the \
+                     terminal has no cell pixel dimensions"
+                );
+                (
+                    c.map(|c| c as usize)
+                        .unwrap_or_else(|| (image_width as usize).div_ceil(cell_pixel_width)),
+                    r.map(|r| r as usize)
+                        .unwrap_or_else(|| (image_height as usize).div_ceil(cell_pixel_height)),
+                )
+            }
+        };
+        anyhow::ensure!(
+            cols > 0 && rows > 0,
+            "refusing virtual placement with zero dimensions ({}x{})",
+            cols,
+            rows
+        );
+
+        self.kitty_img.virtual_placements.insert(
+            (image_id, placement.placement_id),
+            KittyVirtualPlacement {
+                cols,
+                rows,
+                z_index: placement.z_index.unwrap_or(0),
+            },
+        );
+        log::trace!(
+            "record virtual placement for {} {:?}: {}x{} cells",
+            image_id,
+            placement.placement_id,
+            cols,
+            rows
+        );
+        Ok(())
+    }
+
+    /// Print a kitty image placeholder cell: decode which tile of which
+    /// virtual placement it references and attach that slice of the image
+    /// to the cell in place of the placeholder text.
+    /// Returns false if the grapheme doesn't resolve to a virtual
+    /// placement; the caller should then print it as regular text.
+    /// <https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders>
+    pub(crate) fn kitty_print_unicode_placeholder(
+        &mut self,
+        x: usize,
+        y: VisibleRowIndex,
+        g: &str,
+        pen: &CellAttributes,
+        seqno: SequenceNo,
+    ) -> bool {
+        if !self.config.enable_kitty_graphics() {
+            return false;
+        }
+
+        // The placeholder carries up to three diacritics:
+        // row, column, and the most significant byte of the image id.
+        let mut values = [None; 3];
+        let mut chars = g.chars();
+        chars.next(); // the placeholder char itself
+        for (i, c) in chars.enumerate() {
+            match (i < values.len(), diacritic_value(c)) {
+                (true, Some(v)) => values[i] = Some(v),
+                // Anything else combined with the placeholder isn't a
+                // well formed reference
+                _ => return false,
+            }
+        }
+
+        // The low 24 bits of the image id travel in the foreground color,
+        // the optional high byte in the third diacritic. An optional
+        // placement id travels in the underline color.
+        let mut image_id = match color_encoded_id(pen.foreground()) {
+            Some(id) => id,
+            None => return false,
+        };
+        if let Some(msb) = values[2] {
+            image_id |= msb << 24;
+        }
+        // An underline color of zero means the same as not specifying one
+        let placement_id = color_encoded_id(pen.underline_color()).filter(|&id| id != 0);
+
+        let vp = match self
+            .kitty_img
+            .virtual_placements
+            .get(&(image_id, placement_id))
+            .or_else(|| self.kitty_img.virtual_placements.get(&(image_id, None)))
+            .or_else(|| {
+                // A placeholder that doesn't encode a placement id refers
+                // to any virtual placement of the image, as in kitty
+                if placement_id.is_none() {
+                    self.kitty_img
+                        .virtual_placements
+                        .iter()
+                        .filter(|((id, _), _)| *id == image_id)
+                        .min_by_key(|((_, pid), _)| *pid)
+                        .map(|(_, vp)| vp)
+                } else {
+                    None
+                }
+            }) {
+            Some(vp) => *vp,
+            None => return false,
+        };
+        let img = match self.kitty_img.id_to_data.get(&image_id) {
+            Some(img) => Arc::clone(img),
+            None => return false,
+        };
+
+        let (row, col) = match (values[0], values[1]) {
+            (Some(row), Some(col)) => (row, col),
+            (row, col) => {
+                // Omitted diacritics continue from the placeholder cell to
+                // our left, as in kitty
+                match self.kitty_placeholder_to_left(x, y, image_id, vp) {
+                    Some((prev_row, prev_col)) => {
+                        (row.unwrap_or(prev_row), col.unwrap_or(prev_col + 1))
+                    }
+                    None => (row.unwrap_or(0), col.unwrap_or(0)),
+                }
+            }
+        };
+
+        // Blank the cell: the placeholder text must never reach the font
+        // system, and a reference outside the placement grid displays
+        // nothing
+        let mut cell = Cell::new(' ', pen.clone());
+
+        if (row as usize) < vp.rows && (col as usize) < vp.cols {
+            let cols = vp.cols as f32;
+            let rows = vp.rows as f32;
+            cell.attrs_mut()
+                .attach_image(Box::new(ImageCell::with_z_index(
+                    TextureCoordinate::new_f32(col as f32 / cols, row as f32 / rows),
+                    TextureCoordinate::new_f32((col + 1) as f32 / cols, (row + 1) as f32 / rows),
+                    img,
+                    vp.z_index,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Some(image_id),
+                    placement_id,
+                )));
+        }
+
+        self.screen_mut().set_cell(x, y, &cell, seqno);
+        true
+    }
+
+    /// If the cell to the left of (x, y) displays a tile of the given
+    /// virtual placement, recover its (row, col) from the tile's texture
+    /// coordinates, so that placeholders with omitted diacritics can
+    /// continue from it.
+    fn kitty_placeholder_to_left(
+        &mut self,
+        x: usize,
+        y: VisibleRowIndex,
+        image_id: u32,
+        vp: KittyVirtualPlacement,
+    ) -> Option<(u32, u32)> {
+        if x == 0 {
+            return None;
+        }
+        let cell = self.screen_mut().get_cell(x - 1, y)?;
+        let images = cell.attrs().images()?;
+        let img = images.iter().find(|img| img.image_id() == Some(image_id))?;
+        let row = (img.top_left().y.into_inner() * vp.rows as f32).round() as u32;
+        let col = (img.top_left().x.into_inner() * vp.cols as f32).round() as u32;
+        Some((row, col))
     }
 
     fn kitty_img_inner(&mut self, img: KittyImage) -> anyhow::Result<()> {
@@ -309,11 +583,35 @@ impl TerminalState {
         }
     }
 
+    /// Placeholder cells referencing a virtual placement can be anywhere
+    /// in the visible screen, so detach across all of it rather than a
+    /// recorded placement range.
+    fn kitty_remove_virtual_placement_from_model(
+        &mut self,
+        image_id: u32,
+        placement_id: Option<u32>,
+    ) {
+        let info = PlacementInfo {
+            first_row: self.screen().visible_row_to_stable_row(0),
+            rows: self.screen().physical_rows,
+            cols: 0,
+        };
+        self.kitty_remove_placement_from_model(image_id, placement_id, info);
+    }
+
     fn kitty_remove_placement(&mut self, image_id: u32, placement_id: Option<u32>) {
         if placement_id.is_some() {
             if let Some(info) = self.kitty_img.placements.remove(&(image_id, placement_id)) {
                 log::trace!("removed placement {} {:?}", image_id, placement_id);
                 self.kitty_remove_placement_from_model(image_id, placement_id, info);
+            }
+            if self
+                .kitty_img
+                .virtual_placements
+                .remove(&(image_id, placement_id))
+                .is_some()
+            {
+                self.kitty_remove_virtual_placement_from_model(image_id, placement_id);
             }
         } else {
             let mut to_clear = vec![];
@@ -326,6 +624,17 @@ impl TerminalState {
                 if let Some(info) = self.kitty_img.placements.remove(&(image_id, p)) {
                     self.kitty_remove_placement_from_model(image_id, p, info);
                 }
+            }
+
+            let mut to_clear = vec![];
+            for (id, p) in self.kitty_img.virtual_placements.keys() {
+                if *id == image_id {
+                    to_clear.push(*p);
+                }
+            }
+            for p in to_clear.into_iter() {
+                self.kitty_img.virtual_placements.remove(&(image_id, p));
+                self.kitty_remove_virtual_placement_from_model(image_id, p);
             }
         }
 
@@ -340,6 +649,10 @@ impl TerminalState {
     pub(crate) fn kitty_remove_all_placements(&mut self, delete: bool) {
         for ((image_id, p), info) in std::mem::take(&mut self.kitty_img.placements).into_iter() {
             self.kitty_remove_placement_from_model(image_id, p, info);
+        }
+        for ((image_id, p), _) in std::mem::take(&mut self.kitty_img.virtual_placements).into_iter()
+        {
+            self.kitty_remove_virtual_placement_from_model(image_id, p);
         }
         if delete {
             self.kitty_img.id_to_data.clear();
