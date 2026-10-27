@@ -61,9 +61,9 @@ flowchart LR
     end
     
     subgraph Userspace
-    SHELL["Shell Program (e.g. zsh)"] <-- "input\noutput" --> TTY
+    SHELL["Shell Program (e.g. zsh)"] <-- "input<br/>output" --> TTY
     end
-    TTY  <-- "input\noutput" -->  TE["Terminal Device"]:::td
+    TTY  <-- "input<br/>output" -->  TE["Terminal Device"]:::td
     classDef td stroke:#00F,stroke-width:2px
 ```
 
