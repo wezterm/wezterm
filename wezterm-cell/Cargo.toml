@@ -1,5 +1,4 @@
 [package]
-authors = ["Wez Furlong"]
 name = "wezterm-cell"
 version = "0.1.0"
 edition = "2024"
