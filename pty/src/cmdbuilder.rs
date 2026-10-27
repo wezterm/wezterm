@@ -598,23 +598,27 @@ impl CommandBuilder {
         if let Some(path) = self.get_env("PATH") {
             let extensions = self.get_env("PATHEXT").unwrap_or(OsStr::new(".EXE"));
             for path in std::env::split_paths(&path) {
-                // Check for exactly the user's string in this path dir
                 let candidate = path.join(&exe);
-                if candidate.exists() {
-                    return candidate.into_os_string();
+
+                // Try tacking on the PATHEXT extensions first, like cmd.exe
+                // does: npm and others install an extensionless shell script
+                // next to the `.cmd` file, and CreateProcessW can't run that.
+                // The extension is appended rather than substituted, so that
+                // eg: `pip3.12` finds `pip3.12.exe`.
+                for ext in std::env::split_paths(&extensions) {
+                    if ext.as_os_str().is_empty() {
+                        continue;
+                    }
+                    let mut with_ext = candidate.clone().into_os_string();
+                    with_ext.push(ext.as_os_str());
+                    if Path::new(&with_ext).is_file() {
+                        return with_ext;
+                    }
                 }
 
-                // otherwise try tacking on some extensions.
-                // Note that this really replaces the extension in the
-                // user specified path, so this is potentially wrong.
-                for ext in std::env::split_paths(&extensions) {
-                    // PATHEXT includes the leading `.`, but `with_extension`
-                    // doesn't want that
-                    let ext = ext.to_str().expect("PATHEXT entries must be utf8");
-                    let path = path.join(&exe).with_extension(&ext[1..]);
-                    if path.exists() {
-                        return path.into_os_string();
-                    }
+                // otherwise check for exactly the user's string in this path dir
+                if candidate.is_file() {
+                    return candidate.into_os_string();
                 }
             }
         }
@@ -835,5 +839,38 @@ mod tests {
 
         cmd.env_remove("cARGO_pKG_aUTHORS");
         assert!(cmd.get_env("CARGO_PKG_AUTHORS").is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_search_path_pathext() {
+        // npm and similar tools install an extensionless shell script
+        // (for git-bash) next to the .cmd wrapper. CreateProcessW can
+        // only run the latter, so PATHEXT must be tried first.
+        let dir =
+            std::env::temp_dir().join(format!("wezterm-pty-search-path-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("grunt"), "#!/bin/sh\n").unwrap();
+        std::fs::write(dir.join("grunt.cmd"), "@echo off\r\n").unwrap();
+        std::fs::write(dir.join("pip3.12.exe"), "").unwrap();
+
+        let mut cmd = CommandBuilder::new("dummy");
+        cmd.env("PATH", &dir);
+        cmd.env("PATHEXT", ".COM;.EXE;.BAT;.CMD");
+        let grunt = cmd.search_path(OsStr::new("grunt"));
+        let explicit = cmd.search_path(OsStr::new("grunt.cmd"));
+        // The extension is appended rather than replacing the `.12`
+        let pip = cmd.search_path(OsStr::new("pip3.12"));
+
+        // An empty PATHEXT entry must not select the extensionless file
+        cmd.env("PATHEXT", ".COM;;.CMD");
+        let grunt_empty_ext = cmd.search_path(OsStr::new("grunt"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(grunt, dir.join("grunt.CMD").into_os_string());
+        assert_eq!(explicit, dir.join("grunt.cmd").into_os_string());
+        assert_eq!(pip, dir.join("pip3.12.EXE").into_os_string());
+        assert_eq!(grunt_empty_ext, dir.join("grunt.CMD").into_os_string());
     }
 }
