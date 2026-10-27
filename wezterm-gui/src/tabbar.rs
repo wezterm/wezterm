@@ -556,7 +556,7 @@ impl TabBarState {
                 pane_info,
                 config,
                 hover,
-                tab_title_len,
+                tab_width_max,
             );
 
             let cell_attrs = if active {
