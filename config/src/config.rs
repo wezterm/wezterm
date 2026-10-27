@@ -3,6 +3,7 @@ use crate::bell::{AudibleBell, EasingFunction, VisualBell};
 use crate::color::{
     ColorSchemeFile, HsbTransform, Palette, SrgbaTuple, TabBarStyle, WindowFrameConfig,
 };
+use crate::cursor_trail::CursorTrailConfig;
 use crate::daemon::DaemonOptions;
 use crate::exec_domain::ExecDomain;
 use crate::font::{
@@ -654,6 +655,10 @@ pub struct Config {
     pub cursor_blink_ease_in: EasingFunction,
     #[dynamic(default = "linear_ease")]
     pub cursor_blink_ease_out: EasingFunction,
+
+    /// Cursor trail configuration
+    #[dynamic(default, validate = "validate_cursor_trail")]
+    pub cursor_trail: CursorTrailConfig,
 
     #[dynamic(default = "default_anim_fps")]
     pub animation_fps: u8,
@@ -1714,6 +1719,10 @@ fn validate_scrollback_lines(value: &usize) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn validate_cursor_trail(value: &CursorTrailConfig) -> Result<(), String> {
+    value.validate()
 }
 
 fn default_initial_rows() -> u16 {
