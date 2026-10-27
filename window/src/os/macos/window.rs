@@ -58,11 +58,27 @@ const NSViewLayerContentsPlacementTopLeft: NSInteger = 11;
 #[allow(non_upper_case_globals)]
 const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
 
+/// The terminal's background color, from the color scheme; black without one.
+fn palette_background(config: &ConfigHandle) -> RgbaColor {
+    config
+        .resolved_palette
+        .background
+        .unwrap_or(RgbaColor::from(SrgbaTuple(0., 0., 0., 255.)))
+}
+
 /// Returns the background color to use for the window.
-unsafe fn window_background_color(is_opaque: bool) -> id {
+unsafe fn window_background_color(config: &ConfigHandle) -> id {
     let clear_color = cocoa::appkit::NSColor::clearColor(nil);
-    if is_opaque {
-        clear_color
+    if config.window_background_opacity >= 1.0 {
+        // The terminal's own background: the title bar shows the window's background
+        // through it where macOS draws it translucent, and a clear one showed the
+        // desktop there instead.
+        let color = palette_background(config);
+        msg_send![class!(NSColor),
+            colorWithSRGBRed: color.0 as CGFloat
+            green: color.1 as CGFloat
+            blue: color.2 as CGFloat
+            alpha: 1.0 as CGFloat]
     } else {
         // An alpha of zero puts NSWindow into a special mode for irregularly
         // shaped windows, where shadows are generated from the window contents.
@@ -541,8 +557,7 @@ impl Window {
             let _: () = msg_send![*window, setRestorable: NO];
 
             window.setReleasedWhenClosed_(NO);
-            let is_opaque = config.window_background_opacity >= 1.0;
-            window.setBackgroundColor_(window_background_color(is_opaque));
+            window.setBackgroundColor_(window_background_color(&config));
 
             // Tell Cocoa that we output in sRGB, so it handles color space
             // conversion for non-sRGB displays.
@@ -1173,7 +1188,7 @@ impl WindowInner {
             self.window.setHasShadow_(to_yes_no(needs_shadow));
 
             self.window
-                .setBackgroundColor_(window_background_color(is_opaque));
+                .setBackgroundColor_(window_background_color(&self.config));
         }
     }
 
@@ -1186,13 +1201,7 @@ impl WindowInner {
             return;
         }
 
-        // Set the titlebar background to the theme color falling back to black if there is no
-        // specified color scheme
-        let color = self
-            .config
-            .resolved_palette
-            .background
-            .unwrap_or(RgbaColor::from(SrgbaTuple(0., 0., 0., 255.)));
+        let color = palette_background(&self.config);
 
         unsafe {
             if let Some(titlebar_view_container) = get_titlebar_view_container(&self.window) {
