@@ -2,6 +2,9 @@ use crate::termwindow::{PaneInformation, TabInformation, UIItem, UIItemType};
 use config::{ConfigHandle, TabBarColors};
 use finl_unicode::grapheme_clusters::Graphemes;
 use mlua::FromLua;
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::Rc;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use termwiz::cell::{unicode_column_width, Cell, CellAttributes};
@@ -51,6 +54,59 @@ struct TitleText {
     has_indeterminate: bool,
 }
 
+const STATUS_TEXT_CACHE_CAPACITY: usize = 128;
+const STATUS_TEXT_CACHE_MAX_BYTES: usize = 4096;
+
+struct StatusTextCacheEntry {
+    text: String,
+    default_cell: CellAttributes,
+    line: Rc<Line>,
+}
+
+#[derive(Default)]
+struct StatusTextCache {
+    entries: VecDeque<StatusTextCacheEntry>,
+}
+
+impl StatusTextCache {
+    fn get(&mut self, text: &str, default_cell: CellAttributes) -> Rc<Line> {
+        if text.len() > STATUS_TEXT_CACHE_MAX_BYTES {
+            return Rc::new(parse_status_text(text, default_cell));
+        }
+
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.text == text && entry.default_cell == default_cell)
+        {
+            let entry = self.entries.remove(index).expect("entry at matched index");
+            let line = Rc::clone(&entry.line);
+            self.entries.push_front(entry);
+            return line;
+        }
+
+        let line = Rc::new(parse_status_text(text, default_cell.clone()));
+        if self.entries.len() == STATUS_TEXT_CACHE_CAPACITY {
+            self.entries.pop_back();
+        }
+        self.entries.push_front(StatusTextCacheEntry {
+            text: text.to_string(),
+            default_cell,
+            line: Rc::clone(&line),
+        });
+        line
+    }
+}
+
+thread_local! {
+    static STATUS_TEXT_CACHE: RefCell<StatusTextCache> = RefCell::new(StatusTextCache::default());
+}
+
+fn cached_status_text(text: &str, default_cell: CellAttributes) -> Rc<Line> {
+    // Cache the formatted output, since Lua callbacks can depend on more than tab metadata.
+    STATUS_TEXT_CACHE.with(|cache| cache.borrow_mut().get(text, default_cell))
+}
+
 fn call_format_tab_title(
     tab: &TabInformation,
     tab_info: &[TabInformation],
@@ -61,47 +117,15 @@ fn call_format_tab_title(
 ) -> Option<TitleText> {
     match config::run_immediate_with_lua_config(|lua| {
         if let Some(lua) = lua {
-            let tabs = lua.create_sequence_from(tab_info.iter().cloned())?;
-            let panes = lua.create_sequence_from(pane_info.iter().cloned())?;
-
-            let v = config::lua::emit_sync_callback(
-                &*lua,
-                (
-                    "format-tab-title".to_string(),
-                    (
-                        tab.clone(),
-                        tabs,
-                        panes,
-                        (**config).clone(),
-                        hover,
-                        tab_max_width,
-                    ),
-                ),
-            )?;
-            match &v {
-                mlua::Value::Nil => Ok(None),
-                mlua::Value::Table(_) => {
-                    let items = <Vec<FormatItem>>::from_lua(v, &*lua)?;
-
-                    let esc = format_as_escapes(items.clone())?;
-                    let line = parse_status_text(&esc, CellAttributes::default());
-
-                    Ok(Some(TitleText {
-                        items,
-                        len: line.len(),
-                        has_indeterminate: false,
-                    }))
-                }
-                _ => {
-                    let s = String::from_lua(v, &*lua)?;
-                    let line = parse_status_text(&s, CellAttributes::default());
-                    Ok(Some(TitleText {
-                        len: line.len(),
-                        items: vec![FormatItem::Text(s)],
-                        has_indeterminate: false,
-                    }))
-                }
-            }
+            call_format_tab_title_with_lua(
+                &lua,
+                tab,
+                tab_info,
+                pane_info,
+                config,
+                hover,
+                tab_max_width,
+            )
         } else {
             Ok(None)
         }
@@ -110,6 +134,58 @@ fn call_format_tab_title(
         Err(err) => {
             log::warn!("format-tab-title: {}", err);
             None
+        }
+    }
+}
+
+fn call_format_tab_title_with_lua(
+    lua: &mlua::Lua,
+    tab: &TabInformation,
+    tab_info: &[TabInformation],
+    pane_info: &[PaneInformation],
+    config: &ConfigHandle,
+    hover: bool,
+    tab_max_width: usize,
+) -> anyhow::Result<Option<TitleText>> {
+    let tabs = lua.create_sequence_from(tab_info.iter().cloned())?;
+    let panes = lua.create_sequence_from(pane_info.iter().cloned())?;
+
+    let v = config::lua::emit_sync_callback(
+        lua,
+        (
+            "format-tab-title".to_string(),
+            (
+                tab.clone(),
+                tabs,
+                panes,
+                (**config).clone(),
+                hover,
+                tab_max_width,
+            ),
+        ),
+    )?;
+    match &v {
+        mlua::Value::Nil => Ok(None),
+        mlua::Value::Table(_) => {
+            let items = <Vec<FormatItem>>::from_lua(v, lua)?;
+
+            let esc = format_as_escapes(items.clone())?;
+            let line = cached_status_text(&esc, CellAttributes::default());
+
+            Ok(Some(TitleText {
+                items,
+                len: line.len(),
+                has_indeterminate: false,
+            }))
+        }
+        _ => {
+            let s = String::from_lua(v, lua)?;
+            let line = cached_status_text(&s, CellAttributes::default());
+            Ok(Some(TitleText {
+                len: line.len(),
+                items: vec![FormatItem::Text(s)],
+                has_indeterminate: false,
+            }))
         }
     }
 }
@@ -350,22 +426,22 @@ impl TabBarState {
         };
 
         let window_hide =
-            parse_status_text(&config.tab_bar_style.window_hide, default_cell.clone());
-        let window_hide_hover = parse_status_text(
+            cached_status_text(&config.tab_bar_style.window_hide, default_cell.clone());
+        let window_hide_hover = cached_status_text(
             &config.tab_bar_style.window_hide_hover,
             default_cell_hover.clone(),
         );
 
         let window_maximize =
-            parse_status_text(&config.tab_bar_style.window_maximize, default_cell.clone());
-        let window_maximize_hover = parse_status_text(
+            cached_status_text(&config.tab_bar_style.window_maximize, default_cell.clone());
+        let window_maximize_hover = cached_status_text(
             &config.tab_bar_style.window_maximize_hover,
             default_cell_hover.clone(),
         );
 
         let window_close =
-            parse_status_text(&config.tab_bar_style.window_close, default_cell.clone());
-        let window_close_hover = parse_status_text(
+            cached_status_text(&config.tab_bar_style.window_close, default_cell.clone());
+        let window_close_hover = cached_status_text(
             &config.tab_bar_style.window_close_hover,
             default_cell_hover.clone(),
         );
@@ -402,12 +478,12 @@ impl TabBarState {
                 }
             };
 
-            line.append_line(title.to_owned(), SEQ_ZERO);
+            line.append_line(title.as_ref().clone(), SEQ_ZERO);
 
             let width = title.len();
             items.push(TabEntry {
                 item: TabBarItem::WindowButton(*button),
-                title: title.to_owned(),
+                title: title.as_ref().clone(),
                 x: *x,
                 width,
             });
@@ -438,7 +514,7 @@ impl TabBarState {
         let new_tab_hover_attrs = colors.new_tab_hover().as_cell_attributes();
         let new_tab_attrs = colors.new_tab().as_cell_attributes();
 
-        let new_tab = parse_status_text(
+        let new_tab = cached_status_text(
             &config.tab_bar_style.new_tab,
             if config.use_fancy_tab_bar {
                 CellAttributes::default()
@@ -446,7 +522,7 @@ impl TabBarState {
                 new_tab_attrs.clone()
             },
         );
-        let new_tab_hover = parse_status_text(
+        let new_tab_hover = cached_status_text(
             &config.tab_bar_style.new_tab_hover,
             if config.use_fancy_tab_bar {
                 CellAttributes::default()
@@ -531,16 +607,16 @@ impl TabBarState {
             Self::integrated_title_buttons(mouse_x, &mut x, config, &mut items, &mut line, &colors);
         }
 
-        let left_status_line = parse_status_text(left_status, black_cell.attrs().clone());
+        let left_status_line = cached_status_text(left_status, black_cell.attrs().clone());
         if left_status_line.len() > 0 {
             items.push(TabEntry {
                 item: TabBarItem::LeftStatus,
-                title: left_status_line.clone(),
+                title: left_status_line.as_ref().clone(),
                 x,
                 width: left_status_line.len(),
             });
             x += left_status_line.len();
-            line.append_line(left_status_line, SEQ_ZERO);
+            line.append_line(left_status_line.as_ref().clone(), SEQ_ZERO);
         }
 
         for (tab_idx, tab_title) in tab_titles.iter().enumerate() {
@@ -572,14 +648,16 @@ impl TabBarState {
             has_indeterminate_progress |= tab_title.has_indeterminate;
 
             let esc = format_as_escapes(tab_title.items.clone()).expect("already parsed ok above");
-            let mut tab_line = parse_status_text(
+            let mut tab_line = cached_status_text(
                 &esc,
                 if config.use_fancy_tab_bar {
                     CellAttributes::default()
                 } else {
                     cell_attrs.clone()
                 },
-            );
+            )
+            .as_ref()
+            .clone();
 
             let title = tab_line.clone();
             if tab_line.len() > tab_width_max {
@@ -608,11 +686,11 @@ impl TabBarState {
             let button_start = x;
             let width = new_tab_button.len();
 
-            line.append_line(new_tab_button.clone(), SEQ_ZERO);
+            line.append_line(new_tab_button.as_ref().clone(), SEQ_ZERO);
 
             items.push(TabEntry {
                 item: TabBarItem::NewTabButton,
-                title: new_tab_button.clone(),
+                title: new_tab_button.as_ref().clone(),
                 x: button_start,
                 width,
             });
@@ -626,25 +704,25 @@ impl TabBarState {
             && config.integrated_title_button_alignment == IntegratedTitleButtonAlignment::Right
         {
             let window_hide =
-                parse_status_text(&config.tab_bar_style.window_hide, CellAttributes::default());
-            let window_hide_hover = parse_status_text(
+                cached_status_text(&config.tab_bar_style.window_hide, CellAttributes::default());
+            let window_hide_hover = cached_status_text(
                 &config.tab_bar_style.window_hide_hover,
                 CellAttributes::default(),
             );
 
-            let window_maximize = parse_status_text(
+            let window_maximize = cached_status_text(
                 &config.tab_bar_style.window_maximize,
                 CellAttributes::default(),
             );
-            let window_maximize_hover = parse_status_text(
+            let window_maximize_hover = cached_status_text(
                 &config.tab_bar_style.window_maximize_hover,
                 CellAttributes::default(),
             );
-            let window_close = parse_status_text(
+            let window_close = cached_status_text(
                 &config.tab_bar_style.window_close,
                 CellAttributes::default(),
             );
-            let window_close_hover = parse_status_text(
+            let window_close_hover = cached_status_text(
                 &config.tab_bar_style.window_close_hover,
                 CellAttributes::default(),
             );
@@ -671,7 +749,9 @@ impl TabBarState {
 
         let status_space_available = title_width.saturating_sub(x);
 
-        let mut right_status_line = parse_status_text(right_status, black_cell.attrs().clone());
+        let mut right_status_line = cached_status_text(right_status, black_cell.attrs().clone())
+            .as_ref()
+            .clone();
         items.push(TabEntry {
             item: TabBarItem::RightStatus,
             title: right_status_line.clone(),
@@ -823,4 +903,170 @@ pub fn parse_status_text(text: &str, default_cell: CellAttributes) -> Line {
     });
     flush_print(&mut print_buffer, &mut cells, &pen);
     Line::from_cells(cells, SEQ_ZERO)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn status_text_cache_reuses_identical_text_and_attributes() {
+        let mut cache = StatusTextCache::default();
+        let first = cache.get("\x1b[31mproject\x1b[0m", CellAttributes::default());
+        let second = cache.get("\x1b[31mproject\x1b[0m", CellAttributes::default());
+        assert!(Rc::ptr_eq(&first, &second));
+        assert_eq!(first.as_str(), "project");
+        assert_eq!(cache.entries.len(), 1);
+    }
+
+    #[test]
+    fn status_text_cache_keeps_text_and_default_colors_distinct() {
+        let mut cache = StatusTextCache::default();
+        let mut blue = CellAttributes::default();
+        blue.set_foreground(AnsiColor::Blue);
+        let mut green = CellAttributes::default();
+        green.set_foreground(AnsiColor::Green);
+        let mut red = CellAttributes::default();
+        red.set_foreground(AnsiColor::Maroon);
+        let text = "\x1b[31mR\x1b[0m界\nignored";
+        let blue_line = cache.get(text, blue.clone());
+        let green_line = cache.get(text, green.clone());
+        let changed_text = cache.get("changed", blue.clone());
+
+        assert_eq!(blue_line.as_str(), "R界");
+        assert_eq!(blue_line.len(), 3);
+        assert_eq!(
+            blue_line.get_cell(0).unwrap().attrs().foreground(),
+            red.foreground()
+        );
+        assert_eq!(
+            blue_line.get_cell(1).unwrap().attrs().foreground(),
+            blue.foreground()
+        );
+        assert_eq!(
+            green_line.get_cell(1).unwrap().attrs().foreground(),
+            green.foreground()
+        );
+        assert!(!Rc::ptr_eq(&blue_line, &green_line));
+        assert_eq!(changed_text.as_str(), "changed");
+        assert_eq!(blue_line.as_ref(), &parse_status_text(text, blue));
+        assert_eq!(green_line.as_ref(), &parse_status_text(text, green));
+    }
+
+    #[test]
+    fn status_text_cache_survives_render_copy_truncation() {
+        let mut cache = StatusTextCache::default();
+        let full = cache.get("project title", CellAttributes::default());
+        let mut rendered = full.as_ref().clone();
+        rendered.resize(3, SEQ_ZERO);
+        assert_eq!(rendered.as_str(), "pro");
+
+        let next = cache.get("project title", CellAttributes::default());
+        assert_eq!(next.as_str(), "project title");
+        assert!(Rc::ptr_eq(&full, &next));
+    }
+
+    #[test]
+    fn status_text_cache_evicts_the_least_recent_entry() {
+        let mut cache = StatusTextCache::default();
+        let retained = cache.get("retained", CellAttributes::default());
+        let evicted = cache.get("evicted", CellAttributes::default());
+        for n in 2..STATUS_TEXT_CACHE_CAPACITY {
+            cache.get(&format!("project {n}"), CellAttributes::default());
+        }
+        cache.get("retained", CellAttributes::default());
+        cache.get("new project", CellAttributes::default());
+
+        assert_eq!(cache.entries.len(), STATUS_TEXT_CACHE_CAPACITY);
+        assert!(Rc::ptr_eq(
+            &retained,
+            &cache.get("retained", CellAttributes::default())
+        ));
+        assert!(!Rc::ptr_eq(
+            &evicted,
+            &cache.get("evicted", CellAttributes::default())
+        ));
+        assert_eq!(cache.entries.len(), STATUS_TEXT_CACHE_CAPACITY);
+    }
+
+    #[test]
+    fn status_text_cache_does_not_retain_oversized_text() {
+        let mut cache = StatusTextCache::default();
+        let text = "x".repeat(STATUS_TEXT_CACHE_MAX_BYTES + 1);
+        let first = cache.get(&text, CellAttributes::default());
+        let second = cache.get(&text, CellAttributes::default());
+        assert_eq!(first.as_str(), text);
+        assert_eq!(first.as_ref(), second.as_ref());
+        assert!(!Rc::ptr_eq(&first, &second));
+        assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn cached_title_parsing_preserves_dynamic_lua_callbacks() -> anyhow::Result<()> {
+        STATUS_TEXT_CACHE.with(|cache| cache.borrow_mut().entries.clear());
+        let lua = mlua::Lua::new();
+        lua.globals().set("calls", 0)?;
+        lua.globals().set("label", "initial")?;
+        let callback = lua
+            .load(
+                r#"
+                return function(tab, tabs, panes, config, hover, max_width)
+                    calls = calls + 1
+                    return label .. (hover and " hover " or " plain ") .. max_width
+                end
+                "#,
+            )
+            .eval::<mlua::Function>()?;
+        config::lua::register_event(&lua, ("format-tab-title".to_string(), callback))?;
+        let tab = TabInformation {
+            tab_id: 7,
+            tab_index: 0,
+            is_active: true,
+            is_last_active: false,
+            active_pane: None,
+            window_id: 9,
+            tab_title: "unchanged".to_string(),
+        };
+        let config = ConfigHandle::default_config();
+        for _ in 0..2 {
+            let title = call_format_tab_title_with_lua(
+                &lua,
+                &tab,
+                std::slice::from_ref(&tab),
+                &[],
+                &config,
+                false,
+                32,
+            )?
+            .unwrap();
+            let text = format_as_escapes(title.items)?;
+            assert_eq!(
+                parse_status_text(&text, CellAttributes::default()).as_str(),
+                "initial plain 32"
+            );
+            assert_eq!(title.len, 16);
+            STATUS_TEXT_CACHE.with(|cache| assert_eq!(cache.borrow().entries.len(), 1));
+        }
+
+        lua.globals().set("label", "updated")?;
+        let title = call_format_tab_title_with_lua(
+            &lua,
+            &tab,
+            std::slice::from_ref(&tab),
+            &[],
+            &config,
+            true,
+            7,
+        )?
+        .unwrap();
+        let text = format_as_escapes(title.items)?;
+        assert_eq!(
+            parse_status_text(&text, CellAttributes::default()).as_str(),
+            "updated hover 7"
+        );
+        assert_eq!(title.len, 15);
+        assert_eq!(lua.globals().get::<_, usize>("calls")?, 3);
+        STATUS_TEXT_CACHE.with(|cache| assert_eq!(cache.borrow().entries.len(), 2));
+        Ok(())
+    }
 }
