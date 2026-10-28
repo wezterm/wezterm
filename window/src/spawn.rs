@@ -122,6 +122,19 @@ impl SpawnQueue {
         }
         self.has_any_queued()
     }
+
+    pub fn run_one(&self) -> bool {
+        self.event_handle.reset_event();
+        if let Some(func) = self.pop_func() {
+            func();
+        }
+        let pending = self.has_any_queued();
+        if pending {
+            // The message loop may wait on this event after checking native messages.
+            self.event_handle.set_event();
+        }
+        pending
+    }
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -240,5 +253,71 @@ impl SpawnQueue {
             func();
         }
         self.has_any_queued()
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use winapi::shared::winerror::WAIT_TIMEOUT;
+    use winapi::um::synchapi::WaitForSingleObject;
+    use winapi::um::winbase::WAIT_OBJECT_0;
+
+    fn wakeup_is_signaled(queue: &SpawnQueue) -> bool {
+        // SAFETY: the queue owns this live event handle, and a zero timeout cannot block.
+        match unsafe { WaitForSingleObject(queue.event_handle.0, 0) } {
+            WAIT_OBJECT_0 => true,
+            WAIT_TIMEOUT => false,
+            result => panic!("unexpected wait result: {}", result),
+        }
+    }
+
+    #[test]
+    fn yields_before_running_follow_up_work() {
+        let queue = Arc::new(SpawnQueue::new().unwrap());
+        let completed = Arc::new(AtomicUsize::new(0));
+        let next_queue = Arc::clone(&queue);
+        let next_completed = Arc::clone(&completed);
+        queue.spawn_impl(
+            Box::new(move || {
+                next_completed.fetch_add(1, Ordering::SeqCst);
+                next_queue.spawn_impl(
+                    Box::new(move || {
+                        next_completed.fetch_add(1, Ordering::SeqCst);
+                    }),
+                    true,
+                );
+            }),
+            true,
+        );
+
+        assert!(queue.run_one());
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+        assert!(wakeup_is_signaled(&queue));
+        assert!(!queue.run_one());
+        assert_eq!(completed.load(Ordering::SeqCst), 2);
+        assert!(!wakeup_is_signaled(&queue));
+    }
+
+    #[test]
+    fn keeps_pending_work_awake_and_preserves_priority() {
+        let queue = SpawnQueue::new().unwrap();
+        let order = Arc::new(Mutex::new(Vec::new()));
+        for (value, high_priority) in [(2, false), (1, true)] {
+            let order = Arc::clone(&order);
+            queue.spawn_impl(
+                Box::new(move || order.lock().unwrap().push(value)),
+                high_priority,
+            );
+        }
+
+        assert!(queue.run_one());
+        assert_eq!(*order.lock().unwrap(), [1]);
+        assert!(wakeup_is_signaled(&queue));
+        assert!(!queue.run_one());
+        assert_eq!(*order.lock().unwrap(), [1, 2]);
+        assert!(!wakeup_is_signaled(&queue));
+        assert!(!queue.run_one());
     }
 }
