@@ -46,6 +46,7 @@ pub(crate) struct PerPane {
     sent_initial_palette: bool,
     seqno: SequenceNo,
     config_generation: usize,
+    push_pending: bool,
     pub(crate) notifications: Vec<Alert>,
 }
 
@@ -239,9 +240,18 @@ impl SessionHandler {
     }
 
     pub fn schedule_pane_push(&mut self, pane_id: PaneId) {
-        let sender = self.to_write_tx.clone();
         let per_pane = self.per_pane(pane_id);
+        {
+            let mut state = per_pane.lock().unwrap();
+            if state.push_pending {
+                return;
+            }
+            state.push_pending = true;
+        }
+        let sender = self.to_write_tx.clone();
         spawn_into_main_thread(async move {
+            // Clear before lookup so a removed pane cannot leave the push pending.
+            per_pane.lock().unwrap().push_pending = false;
             let mux = Mux::get();
             let pane = mux
                 .get_pane(pane_id)

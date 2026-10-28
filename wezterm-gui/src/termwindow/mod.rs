@@ -83,9 +83,11 @@ pub mod render;
 pub mod resize;
 mod selection;
 pub mod spawn;
+mod title_update;
 pub mod webgpu;
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
+use title_update::PendingTitleUpdate;
 
 const ATLAS_SIZE: usize = 128;
 
@@ -143,6 +145,7 @@ pub enum TermWindowNotif {
         pane_id: Option<PaneId>,
     },
     MuxNotification(MuxNotification),
+    RefreshMuxTitle,
     EmitStatusUpdate,
     Apply(Box<dyn FnOnce(&mut TermWindow) + Send + Sync>),
     SwitchToMuxWindow(MuxWindowId),
@@ -384,6 +387,7 @@ pub struct TermWindow {
     /// `true` when the mux subscription must be unsubscribed from.
     /// This is done asynchronously to avoid races between mux events.
     mux_subscription_dead: Arc<AtomicBool>,
+    pending_mux_title_update: Arc<PendingTitleUpdate>,
     pub render_metrics: RenderMetrics,
     render_state: Option<RenderState>,
     input_map: InputMap,
@@ -701,6 +705,7 @@ impl TermWindow {
             mux_window_id,
             mux_window_id_for_subscriptions: Arc::new(Mutex::new(mux_window_id)),
             mux_subscription_dead: Arc::new(AtomicBool::new(false)),
+            pending_mux_title_update: Arc::new(PendingTitleUpdate::default()),
             fonts: Rc::clone(&fontconfig),
             render_metrics,
             dimensions,
@@ -1321,6 +1326,15 @@ impl TermWindow {
                 | MuxNotification::Empty
                 | MuxNotification::WindowCreated(_) => {}
             },
+            TermWindowNotif::RefreshMuxTitle => {
+                if let Some(update_status) = self.pending_mux_title_update.take() {
+                    if update_status {
+                        self.update_title();
+                    } else {
+                        self.update_title_post_status();
+                    }
+                }
+            }
             TermWindowNotif::EmitStatusUpdate => {
                 self.emit_status_event();
             }
@@ -1450,6 +1464,7 @@ impl TermWindow {
         window: &Window,
         mux_window_id: MuxWindowId,
         dead: &Arc<AtomicBool>,
+        pending_title_update: &Arc<PendingTitleUpdate>,
     ) -> bool {
         if dead.load(Ordering::Relaxed) {
             // Subscription cancelled asynchronously
@@ -1534,7 +1549,38 @@ impl TermWindow {
             }
         }
 
-        window.notify(TermWindowNotif::MuxNotification(n));
+        let update_status = match &n {
+            MuxNotification::WindowTitleChanged { .. }
+            | MuxNotification::Alert {
+                alert:
+                    Alert::OutputSinceFocusLost
+                    | Alert::CurrentWorkingDirectoryChanged
+                    | Alert::WindowTitleChanged(_)
+                    | Alert::TabTitleChanged(_)
+                    | Alert::IconTitleChanged(_)
+                    | Alert::Progress(_),
+                ..
+            } => Some(true),
+            MuxNotification::TabTitleChanged { .. } => Some(false),
+            _ => None,
+        };
+
+        if let Some(update_status) = update_status {
+            if pending_title_update.request(update_status) {
+                let window = window.clone();
+                let dead = Arc::clone(dead);
+                promise::spawn::spawn_into_main_thread(async move {
+                    // Read the latest pane state once after a burst of title notifications.
+                    Timer::after(Duration::from_millis(16)).await;
+                    if !dead.load(Ordering::Relaxed) {
+                        window.notify(TermWindowNotif::RefreshMuxTitle);
+                    }
+                })
+                .detach();
+            }
+        } else {
+            window.notify(TermWindowNotif::MuxNotification(n));
+        }
 
         true
     }
@@ -1544,6 +1590,7 @@ impl TermWindow {
         let mux_window_id = Arc::clone(&self.mux_window_id_for_subscriptions);
         let mux = Mux::get();
         let dead = Arc::clone(&self.mux_subscription_dead);
+        let pending_title_update = Arc::clone(&self.pending_mux_title_update);
         mux.subscribe(move |n| {
             if dead.load(Ordering::Relaxed) {
                 // Unsubscribe this handler from the mux
@@ -1552,8 +1599,15 @@ impl TermWindow {
             let mux_window_id = *mux_window_id.lock().unwrap();
             let window = window.clone();
             let dead = dead.clone();
+            let pending_title_update = Arc::clone(&pending_title_update);
             promise::spawn::spawn_into_main_thread(async move {
-                Self::mux_pane_output_event_callback(n, &window, mux_window_id, &dead)
+                Self::mux_pane_output_event_callback(
+                    n,
+                    &window,
+                    mux_window_id,
+                    &dead,
+                    &pending_title_update,
+                )
             })
             .detach();
             true
