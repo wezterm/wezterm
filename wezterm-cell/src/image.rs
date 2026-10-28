@@ -97,7 +97,7 @@ pub struct ImageCell {
     /// Floating texture coordinates for the bottom right of this cell.
     bottom_right: TextureCoordinate,
     /// References the underlying image data
-    data: Arc<ImageData>,
+    pub(super) data: Arc<ImageData>,
     z_index: i32,
     /// When rendering in the cell, use this offset from the top left
     /// of the cell
