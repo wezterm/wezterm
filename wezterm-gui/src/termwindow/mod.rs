@@ -126,6 +126,10 @@ pub enum TermWindowNotif {
     SetLeftStatus(String),
     SetRightStatus(String),
     GetDimensions(Sender<(Dimensions, WindowState)>),
+    /// The window's font scale: 1.0 at the configured font_size, and
+    /// changed by IncreaseFontSize, DecreaseFontSize and ResetFontSize.
+    GetFontScale(Sender<f64>),
+    SetFontScale(f64),
     GetSelectionForPane {
         pane_id: PaneId,
         tx: Sender<String>,
@@ -1173,6 +1177,18 @@ impl TermWindow {
                 tx.try_send((self.dimensions, self.window_state))
                     .map_err(chan_err)
                     .context("send GetDimensions response")?;
+            }
+            TermWindowNotif::GetFontScale(tx) => {
+                tx.try_send(self.fonts.get_font_scale())
+                    .map_err(chan_err)
+                    .context("send GetFontScale response")?;
+            }
+            TermWindowNotif::SetFontScale(scale) => {
+                // Queued with the key assignments' changes, so it applies
+                // after a resize in progress, as theirs do.
+                self.pending_scale_changes
+                    .push_back(resize::ScaleChange::Absolute(scale));
+                self.apply_pending_scale_changes();
             }
             TermWindowNotif::GetEffectiveConfig(tx) => {
                 tx.try_send(self.config.clone())

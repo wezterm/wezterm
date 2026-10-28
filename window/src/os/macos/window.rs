@@ -446,6 +446,20 @@ fn set_window_position(window: *mut Object, coords: ScreenPoint) {
     }
 }
 
+/// The top left of the content area, the point set_window_position moves
+/// there. macOS measures the screen from its bottom left, so the content
+/// area's top is its origin plus its height.
+fn get_window_position(window: *mut Object) -> ScreenPoint {
+    unsafe {
+        let frame = NSWindow::frame(window);
+        let content_frame = NSWindow::contentRectForFrameRect_(window, frame);
+        cartesian_to_screen_point(NSPoint::new(
+            content_frame.origin.x,
+            content_frame.origin.y + content_frame.size.height,
+        ))
+    }
+}
+
 impl Window {
     pub async fn new_window<F>(
         _class_name: &str,
@@ -821,6 +835,12 @@ impl WindowOps for Window {
             }
             Ok(())
         });
+    }
+
+    fn get_window_position(&self) -> Future<Option<ScreenPoint>> {
+        Connection::with_window_inner(self.id, |inner| {
+            Ok(Some(get_window_position(*inner.window)))
+        })
     }
 
     fn set_window_position(&self, coords: ScreenPoint) {

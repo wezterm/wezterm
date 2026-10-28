@@ -957,6 +957,14 @@ impl WindowOps for Window {
         });
     }
 
+    /// The client area's top left on the screen, the point
+    /// set_window_position moves there.
+    fn get_window_position(&self) -> Future<Option<ScreenPoint>> {
+        Connection::with_window_inner(self.0, |inner| {
+            Ok(Some(client_to_screen(inner.hwnd.0, Point::new(0, 0))))
+        })
+    }
+
     fn get_clipboard(&self, _clipboard: Clipboard) -> Future<String> {
         Future::result(
             clipboard_win::get_clipboard_string()

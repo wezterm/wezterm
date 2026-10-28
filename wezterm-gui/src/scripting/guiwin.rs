@@ -29,6 +29,20 @@ impl GuiWin {
             mux_window_id,
         }
     }
+
+    /// Apply `change` to the window from the TermWindow's queue, after the
+    /// changes requested before it. set_inner_size and set_font_scale take
+    /// that queue, so the window's size, zoom, position and state change in
+    /// the order Lua asks for them, rather than a move or a maximize
+    /// overtaking a resize asked for first.
+    fn in_order(&self, change: impl FnOnce(&::window::Window) + Send + Sync + 'static) {
+        self.window
+            .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                if let Some(window) = term_window.window.as_ref() {
+                    change(window);
+                }
+            })));
+    }
 }
 
 impl UserData for GuiWin {
@@ -64,19 +78,55 @@ impl UserData for GuiWin {
             },
         );
         methods.add_method("set_position", |_, this, (x, y): (isize, isize)| {
-            this.window.set_window_position(euclid::point2(x, y));
+            this.in_order(move |window| window.set_window_position(euclid::point2(x, y)));
+            Ok(())
+        });
+        methods.add_async_method("get_position", |_, this, _: ()| async move {
+            #[derive(FromDynamic, ToDynamic)]
+            struct Position {
+                x: isize,
+                y: isize,
+            }
+            impl_lua_conversion_dynamic!(Position);
+
+            let position = this
+                .window
+                .get_window_position()
+                .await
+                .map_err(|e| anyhow::anyhow!("{:#}", e))
+                .map_err(luaerr)?;
+            Ok(position.map(|point| Position {
+                x: point.x,
+                y: point.y,
+            }))
+        });
+        methods.add_async_method("get_font_scale", |_, this, _: ()| async move {
+            let (tx, rx) = smol::channel::bounded(1);
+            this.window.notify(TermWindowNotif::GetFontScale(tx));
+            rx.recv()
+                .await
+                .map_err(|e| anyhow::anyhow!("{:#}", e))
+                .map_err(luaerr)
+        });
+        methods.add_method("set_font_scale", |_, this, scale: f64| {
+            if !scale.is_finite() || scale <= 0.0 {
+                return Err(mlua::Error::external(format!(
+                    "set_font_scale takes a positive font scale, not {scale}"
+                )));
+            }
+            this.window.notify(TermWindowNotif::SetFontScale(scale));
             Ok(())
         });
         methods.add_method("maximize", |_, this, _: ()| {
-            this.window.maximize();
+            this.in_order(|window| window.maximize());
             Ok(())
         });
         methods.add_method("restore", |_, this, _: ()| {
-            this.window.restore();
+            this.in_order(|window| window.restore());
             Ok(())
         });
         methods.add_method("toggle_fullscreen", |_, this, _: ()| {
-            this.window.toggle_fullscreen();
+            this.in_order(|window| window.toggle_fullscreen());
             Ok(())
         });
         methods.add_method("focus", |_, this, _: ()| {
@@ -121,6 +171,7 @@ impl UserData for GuiWin {
                 pixel_height: usize,
                 dpi: usize,
                 is_full_screen: bool,
+                is_maximized: bool,
             }
             impl_lua_conversion_dynamic!(Dims);
 
@@ -129,7 +180,7 @@ impl UserData for GuiWin {
                 pixel_height: dims.pixel_height,
                 dpi: dims.dpi,
                 is_full_screen: window_state.contains(WindowState::FULL_SCREEN),
-                // FIXME: expose other states here
+                is_maximized: window_state.contains(WindowState::MAXIMIZED),
             };
             Ok(dims)
         });

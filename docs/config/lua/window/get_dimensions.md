@@ -10,3 +10,4 @@ The table has the following fields:
 - `pixel_height`: the height of the window in pixels
 - `dpi`: The DPI of the screen the window in on
 - `is_full_screen`: whether the window is in full screen mode
+- `is_maximized`: whether the window is maximized {{since('nightly', inline=True)}}

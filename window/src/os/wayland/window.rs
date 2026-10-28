@@ -447,6 +447,12 @@ impl WindowOps for WaylandWindow {
         });
     }
 
+    /// Wayland gives a window no position: the compositor places it, and
+    /// tells the application nothing of where.
+    fn get_window_position(&self) -> Future<Option<ScreenPoint>> {
+        Future::ok(None)
+    }
+
     fn get_clipboard(&self, clipboard: Clipboard) -> Future<String> {
         let mut promise = Promise::new();
         let future = promise.get_future().unwrap();

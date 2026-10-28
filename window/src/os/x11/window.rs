@@ -1547,10 +1547,13 @@ impl XWindow {
             data: &[5u32],
         })?;
 
-        window
-            .lock()
-            .unwrap()
-            .adjust_decorations(config.window_decorations)?;
+        {
+            let mut inner = window.lock().unwrap();
+            // The size hints carry the window's gravity, which the window
+            // manager must have before it places the window.
+            inner.set_resize_increments(ResizeIncrement::disabled())?;
+            inner.adjust_decorations(config.window_decorations)?;
+        }
 
         let window_handle = Window::X11(XWindow::from_id(window_id));
 
@@ -1778,7 +1781,8 @@ impl XWindowInner {
         }
 
         // We ask the window manager to move the window for us so that
-        // we don't have to deal with adjusting for the frame size.
+        // we don't have to deal with adjusting for the frame size. The
+        // request's static gravity is the window's own (set_resize_increments).
         // Note that neither this technique or the configure_window
         // approach below will successfully move a window running
         // under the crostini environment on a chromebook :-(
@@ -1805,6 +1809,26 @@ impl XWindowInner {
                 ]),
             ),
         });
+    }
+
+    /// Where the client area's top left pixel is on the root window. That is
+    /// the point set_window_position moves it to: its request uses static
+    /// gravity, which places the client area itself rather than the frame the
+    /// window manager wraps around it.
+    fn get_window_position(&self) -> anyhow::Result<ScreenPoint> {
+        let conn = self.conn();
+        let coords = conn
+            .send_and_wait_request(&xcb::x::TranslateCoordinates {
+                src_window: self.window_id,
+                dst_window: conn.root,
+                src_x: 0,
+                src_y: 0,
+            })
+            .context("querying the window's position on the screen")?;
+        Ok(ScreenPoint::new(
+            coords.dst_x().into(),
+            coords.dst_y().into(),
+        ))
     }
 
     /// Change the title for the window manager
@@ -1881,12 +1905,23 @@ impl XWindowInner {
             });
     }
 
+    /// Set WM_NORMAL_HINTS: the resize increments, and the window's gravity.
+    ///
+    /// The gravity is static, the meaning set_window_position gives a
+    /// position: where the client area goes, not the frame the window
+    /// manager wraps around it. The window manager reads the window's
+    /// position by the window's gravity whenever it configures it, so a
+    /// window moved with static gravity but declaring another is placed by
+    /// its frame the next time it is resized or restored from maximized:
+    /// openbox does so. new_window sets these hints before mapping the
+    /// window, and every later call keeps the gravity.
     fn set_resize_increments(&mut self, incr: ResizeIncrement) -> anyhow::Result<()> {
         use xcb_util::*;
         let hints = xcb_size_hints_t {
             flags: XCB_ICCCM_SIZE_HINT_P_MIN_SIZE
                 | XCB_ICCCM_SIZE_HINT_P_RESIZE_INC
-                | XCB_ICCCM_SIZE_HINT_BASE_SIZE,
+                | XCB_ICCCM_SIZE_HINT_BASE_SIZE
+                | XCB_ICCCM_SIZE_HINT_P_WIN_GRAVITY,
             x: 0,
             y: 0,
             width: 0,
@@ -1903,7 +1938,7 @@ impl XWindowInner {
             max_aspect_den: 0,
             base_width: incr.base_width.into(),
             base_height: incr.base_height.into(),
-            win_gravity: 0,
+            win_gravity: xcb::x::Gravity::Static as u32,
         };
 
         let data = unsafe {
@@ -2092,6 +2127,10 @@ impl WindowOps for XWindow {
             inner.set_window_position(coords);
             Ok(())
         });
+    }
+
+    fn get_window_position(&self) -> Future<Option<ScreenPoint>> {
+        XConnection::with_window_inner(self.0, |inner| inner.get_window_position().map(Some))
     }
 
     fn set_text_cursor_position(&self, cursor: Rect) {
