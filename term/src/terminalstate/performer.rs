@@ -161,6 +161,13 @@ impl<'a> Performer<'a> {
                 }
             }
 
+            let physical_cols = self.screen().physical_cols;
+            if self.cursor.x >= physical_cols {
+                // set_cursor_pos allows x == physical_cols; printing there is a pending wrap
+                self.cursor.x = physical_cols - 1;
+                self.wrap_next = self.dec_auto_wrap;
+            }
+
             if self.wrap_next {
                 // Since we're implicitly moving the cursor to the next
                 // line, we need to tag the current position as wrapped
