@@ -45,6 +45,11 @@ async_ossl.workspace = true
 [target.'cfg(unix)'.dependencies]
 passfd.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "net"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation"] }
+
 [dev-dependencies]
 assert_fs.workspace = true
 clap.workspace = true
@@ -55,3 +60,6 @@ rstest.workspace = true
 shell-words.workspace = true
 termwiz.workspace = true
 whoami.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+tokio = { workspace = true, features = ["io-util"] }
