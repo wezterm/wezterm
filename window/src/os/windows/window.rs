@@ -2,10 +2,10 @@ use super::*;
 use crate::connection::ConnectionOps;
 use crate::parameters::{self, Parameters};
 use crate::{
-    Appearance, Clipboard, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent,
-    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
-    RequestedWindowGeometry, ResolvedGeometry, ScreenPoint, ScreenRect, ULength, WindowDecorations,
-    WindowEvent, WindowEventSender, WindowOps, WindowState,
+    Appearance, Clipboard, ContentSize, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode,
+    KeyEvent, Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent,
+    Rect, RequestedWindowGeometry, ResolvedGeometry, ScreenPoint, ScreenRect, ULength,
+    WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
 };
 use anyhow::{bail, Context};
 use async_trait::async_trait;
@@ -161,6 +161,22 @@ fn adjust_client_to_window_dimensions(
     (rect_width(&rect), rect_height(&rect))
 }
 
+/// The size of the work area, the monitor less the taskbar, of the
+/// monitor that `hwnd` is on, or is nearest to.
+fn work_area_size(hwnd: HWND) -> anyhow::Result<(i32, i32)> {
+    unsafe {
+        let mut mi: MONITORINFO = std::mem::zeroed();
+        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi) == 0 {
+            bail!(
+                "GetMonitorInfoW failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        Ok((rect_width(&mi.rcWork), rect_height(&mi.rcWork)))
+    }
+}
+
 fn rc_to_pointer(arc: &Rc<RefCell<WindowInner>>) -> *const RefCell<WindowInner> {
     let cloned = Rc::clone(arc);
     Rc::into_raw(cloned)
@@ -260,6 +276,62 @@ impl WindowInner {
         self.gl_state.replace(gl_state.clone());
 
         Ok(gl_state)
+    }
+
+    /// Resize the client area to `width` x `height` pixels, at most the
+    /// size of the work area (the monitor less the taskbar) of the
+    /// monitor the window is on.
+    fn set_inner_size(&self, width: usize, height: usize) {
+        let hwnd = self.hwnd;
+        let decorations = self.config.window_decorations;
+        promise::spawn::spawn(async move {
+            log::trace!("set_inner_size called with {width}x{height}");
+            let frame_dpi = unsafe { GetDpiForWindow(hwnd.0) };
+            let style = decorations_to_style(decorations);
+            // The frame's own size: that of the window around an empty client area.
+            let (frame_width, frame_height) =
+                adjust_client_to_window_dimensions(style, 0, 0, frame_dpi);
+            let (work_width, work_height) = match work_area_size(hwnd.0) {
+                Ok(size) => size,
+                Err(err) => {
+                    log::error!("not resizing the window to {width}x{height}: {err:#}");
+                    if let Some(inner) = rc_from_hwnd(hwnd.0) {
+                        let mut inner = inner.borrow_mut();
+                        inner.events.dispatch(WindowEvent::SetInnerSizeCompleted);
+                    }
+                    return;
+                }
+            };
+            let width = width.min((work_width - frame_width).max(1) as usize) as i32 + frame_width;
+            let height =
+                height.min((work_height - frame_height).max(1) as usize) as i32 + frame_height;
+            let window_state = get_window_state(hwnd.0);
+            if window_state.can_resize() {
+                log::trace!("set_inner_size now calling SetWindowPos with {width}x{height}");
+                unsafe {
+                    SetWindowPos(
+                        hwnd.0,
+                        hwnd.0,
+                        0,
+                        0,
+                        width,
+                        height,
+                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
+                    );
+                    wm_paint(hwnd.0, 0, 0, 0);
+                    if let Some(inner) = rc_from_hwnd(hwnd.0) {
+                        let mut inner = inner.borrow_mut();
+                        inner.events.dispatch(WindowEvent::SetInnerSizeCompleted);
+                    }
+                }
+            } else {
+                log::trace!(
+                    "ignoring set_inner_size({width}, {height}) call \
+                                because window_state is {window_state:?}"
+                );
+            }
+        })
+        .detach();
     }
 
     fn get_effective_dpi(&self) -> usize {
@@ -901,44 +973,35 @@ impl WindowOps for Window {
 
     fn set_inner_size(&self, width: usize, height: usize) {
         Connection::with_window_inner(self.0, move |inner| {
-            let hwnd = inner.hwnd;
-            let decorations = inner.config.window_decorations;
-            promise::spawn::spawn(async move {
-                log::trace!("set_inner_size called with {width}x{height}");
-                let frame_dpi = unsafe { GetDpiForWindow(hwnd.0) };
-                let (width, height) = adjust_client_to_window_dimensions(
-                    decorations_to_style(decorations),
-                    width,
-                    height,
-                    frame_dpi,
-                );
-                let window_state = get_window_state(hwnd.0);
-                if window_state.can_resize() {
-                    log::trace!("set_inner_size now calling SetWindowPos with {width}x{height}");
-                    unsafe {
-                        SetWindowPos(
-                            hwnd.0,
-                            hwnd.0,
-                            0,
-                            0,
-                            width,
-                            height,
-                            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
-                        );
-                        wm_paint(hwnd.0, 0, 0, 0);
-                        if let Some(inner) = rc_from_hwnd(hwnd.0) {
-                            let mut inner = inner.borrow_mut();
-                            inner.events.dispatch(WindowEvent::SetInnerSizeCompleted);
-                        }
-                    }
-                } else {
-                    log::trace!(
-                        "ignoring set_inner_size({width}, {height}) call \
-                                because window_state is {window_state:?}"
-                    );
-                }
-            })
-            .detach();
+            inner.set_inner_size(width, height);
+            Ok(())
+        });
+    }
+
+    /// The client area's size in pixels. WezTerm keeps a window's size in
+    /// pixels when it moves to a monitor of another DPI: it does not
+    /// resize it for WM_DPICHANGED.
+    fn get_content_size(&self) -> Future<ContentSize> {
+        Connection::with_window_inner(self.0, |inner| {
+            let mut rect = RECT {
+                left: 0,
+                bottom: 0,
+                right: 0,
+                top: 0,
+            };
+            unsafe {
+                GetClientRect(inner.hwnd.0, &mut rect);
+            }
+            Ok(ContentSize::new(
+                rect_width(&rect).into(),
+                rect_height(&rect).into(),
+            ))
+        })
+    }
+
+    fn set_content_size(&self, size: ContentSize) {
+        Connection::with_window_inner(self.0, move |inner| {
+            inner.set_inner_size(size.width.round() as usize, size.height.round() as usize);
             Ok(())
         });
     }

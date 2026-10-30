@@ -55,7 +55,7 @@ use wezterm_input_types::{
 use crate::wayland::WaylandConnection;
 use crate::x11::KeyboardWithFallback;
 use crate::{
-    Appearance, Clipboard, Connection, ConnectionOps, Dimensions, Point, Rect,
+    Appearance, Clipboard, Connection, ConnectionOps, ContentSize, Dimensions, Point, Rect,
     RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, Window, WindowEvent,
     WindowEventSender, WindowKeyEvent, WindowOps, WindowState,
 };
@@ -309,6 +309,7 @@ impl WaylandWindow {
             window_frame,
             dimensions,
             resize_increments: None,
+            suggested_bounds: None,
             window_state: WindowState::default(),
             last_mouse_coords: Point::new(0, 0),
             mouse_buttons: MouseButtons::NONE,
@@ -437,6 +438,17 @@ impl WindowOps for WaylandWindow {
     fn set_inner_size(&self, width: usize, height: usize) {
         WaylandConnection::with_window_inner(self.0, move |inner| {
             inner.set_inner_size(width, height);
+            Ok(())
+        });
+    }
+
+    fn get_content_size(&self) -> Future<ContentSize> {
+        WaylandConnection::with_window_inner(self.0, |inner| Ok(inner.content_size()))
+    }
+
+    fn set_content_size(&self, size: ContentSize) {
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.set_surface_size(size.width.round() as u32, size.height.round() as u32);
             Ok(())
         });
     }
@@ -594,6 +606,10 @@ pub struct WaylandWindowInner {
     pub(super) window_frame: FallbackFrame<WaylandState>,
     dimensions: Dimensions,
     resize_increments: Option<ResizeIncrement>,
+    /// The size, in surface coordinates, that the compositor last
+    /// suggested a window fit in (xdg_toplevel configure_bounds): the
+    /// visible area of the window's output, where it says.
+    suggested_bounds: Option<(u32, u32)>,
     window_state: WindowState,
     last_mouse_coords: Point,
     mouse_buttons: MouseButtons,
@@ -866,6 +882,7 @@ impl WaylandWindowInner {
         }
 
         if let Some(ref window_config) = pending.window_configure {
+            self.suggested_bounds = window_config.suggested_bounds;
             self.window_frame.update_state(window_config.state);
             self.window_frame
                 .update_wm_capabilities(window_config.capabilities);
@@ -1081,10 +1098,51 @@ impl WaylandWindowInner {
     }
 
     fn set_inner_size(&mut self, width: usize, height: usize) {
-        let pixel_width = width as i32;
-        let pixel_height = height as i32;
-        let surface_width = self.pixels_to_surface(pixel_width) as u32;
-        let surface_height = self.pixels_to_surface(pixel_height) as u32;
+        // A size beyond i32 is beyond every output; fit_surface_size
+        // brings it within the window's.
+        let pixel_width = width.min(i32::MAX as usize) as i32;
+        let pixel_height = height.min(i32::MAX as usize) as i32;
+        self.set_surface_size(
+            self.pixels_to_surface(pixel_width) as u32,
+            self.pixels_to_surface(pixel_height) as u32,
+        );
+    }
+
+    /// The surface's size in its own coordinates, the logical pixels
+    /// that the compositor keeps while the window moves between outputs
+    /// of different scales.
+    fn content_size(&self) -> ContentSize {
+        let factor = self.get_dpi_factor();
+        ContentSize::new(
+            self.dimensions.pixel_width as f64 / factor,
+            self.dimensions.pixel_height as f64 / factor,
+        )
+    }
+
+    /// `width` x `height` in surface coordinates, at most the bounds the
+    /// compositor suggested less the frame WezTerm draws around the
+    /// surface. A compositor that suggests no bounds (one whose
+    /// xdg-shell is older than version 4, or that does not know them)
+    /// says nothing of the output's size, so the size stays as asked.
+    fn fit_surface_size(&self, width: u32, height: u32) -> (u32, u32) {
+        let (bound_width, bound_height) = match self
+            .suggested_bounds
+            .map(|(width, height)| (NonZeroU32::new(width), NonZeroU32::new(height)))
+        {
+            Some((Some(width), Some(height))) => (width, height),
+            _ => return (width, height),
+        };
+        let (max_width, max_height) = self
+            .window_frame
+            .subtract_borders(bound_width, bound_height);
+        (
+            width.min(max_width.map_or(1, NonZeroU32::get)),
+            height.min(max_height.map_or(1, NonZeroU32::get)),
+        )
+    }
+
+    fn set_surface_size(&mut self, width: u32, height: u32) {
+        let (surface_width, surface_height) = self.fit_surface_size(width, height);
         // window.resize() doesn't generate a configure event,
         // so we're going to fake one up, otherwise the window
         // contents don't reflect the real size until eg:

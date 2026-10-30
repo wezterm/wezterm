@@ -3,8 +3,8 @@ use crate::bitmaps::*;
 use crate::connection::ConnectionOps;
 use crate::os::{xkeysyms, Connection, Window};
 use crate::{
-    Appearance, Clipboard, CursorIcon, DeadKeyStatus, Dimensions, MouseButtons, MouseEvent,
-    MouseEventKind, MousePress, Point, Rect, RequestedWindowGeometry, ResizeIncrement,
+    Appearance, Clipboard, ContentSize, CursorIcon, DeadKeyStatus, Dimensions, MouseButtons,
+    MouseEvent, MouseEventKind, MousePress, Point, Rect, RequestedWindowGeometry, ResizeIncrement,
     ResolvedGeometry, ScreenPoint, ScreenRect, WindowDecorations, WindowEvent, WindowEventSender,
     WindowOps, WindowState,
 };
@@ -1811,6 +1811,77 @@ impl XWindowInner {
         });
     }
 
+    /// Resize the window to `width` x `height` pixels, at most the size
+    /// of the screen it is on.
+    fn set_inner_size(&mut self, width: usize, height: usize) {
+        let (screen_width, screen_height) = match self.screen_size() {
+            Ok(size) => size,
+            Err(err) => {
+                log::error!("not resizing the window to {width}x{height}: {err:#}");
+                // The resize is over, though nothing was resized.
+                self.events.dispatch(WindowEvent::SetInnerSizeCompleted);
+                return;
+            }
+        };
+        let width = width.min(screen_width) as u32;
+        let height = height.min(screen_height) as u32;
+        if (width, height) == (self.width.into(), self.height.into()) {
+            // The X server sends no ConfigureNotify for a request that
+            // changes nothing, so the resize is over now.
+            self.events.dispatch(WindowEvent::SetInnerSizeCompleted);
+            return;
+        }
+        self.conn()
+            .send_request_no_reply_log(&xcb::x::ConfigureWindow {
+                window: self.window_id,
+                value_list: &[
+                    xcb::x::ConfigWindow::Width(width),
+                    xcb::x::ConfigWindow::Height(height),
+                ],
+            });
+        self.resize_child(width, height);
+        self.outstanding_configure_requests += 1;
+    }
+
+    /// The size of the screen the window is on: the RandR output it
+    /// overlaps most, the main one when it overlaps none, or the whole X
+    /// screen when the server has no RandR. X11 tells a window nothing
+    /// of the panels on a screen, so the size is the whole screen's.
+    fn screen_size(&self) -> anyhow::Result<(usize, usize)> {
+        let conn = self.conn();
+        if !conn.has_randr {
+            let screen = conn
+                .get_setup()
+                .roots()
+                .nth(conn.screen_num as usize)
+                .ok_or_else(|| anyhow!("the X server has no screen {}", conn.screen_num))?;
+            return Ok((
+                screen.width_in_pixels().into(),
+                screen.height_in_pixels().into(),
+            ));
+        }
+        let position = self.get_window_position()?;
+        let window_rect: ScreenRect = euclid::rect(
+            position.x,
+            position.y,
+            self.width as isize,
+            self.height as isize,
+        );
+        let screens = conn.get_cached_screens()?;
+        let screen = screens
+            .by_name
+            .values()
+            .filter_map(|screen| {
+                screen
+                    .rect
+                    .intersection(&window_rect)
+                    .map(|overlap| (screen, overlap.area()))
+            })
+            .max_by_key(|(_, area)| *area)
+            .map_or(&screens.main, |(screen, _)| screen);
+        Ok((screen.rect.width() as usize, screen.rect.height() as usize))
+    }
+
     /// Where the client area's top left pixel is on the root window. That is
     /// the point set_window_position moves it to: its request uses static
     /// gravity, which places the client area itself rather than the frame the
@@ -2093,17 +2164,21 @@ impl WindowOps for XWindow {
 
     fn set_inner_size(&self, width: usize, height: usize) {
         XConnection::with_window_inner(self.0, move |inner| {
-            inner
-                .conn()
-                .send_request_no_reply_log(&xcb::x::ConfigureWindow {
-                    window: inner.window_id,
-                    value_list: &[
-                        xcb::x::ConfigWindow::Width(width as u32),
-                        xcb::x::ConfigWindow::Height(height as u32),
-                    ],
-                });
-            inner.resize_child(width as u32, height as u32);
-            inner.outstanding_configure_requests += 1;
+            inner.set_inner_size(width, height);
+            Ok(())
+        });
+    }
+
+    /// X11 measures windows in pixels on every screen.
+    fn get_content_size(&self) -> Future<ContentSize> {
+        XConnection::with_window_inner(self.0, |inner| {
+            Ok(ContentSize::new(inner.width.into(), inner.height.into()))
+        })
+    }
+
+    fn set_content_size(&self, size: ContentSize) {
+        XConnection::with_window_inner(self.0, move |inner| {
+            inner.set_inner_size(size.width.round() as usize, size.height.round() as usize);
             Ok(())
         });
     }

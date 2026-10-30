@@ -65,6 +65,12 @@ pub type Size = euclid::Size2D<isize, PixelUnit>;
 pub type SizeF = euclid::Size2D<f32, PixelUnit>;
 pub type ScreenRect = euclid::Rect<isize, ScreenPixelUnit>;
 
+/// The unit of a window's content size as the windowing system keeps it
+/// while the window moves between screens of different scales; see
+/// [WindowOps::get_content_size].
+pub struct ContentUnit;
+pub type ContentSize = euclid::Size2D<f64, ContentUnit>;
+
 /// Represents the preferred appearance of the windowing
 /// environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -272,8 +278,26 @@ pub trait WindowOps {
     /// Change the titlebar text for the window
     fn set_title(&self, title: &str);
 
-    /// Resize the inner or client area of the window
+    /// Resize the inner or client area of the window, in pixels at the
+    /// scale of the screen the window is on, at most the size of the
+    /// visible area of that screen.
     fn set_inner_size(&self, width: usize, height: usize);
+
+    /// The size of the inner or client area in the units the windowing
+    /// system keeps it in while the window moves between screens of
+    /// different scales: points on macOS, the surface's logical pixels
+    /// on Wayland, and pixels on X11 and Windows, where a window keeps
+    /// its size in pixels when it moves (on Windows, WezTerm does not
+    /// resize its windows for a screen's DPI). Unlike a size in pixels,
+    /// it gives a window the same size on every screen.
+    fn get_content_size(&self) -> Future<ContentSize>;
+
+    /// Resize the inner or client area to `size`, in the units that
+    /// get_content_size reports, at most the size of the visible area
+    /// of the screen the window is on when the resize applies. The top
+    /// left of the area stays where it is, which is where
+    /// set_window_position puts it.
+    fn set_content_size(&self, size: ContentSize);
 
     /// Use for windows snap layouts
     fn set_maximize_button_position(&self, _rect: ScreenRect) {}

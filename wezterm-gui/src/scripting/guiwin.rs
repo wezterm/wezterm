@@ -77,6 +77,42 @@ impl UserData for GuiWin {
                 Ok(())
             },
         );
+        methods.add_async_method("get_content_size", |_, this, _: ()| async move {
+            #[derive(FromDynamic, ToDynamic)]
+            struct ContentSize {
+                width: f64,
+                height: f64,
+            }
+            impl_lua_conversion_dynamic!(ContentSize);
+
+            let size = this
+                .window
+                .get_content_size()
+                .await
+                .map_err(|e| anyhow::anyhow!("{:#}", e))
+                .map_err(luaerr)?;
+            Ok(ContentSize {
+                width: size.width,
+                height: size.height,
+            })
+        });
+        methods.add_method(
+            "set_content_size",
+            |_, this, (width, height): (f64, f64)| {
+                for (name, value) in [("width", width), ("height", height)] {
+                    if !value.is_finite() || value < 1.0 {
+                        return Err(mlua::Error::external(format!(
+                            "set_content_size takes a {name} of at least 1, not {value}"
+                        )));
+                    }
+                }
+                this.window
+                    .notify(TermWindowNotif::SetContentSize(::window::ContentSize::new(
+                        width, height,
+                    )));
+                Ok(())
+            },
+        );
         methods.add_method("set_position", |_, this, (x, y): (isize, isize)| {
             this.in_order(move |window| window.set_window_position(euclid::point2(x, y)));
             Ok(())

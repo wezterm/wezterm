@@ -527,6 +527,12 @@ impl WebGpuState {
         })
     }
 
+    /// The largest width or height of a surface the GPU can draw: that
+    /// of its largest texture.
+    pub fn max_surface_dimension(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
     #[allow(unused_mut)]
     pub fn resize(&self, mut dims: Dimensions) {
         // During a live resize on Windows, the Dimensions that we're processing may be
@@ -545,6 +551,14 @@ impl WebGpuState {
         }
 
         if dims == *self.dimensions.borrow() {
+            return;
+        }
+        let max = self.max_surface_dimension();
+        if dims.pixel_width > max as usize || dims.pixel_height > max as usize {
+            // Configuring a surface larger than the GPU can draw panics.
+            // The window is not painted at this size either (see
+            // TermWindow::too_large_to_paint, which logs it), so the
+            // surface keeps its size until the window has one it can draw.
             return;
         }
         *self.dimensions.borrow_mut() = dims;
