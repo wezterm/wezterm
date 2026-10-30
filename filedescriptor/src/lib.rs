@@ -335,6 +335,10 @@ impl FileDescriptor {
     pub fn redirect_stdio<F: AsRawFileDescriptor>(f: &F, stdio: StdioDescriptor) -> Result<Self> {
         Self::redirect_stdio_impl(f, stdio)
     }
+
+    pub fn as_stdio_pair(&self) -> Result<(std::process::Stdio, std::process::Stdio)> {
+        self.as_stdio_pair_impl()
+    }
 }
 
 impl From<FileDescriptor> for std::process::Stdio {
