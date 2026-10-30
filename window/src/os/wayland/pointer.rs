@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -7,7 +6,6 @@ use smithay_client_toolkit::reexports::csd_frame::{DecorationsFrame, FrameClick}
 use smithay_client_toolkit::seat::pointer::{
     PointerData, PointerDataExt, PointerEvent, PointerEventKind, PointerHandler,
 };
-use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_pointer::{ButtonState, WlPointer};
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{Connection, Proxy, QueueHandle};
@@ -35,19 +33,16 @@ impl PointerHandler for WaylandState {
             .unwrap();
 
         for evt in events {
-            if let PointerEventKind::Enter { .. } = &evt.kind {
-                let surface_id = evt.surface.id();
-                self.active_surface_id = RefCell::new(Some(surface_id.clone()));
-                pstate.active_surface_id = Some(surface_id);
-            }
             if let Some(serial) = event_serial(&evt) {
                 *self.last_serial.borrow_mut() = serial;
                 pstate.serial = serial;
             }
-            if let Some(pending) = self
-                .surface_to_pending
-                .get(&self.active_surface_id.borrow().as_ref().unwrap())
-            {
+            // Each event goes to the surface the compositor delivered it on. A
+            // remembered "active" surface is not that: the keyboard entering the
+            // window when a click on its title bar focuses it would make a press on
+            // the frame the terminal's, at the frame's coordinates, which are the
+            // tab bar's.
+            if let Some(pending) = self.surface_to_pending.get(&evt.surface.id()) {
                 let mut pending = pending.lock().unwrap();
                 if pending.queue(evt) {
                     WaylandConnection::with_window_inner(pending.window_id, move |inner| {
@@ -78,7 +73,6 @@ impl PointerUserData {
 /// Per-pointer state tracked across pointer events.
 #[derive(Default)]
 pub struct PointerState {
-    active_surface_id: Option<ObjectId>,
     serial: u32,
     /// Active drag-and-drop session, if any.
     pub drag_and_drop_session: Option<DragAndDropSession>,
@@ -206,60 +200,59 @@ impl WaylandState {
         let windows = self.windows.borrow();
 
         for evt in events {
-            let surface = &evt.surface;
-            if surface.id() == self.active_surface_id.borrow().as_ref().unwrap().clone() {
-                let (x, y) = evt.position;
-                let parent_surface = match evt.surface.data::<SurfaceData>() {
-                    Some(data) => match data.parent_surface() {
-                        Some(sd) => sd,
-                        None => continue,
-                    },
+            // Only a frame part's surface has the window's as its parent: events on
+            // the window's own surface are the terminal's, and pointer_frame queued them.
+            let (x, y) = evt.position;
+            let parent_surface = match evt.surface.data::<SurfaceData>() {
+                Some(data) => match data.parent_surface() {
+                    Some(sd) => sd,
                     None => continue,
-                };
+                },
+                None => continue,
+            };
 
-                let wid = SurfaceUserData::from_wl(parent_surface).window_id;
-                let mut inner = windows.get(&wid).unwrap().borrow_mut();
+            let wid = SurfaceUserData::from_wl(parent_surface).window_id;
+            let mut inner = windows.get(&wid).unwrap().borrow_mut();
 
-                match evt.kind {
-                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                        // The frame names the cursor for the part under the pointer:
-                        // a resize arrow on a border, so the edge shows it can be dragged.
-                        if let Some(cursor) = inner.window_frame.click_point_moved(
-                            Duration::ZERO,
-                            &evt.surface.id(),
-                            x,
-                            y,
-                        ) {
-                            if let Some(themed) = self.pointer.as_ref() {
-                                if let Err(err) = themed.set_cursor(conn, cursor) {
-                                    log::error!("set_cursor over the window frame: {}", err);
-                                }
+            match evt.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    // The frame names the cursor for the part under the pointer:
+                    // a resize arrow on a border, so the edge shows it can be dragged.
+                    if let Some(cursor) = inner.window_frame.click_point_moved(
+                        Duration::ZERO,
+                        &evt.surface.id(),
+                        x,
+                        y,
+                    ) {
+                        if let Some(themed) = self.pointer.as_ref() {
+                            if let Err(err) = themed.set_cursor(conn, cursor) {
+                                log::error!("set_cursor over the window frame: {}", err);
                             }
                         }
                     }
-                    PointerEventKind::Leave { .. } => {
-                        inner.window_frame.click_point_left();
-                    }
-                    PointerEventKind::Press { button, serial, .. }
-                    | PointerEventKind::Release { button, serial, .. } => {
-                        let pressed = if matches!(evt.kind, PointerEventKind::Press { .. }) {
-                            true
-                        } else {
-                            false
-                        };
-                        let click = match button {
-                            0x110 => FrameClick::Normal,
-                            0x111 => FrameClick::Alternate,
-                            _ => continue,
-                        };
-                        if let Some(action) =
-                            inner.window_frame.on_click(Duration::ZERO, click, pressed)
-                        {
-                            inner.frame_action(pointer, serial, action);
-                        }
-                    }
-                    _ => {}
                 }
+                PointerEventKind::Leave { .. } => {
+                    inner.window_frame.click_point_left();
+                }
+                PointerEventKind::Press { button, serial, .. }
+                | PointerEventKind::Release { button, serial, .. } => {
+                    let pressed = if matches!(evt.kind, PointerEventKind::Press { .. }) {
+                        true
+                    } else {
+                        false
+                    };
+                    let click = match button {
+                        0x110 => FrameClick::Normal,
+                        0x111 => FrameClick::Alternate,
+                        _ => continue,
+                    };
+                    if let Some(action) =
+                        inner.window_frame.on_click(Duration::ZERO, click, pressed)
+                    {
+                        inner.frame_action(pointer, serial, action);
+                    }
+                }
+                _ => {}
             }
         }
     }

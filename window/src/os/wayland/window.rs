@@ -1048,11 +1048,11 @@ impl WaylandWindowInner {
         let conn = WaylandConnection::get().unwrap().wayland();
         let state = conn.wayland_state.borrow();
         let surface = self.surface().clone();
-        let active_surface_id = state.active_surface_id.borrow();
+        let keyboard_surface_id = state.keyboard_surface_id.borrow();
         let surface_id = surface.id();
 
-        if let Some(active_surface_id) = active_surface_id.as_ref() {
-            if surface_id == active_surface_id.clone() {
+        if let Some(keyboard_surface_id) = keyboard_surface_id.as_ref() {
+            if surface_id == keyboard_surface_id.clone() {
                 if self.text_cursor.map(|prior| prior != rect).unwrap_or(true) {
                     self.text_cursor.replace(rect);
 
