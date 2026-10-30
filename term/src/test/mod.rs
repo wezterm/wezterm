@@ -1378,3 +1378,21 @@ fn test_hyperlinks() {
         Compare::TEXT | Compare::ATTRS,
     );
 }
+
+#[test]
+fn test_osc7_cwd_with_semicolon() {
+    let mut term = TestTerm::new(1, 5, 0);
+
+    // `wezterm set-working-directory` builds the URL like this, which
+    // leaves `;` unescaped since it is valid in a URL path
+    let dir = if cfg!(windows) {
+        r"C:\Users\me\a;b"
+    } else {
+        "/home/me/a;b"
+    };
+    let url = url::Url::from_directory_path(dir).unwrap();
+    assert!(url.as_str().contains("a;b"));
+
+    term.print(format!("\x1b]7;{url}\x1b\\"));
+    assert_eq!(term.get_current_dir(), Some(&url));
+}
