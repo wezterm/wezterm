@@ -979,6 +979,7 @@ impl AlertHandler for LocalPaneNotifHandler {
 /// until something else triggered the mux to prune dead processes.
 fn split_child(
     mut process: Box<dyn Child>,
+    pane_id: PaneId,
 ) -> (
     Receiver<IoResult<ExitStatus>>,
     Box<dyn ChildKiller + Sync>,
@@ -991,6 +992,9 @@ fn split_child(
 
     std::thread::spawn(move || {
         let status = process.wait();
+        if let (Some(mux), Ok(exit)) = (Mux::try_get(), &status) {
+            mux.record_child_exit(pane_id, exit);
+        }
         tx.try_send(status).ok();
         promise::spawn::spawn_into_main_thread(async move {
             let mux = Mux::get();
@@ -1012,7 +1016,7 @@ impl LocalPane {
         domain_id: DomainId,
         command_description: String,
     ) -> Self {
-        let (process, signaller, pid) = split_child(process);
+        let (process, signaller, pid) = split_child(process, pane_id);
 
         terminal.set_device_control_handler(Box::new(LocalPaneDCSHandler {
             pane_id,
