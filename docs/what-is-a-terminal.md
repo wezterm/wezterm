@@ -57,13 +57,16 @@ kernel, which manages the actual communication with the terminal.
 flowchart LR
     subgraph Kernel
         direction LR
-        TTY["TTY device\n(e.g. /dev/tty/0)"] 
+        TTY["
+            TTY device
+            (e.g. /dev/tty/0)
+        "] 
     end
     
     subgraph Userspace
-    SHELL["Shell Program (e.g. zsh)"] <-- "input\noutput" --> TTY
+    SHELL["Shell Program (e.g. zsh)"] <-- "input/output" --> TTY
     end
-    TTY  <-- "input\noutput" -->  TE["Terminal Device"]:::td
+    TTY  <-- "input/output" -->  TE["Terminal Device"]:::td
     classDef td stroke:#00F,stroke-width:2px
 ```
 
@@ -137,13 +140,19 @@ an appropriate library to resolve the correct escape sequences.
 flowchart 
     subgraph Kernel
         direction TB
-        TTY["TTY device\n(e.g. /dev/tty/0)"] 
+        TTY["
+            TTY device
+            (e.g. /dev/tty/0)
+        "] 
     end
     
     subgraph Userspace
     SHELL["Shell Program (e.g. zsh)"] <-- input/output --> TTY
     SHELL -. "starts" .-> APP
-    APP["Application\n(e.g. vim)"] <-- input/output --> TTY
+    APP["
+        Application
+        (e.g. vim)
+    "] <-- input/output --> TTY
 
     end
     TTY  <-- input/output -->  TE["Terminal Device"]:::td
@@ -224,7 +233,10 @@ essentially just being the I/O stream.
 flowchart 
     subgraph Kernel
         direction TB
-        PTYC["PTY client\n(e.g. /dev/pts/0)"] 
+        PTYC["
+            PTY client
+            (e.g. /dev/pts/0)
+        "] 
         PTYM[PTY master]
         PTYC <--> PTYM
     end
@@ -232,8 +244,15 @@ flowchart
     subgraph Userspace
     SHELL["Shell Program (e.g. zsh)"] <-- input/output --> PTYC
     SHELL -. "starts" .-> APP
-    APP["Application\n(e.g. vim)"] <-- input/output --> PTYC
-    PTYM  <-- input/output -->  TE["Terminal Emulator\n(e.g. wezterm)"]:::wezterm
+    APP["
+        Application
+        (e.g. vim)
+    "] <-- input/output --> PTYC
+    PTYM  <-- input/output -->  TE
+    TE["
+        Terminal Emulator
+        (e.g. wezterm)
+    "]:::wezterm
     classDef wezterm stroke:#00F,stroke-width:2px
     end
 ```
