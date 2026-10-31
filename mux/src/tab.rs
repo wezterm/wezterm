@@ -142,23 +142,27 @@ impl Default for SplitRequest {
 }
 
 impl SplitDirectionAndSize {
+    fn gap_cells(&self) -> usize {
+        split_gap_cells(self.direction, &cell_dimensions(&self.first))
+    }
+
     fn top_of_second(&self) -> usize {
         match self.direction {
             SplitDirection::Horizontal => 0,
-            SplitDirection::Vertical => self.first.rows as usize + 1,
+            SplitDirection::Vertical => self.first.rows as usize + self.gap_cells(),
         }
     }
 
     fn left_of_second(&self) -> usize {
         match self.direction {
-            SplitDirection::Horizontal => self.first.cols as usize + 1,
+            SplitDirection::Horizontal => self.first.cols as usize + self.gap_cells(),
             SplitDirection::Vertical => 0,
         }
     }
 
     pub fn width(&self) -> usize {
         if self.direction == SplitDirection::Horizontal {
-            self.first.cols + self.second.cols + 1
+            self.first.cols + self.second.cols + self.gap_cells()
         } else {
             self.first.cols
         }
@@ -166,7 +170,7 @@ impl SplitDirectionAndSize {
 
     pub fn height(&self) -> usize {
         if self.direction == SplitDirection::Vertical {
-            self.first.rows + self.second.rows + 1
+            self.first.rows + self.second.rows + self.gap_cells()
         } else {
             self.first.rows
         }
@@ -326,9 +330,10 @@ fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
         } => {
             let (left_x, left_y) = compute_min_size(&mut *left);
             let (right_x, right_y) = compute_min_size(&mut *right);
+            let gap = data.gap_cells();
             match data.direction {
-                SplitDirection::Vertical => (left_x.max(right_x), left_y + right_y + 1),
-                SplitDirection::Horizontal => (left_x + right_x + 1, left_y.max(right_y)),
+                SplitDirection::Vertical => (left_x.max(right_x), left_y + right_y + gap),
+                SplitDirection::Horizontal => (left_x + right_x + gap, left_y.max(right_y)),
             }
         }
         Tree::Leaf(_) => (1, 1),
@@ -504,6 +509,21 @@ fn cell_dimensions(size: &TerminalSize) -> TerminalSize {
         pixel_height: size.pixel_height / size.rows,
         dpi: size.dpi,
     }
+}
+
+/// How many cells wide the gap between two sibling panes should be along
+/// `direction`, given `cell_dims` (as returned by `cell_dimensions`, i.e. a
+/// 1x1-cell-sized TerminalSize). This is 1 (just the divider line) unless
+/// `config.pane_padding` is set, in which case it grows to reserve a gutter
+/// on either side of the divider too. See `PanePadding::split_gap_cells`.
+fn split_gap_cells(direction: SplitDirection, cell_dims: &TerminalSize) -> usize {
+    let (_leading, total) = configuration().pane_padding.split_gap_cells(
+        direction == SplitDirection::Horizontal,
+        cell_dims.pixel_width as f32,
+        cell_dims.pixel_height as f32,
+        cell_dims.dpi as f32,
+    );
+    total
 }
 
 impl Tab {
@@ -1196,16 +1216,17 @@ impl TabInner {
             // child and adjust the second, so if we are split down the middle
             // and the window is made wider, the right column will grow in
             // size, leaving the left at its current width.
+            let gap = node.gap_cells();
             if node.direction == SplitDirection::Horizontal {
                 node.first.rows = pane_size.rows;
                 node.second.rows = pane_size.rows;
 
-                node.second.cols = pane_size.cols.saturating_sub(1 + node.first.cols);
+                node.second.cols = pane_size.cols.saturating_sub(gap + node.first.cols);
             } else {
                 node.first.cols = pane_size.cols;
                 node.second.cols = pane_size.cols;
 
-                node.second.rows = pane_size.rows.saturating_sub(1 + node.first.rows);
+                node.second.rows = pane_size.rows.saturating_sub(gap + node.first.rows);
             }
             node.first.pixel_width = node.first.cols * cell_width;
             node.first.pixel_height = node.first.rows * cell_height;
@@ -1294,6 +1315,7 @@ impl TabInner {
     fn adjust_node_at_cursor(&mut self, cursor: &mut Cursor, delta: isize) {
         let cell_dimensions = self.cell_dimensions();
         if let Ok(Some(node)) = cursor.node_mut() {
+            let gap = node.gap_cells();
             match node.direction {
                 SplitDirection::Horizontal => {
                     let width = node.width();
@@ -1302,12 +1324,12 @@ impl TabInner {
                     cols = cols
                         .saturating_add(delta)
                         .max(1)
-                        .min((width as isize).saturating_sub(2));
+                        .min((width as isize).saturating_sub(gap as isize + 1));
                     node.first.cols = cols as usize;
                     node.first.pixel_width =
                         node.first.cols.saturating_mul(cell_dimensions.pixel_width);
 
-                    node.second.cols = width.saturating_sub(node.first.cols.saturating_add(1));
+                    node.second.cols = width.saturating_sub(node.first.cols.saturating_add(gap));
                     node.second.pixel_width =
                         node.second.cols.saturating_mul(cell_dimensions.pixel_width);
                 }
@@ -1318,12 +1340,12 @@ impl TabInner {
                     rows = rows
                         .saturating_add(delta)
                         .max(1)
-                        .min((height as isize).saturating_sub(2));
+                        .min((height as isize).saturating_sub(gap as isize + 1));
                     node.first.rows = rows as usize;
                     node.first.pixel_height =
                         node.first.rows.saturating_mul(cell_dimensions.pixel_height);
 
-                    node.second.rows = height.saturating_sub(node.first.rows.saturating_add(1));
+                    node.second.rows = height.saturating_sub(node.first.rows.saturating_add(gap));
                     node.second.pixel_height = node
                         .second
                         .rows
@@ -1488,6 +1510,9 @@ impl TabInner {
         let mut best = None;
 
         let recency = &self.recency;
+        let cell_dims = self.cell_dimensions();
+        let gap_x = split_gap_cells(SplitDirection::Horizontal, &cell_dims);
+        let gap_y = split_gap_cells(SplitDirection::Vertical, &cell_dims);
 
         fn edge_intersects(
             active_start: usize,
@@ -1504,7 +1529,7 @@ impl TabInner {
         for pane in &panes {
             let score = match direction {
                 PaneDirection::Right => {
-                    if pane.left == active.left + active.width + 1
+                    if pane.left == active.left + active.width + gap_x
                         && edge_intersects(active.top, active.height, pane.top, pane.height)
                     {
                         1 + recency.score(pane.index)
@@ -1513,7 +1538,7 @@ impl TabInner {
                     }
                 }
                 PaneDirection::Left => {
-                    if pane.left + pane.width + 1 == active.left
+                    if pane.left + pane.width + gap_x == active.left
                         && edge_intersects(active.top, active.height, pane.top, pane.height)
                     {
                         1 + recency.score(pane.index)
@@ -1522,7 +1547,7 @@ impl TabInner {
                     }
                 }
                 PaneDirection::Up => {
-                    if pane.top + pane.height + 1 == active.top
+                    if pane.top + pane.height + gap_y == active.top
                         && edge_intersects(active.left, active.width, pane.left, pane.width)
                     {
                         1 + recency.score(pane.index)
@@ -1531,7 +1556,7 @@ impl TabInner {
                     }
                 }
                 PaneDirection::Down => {
-                    if active.top + active.height + 1 == pane.top
+                    if active.top + active.height + gap_y == pane.top
                         && edge_intersects(active.left, active.width, pane.left, pane.width)
                     {
                         1 + recency.score(pane.index)
@@ -1872,15 +1897,16 @@ impl TabInner {
         request: SplitRequest,
     ) -> Option<SplitDirectionAndSize> {
         let cell_dims = self.cell_dimensions();
+        let gap = split_gap_cells(request.direction, &cell_dims);
 
-        fn split_dimension(dim: usize, request: SplitRequest) -> (usize, usize) {
+        fn split_dimension(dim: usize, request: SplitRequest, gap: usize) -> (usize, usize) {
             let target_size = match request.size {
                 SplitSize::Cells(n) => n,
                 SplitSize::Percent(n) => (dim * (n as usize)) / 100,
             }
             .max(1);
 
-            let remain = dim.saturating_sub(target_size + 1);
+            let remain = dim.saturating_sub(target_size + gap);
 
             if request.target_is_second {
                 (remain, target_size)
@@ -1894,12 +1920,12 @@ impl TabInner {
 
             let ((width1, width2), (height1, height2)) = match request.direction {
                 SplitDirection::Horizontal => (
-                    split_dimension(size.cols as usize, request),
+                    split_dimension(size.cols as usize, request, gap),
                     (size.rows as usize, size.rows as usize),
                 ),
                 SplitDirection::Vertical => (
                     (size.cols as usize, size.cols as usize),
-                    split_dimension(size.rows as usize, request),
+                    split_dimension(size.rows as usize, request, gap),
                 ),
             };
 
@@ -1929,12 +1955,13 @@ impl TabInner {
         self.iter_panes().iter().nth(pane_index).map(|pos| {
             let ((width1, width2), (height1, height2)) = match request.direction {
                 SplitDirection::Horizontal => (
-                    split_dimension(pos.width, request),
+                    split_dimension(pos.width, request, gap),
                     (pos.height, pos.height),
                 ),
-                SplitDirection::Vertical => {
-                    ((pos.width, pos.width), split_dimension(pos.height, request))
-                }
+                SplitDirection::Vertical => (
+                    (pos.width, pos.width),
+                    split_dimension(pos.height, request, gap),
+                ),
             };
 
             SplitDirectionAndSize {

@@ -107,30 +107,42 @@ impl crate::TermWindow {
 
         let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
+        // Bleed the pane's own (correctly active/inactive-dimmed) background
+        // out to the middle of any pane_padding gutter it borders, so the
+        // gutter is never left showing the always-undimmed window background
+        // underneath. Matches where paint_split centers the divider line.
+        let (_, gap_x_cells) = self.config.pane_padding.split_gap_cells(
+            true,
+            cell_width,
+            cell_height,
+            self.dimensions.dpi as f32,
+        );
+        let (_, gap_y_cells) = self.config.pane_padding.split_gap_cells(
+            false,
+            cell_width,
+            cell_height,
+            self.dimensions.dpi as f32,
+        );
+        let gap_x = gap_x_cells as f32 * cell_width;
+        let gap_y = gap_y_cells as f32 * cell_height;
         let background_rect = {
             // We want to fill out to the edges of the splits
             let (x, width_delta) = if pos.left == 0 {
-                (
-                    0.,
-                    padding_left + border.left.get() as f32 + (cell_width / 2.0),
-                )
+                (0., padding_left + border.left.get() as f32 + (gap_x / 2.0))
             } else {
                 (
-                    padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                    padding_left + border.left.get() as f32 - (gap_x / 2.0)
                         + (pos.left as f32 * cell_width),
-                    cell_width,
+                    gap_x,
                 )
             };
 
             let (y, height_delta) = if pos.top == 0 {
-                (
-                    (top_pixel_y - padding_top),
-                    padding_top + (cell_height / 2.0),
-                )
+                ((top_pixel_y - padding_top), padding_top + (gap_y / 2.0))
             } else {
                 (
-                    top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
-                    cell_height,
+                    top_pixel_y + (pos.top as f32 * cell_height) - (gap_y / 2.0),
+                    gap_y,
                 )
             };
             euclid::rect(
@@ -602,29 +614,42 @@ impl crate::TermWindow {
         let border = self.get_os_border();
         let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
 
+        // Bleed the pane's own (correctly active/inactive-dimmed) background
+        // out to the middle of any pane_padding gutter it borders, so the
+        // gutter is never left showing the always-undimmed window background
+        // underneath. Matches where paint_split centers the divider line.
+        let (_, gap_x_cells) = self.config.pane_padding.split_gap_cells(
+            true,
+            cell_width,
+            cell_height,
+            self.dimensions.dpi as f32,
+        );
+        let (_, gap_y_cells) = self.config.pane_padding.split_gap_cells(
+            false,
+            cell_width,
+            cell_height,
+            self.dimensions.dpi as f32,
+        );
+        let gap_x = gap_x_cells as f32 * cell_width;
+        let gap_y = gap_y_cells as f32 * cell_height;
+
         // We want to fill out to the edges of the splits
         let (x, width_delta) = if pos.left == 0 {
-            (
-                0.,
-                padding_left + border.left.get() as f32 + (cell_width / 2.0),
-            )
+            (0., padding_left + border.left.get() as f32 + (gap_x / 2.0))
         } else {
             (
-                padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                padding_left + border.left.get() as f32 - (gap_x / 2.0)
                     + (pos.left as f32 * cell_width),
-                cell_width,
+                gap_x,
             )
         };
 
         let (y, height_delta) = if pos.top == 0 {
-            (
-                (top_pixel_y - padding_top),
-                padding_top + (cell_height / 2.0),
-            )
+            ((top_pixel_y - padding_top), padding_top + (gap_y / 2.0))
         } else {
             (
-                top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
-                cell_height,
+                top_pixel_y + (pos.top as f32 * cell_height) - (gap_y / 2.0),
+                gap_y,
             )
         };
 
