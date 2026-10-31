@@ -53,7 +53,7 @@ impl super::TermWindow {
             self.load_os_parameters();
         }
 
-        if let Some(webgpu) = self.webgpu.as_mut() {
+        if let Some(webgpu) = self.webgpu.as_ref() {
             webgpu.resize(dimensions);
         }
 

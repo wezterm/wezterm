@@ -886,6 +886,9 @@ pub struct Config {
     pub xcursor_theme: Option<String>,
 
     #[dynamic(default)]
+    pub experimental_glow: ExperimentalGlow,
+
+    #[dynamic(default)]
     pub xcursor_size: Option<u32>,
 
     #[dynamic(default)]
@@ -2074,6 +2077,281 @@ impl Default for DroppedFileQuoting {
         } else {
             Self::SpacesOnly
         }
+    }
+}
+
+#[derive(Debug, Clone, FromDynamic, ToDynamic, PartialEq)]
+pub enum GlowAnimationType {
+    Pulse,
+    Shimmer,
+    PulseAndShimmer,
+}
+
+impl Default for GlowAnimationType {
+    fn default() -> Self {
+        Self::Pulse
+    }
+}
+
+#[derive(Debug, Clone, FromDynamic, ToDynamic)]
+pub struct ExperimentalGlow {
+    #[dynamic(default)]
+    pub enabled: bool,
+    
+    #[dynamic(default = "default_glow_radius")]
+    pub radius: f32,
+    
+    #[dynamic(default = "default_glow_strength")]
+    pub strength: f32,
+    
+    #[dynamic(default = "default_glow_threshold")]
+    pub threshold: f32,
+    
+    #[dynamic(default = "default_glow_color_boost")]
+    pub color_boost: f32,
+    
+    #[dynamic(default)]
+    pub animation_enabled: bool,
+    
+    #[dynamic(default = "default_glow_animation_type")]
+    pub animation_type: GlowAnimationType,
+    
+    #[dynamic(default = "default_glow_animation_speed")]
+    pub animation_speed: f32,
+}
+
+impl Default for ExperimentalGlow {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            radius: default_glow_radius(),
+            strength: default_glow_strength(),
+            threshold: default_glow_threshold(),
+            color_boost: default_glow_color_boost(),
+            animation_enabled: false,
+            animation_type: default_glow_animation_type(),
+            animation_speed: default_glow_animation_speed(),
+        }
+    }
+}
+
+fn default_glow_radius() -> f32 {
+    2.0
+}
+
+fn default_glow_strength() -> f32 {
+    0.6
+}
+
+fn default_glow_threshold() -> f32 {
+    0.75
+}
+
+fn default_glow_color_boost() -> f32 {
+    1.1
+}
+
+fn default_glow_animation_type() -> GlowAnimationType {
+    GlowAnimationType::Pulse
+}
+
+fn default_glow_animation_speed() -> f32 {
+    1.0
+}
+
+impl ExperimentalGlow {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.radius < 0.0 {
+            anyhow::bail!("glow radius cannot be negative, got {}", self.radius);
+        }
+        if self.radius > 10.0 {
+            log::warn!("glow radius {} is very large and may impact performance significantly", self.radius);
+        }
+        if self.strength < 0.0 {
+            anyhow::bail!("glow strength cannot be negative, got {}", self.strength);
+        }
+        if self.strength > 2.0 {
+            log::warn!("glow strength {} is very high and may cause visual artifacts", self.strength);
+        }
+        if self.threshold < 0.0 || self.threshold > 1.0 {
+            anyhow::bail!("glow threshold must be between 0.0 and 1.0, got {}", self.threshold);
+        }
+        if self.color_boost < 0.0 {
+            anyhow::bail!("glow color_boost cannot be negative, got {}", self.color_boost);
+        }
+        if self.color_boost > 3.0 {
+            log::warn!("glow color_boost {} is very high and may cause color distortion", self.color_boost);
+        }
+        if self.animation_speed <= 0.0 {
+            anyhow::bail!("glow animation_speed must be positive, got {}", self.animation_speed);
+        }
+        if self.animation_speed > 10.0 {
+            log::warn!("glow animation_speed {} is very high and may cause seizure-inducing effects", self.animation_speed);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod glow_tests {
+    use super::*;
+
+    #[test]
+    fn test_experimental_glow_defaults() {
+        let glow = ExperimentalGlow::default();
+        assert!(!glow.enabled);
+        assert_eq!(glow.radius, 2.0);
+        assert_eq!(glow.strength, 0.6);
+        assert_eq!(glow.threshold, 0.75);
+        assert_eq!(glow.color_boost, 1.1);
+        assert!(!glow.animation_enabled);
+        assert_eq!(glow.animation_type, GlowAnimationType::Pulse);
+        assert_eq!(glow.animation_speed, 1.0);
+    }
+
+    #[test]
+    fn test_experimental_glow_validation_valid() {
+        let glow = ExperimentalGlow {
+            enabled: true,
+            radius: 2.0,
+            strength: 0.6,
+            threshold: 0.75,
+            color_boost: 1.1,
+            animation_enabled: true,
+            animation_type: GlowAnimationType::Pulse,
+            animation_speed: 1.0,
+        };
+        assert!(glow.validate().is_ok());
+    }
+
+    #[test]
+    fn test_experimental_glow_validation_negative_radius() {
+        let glow = ExperimentalGlow {
+            enabled: true,
+            radius: -1.0,
+            strength: 0.6,
+            threshold: 0.75,
+            color_boost: 1.1,
+            animation_enabled: false,
+            animation_type: GlowAnimationType::Pulse,
+            animation_speed: 1.0,
+        };
+        assert!(glow.validate().is_err());
+    }
+
+    #[test]
+    fn test_experimental_glow_validation_negative_strength() {
+        let glow = ExperimentalGlow {
+            enabled: true,
+            radius: 2.0,
+            strength: -0.1,
+            threshold: 0.75,
+            color_boost: 1.1,
+            animation_enabled: false,
+            animation_type: GlowAnimationType::Pulse,
+            animation_speed: 1.0,
+        };
+        assert!(glow.validate().is_err());
+    }
+
+    #[test]
+    fn test_experimental_glow_validation_invalid_threshold() {
+        let glow = ExperimentalGlow {
+            enabled: true,
+            radius: 2.0,
+            strength: 0.6,
+            threshold: 1.5,
+            color_boost: 1.1,
+            animation_enabled: false,
+            animation_type: GlowAnimationType::Pulse,
+            animation_speed: 1.0,
+        };
+        assert!(glow.validate().is_err());
+        
+        let glow = ExperimentalGlow {
+            enabled: true,
+            radius: 2.0,
+            strength: 0.6,
+            threshold: -0.1,
+            color_boost: 1.1,
+            animation_enabled: false,
+            animation_type: GlowAnimationType::Pulse,
+            animation_speed: 1.0,
+        };
+        assert!(glow.validate().is_err());
+    }
+
+    #[test]
+    fn test_experimental_glow_validation_negative_color_boost() {
+        let glow = ExperimentalGlow {
+            enabled: true,
+            radius: 2.0,
+            strength: 0.6,
+            threshold: 0.75,
+            color_boost: -0.1,
+            animation_enabled: false,
+            animation_type: GlowAnimationType::Pulse,
+            animation_speed: 1.0,
+        };
+        assert!(glow.validate().is_err());
+    }
+    
+    #[test]
+    fn test_experimental_glow_validation_negative_animation_speed() {
+        let glow = ExperimentalGlow {
+            enabled: true,
+            radius: 2.0,
+            strength: 0.6,
+            threshold: 0.75,
+            color_boost: 1.1,
+            animation_enabled: true,
+            animation_type: GlowAnimationType::Pulse,
+            animation_speed: -0.5,
+        };
+        assert!(glow.validate().is_err());
+    }
+    
+    #[test]
+    fn test_experimental_glow_validation_zero_animation_speed() {
+        let glow = ExperimentalGlow {
+            enabled: true,
+            radius: 2.0,
+            strength: 0.6,
+            threshold: 0.75,
+            color_boost: 1.1,
+            animation_enabled: true,
+            animation_type: GlowAnimationType::Pulse,
+            animation_speed: 0.0,
+        };
+        assert!(glow.validate().is_err());
+    }
+
+    #[test]
+    fn test_experimental_glow_edge_cases() {
+        // Test boundary values
+        let glow = ExperimentalGlow {
+            enabled: true,
+            radius: 0.0,
+            strength: 0.0,
+            threshold: 0.0,
+            color_boost: 0.0,
+            animation_enabled: false,
+            animation_type: GlowAnimationType::Pulse,
+            animation_speed: 0.1, // Minimum valid speed
+        };
+        assert!(glow.validate().is_ok());
+        
+        let glow = ExperimentalGlow {
+            enabled: true,
+            radius: 10.0,
+            strength: 2.0,
+            threshold: 1.0,
+            color_boost: 3.0,
+            animation_enabled: true,
+            animation_type: GlowAnimationType::PulseAndShimmer,
+            animation_speed: 10.0, // Maximum before warning
+        };
+        assert!(glow.validate().is_ok());
     }
 }
 

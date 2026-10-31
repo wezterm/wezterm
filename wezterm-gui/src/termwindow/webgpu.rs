@@ -1,4 +1,5 @@
 use crate::quad::Vertex;
+use crate::termwindow::glow::GlowRenderer;
 use anyhow::anyhow;
 use config::{ConfigHandle, GpuInfo, WebGpuPowerPreference};
 use std::cell::RefCell;
@@ -35,6 +36,8 @@ pub struct WebGpuState {
     pub texture_nearest_sampler: wgpu::Sampler,
     pub texture_linear_sampler: wgpu::Sampler,
     pub handle: RawHandlePair,
+    pub glow_renderer: RefCell<Option<GlowRenderer>>,
+    glow_enabled: bool,
 }
 
 pub struct RawHandlePair {
@@ -359,8 +362,15 @@ impl WebGpuState {
             vec![]
         };
 
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        // Add TEXTURE_BINDING usage if glow effect is enabled
+        let usage = if config.experimental_glow.enabled {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
+
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage,
             format,
             width: dimensions.pixel_width as u32,
             height: dimensions.pixel_height as u32,
@@ -381,7 +391,7 @@ impl WebGpuState {
             view_formats,
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(&device, &config);
+        surface.configure(&device, &surface_config);
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("../shader.wgsl"));
 
@@ -466,7 +476,7 @@ impl WebGpuState {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -498,7 +508,7 @@ impl WebGpuState {
             surface,
             device,
             queue,
-            config: RefCell::new(config),
+            config: RefCell::new(surface_config),
             dimensions: RefCell::new(dimensions),
             render_pipeline,
             handle,
@@ -506,6 +516,8 @@ impl WebGpuState {
             texture_bind_group_layout,
             texture_nearest_sampler,
             texture_linear_sampler,
+            glow_renderer: RefCell::new(None), // Will be initialized later if needed
+            glow_enabled: config.experimental_glow.enabled,
         })
     }
 
@@ -551,11 +563,41 @@ impl WebGpuState {
         let mut config = self.config.borrow_mut();
         config.width = dims.pixel_width as u32;
         config.height = dims.pixel_height as u32;
+        
+        // Update usage flags if glow is enabled
+        config.usage = if self.glow_enabled {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
         if config.width > 0 && config.height > 0 {
             // Avoid reconfiguring with a 0 sized surface, as webgpu will
             // panic in that case
             // <https://github.com/wezterm/wezterm/issues/2881>
             self.surface.configure(&self.device, &config);
         }
+        
+        // Resize glow renderer if it exists (do this after dropping config borrow)
+        if let Err(e) = self.resize_glow_renderer(&dims) {
+            log::error!("Failed to resize glow renderer: {}", e);
+        }
+    }
+    
+    pub fn ensure_glow_renderer(&self, dimensions: &Dimensions, glow_config: &config::ExperimentalGlow) -> anyhow::Result<()> {
+        if self.glow_renderer.borrow().is_none() {
+            // Validate configuration before creating renderer
+            glow_config.validate()?;
+            
+            let surface_format = self.config.borrow().format;
+            *self.glow_renderer.borrow_mut() = Some(GlowRenderer::new(&self.device, surface_format, dimensions)?);
+        }
+        Ok(())
+    }
+    
+    pub fn resize_glow_renderer(&self, dimensions: &Dimensions) -> anyhow::Result<()> {
+        if let Some(ref mut glow_renderer) = self.glow_renderer.borrow_mut().as_mut() {
+            glow_renderer.resize(&self.device, dimensions)?;
+        }
+        Ok(())
     }
 }
