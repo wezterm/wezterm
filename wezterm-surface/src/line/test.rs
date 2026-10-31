@@ -193,7 +193,7 @@ C(
         ],
         len: 23,
         last_cell_width: Some(
-            1,
+            2,
         ),
     },
 )
@@ -225,6 +225,60 @@ C(
     );
     compressed.coerce_vec_storage();
     assert_eq!(line, compressed);
+}
+
+#[test]
+fn trailing_wide_cell_preserves_wrap_flag() {
+    for (text, final_cell_index) in [("界", 0), ("a界", 1)] {
+        for compressed in [false, true] {
+            let mut line: Line = text.into();
+            if compressed {
+                line.compress_for_scrollback();
+            }
+
+            for wrapped in [true, false] {
+                line.set_last_cell_was_wrapped(wrapped, 1);
+                assert_eq!(
+                    line.last_cell_was_wrapped(),
+                    wrapped,
+                    "wrapped flag was lost for text={:?}, compressed={}",
+                    text,
+                    compressed
+                );
+                assert_wide_cell_wrapping(&line, final_cell_index, wrapped);
+
+                let mut compressed_line = line.clone();
+                compressed_line.compress_for_scrollback();
+                assert_eq!(compressed_line.last_cell_was_wrapped(), wrapped);
+                assert_wide_cell_wrapping(&compressed_line, final_cell_index, wrapped);
+            }
+        }
+    }
+}
+
+fn assert_wide_cell_wrapping(line: &Line, final_cell_index: usize, wrapped: bool) {
+    let mut line = line.clone();
+    let cells = line.coerce_vec_storage();
+    assert!(cells[..final_cell_index]
+        .iter()
+        .all(|cell| !cell.attrs().wrapped()));
+    assert!(cells[final_cell_index..]
+        .iter()
+        .all(|cell| cell.attrs().wrapped() == wrapped));
+}
+
+#[test]
+fn from_text_with_wrapped_last_col_handles_wide_cell() {
+    let mut line =
+        Line::from_text_with_wrapped_last_col("界", &CellAttributes::default(), SEQ_ZERO);
+
+    assert!(line.last_cell_was_wrapped());
+    line.compress_for_scrollback();
+    assert!(line.last_cell_was_wrapped());
+    assert!(line
+        .coerce_vec_storage()
+        .iter()
+        .all(|cell| cell.attrs().wrapped()));
 }
 
 #[test]
