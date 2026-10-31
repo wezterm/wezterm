@@ -62,7 +62,11 @@ pub enum MuxNotification {
     WindowRemoved(WindowId),
     WindowInvalidated(WindowId),
     WindowWorkspaceChanged(WindowId),
-    ActiveWorkspaceChanged(Arc<ClientId>),
+    ActiveWorkspaceChanged {
+        client_id: Arc<ClientId>,
+        new_workspace: String,
+        old_workspace: String,
+    },
     Alert {
         pane_id: PaneId,
         alert: wezterm_term::Alert,
@@ -635,10 +639,23 @@ impl Mux {
     }
 
     pub fn set_active_workspace_for_client(&self, ident: &Arc<ClientId>, workspace: &str) {
+        let default_workspace = self.get_default_workspace();
         let mut clients = self.clients.write();
         if let Some(info) = clients.get_mut(&ident) {
-            info.active_workspace.replace(workspace.to_string());
-            self.notify(MuxNotification::ActiveWorkspaceChanged(ident.clone()));
+            // A client that has never been assigned a workspace is already on
+            // the default one, so that is the name this change replaces.
+            let old_workspace = info
+                .active_workspace
+                .replace(workspace.to_string())
+                .unwrap_or(default_workspace);
+            if old_workspace == workspace {
+                return;
+            }
+            self.notify(MuxNotification::ActiveWorkspaceChanged {
+                client_id: ident.clone(),
+                new_workspace: workspace.to_string(),
+                old_workspace,
+            });
         }
     }
 
@@ -667,9 +684,11 @@ impl Mux {
         for client in self.clients.write().values_mut() {
             if client.active_workspace.as_deref() == Some(old_workspace) {
                 client.active_workspace.replace(new_workspace.to_string());
-                self.notify(MuxNotification::ActiveWorkspaceChanged(
-                    client.client_id.clone(),
-                ));
+                self.notify(MuxNotification::ActiveWorkspaceChanged {
+                    client_id: client.client_id.clone(),
+                    new_workspace: new_workspace.to_string(),
+                    old_workspace: old_workspace.to_string(),
+                });
             }
         }
     }
