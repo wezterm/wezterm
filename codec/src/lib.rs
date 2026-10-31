@@ -17,6 +17,7 @@ use config::keyassignment::{PaneDirection, ScrollbackEraseMode};
 use mux::client::{ClientId, ClientInfo};
 use mux::pane::PaneId;
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
+use mux::serial::InputSerial;
 use mux::tab::{PaneNode, SerdeUrl, SplitRequest, TabId};
 use mux::window::WindowId;
 use portable_pty::CommandBuilder;
@@ -25,7 +26,6 @@ use serde::{Deserialize, Serialize};
 use smol::io::AsyncWriteExt;
 use smol::prelude::*;
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::io::Cursor;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -595,7 +595,7 @@ impl Pdu {
             | Pdu::SetPalette(SetPalette { pane_id, .. })
             | Pdu::NotifyAlert(NotifyAlert { pane_id, .. })
             | Pdu::SetClipboard(SetClipboard { pane_id, .. })
-            | Pdu::PaneFocused(PaneFocused { pane_id })
+            | Pdu::PaneFocused(PaneFocused { pane_id, .. })
             | Pdu::PaneRemoved(PaneRemoved { pane_id }) => Some(*pane_id),
             _ => None,
         }
@@ -723,40 +723,6 @@ pub struct SendKeyDown {
     pub input_serial: InputSerial,
 }
 
-/// InputSerial is used to sequence input requests with output events.
-/// It started life as a monotonic sequence number but evolved into
-/// the number of milliseconds since the unix epoch.
-#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Copy, PartialOrd, Ord)]
-pub struct InputSerial(u64);
-
-impl InputSerial {
-    pub const fn empty() -> Self {
-        Self(0)
-    }
-
-    pub fn now() -> Self {
-        std::time::SystemTime::now().into()
-    }
-
-    pub fn elapsed_millis(&self) -> u64 {
-        let now = InputSerial::now();
-        now.0 - self.0
-    }
-}
-
-impl From<std::time::SystemTime> for InputSerial {
-    fn from(val: std::time::SystemTime) -> Self {
-        let duration = val
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .expect("SystemTime before unix epoch?");
-        let millis: u64 = duration
-            .as_millis()
-            .try_into()
-            .expect("millisecond count to fit in u64");
-        InputSerial(millis)
-    }
-}
-
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct SendMouseEvent {
     pub pane_id: PaneId,
@@ -823,6 +789,7 @@ pub struct WindowTitleChanged {
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct PaneFocused {
     pub pane_id: PaneId,
+    pub pane_focus_serial: Option<InputSerial>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
@@ -840,6 +807,7 @@ pub struct SetClientId {
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct SetFocusedPane {
     pub pane_id: PaneId,
+    pub pane_focus_serial: Option<InputSerial>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
