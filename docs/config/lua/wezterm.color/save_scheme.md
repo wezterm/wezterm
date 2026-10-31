@@ -3,8 +3,10 @@
 {{since('20220807-113146-c2fee766')}}
 
 Saves a color scheme as a wezterm TOML file.
+
 This is useful when sharing your custom color scheme with others.
-While you could share the lua representation of the scheme, the
+
+While you could share the Lua representation of the scheme, the
 TOML file is recommended for sharing as it is purely declarative:
 no executable logic is present in the TOML color scheme which makes
 it safe to consume "random" schemes from the internet.
@@ -12,9 +14,10 @@ it safe to consume "random" schemes from the internet.
 This example demonstrates importing a base16 scheme and exporting
 it as a wezterm scheme.
 
-Given a yaml file with these contents:
+Given a YAML file with these contents:
 
 ```yaml
+# /tmp/cupcake.yaml
 scheme: "Cupcake"
 author: "Chris Kempson (http://chriskempson.com)"
 base00: "fbf1f2"
@@ -37,14 +40,17 @@ base0F: "BAA58C"
 
 Then:
 
-```
-> colors, metadata = wezterm.color.load_base16_scheme("/tmp/cupcake.yaml")
-> wezterm.color.save_scheme(colors, metadata, "/tmp/cupcacke.toml")
+```lua
+local wezterm = require 'wezterm'
+local colors, metadata = wezterm.color.load_base16_scheme("/tmp/cupcake.yaml")
+
+wezterm.color.save_scheme(colors, metadata, "/tmp/cupcacke.toml")
 ```
 
-produces a toml file with these contents:
+produces a TOML file with these contents:
 
 ```toml
+# /tmp/cupcacke.toml
 [colors]
 ansi = [
     '#fbf1f2',
