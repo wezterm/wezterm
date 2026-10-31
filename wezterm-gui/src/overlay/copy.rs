@@ -57,6 +57,14 @@ struct Jump {
     target: char,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavigationAction {
+    PriorMatch,
+    NextMatch,
+    PriorMatchPage,
+    NextMatchPage,
+}
+
 struct CopyRenderable {
     cursor: StableCursorPosition,
     delegate: Arc<dyn Pane>,
@@ -85,6 +93,10 @@ struct CopyRenderable {
     searching: Option<Searching>,
     pending_jump: Option<PendingJump>,
     last_jump: Option<Jump>,
+
+    last_selected_match: Option<SearchResult>,
+    last_pattern: Option<Pattern>,
+    pending_navigation: Option<NavigationAction>,
 }
 
 struct Searching {
@@ -162,6 +174,9 @@ impl CopyOverlay {
             searching: None,
             pending_jump: None,
             last_jump: None,
+            last_selected_match: None,
+            last_pattern: None,
+            pending_navigation: None,
         };
 
         let search_row = render.compute_search_row();
@@ -298,6 +313,18 @@ impl CopyRenderable {
     }
 
     fn update_search(&mut self) {
+        let pattern = self.get_pattern();
+        let pattern_changed = Some(&pattern) != self.last_pattern.as_ref();
+
+        if pattern_changed {
+            self.last_selected_match = None;
+        } else if let Some(pos) = self.result_pos {
+            if pos < self.results.len() {
+                self.last_selected_match = Some(self.results[pos].clone());
+            }
+        }
+        self.last_pattern = Some(pattern.clone());
+
         for idx in self.by_line.keys() {
             self.dirty_results.add(*idx);
         }
@@ -309,7 +336,7 @@ impl CopyRenderable {
         self.by_line.clear();
         self.result_pos.take();
 
-        SAVED_PATTERN.lock().insert(self.tab_id, self.get_pattern());
+        SAVED_PATTERN.lock().insert(self.tab_id, pattern.clone());
 
         let bar_pos = self.compute_search_row();
         self.dirty_results.add(bar_pos);
@@ -370,7 +397,11 @@ impl CopyRenderable {
         let is_first = self.results.is_empty();
         self.incrementally_recompute_results(results);
 
-        if is_first {
+        if let Some(saved_res) = self.last_selected_match.as_ref() {
+            if let Some(pos) = self.results.iter().position(|r| r.start_y == saved_res.start_y && r.start_x == saved_res.start_x) {
+                self.result_pos = Some(pos);
+            }
+        } else if is_first {
             if !self.results.is_empty() {
                 self.activate_match_number(0);
             } else {
@@ -382,6 +413,14 @@ impl CopyRenderable {
         let dims = self.delegate.get_dimensions();
         if range.start == dims.scrollback_top {
             self.searching.take();
+            if let Some(nav) = self.pending_navigation.take() {
+                match nav {
+                    NavigationAction::NextMatch => self.next_match(),
+                    NavigationAction::PriorMatch => self.prior_match(),
+                    NavigationAction::NextMatchPage => self.next_match_page(),
+                    NavigationAction::PriorMatchPage => self.prior_match_page(),
+                }
+            }
             return;
         }
 
@@ -583,6 +622,11 @@ impl CopyRenderable {
 
     /// Move to next match
     fn next_match(&mut self) {
+        if !self.get_pattern().is_empty() && self.delegate.get_current_seqno() > self.last_result_seqno {
+            self.pending_navigation = Some(NavigationAction::NextMatch);
+            self.update_search();
+            return;
+        }
         if let Some(cur) = self.result_pos.as_ref() {
             let prior = if *cur > 0 {
                 cur - 1
@@ -595,6 +639,11 @@ impl CopyRenderable {
 
     /// Move to prior match
     fn prior_match(&mut self) {
+        if !self.get_pattern().is_empty() && self.delegate.get_current_seqno() > self.last_result_seqno {
+            self.pending_navigation = Some(NavigationAction::PriorMatch);
+            self.update_search();
+            return;
+        }
         if let Some(cur) = self.result_pos.as_ref() {
             let next = if *cur + 1 >= self.results.len() {
                 0
@@ -608,6 +657,11 @@ impl CopyRenderable {
     /// Skip this page of matches and move down to the first match from
     /// the next page.
     fn next_match_page(&mut self) {
+        if !self.get_pattern().is_empty() && self.delegate.get_current_seqno() > self.last_result_seqno {
+            self.pending_navigation = Some(NavigationAction::NextMatchPage);
+            self.update_search();
+            return;
+        }
         let dims = self.delegate.get_dimensions();
         if let Some(cur) = self.result_pos {
             let top = self.viewport.unwrap_or(dims.physical_top);
@@ -627,6 +681,11 @@ impl CopyRenderable {
     /// Skip this page of matches and move up to the first match from
     /// the prior page.
     fn prior_match_page(&mut self) {
+        if !self.get_pattern().is_empty() && self.delegate.get_current_seqno() > self.last_result_seqno {
+            self.pending_navigation = Some(NavigationAction::PriorMatchPage);
+            self.update_search();
+            return;
+        }
         let dims = self.delegate.get_dimensions();
         if let Some(cur) = self.result_pos {
             let top = self.viewport.unwrap_or(dims.physical_top);
@@ -1391,7 +1450,9 @@ impl Pane for CopyOverlay {
         // lock erro!
         let mut renderer = self.render.lock();
         if self.delegate.get_current_seqno() > renderer.last_result_seqno {
-            renderer.update_search();
+            if !config::configuration().search_trigger_on_navigate {
+                renderer.update_search();
+            }
         }
         renderer.check_for_resize();
         let dims = self.get_dimensions();
@@ -1511,7 +1572,9 @@ impl Pane for CopyOverlay {
     fn get_lines(&self, lines: Range<StableRowIndex>) -> (StableRowIndex, Vec<Line>) {
         let mut renderer = self.render.lock();
         if self.delegate.get_current_seqno() > renderer.last_result_seqno {
-            renderer.update_search();
+            if !config::configuration().search_trigger_on_navigate {
+                renderer.update_search();
+            }
         }
 
         renderer.check_for_resize();
