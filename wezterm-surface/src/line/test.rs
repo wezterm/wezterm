@@ -106,6 +106,34 @@ fn double_click_range_bounds() {
     assert_eq!(r, DoubleClickRange::Range(200..200));
 }
 
+/// Double-clicking a run of wide (2-cell) characters must include the full
+/// width of the trailing character, otherwise the last glyph is left
+/// half-selected. <https://github.com/wezterm/wezterm/issues/6733>
+#[test]
+fn double_click_range_wide() {
+    // "日本語" occupies 6 columns (each character is 2 cells wide).
+    let line: Line = "日本語".into();
+    assert_eq!(line.len(), 6);
+    // Clicking on any of its columns should select all 6 columns, so that the
+    // final wide character's second column (index 5) is included.
+    for click_col in 0..6 {
+        let r = line.compute_double_click_range(click_col, |_| true);
+        assert_eq!(r, DoubleClickRange::Range(0..6));
+    }
+}
+
+#[test]
+fn wide_cell_covering() {
+    // "a日b": a=col0 (w1), 日=col1..3 (w2), b=col3 (w1)
+    let line: Line = "a日b".into();
+    assert_eq!(line.len(), 4);
+    assert_eq!(line.wide_cell_covering(0), None); // single-width 'a'
+    assert_eq!(line.wide_cell_covering(1), Some(1..3)); // start of wide '日'
+    assert_eq!(line.wide_cell_covering(2), Some(1..3)); // hidden 2nd col of '日'
+    assert_eq!(line.wide_cell_covering(3), None); // single-width 'b'
+    assert_eq!(line.wide_cell_covering(4), None); // past end of line
+}
+
 #[test]
 fn cluster_representation_basic() {
     let line: Line = "hello".into();

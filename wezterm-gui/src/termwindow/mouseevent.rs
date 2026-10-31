@@ -773,6 +773,42 @@ impl super::TermWindow {
             .unwrap_or(dims.physical_top)
             + row as StableRowIndex;
 
+        // When the click lands inside a wide (multi-column) character, the
+        // rounded column can point at the character's second (hidden) column,
+        // which would start/extend a selection in the middle of the glyph.
+        // Snap the column to the nearer edge of the wide character based on
+        // which half of it was clicked. We only do this when the mouse isn't
+        // grabbed, matching the coordinate rounding in `mouse_event_impl`.
+        if column > 0 && !pane.is_mouse_grabbed() {
+            let (_, lines) = pane.get_lines(stable_row..stable_row + 1);
+            if let Some(line) = lines.first() {
+                if let Some(covered) = line.wide_cell_covering(column) {
+                    // Reconstruct the sub-cell click position (in columns) so
+                    // that we can compare against the wide character's midpoint.
+                    let cell_width = self.render_metrics.cell_size.width as f32;
+                    let frac = if cell_width > 0. {
+                        x_pixel_offset as f32 / cell_width
+                    } else {
+                        0.
+                    };
+                    // `column` is `round(floor_val + frac)`, so a fraction of
+                    // 0.5 or more means the value was rounded up.
+                    let floor_val = if frac >= 0.5 {
+                        column.saturating_sub(1)
+                    } else {
+                        column
+                    };
+                    let x_in_cells = floor_val as f32 + frac;
+                    let mid = covered.start as f32 + (covered.end - covered.start) as f32 / 2.;
+                    column = if x_in_cells < mid {
+                        covered.start
+                    } else {
+                        covered.end
+                    };
+                }
+            }
+        }
+
         self.pane_state(pane.pane_id())
             .mouse_terminal_coords
             .replace((
