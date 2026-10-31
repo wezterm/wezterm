@@ -47,6 +47,18 @@ impl Default for Shell {
     }
 }
 
+impl FromStr for Shell {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Posix" | "posix" => Ok(Self::Posix),
+            "Unknown" | "unknown" => Ok(Self::Unknown),
+            _ => anyhow::bail!("invalid `assume_shell` {s}"),
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, FromDynamic, ToDynamic)]
 pub struct SshDomain {
     /// The name of this specific domain.  Must be unique amongst
