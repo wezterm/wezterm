@@ -425,6 +425,9 @@ async fn main() -> anyhow::Result<()> {
     schemeses
         .sync_toml("https://github.com/eldritch-theme/wezterm", "master", "")
         .await?;
+    schemeses
+        .sync_toml("https://github.com/noxyzone/nocturnalzone-wezterm", "main", "")
+        .await?;
     schemeses.accumulate(iterm2::sync_iterm2().await.context("sync iterm2")?);
     schemeses.accumulate(base16::sync().await.context("sync base16")?);
     schemeses.accumulate(gogh::sync_gogh().await.context("sync gogh")?);
