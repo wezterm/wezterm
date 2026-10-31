@@ -160,10 +160,11 @@ fn run() -> anyhow::Result<()> {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
+            use windows_sys::Win32::System::Threading::DETACHED_PROCESS;
             cmd.stdout(config.daemon_options.open_stdout()?);
             cmd.stderr(config.daemon_options.open_stderr()?);
 
-            cmd.creation_flags(winapi::um::winbase::DETACHED_PROCESS);
+            cmd.creation_flags(DETACHED_PROCESS);
             let child = cmd.spawn();
             drop(child);
             return Ok(());
