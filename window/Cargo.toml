@@ -49,6 +49,8 @@ wezterm-font.workspace = true
 wezterm-input-types.workspace = true
 
 [target."cfg(windows)".dependencies]
+accesskit.workspace = true
+accesskit_windows.workspace = true
 clipboard-win = { workspace = true, features = ["std"] }
 shared_library.workspace = true
 winapi = { workspace=true, features = [
@@ -67,6 +69,9 @@ windows = { workspace=true, features = [
     "Win32_Devices_Display",
 ]}
 winreg.workspace = true
+
+[target."cfg(windows)".dev-dependencies]
+accesskit_consumer.workspace = true
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 dirs-next.workspace = true

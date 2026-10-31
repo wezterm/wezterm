@@ -90,6 +90,8 @@ impl MyWindow {
             | WindowEvent::PerformKeyAssignment(_)
             | WindowEvent::MouseLeave
             | WindowEvent::SetInnerSizeCompleted => {}
+            #[cfg(windows)]
+            WindowEvent::AccessibilityInput { .. } => {}
         }
     }
 }
