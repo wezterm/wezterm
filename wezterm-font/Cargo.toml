@@ -45,7 +45,12 @@ fontconfig.workspace = true
 
 [target."cfg(windows)".dependencies]
 dwrote.workspace = true
-winapi.workspace = true
+windows = { workspace = true, features = ["Win32_Graphics_DirectWrite"] }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics",
+    "Win32_Graphics_Gdi",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa.workspace = true

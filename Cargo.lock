@@ -7100,7 +7100,8 @@ dependencies = [
  "wezterm-input-types",
  "wezterm-term",
  "wezterm-toast-notification",
- "winapi",
+ "windows 0.33.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
