@@ -10,10 +10,7 @@ publish = false
 anyhow.workspace = true
 bstr.workspace = true
 config.workspace = true
-log.workspace = true
-luahelper.workspace = true
 smol.workspace = true
-wezterm-dynamic.workspace = true
 wezterm-open-url.workspace = true
 
 [target."cfg(windows)".dependencies]
