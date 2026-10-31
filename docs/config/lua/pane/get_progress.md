@@ -48,6 +48,7 @@ local function tab_title(tab_info)
 end
 
 local PCT_GLYPHS = {
+  wezterm.nerdfonts.md_checkbox_blank_circle_outline,
   wezterm.nerdfonts.md_circle_slice_1,
   wezterm.nerdfonts.md_circle_slice_2,
   wezterm.nerdfonts.md_circle_slice_3,
@@ -58,7 +59,7 @@ local PCT_GLYPHS = {
   wezterm.nerdfonts.md_circle_slice_8,
 }
 local function pct_glyph(pct)
-  local slot = math.floor(pct / 12)
+  local slot = math.floor(pct / 12.5)
   return PCT_GLYPHS[slot + 1]
 end
 
@@ -82,17 +83,17 @@ wezterm.on(
         status = pct_glyph(progress.Error)
         color = 'red'
       elseif progress == 'Indeterminate' then
-        status = '~'
+        status = wezterm.nerdfonts.md_dots_circle
       else
         status = wezterm.serde.json_encode(progress)
       end
 
       table.insert(elements, { Foreground = { Color = color } })
-      table.insert(elements, { Text = status })
+      table.insert(elements, { Text = status .. '  ' })
       table.insert(elements, { Foreground = 'Default' })
     end
 
-    table.insert(elements, { Text = ' ' .. title .. ' ' })
+    table.insert(elements, { Text = title })
 
     return elements
   end
