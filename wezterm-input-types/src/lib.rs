@@ -1708,7 +1708,7 @@ impl KeyEvent {
         }
     }
 
-    pub fn encode_kitty(&self, flags: KittyKeyboardFlags) -> String {
+    pub fn encode_kitty(&self, flags: KittyKeyboardFlags, application_cursor_keys: bool) -> String {
         use KeyCode::*;
 
         if !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES) && !self.key_is_down {
@@ -1869,6 +1869,12 @@ impl KeyEvent {
             return format!("\x1b[{code};{modifiers}{event_type}{generated_text}u");
         }
 
+        // The kitty docs drop the "1;mods" parameters for legacy functional keys
+        // when nothing is held down (so Up is just ESC[A rather than ESC[1;1A).
+        // A key release still needs the full form so the receiver can tell a press
+        // from a release, so only skip the params for a plain unmodified press.
+        let omit_params = modifiers == 1 && event_type.is_empty();
+
         match &self.key {
             PageUp | PageDown | Insert | Char('\x7f') => {
                 let c = match &self.key {
@@ -1879,7 +1885,11 @@ impl KeyEvent {
                     _ => unreachable!(),
                 };
 
-                format!("\x1b[{c};{modifiers}{event_type}~")
+                if omit_params {
+                    format!("\x1b[{c}~")
+                } else {
+                    format!("\x1b[{c};{modifiers}{event_type}~")
+                }
             }
             Char(shifted_key) => {
                 let shifted_key = if *shifted_key == '\x08' {
@@ -1960,7 +1970,16 @@ impl KeyEvent {
                     End => 'F',
                     _ => unreachable!(),
                 };
-                format!("\x1b[1;{modifiers}{event_type}{c}")
+                if omit_params {
+                    if application_cursor_keys {
+                        // SS3 form: used only in cursor key mode (DECCKM) with no modifiers
+                        format!("\x1bO{c}")
+                    } else {
+                        format!("\x1b[{c}")
+                    }
+                } else {
+                    format!("\x1b[1;{modifiers}{event_type}{c}")
+                }
             }
             Function(n) if *n < 25 => {
                 // The spec says that kitty prefers an SS3 form for F1-F4,
@@ -1999,7 +2018,11 @@ impl KeyEvent {
                 // for F13 and up the spec says we should terminate with u
                 let end_char = if *n < 13 { '~' } else { 'u' };
 
-                format!("{intro};{modifiers}{event_type}{end_char}")
+                if omit_params {
+                    format!("{intro}{end_char}")
+                } else {
+                    format!("{intro};{modifiers}{event_type}{end_char}")
+                }
             }
 
             _ => {
@@ -2323,7 +2346,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "o".to_string()
         );
         assert_eq!(
@@ -2337,7 +2360,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[111;1:3u".to_string()
         );
     }
@@ -2360,8 +2383,9 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
-            "\x1b[11;1~".to_string()
+            .encode_kitty(flags, false),
+            // no modifiers held, so the 1;mods part is dropped
+            "\x1b[11~".to_string()
         );
         assert_eq!(
             KeyEvent {
@@ -2374,7 +2398,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[11;1:3~".to_string()
         );
     }
@@ -2394,7 +2418,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[105;4u".to_string()
         );
         assert_eq!(
@@ -2408,7 +2432,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[105;4u".to_string()
         );
 
@@ -2423,7 +2447,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[49;4u".to_string()
         );
 
@@ -2441,7 +2465,7 @@ mod test {
                 },
                 Some(PhysKeyCode::K1)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[49;4u".to_string()
         );
 
@@ -2456,7 +2480,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[105;6u".to_string()
         );
         assert_eq!(
@@ -2470,7 +2494,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[105;6u".to_string()
         );
 
@@ -2496,7 +2520,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[105;6u".to_string()
         );
 
@@ -2511,7 +2535,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[105;8u".to_string()
         );
         assert_eq!(
@@ -2525,7 +2549,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[105;8u".to_string()
         );
 
@@ -2540,7 +2564,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x7f".to_string()
         );
 
@@ -2555,7 +2579,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[127;5u".to_string()
         );
     }
@@ -2578,7 +2602,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[97:65;1u".to_string()
         );
         assert_eq!(
@@ -2592,7 +2616,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[97:65;1:3u".to_string()
         );
     }
@@ -2640,7 +2664,7 @@ mod test {
                 },
                 None
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57441;1u".to_string()
         );
         assert_eq!(
@@ -2657,7 +2681,7 @@ mod test {
                 },
                 None
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57441;1:3u".to_string()
         );
         assert_eq!(
@@ -2674,7 +2698,7 @@ mod test {
                 },
                 None
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57442;1u".to_string()
         );
         assert_eq!(
@@ -2691,7 +2715,7 @@ mod test {
                 },
                 None
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57442;1:3u".to_string()
         );
     }
@@ -2717,7 +2741,7 @@ mod test {
                 },
                 None
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57425;1u".to_string()
         );
         assert_eq!(
@@ -2734,7 +2758,7 @@ mod test {
                 },
                 None
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57425;2u".to_string()
         );
 
@@ -2752,7 +2776,7 @@ mod test {
                 },
                 None
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57424;1u".to_string()
         );
         assert_eq!(
@@ -2769,7 +2793,7 @@ mod test {
                 },
                 None
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57424;2u".to_string()
         );
 
@@ -2787,7 +2811,7 @@ mod test {
                 },
                 Some(PhysKeyCode::Keypad0)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57399;129u".to_string()
         );
         assert_eq!(
@@ -2804,7 +2828,7 @@ mod test {
                 },
                 Some(PhysKeyCode::Keypad0)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57399;130u".to_string()
         );
 
@@ -2822,7 +2846,7 @@ mod test {
                 },
                 Some(PhysKeyCode::Keypad5)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57404;129u".to_string()
         );
 
@@ -2840,7 +2864,7 @@ mod test {
                 },
                 Some(PhysKeyCode::Keypad5)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[E".to_string()
         );
     }
@@ -2867,7 +2891,7 @@ mod test {
                 },
                 Some(PhysKeyCode::Keypad5)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57404;129;53u".to_string()
         );
         assert_eq!(
@@ -2884,7 +2908,7 @@ mod test {
                 },
                 Some(PhysKeyCode::Keypad5)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[57404;129:3u".to_string()
         );
 
@@ -2902,7 +2926,7 @@ mod test {
                 },
                 Some(PhysKeyCode::Keypad5)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[E".to_string()
         );
 
@@ -2920,7 +2944,7 @@ mod test {
                 },
                 Some(PhysKeyCode::Keypad5)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[1;1:3E".to_string()
         );
     }
@@ -2940,7 +2964,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\"".to_string()
         );
 
@@ -2955,7 +2979,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\"".to_string()
         );
 
@@ -2970,7 +2994,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "!".to_string()
         );
 
@@ -2985,7 +3009,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "".to_string()
         );
     }
@@ -3011,7 +3035,7 @@ mod test {
                 },
                 Some(PhysKeyCode::A)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[1092::97;5u".to_string()
         );
 
@@ -3029,7 +3053,7 @@ mod test {
                 },
                 Some(PhysKeyCode::A)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[1092:1060:97;6u".to_string()
         );
     }
@@ -3056,7 +3080,7 @@ mod test {
                 },
                 Some(PhysKeyCode::A)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[1092::97;5;1092u".to_string()
         );
 
@@ -3074,7 +3098,7 @@ mod test {
                 },
                 Some(PhysKeyCode::A)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[1092:1060:97;6;1060u".to_string()
         );
     }
@@ -3094,7 +3118,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             " ".to_string()
         );
 
@@ -3109,7 +3133,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             " ".to_string()
         );
 
@@ -3127,7 +3151,7 @@ mod test {
                 },
                 Some(PhysKeyCode::NumLock)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "".to_string()
         );
 
@@ -3145,7 +3169,7 @@ mod test {
                 },
                 Some(PhysKeyCode::CapsLock)
             )
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "".to_string()
         );
     }
@@ -3165,7 +3189,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "q".to_string()
         );
 
@@ -3180,7 +3204,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[102;9u".to_string()
         );
 
@@ -3195,7 +3219,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[102;10u".to_string()
         );
 
@@ -3210,7 +3234,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\u{1b}[102;14u".to_string()
         );
     }
@@ -3232,7 +3256,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[27;1u".to_string()
         );
 
@@ -3250,7 +3274,7 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b".to_string()
         );
 
@@ -3268,8 +3292,209 @@ mod test {
                 #[cfg(windows)]
                 win32_uni_char: None,
             }
-            .encode_kitty(flags),
+            .encode_kitty(flags, false),
             "\x1b[27;1:3u".to_string()
+        );
+    }
+
+    // Unmodified functional keys (cursor, tilde, Fn) should drop the "1;mods"
+    // part of the sequence — Up becomes ESC[A not ESC[1;1A.
+    #[test]
+    fn encode_kitty_unmodified_functional() {
+        let flags = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
+
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::UpArrow,
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, false),
+            "\x1b[A".to_string()
+        );
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::End,
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, false),
+            "\x1b[F".to_string()
+        );
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::PageUp,
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, false),
+            "\x1b[5~".to_string()
+        );
+        // F13+ uses "u" terminator; params still omitted when unmodified
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::Function(13),
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, false),
+            "\x1b[57376u".to_string()
+        );
+    }
+
+    // With a modifier held, or on key-release, the "1;mods" params must be present.
+    #[test]
+    fn encode_kitty_functional_keeps_params() {
+        let flags =
+            KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES | KittyKeyboardFlags::REPORT_EVENT_TYPES;
+
+        // Ctrl held — full form
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::UpArrow,
+                modifiers: Modifiers::CTRL,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, false),
+            "\x1b[1;5A".to_string()
+        );
+        // Key release — full form so the receiver can tell press from release
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::UpArrow,
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: false,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, false),
+            "\x1b[1;1:3A".to_string()
+        );
+        // Plain press under the same flags still omits params
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::UpArrow,
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, false),
+            "\x1b[A".to_string()
+        );
+    }
+
+    // In cursor key mode (DECCKM / smkx) unmodified cursor keys and Home/End
+    // must use the SS3 form so applications like less can recognise them.
+    // Modified arrows and key-releases stay on the CSI form regardless.
+    #[test]
+    fn encode_kitty_cursor_key_mode() {
+        let flags =
+            KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES | KittyKeyboardFlags::REPORT_EVENT_TYPES;
+
+        // Unmodified down-press → SS3
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::UpArrow,
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, true),
+            "\x1bOA".to_string()
+        );
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::DownArrow,
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, true),
+            "\x1bOB".to_string()
+        );
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::End,
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, true),
+            "\x1bOF".to_string()
+        );
+        // Modifier held → full CSI form regardless of cursor key mode
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::UpArrow,
+                modifiers: Modifiers::CTRL,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: true,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, true),
+            "\x1b[1;5A".to_string()
+        );
+        // Key release → full CSI form (receiver needs to distinguish press/release)
+        assert_eq!(
+            KeyEvent {
+                key: KeyCode::UpArrow,
+                modifiers: Modifiers::NONE,
+                leds: KeyboardLedStatus::empty(),
+                repeat_count: 1,
+                key_is_down: false,
+                raw: None,
+                #[cfg(windows)]
+                win32_uni_char: None,
+            }
+            .encode_kitty(flags, true),
+            "\x1b[1;1:3A".to_string()
         );
     }
 }

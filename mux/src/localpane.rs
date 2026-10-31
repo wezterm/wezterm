@@ -179,6 +179,14 @@ impl Pane for LocalPane {
         }
     }
 
+    fn get_application_cursor_keys(&self) -> bool {
+        if self.tmux_domain.lock().is_some() {
+            false
+        } else {
+            self.terminal.lock().get_application_cursor_keys()
+        }
+    }
+
     fn get_current_seqno(&self) -> SequenceNo {
         self.terminal.lock().current_seqno()
     }
