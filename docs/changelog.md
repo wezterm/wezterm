@@ -158,6 +158,8 @@ As features stabilize some brief notes about them will accumulate here.
   search matching. Thanks to @mrdziuban! #7385
 * The line editor used by prompt overlays and the debug overlay now supports
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
+* Windows: ConEmu style progress escape sequences are now reflected in the
+  taskbar button of the window. #6581
 * ConEmu style progress escape sequences now support the paused state, which
   is reported as `{Paused = pr}` by
   [pane:get_progress()](config/lua/pane/get_progress.md) and shown in yellow
