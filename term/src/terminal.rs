@@ -40,6 +40,7 @@ pub enum Progress {
     Percentage(u8),
     Error(u8),
     Indeterminate,
+    Paused(u8),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

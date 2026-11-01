@@ -20,7 +20,7 @@ When `st` is:
 * `1`: set progress value to `pr` (number, 0-100). Reported as `{Percentage = pr}`
 * `2`: set error state in progress, `pr` is optional and will be assumed 0 if omitted. Reported as `{Error = pr}`
 * `3`: set indeterminate state. Reported as `"Indeterminate"`
-* `4`: set paused state, pr is optional. *Not supported by WezTerm*
+* `4`: set paused state, `pr` is optional and will be assumed 0 if omitted. Reported as `{Paused = pr}` {{since('nightly', inline=True)}}
 
 When the progress OSC is processed, the state is captured, and if it has
 changed, WezTerm will trigger an update of the tab bar, which will in turn
@@ -81,6 +81,9 @@ wezterm.on(
         -- status = string.format("%d%%", progress.Error)
         status = pct_glyph(progress.Error)
         color = 'red'
+      elseif progress.Paused ~= nil then
+        status = pct_glyph(progress.Paused)
+        color = 'yellow'
       elseif progress == 'Indeterminate' then
         status = '~'
       else
