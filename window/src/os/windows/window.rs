@@ -311,8 +311,8 @@ impl WindowInner {
         unsafe {
             GetClientRect(self.hwnd.0, &mut rect);
         }
-        let pixel_width = rect_width(&rect) as usize;
-        let pixel_height = rect_height(&rect) as usize;
+        let pixel_width = rect_width(&rect).max(0) as usize;
+        let pixel_height = rect_height(&rect).max(0) as usize;
 
         let current_dims = Dimensions {
             pixel_width,
@@ -1175,6 +1175,11 @@ unsafe fn wm_nccalcsize(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
                 requested_client_rect.top += frame_y + padding;
             }
         }
+
+        // While minimizing, the proposed rect can be smaller than the
+        // frame we trim, which would leave a negative client size.
+        requested_client_rect.right = requested_client_rect.right.max(requested_client_rect.left);
+        requested_client_rect.bottom = requested_client_rect.bottom.max(requested_client_rect.top);
     }
 
     Some(0)
