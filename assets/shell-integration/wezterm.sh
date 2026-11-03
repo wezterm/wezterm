@@ -448,13 +448,44 @@ __wezterm_set_user_var() {
 # of the current working directory.  It prefers to use a helper
 # command provided by wezterm if wezterm is installed, but falls
 # back to a simple printf command otherwise.
+# The last directory reported is cached: the terminal already knows
+# it, so re-emitting the identical sequence on every prompt would only
+# cost a wezterm CLI fork. It is skipped until HOSTNAME, PWD, or the
+# system hostname changes, and the emitted sequence itself is unchanged.
+__wezterm_osc7_seen=
+__wezterm_osc7_last_host=
+__wezterm_osc7_last_pwd=
+__wezterm_osc7_last_syshost=
 __wezterm_osc7() {
+  # The CLI path reports the system hostname, not $HOSTNAME, so the
+  # cache key also tracks the system hostname (fork-free on Linux).
+  # On the printf path this can only cause a harmless re-emit when
+  # the system hostname changes; it can never hide a CLI change.
+  local cur_syshost
+  if [[ -r /proc/sys/kernel/hostname ]]; then
+    cur_syshost="$(< /proc/sys/kernel/hostname)"
+  else
+    cur_syshost=""
+  fi
+  if [[ -n "${__wezterm_osc7_seen-}" && "${__wezterm_osc7_last_host-}" == "${HOSTNAME-}" && "${__wezterm_osc7_last_pwd-}" == "${PWD-}" && "${__wezterm_osc7_last_syshost-}" == "${cur_syshost}" ]]; then
+    return 0
+  fi
   if hash wezterm 2>/dev/null ; then
-    wezterm set-working-directory 2>/dev/null && return 0
+    if wezterm set-working-directory 2>/dev/null; then
+      __wezterm_osc7_last_host="${HOSTNAME-}"
+      __wezterm_osc7_last_pwd="${PWD-}"
+      __wezterm_osc7_last_syshost="${cur_syshost}"
+      __wezterm_osc7_seen=1
+      return 0
+    fi
     # If the command failed (perhaps the installed wezterm
     # is too old?) then fall back to the simple version below.
   fi
   printf "\033]7;file://%s%s\033\\" "${HOSTNAME}" "${PWD}"
+  __wezterm_osc7_last_host="${HOSTNAME-}"
+  __wezterm_osc7_last_pwd="${PWD-}"
+  __wezterm_osc7_last_syshost="${cur_syshost}"
+  __wezterm_osc7_seen=1
 }
 
 # The semantic precmd and prexec functions generate semantic
@@ -505,38 +536,116 @@ function __wezterm_semantic_preexec() {
   __wezterm_semantic_precmd_executing=1
 }
 
-__wezterm_user_vars_precmd() {
-  __wezterm_set_user_var "WEZTERM_PROG" ""
-  __wezterm_set_user_var "WEZTERM_USER" "$(id -un)"
+# Cached values for __wezterm_user_vars_precmd, so a steady-state prompt
+# re-emits nothing instead of re-forking id/hostname/base64 on every prompt.
+# Each entry is only trusted after its *_seen flag is set, because an empty
+# value (notably WEZTERM_PROG="") is a legitimate cached value.
+__wezterm_user_vars_prog_seen=
+__wezterm_user_vars_last_prog=
+__wezterm_user_vars_user_seen=
+__wezterm_user_vars_last_user=
+__wezterm_user_vars_host_seen=
+__wezterm_user_vars_last_host=
+__wezterm_user_vars_system_host_seen=
+__wezterm_user_vars_system_host=
+__wezterm_user_vars_in_tmux_seen=
+__wezterm_user_vars_last_in_tmux=
 
-  # Indicate whether this pane is running inside tmux or not
+__wezterm_user_vars_precmd() {
+  # WEZTERM_PROG is cleared by every prompt. preexec() records the command
+  # it reported, so a prompt after a command still emits the clearing
+  # sequence exactly once, and steady blank prompts emit nothing.
+  # A cache entry is only marked seen when base64 was actually present:
+  # set_user_var silently no-ops without it, so a shell that starts with
+  # base64 missing and later gains it must retry, not stay silent.
+  if [[ -z "${__wezterm_user_vars_prog_seen-}" || "${__wezterm_user_vars_last_prog-}" != "" ]]; then
+    __wezterm_set_user_var "WEZTERM_PROG" ""
+    if hash base64 2>/dev/null; then
+      __wezterm_user_vars_last_prog=""
+      __wezterm_user_vars_prog_seen=1
+    else
+      __wezterm_user_vars_prog_seen=
+    fi
+  fi
+
+  # WEZTERM_USER never changes within a shell session: resolve it once.
+  if [[ -z "${__wezterm_user_vars_user_seen-}" ]]; then
+    __wezterm_user_vars_last_user="$(id -un)"
+    __wezterm_set_user_var "WEZTERM_USER" "${__wezterm_user_vars_last_user}"
+    if hash base64 2>/dev/null; then
+      __wezterm_user_vars_user_seen=1
+    else
+      __wezterm_user_vars_user_seen=
+    fi
+  fi
+
+  # Indicate whether this pane is running inside tmux or not.
+  # This is a cheap boolean read each prompt, so entering or leaving
+  # tmux is still picked up, without forking anything.
+  local cur_in_tmux
   if [[ -n "${TMUX-}" ]] ; then
-    __wezterm_set_user_var "WEZTERM_IN_TMUX" "1"
+    cur_in_tmux="1"
   else
-    __wezterm_set_user_var "WEZTERM_IN_TMUX" "0"
+    cur_in_tmux="0"
+  fi
+  if [[ -z "${__wezterm_user_vars_in_tmux_seen-}" || "${__wezterm_user_vars_last_in_tmux-}" != "${cur_in_tmux}" ]]; then
+    __wezterm_set_user_var "WEZTERM_IN_TMUX" "${cur_in_tmux}"
+    if hash base64 2>/dev/null; then
+      __wezterm_user_vars_last_in_tmux="${cur_in_tmux}"
+      __wezterm_user_vars_in_tmux_seen=1
+    else
+      __wezterm_user_vars_in_tmux_seen=
+    fi
   fi
 
   # You may set WEZTERM_HOSTNAME to a name you want to use instead
   # of calling out to the hostname executable on every prompt print.
-if [[ -z "${WEZTERM_HOSTNAME}" ]]; then
-  if [[ -r /proc/sys/kernel/hostname ]]; then
-    __wezterm_set_user_var "WEZTERM_HOST" "$(cat /proc/sys/kernel/hostname)"
-  elif hash hostname 2>/dev/null; then
-    __wezterm_set_user_var "WEZTERM_HOST" "$(hostname)"
-  elif hash hostnamectl 2>/dev/null; then
-    __wezterm_set_user_var "WEZTERM_HOST" "$(hostnamectl hostname)"
+  # An explicit WEZTERM_HOSTNAME override is read each prompt (cheap,
+  # no fork) so changing it mid-session is picked up. On Linux the
+  # system hostname is likewise re-read each prompt, fork-free via
+  # $(< /proc/sys/kernel/hostname), so a mid-session rename is picked
+  # up too. Only the hostname/hostnamectl fallback (no /proc) is
+  # resolved once and cached, using the original resolution order.
+  local cur_host
+  if [[ -n "${WEZTERM_HOSTNAME-}" ]]; then
+    cur_host="${WEZTERM_HOSTNAME}"
+  elif [[ -r /proc/sys/kernel/hostname ]]; then
+    cur_host="$(< /proc/sys/kernel/hostname)"
   else
-    __wezterm_set_user_var "WEZTERM_HOST" "unknown"
+    if [[ -z "${__wezterm_user_vars_system_host_seen-}" ]]; then
+      if hash hostname 2>/dev/null; then
+        __wezterm_user_vars_system_host="$(hostname)"
+      elif hash hostnamectl 2>/dev/null; then
+        __wezterm_user_vars_system_host="$(hostnamectl hostname)"
+      else
+        __wezterm_user_vars_system_host="unknown"
+      fi
+      __wezterm_user_vars_system_host_seen=1
+    fi
+    cur_host="${__wezterm_user_vars_system_host}"
   fi
-else
-  __wezterm_set_user_var "WEZTERM_HOST" "${WEZTERM_HOSTNAME}"
-fi
-
+  if [[ -z "${__wezterm_user_vars_host_seen-}" || "${__wezterm_user_vars_last_host-}" != "${cur_host}" ]]; then
+    __wezterm_set_user_var "WEZTERM_HOST" "${cur_host}"
+    if hash base64 2>/dev/null; then
+      __wezterm_user_vars_last_host="${cur_host}"
+      __wezterm_user_vars_host_seen=1
+    else
+      __wezterm_user_vars_host_seen=
+    fi
+  fi
 }
 
 __wezterm_user_vars_preexec() {
-  # Tell wezterm the full command that is being run
+  # Tell wezterm the full command that is being run, and record it so
+  # the next precmd knows it must clear it exactly once. As in precmd,
+  # only record it when base64 was present to actually emit it.
   __wezterm_set_user_var "WEZTERM_PROG" "$1"
+  if hash base64 2>/dev/null; then
+    __wezterm_user_vars_last_prog="$1"
+    __wezterm_user_vars_prog_seen=1
+  else
+    __wezterm_user_vars_prog_seen=
+  fi
 }
 
 # Register the various functions; take care to perform osc7 after
