@@ -2196,7 +2196,7 @@ impl<'a> CSIParser<'a> {
                 params,
                 CSI::Cursor(Cursor::SetLeftAndRightMargins {
                     left: OneBased::from_esc_param(a)?,
-                    right: OneBased::from_esc_param(b)?,
+                    right: OneBased::from_esc_param_with_big_default(b)?,
                 }),
             )),
             [CsiParam::P(b';'), b] => Ok(self.advance_by(
@@ -2204,7 +2204,7 @@ impl<'a> CSIParser<'a> {
                 params,
                 CSI::Cursor(Cursor::SetLeftAndRightMargins {
                     left: OneBased::new(1),
-                    right: OneBased::from_esc_param(b)?,
+                    right: OneBased::from_esc_param_with_big_default(b)?,
                 }),
             )),
             _ => Err(()),
@@ -3193,6 +3193,33 @@ mod test {
             vec![CSI::Edit(Edit::EraseInDisplay(
                 EraseInDisplay::EraseToStartOfDisplay,
             ))]
+        );
+    }
+
+    #[test]
+    fn margins() {
+        // A bottom or right margin of 0 means "the last row/column",
+        // matching xterm, rather than row/column 1.
+        assert_eq!(
+            parse('r', &[2, 0], "\x1b[2;4294967295r"),
+            vec![CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                top: OneBased::new(2),
+                bottom: OneBased::new(u32::max_value()),
+            })]
+        );
+        assert_eq!(
+            parse('s', &[2, 0], "\x1b[2;4294967295s"),
+            vec![CSI::Cursor(Cursor::SetLeftAndRightMargins {
+                left: OneBased::new(2),
+                right: OneBased::new(u32::max_value()),
+            })]
+        );
+        assert_eq!(
+            parse('s', &[2, 4], "\x1b[2;4s"),
+            vec![CSI::Cursor(Cursor::SetLeftAndRightMargins {
+                left: OneBased::new(2),
+                right: OneBased::new(4),
+            })]
         );
     }
 
