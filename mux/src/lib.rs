@@ -266,6 +266,8 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
             Ok(size) => {
                 parser.parse(&buf[0..size], |action| {
                     if hold && is_passthrough_query(&action) {
+                        // Only the query is sent; the held actions stay
+                        // pending, so action_size is left alone
                         send_actions_to_mux(&pane, &dead, vec![action]);
                         return;
                     }
