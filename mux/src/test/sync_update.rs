@@ -1,7 +1,7 @@
 use super::*;
 use crate::{configuration, hold_timeout_from};
 use std::io::Write;
-use termwiz::escape::csi::{Cursor, Device, Keyboard, Mode, CSI};
+use termwiz::escape::csi::{Cursor, Device, Keyboard, Mode, Window, CSI};
 
 #[test]
 fn a_synchronized_update_expires_after_the_configured_timeout() {
@@ -288,6 +288,51 @@ fn cursor_position_reports_stay_held() {
     tx.write_all(ESU).unwrap();
     assert!(wait_for(
         || pane.flattened_actions().contains(&cpr),
+        Duration::from_secs(5)
+    ));
+
+    stop_parser(tx, parser);
+}
+
+#[test]
+fn window_size_reports_pass_through_but_the_title_report_stays_held() {
+    let _guard = TEST_LOCK.lock();
+    let (mut tx, pane, parser) = start_parser(60_000);
+
+    tx.write_all(BSU).unwrap();
+    // A held title change; answering the title report before it is
+    // applied would report the old title
+    tx.write_all(b"\x1b]2;new title\x07").unwrap();
+    tx.write_all(b"\x1b[21t").unwrap();
+    tx.write_all(b"\x1b[14t\x1b[16t\x1b[18t").unwrap();
+
+    let size_reports = [
+        Window::ReportTextAreaSizePixels,
+        Window::ReportCellSizePixels,
+        Window::ReportTextAreaSizeCells,
+    ]
+    .map(|report| Action::CSI(CSI::Window(Box::new(report))));
+    let title_report = Action::CSI(CSI::Window(Box::new(Window::ReportWindowTitle)));
+
+    assert!(
+        wait_for(
+            || {
+                let actions = pane.flattened_actions();
+                size_reports.iter().all(|report| actions.contains(report))
+            },
+            Duration::from_secs(5)
+        ),
+        "window size reports should be answered while the update is held, got {:?}",
+        pane.flattened_actions()
+    );
+    assert!(
+        !pane.flattened_actions().contains(&title_report),
+        "the title report depends on the held title change, so it must wait for the update to close"
+    );
+
+    tx.write_all(ESU).unwrap();
+    assert!(wait_for(
+        || pane.flattened_actions().contains(&title_report),
         Duration::from_secs(5)
     ));
 

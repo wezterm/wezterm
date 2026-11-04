@@ -28,7 +28,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
-use termwiz::escape::csi::{DecPrivateMode, DecPrivateModeCode, Device, Keyboard, Mode};
+use termwiz::escape::csi::{
+    DecPrivateMode, DecPrivateModeCode, Device, Keyboard, Mode, Window as CsiWindow,
+};
 use termwiz::escape::{Action, CSI};
 use thiserror::*;
 use wezterm_term::{Clipboard, ClipboardSelection, DownloadHandler, TerminalSize};
@@ -162,6 +164,15 @@ fn is_passthrough_query(action: &Action) -> bool {
         // held screen switch or reset could route an eager mutation to
         // the wrong screen's stack.
         Action::CSI(CSI::Keyboard(Keyboard::QueryKittySupport)) => true,
+        // Held output cannot resize the pane, so its size reports are
+        // already final. The title report and rectangle checksum stay
+        // held: held output can change the title and the screen.
+        Action::CSI(CSI::Window(window)) => matches!(
+            **window,
+            CsiWindow::ReportTextAreaSizePixels
+                | CsiWindow::ReportCellSizePixels
+                | CsiWindow::ReportTextAreaSizeCells
+        ),
         // Notably, CPR and DECRQM stay held: their answers (the cursor
         // position, the state of a mode) may be changed by the actions
         // that are being held back.
