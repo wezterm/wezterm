@@ -18,6 +18,7 @@ use url::Url;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{KeyCode, KeyModifiers, MouseEvent, StableRowIndex, TerminalSize};
 
+mod coalesce;
 mod sync_update;
 
 pub(crate) struct RecordingPane {
@@ -131,6 +132,14 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 fn start_parser(
     mux_synchronized_output_timeout_ms: u64,
 ) -> (FileDescriptor, Arc<RecordingPane>, thread::JoinHandle<()>) {
+    start_parser_with(|config| {
+        config.mux_synchronized_output_timeout_ms = mux_synchronized_output_timeout_ms;
+    })
+}
+
+fn start_parser_with(
+    configure: impl FnOnce(&mut config::Config),
+) -> (FileDescriptor, Arc<RecordingPane>, thread::JoinHandle<()>) {
     static SCHEDULER: Once = Once::new();
     SCHEDULER.call_once(|| {
         // send_actions_to_mux notifies the mux via
@@ -148,7 +157,7 @@ fn start_parser(
     });
 
     let mut config = config::Config::default_config();
-    config.mux_synchronized_output_timeout_ms = mux_synchronized_output_timeout_ms;
+    configure(&mut config);
     config::use_this_configuration(config);
 
     let (tx, rx) = socketpair().unwrap();
