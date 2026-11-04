@@ -207,11 +207,7 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                     match poll(&mut pfd, Some(remaining)) {
                         Ok(0) => true,
                         Ok(_) => false,
-                        // Interrupted before the deadline; recompute the
-                        // remaining time and poll again. The error variant
-                        // depends on the backend: poll(2) reports
-                        // FdError::Poll, while the macOS select(2) shim and
-                        // Windows WSAPoll report FdError::Io
+                        // Interrupted; poll again against the same deadline
                         Err(FdError::Poll(err) | FdError::Io(err))
                             if err.kind() == std::io::ErrorKind::Interrupted =>
                         {
