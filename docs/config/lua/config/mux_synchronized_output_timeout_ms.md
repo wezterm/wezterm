@@ -20,3 +20,4 @@ You should not normally need to change this. Raising it gives slow
 applications more time to complete an atomic frame; lowering it makes wezterm
 give up on stalled updates sooner. Setting it to `0` expires every update
 immediately, which effectively disables synchronized output handling.
+The maximum is `10000` (10 seconds); larger values are treated as `10000`.

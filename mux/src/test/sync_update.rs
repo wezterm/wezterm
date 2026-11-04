@@ -174,15 +174,17 @@ fn queries_pass_through_a_synchronized_update() {
 }
 
 #[test]
-fn the_hold_timeout_is_clamped_against_extreme_values() {
+fn the_hold_timeout_is_clamped_to_ten_seconds() {
     let _guard = TEST_LOCK.lock();
-    let mut config = config::Config::default_config();
-    config.mux_synchronized_output_timeout_ms = u64::MAX;
-    config::use_this_configuration(config);
-    assert_eq!(
-        hold_timeout_from(&configuration()),
-        Duration::from_millis(i32::MAX as u64)
-    );
+    let hold_timeout_for = |ms| {
+        let mut config = config::Config::default_config();
+        config.mux_synchronized_output_timeout_ms = ms;
+        config::use_this_configuration(config);
+        hold_timeout_from(&configuration())
+    };
+    assert_eq!(hold_timeout_for(5_000), Duration::from_secs(5));
+    assert_eq!(hold_timeout_for(10_001), Duration::from_secs(10));
+    assert_eq!(hold_timeout_for(u64::MAX), Duration::from_secs(10));
 }
 
 #[test]

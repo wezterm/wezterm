@@ -180,15 +180,15 @@ fn is_passthrough_query(action: &Action) -> bool {
     }
 }
 
-/// The poll timeout is a c_int of milliseconds on the platforms this
-/// runs on, and the deadline is Instant arithmetic; clamp the configured
-/// value (to ~24.8 days) so that an absurdly large setting can't wrap
-/// into a negative poll timeout or overflow the deadline
+/// A pane stays frozen while an update is held, and a timeout that
+/// fires only costs a non-atomic frame, so a long hold is never worth it
+const MAX_HOLD_TIMEOUT_MS: u64 = 10_000;
+
 fn hold_timeout_from(config: &config::ConfigHandle) -> Duration {
     Duration::from_millis(
         config
             .mux_synchronized_output_timeout_ms
-            .min(i32::MAX as u64),
+            .min(MAX_HOLD_TIMEOUT_MS),
     )
 }
 
