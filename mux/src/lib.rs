@@ -237,30 +237,38 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
     let mut hold_deadline: Option<Instant> = None;
 
     loop {
-        if hold {
-            let target = *hold_deadline.get_or_insert_with(|| Instant::now() + hold_timeout);
-            let expired = match poll_for_input(&rx, target) {
+        // While a synchronized update is open, output is held until it
+        // closes or times out, so that a stalled application cannot
+        // freeze the pane indefinitely. Otherwise, if we haven't
+        // accumulated too much data, pause for a short while to increase
+        // the chances that we coalesce a full "frame" from an unoptimized
+        // TUI program. With nothing pending, just block on the next read
+        let send_at = if hold {
+            hold_deadline
+        } else if actions.is_empty() {
+            None
+        } else if action_size >= buf.len() {
+            Some(Instant::now())
+        } else {
+            Some(*deadline.get_or_insert_with(|| Instant::now() + delay))
+        };
+        if let Some(send_at) = send_at {
+            let due = match poll_for_input(&rx, send_at) {
                 PollResult::Ready => false,
                 PollResult::TimedOut => true,
                 PollResult::Failed(err) => {
                     // Polling is what enforces the deadline, so if
                     // it is broken the only way to keep the promise
                     // that a stalled client cannot freeze the pane
-                    // is to fail open and release the hold
-                    log::error!(
-                        "error polling for pane output while a \
-                         synchronized update is open: {err:#}; \
-                         releasing the hold"
-                    );
+                    // is to fail open and send what we have
+                    log::error!("error polling for pane output: {err:#}; giving up waiting");
                     true
                 }
             };
-            if expired {
-                // The synchronized update has been open for longer than
-                // the configured timeout; release the hold so that a
-                // stalled application cannot freeze the pane indefinitely
+            if due {
                 hold = false;
                 hold_deadline = None;
+                deadline = None;
                 if !actions.is_empty() {
                     send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
                     action_size = 0;
@@ -329,27 +337,6 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                     }
                 });
                 action_size += size;
-                if !actions.is_empty() && !hold {
-                    // If we haven't accumulated too much data,
-                    // pause for a short while to increase the chances
-                    // that we coalesce a full "frame" from an unoptimized
-                    // TUI program
-                    if action_size < buf.len() {
-                        let target = *deadline.get_or_insert_with(|| Instant::now() + delay);
-                        if let PollResult::Ready = poll_for_input(&rx, target) {
-                            // We can read now without blocking, so accumulate
-                            // more data into actions
-                            continue;
-                        }
-
-                        // Not readable in time: let the data we have flow into
-                        // the terminal model
-                    }
-
-                    send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
-                    deadline = None;
-                    action_size = 0;
-                }
 
                 let config = configuration();
                 buf.resize(config.mux_output_parser_buffer_size, 0);
