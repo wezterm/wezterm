@@ -192,6 +192,37 @@ fn hold_timeout_from(config: &config::ConfigHandle) -> Duration {
     )
 }
 
+enum PollResult {
+    Ready,
+    TimedOut,
+    Failed(FdError),
+}
+
+/// Waits until `rx` has data to read or `deadline` passes
+fn poll_for_input(rx: &FileDescriptor, deadline: Instant) -> PollResult {
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return PollResult::TimedOut;
+        };
+        let mut pfd = [pollfd {
+            fd: rx.as_socket_descriptor(),
+            events: POLLIN,
+            revents: 0,
+        }];
+        return match poll(&mut pfd, Some(remaining)) {
+            Ok(0) => PollResult::TimedOut,
+            Ok(_) => PollResult::Ready,
+            // Interrupted; poll again against the same deadline
+            Err(FdError::Poll(err) | FdError::Io(err))
+                if err.kind() == std::io::ErrorKind::Interrupted =>
+            {
+                continue;
+            }
+            Err(err) => PollResult::Failed(err),
+        };
+    }
+}
+
 /// This is the parsing loop for the given pane.
 /// It reads all data sent to `rx` (from pane PTY) and handles all terminal events for this pane.
 fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
@@ -208,37 +239,21 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
     loop {
         if hold {
             let target = *hold_deadline.get_or_insert_with(|| Instant::now() + hold_timeout);
-            let expired = match target.checked_duration_since(Instant::now()) {
-                Some(remaining) => {
-                    let mut pfd = [pollfd {
-                        fd: rx.as_socket_descriptor(),
-                        events: POLLIN,
-                        revents: 0,
-                    }];
-                    match poll(&mut pfd, Some(remaining)) {
-                        Ok(0) => true,
-                        Ok(_) => false,
-                        // Interrupted; poll again against the same deadline
-                        Err(FdError::Poll(err) | FdError::Io(err))
-                            if err.kind() == std::io::ErrorKind::Interrupted =>
-                        {
-                            continue;
-                        }
-                        Err(err) => {
-                            // Polling is what enforces the deadline, so if
-                            // it is broken the only way to keep the promise
-                            // that a stalled client cannot freeze the pane
-                            // is to fail open and release the hold
-                            log::error!(
-                                "error polling for pane output while a \
-                                 synchronized update is open: {err:#}; \
-                                 releasing the hold"
-                            );
-                            true
-                        }
-                    }
+            let expired = match poll_for_input(&rx, target) {
+                PollResult::Ready => false,
+                PollResult::TimedOut => true,
+                PollResult::Failed(err) => {
+                    // Polling is what enforces the deadline, so if
+                    // it is broken the only way to keep the promise
+                    // that a stalled client cannot freeze the pane
+                    // is to fail open and release the hold
+                    log::error!(
+                        "error polling for pane output while a \
+                         synchronized update is open: {err:#}; \
+                         releasing the hold"
+                    );
+                    true
                 }
-                None => true,
             };
             if expired {
                 // The synchronized update has been open for longer than
@@ -320,28 +335,15 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                     // that we coalesce a full "frame" from an unoptimized
                     // TUI program
                     if action_size < buf.len() {
-                        let poll_delay = match deadline {
-                            None => {
-                                deadline.replace(Instant::now() + delay);
-                                Some(delay)
-                            }
-                            Some(target) => target.checked_duration_since(Instant::now()),
-                        };
-                        if poll_delay.is_some() {
-                            let mut pfd = [pollfd {
-                                fd: rx.as_socket_descriptor(),
-                                events: POLLIN,
-                                revents: 0,
-                            }];
-                            if let Ok(1) = poll(&mut pfd, poll_delay) {
-                                // We can read now without blocking, so accumulate
-                                // more data into actions
-                                continue;
-                            }
-
-                            // Not readable in time: let the data we have flow into
-                            // the terminal model
+                        let target = *deadline.get_or_insert_with(|| Instant::now() + delay);
+                        if let PollResult::Ready = poll_for_input(&rx, target) {
+                            // We can read now without blocking, so accumulate
+                            // more data into actions
+                            continue;
                         }
+
+                        // Not readable in time: let the data we have flow into
+                        // the terminal model
                     }
 
                     send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));

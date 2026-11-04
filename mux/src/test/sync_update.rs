@@ -1,5 +1,5 @@
 use super::*;
-use crate::{configuration, hold_timeout_from};
+use crate::{configuration, hold_timeout_from, poll_for_input, PollResult};
 use std::io::Write;
 use termwiz::escape::csi::{Cursor, Device, Keyboard, Mode, Window, CSI};
 
@@ -337,4 +337,27 @@ fn window_size_reports_pass_through_but_the_title_report_stays_held() {
     ));
 
     stop_parser(tx, parser);
+}
+
+#[test]
+fn poll_for_input_reports_ready_or_timed_out() {
+    let (mut tx, rx) = socketpair().unwrap();
+
+    let started = Instant::now();
+    assert!(matches!(
+        poll_for_input(&rx, started + Duration::from_millis(50)),
+        PollResult::TimedOut
+    ));
+    // Some backends round the timeout down to whole milliseconds
+    assert!(started.elapsed() >= Duration::from_millis(40));
+
+    tx.write_all(b"x").unwrap();
+    assert!(matches!(
+        poll_for_input(&rx, Instant::now() + Duration::from_secs(5)),
+        PollResult::Ready
+    ));
+
+    // A deadline that has already passed must not block, even with
+    // data waiting
+    assert!(matches!(poll_for_input(&rx, started), PollResult::TimedOut));
 }
