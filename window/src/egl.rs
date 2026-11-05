@@ -86,6 +86,18 @@ pub struct GlState {
     connection: Rc<GlConnection>,
     surface: ffi::types::EGLSurface,
     context: ffi::types::EGLContext,
+    after_drop: AfterDrop,
+}
+
+/// Runs once the surface and context are destroyed: the native window
+/// they were made on must outlive them.
+#[derive(Default)]
+struct AfterDrop(std::cell::RefCell<Option<Box<dyn FnOnce()>>>);
+
+impl std::fmt::Debug for AfterDrop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AfterDrop")
+    }
 }
 
 impl Drop for GlState {
@@ -101,6 +113,9 @@ impl Drop for GlState {
                 .DestroySurface(self.connection.display, self.surface);
             self.connection
                 .DestroyContext(self.connection.display, self.context);
+        }
+        if let Some(after_drop) = self.after_drop.0.borrow_mut().take() {
+            after_drop();
         }
     }
 }
@@ -400,6 +415,11 @@ impl GlState {
         &self.connection
     }
 
+    /// Called after this state's surface and context are destroyed.
+    pub fn set_after_drop(&self, f: impl FnOnce() + 'static) {
+        self.after_drop.0.borrow_mut().replace(Box::new(f));
+    }
+
     fn with_egl_lib<F: FnMut(EglWrapper) -> anyhow::Result<Self>>(
         mut func: F,
     ) -> anyhow::Result<Self> {
@@ -650,6 +670,7 @@ impl GlState {
                 connection: Rc::clone(connection),
                 context,
                 surface,
+                after_drop: AfterDrop::default(),
             });
         }
 
