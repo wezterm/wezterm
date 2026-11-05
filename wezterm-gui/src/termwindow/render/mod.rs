@@ -931,7 +931,7 @@ fn resolve_fg_color_attr(
     config: &ConfigHandle,
     style: &config::TextStyle,
 ) -> LinearRgba {
-    match fg {
+    let color = match fg {
         wezterm_term::color::ColorAttribute::Default => {
             if let Some(fg) = style.foreground {
                 fg.into()
@@ -955,7 +955,15 @@ fn resolve_fg_color_attr(
         }
         _ => palette.resolve_fg(fg),
     }
-    .to_linear()
+    .to_linear();
+
+    if attrs.intensity() == wezterm_term::Intensity::Half {
+        let factor = config.dim_tint_factor as f32;
+        let (r, g, b, a) = color.tuple();
+        LinearRgba::with_components(r * factor, g * factor, b * factor, a)
+    } else {
+        color
+    }
 }
 
 fn update_next_frame_time(storage: &mut Option<Instant>, next_due: Option<Instant>) {
