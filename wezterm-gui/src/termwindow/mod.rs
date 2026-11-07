@@ -161,9 +161,11 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
-    /// The right-click menu as a whole, and each of its entries by index.
-    ContextMenu,
-    ContextMenuItem(usize),
+    /// A level of the right-click menu as a whole (the menu itself at depth
+    /// 0, then each open submenu), and each of its entries, by depth and
+    /// index.
+    ContextMenu(usize),
+    ContextMenuItem(usize, usize),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

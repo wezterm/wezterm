@@ -1,5 +1,5 @@
 use crate::tabbar::TabBarItem;
-use crate::termwindow::contextmenu::ContextMenu;
+use crate::termwindow::contextmenu::{ContextMenu, MenuOutcome};
 use crate::termwindow::{
     GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
 };
@@ -45,8 +45,8 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
-            | UIItemType::ContextMenu
-            | UIItemType::ContextMenuItem(_) => {}
+            | UIItemType::ContextMenu(_)
+            | UIItemType::ContextMenuItem(..) => {}
         }
     }
 
@@ -58,8 +58,8 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
-            | UIItemType::ContextMenu
-            | UIItemType::ContextMenuItem(_) => {}
+            | UIItemType::ContextMenu(_)
+            | UIItemType::ContextMenuItem(..) => {}
         }
     }
 
@@ -268,10 +268,10 @@ impl super::TermWindow {
     ) {
         let hit = self.resolve_ui_item(&event).map(|item| item.item_type);
         let entry = match hit {
-            Some(UIItemType::ContextMenuItem(idx)) => Some(idx),
+            Some(UIItemType::ContextMenuItem(depth, idx)) => Some((depth, idx)),
             _ => None,
         };
-        let inside = entry.is_some() || hit == Some(UIItemType::ContextMenu);
+        let inside = entry.is_some() || matches!(hit, Some(UIItemType::ContextMenu(_)));
 
         match event.kind {
             WMEK::Move => {
@@ -292,8 +292,12 @@ impl super::TermWindow {
                 // the press that opened it), so finish its bookkeeping here.
                 self.current_mouse_capture = None;
                 self.current_mouse_buttons.retain(|p| p != press);
-                if let (Some(idx), true) = (entry, menu.is_armed()) {
-                    self.choose_context_menu_entry(menu, idx);
+                if let Some((depth, idx)) = entry {
+                    match menu.release(depth, idx) {
+                        MenuOutcome::Choose(path) => self.choose_context_menu_entry(menu, &path),
+                        MenuOutcome::Redraw => context.invalidate(),
+                        MenuOutcome::Unchanged | MenuOutcome::Close => {}
+                    }
                 }
             }
             _ => {}
@@ -441,7 +445,7 @@ impl super::TermWindow {
             }
             // While the menu is open, mouse_event_context_menu takes the
             // events before they get this far.
-            UIItemType::ContextMenu | UIItemType::ContextMenuItem(_) => {}
+            UIItemType::ContextMenu(_) | UIItemType::ContextMenuItem(..) => {}
         }
     }
 

@@ -30,10 +30,17 @@ to `wezterm.action.DisableDefaultAssignment`.
 
 A right-click on the tab bar opens a menu for the tab bar instead: New Tab,
 Close Tab when the click was on a tab, then Minimize, Maximize or Restore, and
-Close Window.
+Close Window. The configuration can add entries to it, submenus among them,
+with the [augment-tab-bar-menu](../window-events/augment-tab-bar-menu.md)
+event.
+
+A submenu's entry shows `▸`; pointing at it opens the submenu beside the menu,
+on its right, or on its left where the window has no room on the right.
 
 | Action | Key |
 |--------|-----|
 | Highlight the previous or next entry | <kbd>UpArrow</kbd>, <kbd>DownArrow</kbd> |
 | Choose the highlighted entry | <kbd>Enter</kbd> |
-| Close the menu | <kbd>Esc</kbd>, or a click outside it |
+| Open the highlighted submenu at its first entry | <kbd>RightArrow</kbd>, <kbd>Enter</kbd> |
+| Close the innermost open submenu | <kbd>LeftArrow</kbd>, <kbd>Esc</kbd> |
+| Close the menu | <kbd>Esc</kbd> with no submenu open, or a click outside it |
