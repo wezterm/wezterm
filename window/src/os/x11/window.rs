@@ -590,7 +590,13 @@ impl XWindowInner {
                         long_offset: 0,
                         long_length: u32::max_value(),
                     }) {
-                        Ok(prop) => prop.value::<Atom>().to_vec(),
+                        Ok(prop) if prop.format() == 32 && prop.r#type() == xcb::x::ATOM_ATOM => {
+                            prop.value::<Atom>().to_vec()
+                        }
+                        Ok(_) => {
+                            log::warn!("xdnd: ignoring XdndTypeList with invalid type or format");
+                            Vec::<Atom>::new()
+                        }
                         Err(err) => {
                             log::error!(
                                 "xdnd: unable to get type list from source window: {:?}",
