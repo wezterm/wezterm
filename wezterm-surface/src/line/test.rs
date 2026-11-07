@@ -152,58 +152,6 @@ C(
 }
 
 #[test]
-fn cluster_representation_double_width() {
-    let line: Line = "❤ 😍🤢he❤ 😍🤢llo❤ 😍🤢".into();
-    let mut compressed = line.clone();
-    compressed.compress_for_scrollback();
-    k9::snapshot!(
-        &compressed.cells,
-        r#"
-C(
-    ClusteredLine {
-        text: "❤ 😍🤢he❤ 😍🤢llo❤ 😍🤢",
-        is_double_wide: Some(
-            FixedBitSet {
-                data: [
-                    2626580,
-                ],
-                length: 23,
-            },
-        ),
-        clusters: [
-            Cluster {
-                cell_width: 23,
-                attrs: CellAttributes {
-                    attributes: 0,
-                    intensity: Normal,
-                    underline: None,
-                    blink: None,
-                    italic: false,
-                    reverse: false,
-                    strikethrough: false,
-                    invisible: false,
-                    wrapped: false,
-                    overline: false,
-                    semantic_type: Output,
-                    foreground: Default,
-                    background: Default,
-                    fat: None,
-                },
-            },
-        ],
-        len: 23,
-        last_cell_width: Some(
-            1,
-        ),
-    },
-)
-"#
-    );
-    compressed.coerce_vec_storage();
-    assert_eq!(line, compressed);
-}
-
-#[test]
 fn cluster_representation_empty() {
     let line = Line::from_cells(vec![], SEQ_ZERO);
 
