@@ -202,7 +202,7 @@ impl super::TermWindow {
             return None;
         }
         if let KeyboardEncoding::Kitty(flags) = pane.get_keyboard_encoding() {
-            Some(key.encode_kitty(flags))
+            Some(key.encode_kitty(flags, pane.get_application_cursor_keys()))
         } else {
             None
         }
