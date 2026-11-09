@@ -585,56 +585,65 @@ pub(crate) fn read_pipe_with_timeout(mut file: ReadPipe) -> anyhow::Result<Strin
 /// the window and the WaylandGlBackend whose buffer swaps commit it.
 #[derive(Debug)]
 struct BufferScale {
-    /// The scale last sent with wl_surface.set_buffer_scale
-    applied: Cell<i32>,
-    /// The scale that the wl_egl_window size is aligned to
+    /// The scale last sent with wl_surface.set_buffer_scale (by
+    /// WaylandGlBackend::swap_buffers, or by the configure handler for
+    /// non-EGL windows). It is pending state: the compositor latches it
+    /// with the next commit, together with that commit's buffer.
+    last_applied: Cell<i32>,
+    /// The scale the compositor asked for at the last configure (or at
+    /// enable_opengl); the wl_egl_window size is rounded to a multiple
+    /// of it. It differs from `last_applied` while it is pending:
+    /// swap_buffers sends it with the first buffer it divides.
     wanted: Cell<i32>,
-    /// The size last given to the wl_egl_window
-    egl_window_size: Cell<(i32, i32)>,
+    /// The size last given to the wl_egl_window, at its creation in
+    /// enable_opengl or by wl_egl_window_resize in the configure handler.
+    last_egl_window_size: Cell<(i32, i32)>,
 }
 
 impl Default for BufferScale {
     fn default() -> Self {
         Self {
-            applied: Cell::new(1),
+            last_applied: Cell::new(1),
             wanted: Cell::new(1),
-            egl_window_size: Cell::new((0, 0)),
+            last_egl_window_size: Cell::new((0, 0)),
         }
     }
 }
 
 /// Returns the buffer scale to send before a commit whose buffer may
-/// have any of `sizes`: `wanted` if it divides all of them, else
-/// `applied` if it does, else 1. The result always divides every size, because
-/// compositors reject a commit whose buffer size isn't a multiple of
-/// the scale (wl_surface error invalid_size).
+/// have any of `sizes`: `wanted` if it divides every size, else
+/// `last_applied` if that divides every size, else 1. The result always
+/// divides every size, because compositors reject a commit whose buffer
+/// size isn't a multiple of the scale (wl_surface error invalid_size).
 ///
 /// wl_surface.set_buffer_scale is pending state, latched by the next
 /// commit together with whatever buffer that commit carries, so it
 /// must be sent with a buffer it divides rather than when a configure
 /// changes the scale. Reference clients do the same:
-/// * GTK4: gdk_wayland_surface_update_size only marks the scale dirty;
-///   gdk_wayland_gl_context_end_frame calls gdk_wayland_surface_sync
-///   (sync_buffer_scale) right before eglSwapBuffers.
-/// * swaybar (also swaynag, swaylock): output_scale only stores the
-///   scale; render.c sends set_buffer_scale with the attach and commit
-///   of a buffer rendered at that scale.
-/// * foot: wayl_win_scale is given the buffer about to be attached and
-///   checks that its size is divisible by the scale.
+/// * GTK4 sets the scale with the surface state it syncs right before
+///   eglSwapBuffers:
+///   <https://gitlab.gnome.org/GNOME/gtk/-/blob/f7f8a1ff05bbfa0aad3fe453e3e13cde8a40710d/gdk/wayland/gdksurface-wayland.c#L801-822>
+///   <https://gitlab.gnome.org/GNOME/gtk/-/blob/f7f8a1ff05bbfa0aad3fe453e3e13cde8a40710d/gdk/wayland/gdkglcontext-wayland.c#L74>
+/// * swaybar sends it with the buffer rendered at that scale:
+///   <https://github.com/swaywm/sway/blob/990b23c0e584114c3694447344d6bbf44b2d748f/swaybar/render.c#L820-L857>
+/// * foot checks the buffer about to be attached is divisible by it:
+///   <https://codeberg.org/dnkl/foot/src/commit/152487e494993ad7fb5633a27c7d7ad0f8810ea5/wayland.c#L2498-L2575>
 ///
 /// With EGL the committed buffer can be a frame of the old size: Mesa
 /// keeps a back buffer allocated before wl_egl_window_resize and commits
-/// it on the next eglSwapBuffers (platform_wayland.c: resize_callback
-/// leaves the surface size alone while a back buffer exists, and
-/// update_buffers_if_needed returns early when there is one).
-fn buffer_scale_for_commit(applied: i32, wanted: i32, sizes: &[(i32, i32)]) -> i32 {
+/// it on the next eglSwapBuffers (resize_callback leaves the surface
+/// size alone while a back buffer exists, and update_buffers_if_needed
+/// returns early when there is one):
+/// <https://gitlab.freedesktop.org/mesa/mesa/-/blob/0b97dcdd9424fce130054e1972a610b765644003/src/egl/drivers/dri2/platform_wayland.c#L434-455>
+/// <https://gitlab.freedesktop.org/mesa/mesa/-/blob/0b97dcdd9424fce130054e1972a610b765644003/src/egl/drivers/dri2/platform_wayland.c#L1491-1499>
+fn buffer_scale_for_commit(last_applied: i32, wanted: i32, sizes: &[(i32, i32)]) -> i32 {
     let divides_all = |scale: i32| {
         scale > 0
             && sizes
                 .iter()
                 .all(|&(width, height)| width % scale == 0 && height % scale == 0)
     };
-    [wanted, applied]
+    [wanted, last_applied]
         .iter()
         .copied()
         .find(|&scale| divides_all(scale))
@@ -658,16 +667,16 @@ unsafe impl glium::backend::Backend for WaylandGlBackend {
         // it at the wl_egl_window size. Pick a scale that divides both.
         let (width, height) = self.gl_state.get_framebuffer_dimensions();
         let scale = buffer_scale_for_commit(
-            self.buffer_scale.applied.get(),
+            self.buffer_scale.last_applied.get(),
             self.buffer_scale.wanted.get(),
             &[
                 (width as i32, height as i32),
-                self.buffer_scale.egl_window_size.get(),
+                self.buffer_scale.last_egl_window_size.get(),
             ],
         );
-        if scale != self.buffer_scale.applied.get() {
+        if scale != self.buffer_scale.last_applied.get() {
             self.surface.set_buffer_scale(scale);
-            self.buffer_scale.applied.set(scale);
+            self.buffer_scale.last_applied.set(scale);
         }
         self.gl_state.swap_buffers()
     }
@@ -785,7 +794,7 @@ impl WaylandWindowInner {
             wegl_surface = Some(WlEglSurface::new(object_id, pixel_width, pixel_height)?);
             self.buffer_scale.wanted.set(scale);
             self.buffer_scale
-                .egl_window_size
+                .last_egl_window_size
                 .set((pixel_width, pixel_height));
 
             log::trace!("WEGL Surface here {:?}", wegl_surface);
@@ -1064,16 +1073,44 @@ impl WaylandWindowInner {
                     // compositor; if it is going to double the size then
                     // we render at double the size anyway and tell it that
                     // the buffer is already doubled.
-                    // The wegl_surface.resize won't take effect until
+                    // For EGL windows set_buffer_scale is no longer called
+                    // here: the wegl_surface.resize won't take effect until
                     // we paint later on, and the next buffer swap may still
                     // commit a frame of the old size, so the scale is only
-                    // recorded here; WaylandGlBackend::swap_buffers sends it
-                    // with the first buffer that it divides.
+                    // recorded in `wanted`; WaylandGlBackend::swap_buffers
+                    // sends it with the first buffer that it divides.
                     if let Some(wegl_surface) = self.wegl_surface.as_mut() {
                         wegl_surface.resize(pixel_width, pixel_height, 0, 0);
                         self.buffer_scale
-                            .egl_window_size
+                            .last_egl_window_size
                             .set((pixel_width, pixel_height));
+                    } else if scale != self.buffer_scale.last_applied.get() {
+                        // Non-EGL (WebGpu) windows keep the previous
+                        // behaviour: their buffers are committed by wgpu's
+                        // present, which this code doesn't wrap.
+                        // Take care to detach the current buffer, so that
+                        // the compositor doesn't get annoyed by it not
+                        // having dimensions that match the scale.
+                        // We do this only if the scale has actually changed,
+                        // otherwise interactive window resize will keep
+                        // removing the window contents!
+                        let wayland_conn = Connection::get().unwrap().wayland();
+                        let wayland_state = wayland_conn.wayland_state.borrow();
+                        let mut pool = wayland_state.mem_pool.borrow_mut();
+
+                        // Make a "fake" buffer with the right dimensions, as
+                        // simply detaching the buffer can cause wlroots-derived
+                        // compositors consider the window to be unconfigured.
+                        if let Ok((buffer, _bytes)) = pool.create_buffer(
+                            factor as i32,
+                            factor as i32,
+                            (factor * 4.0) as i32,
+                            wayland_client::protocol::wl_shm::Format::Argb8888,
+                        ) {
+                            self.surface().attach(Some(buffer.wl_buffer()), 0, 0);
+                            self.surface().set_buffer_scale(factor as i32);
+                            self.buffer_scale.last_applied.set(scale);
+                        }
                     }
                     self.buffer_scale.wanted.set(scale);
                     self.update_window_background_blur();
@@ -1245,7 +1282,12 @@ impl WaylandWindowInner {
         self.frame_callback.take();
         // A buffer swap defers the wanted scale while the committed
         // buffer is still the old size; paint again so that it gets sent.
-        if self.invalidated || self.buffer_scale.applied.get() != self.buffer_scale.wanted.get() {
+        // Only EGL windows defer it: on other windows nothing would send
+        // it on paint, so a failed placeholder buffer must not repaint
+        // forever.
+        let scale_pending = self.wegl_surface.is_some()
+            && self.buffer_scale.last_applied.get() != self.buffer_scale.wanted.get();
+        if self.invalidated || scale_pending {
             self.do_paint().ok();
         }
     }
@@ -1772,14 +1814,15 @@ impl HasWindowHandle for WaylandWindow {
 mod tests {
     use super::buffer_scale_for_commit;
 
+    /// Table of buffer_scale_for_commit results for the sizes seen around a scale change.
     #[test]
     fn buffer_scale_for_commit_cases() {
-        // (applied, wanted, sizes, expected)
+        // (last_applied, wanted, sizes, expected)
         let cases: &[(i32, i32, &[(i32, i32)], i32)] = &[
             // wanted divides the buffer
             (1, 2, &[(1716, 1380)], 2),
             (2, 1, &[(1717, 1381)], 1),
-            // only applied divides it
+            // only last_applied divides it
             (2, 3, &[(1718, 1382)], 2),
             // neither divides it
             (2, 3, &[(1717, 1381)], 1),
@@ -1800,26 +1843,31 @@ mod tests {
             // a scale below 1 is never returned
             (0, 0, &[(1716, 1380)], 1),
         ];
-        for &(applied, wanted, sizes, expected) in cases {
+        for &(last_applied, wanted, sizes, expected) in cases {
             assert_eq!(
-                buffer_scale_for_commit(applied, wanted, sizes),
+                buffer_scale_for_commit(last_applied, wanted, sizes),
                 expected,
-                "applied={applied} wanted={wanted} sizes={sizes:?}"
+                "last_applied={last_applied} wanted={wanted} sizes={sizes:?}"
             );
         }
     }
 
+    /// For every last_applied and wanted scale in 1..=4 and every buffer
+    /// size up to 64x64, the result divides the buffer (so no commit can
+    /// hit wl_surface invalid_size), and it is `wanted` whenever wanted
+    /// divides the buffer (the wanted scale is never deferred needlessly).
     #[test]
     fn buffer_scale_for_commit_divides_buffer() {
-        for applied in 1..=4 {
+        for last_applied in 1..=4 {
             for wanted in 1..=4 {
                 for width in 1..=64 {
                     for height in 1..=64 {
-                        let scale = buffer_scale_for_commit(applied, wanted, &[(width, height)]);
+                        let scale =
+                            buffer_scale_for_commit(last_applied, wanted, &[(width, height)]);
                         assert!(
                             width % scale == 0 && height % scale == 0,
-                            "applied={} wanted={} {}x{} -> {}",
-                            applied,
+                            "last_applied={} wanted={} {}x{} -> {}",
+                            last_applied,
                             wanted,
                             width,
                             height,
