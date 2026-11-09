@@ -308,11 +308,21 @@ impl crate::TermWindow {
                 // Subtract the new-tab button's footprint up front so the
                 // remaining space divides evenly across real tabs and no
                 // dead zone is left at the right edge of the bar
-                let new_tab_button_width = 2.0 * metrics.cell_size.width as f32;
+                let has_new_tab_button = items
+                    .iter()
+                    .any(|item| matches!(item.item, TabBarItem::NewTabButton));
+                let new_tab_button_width = if has_new_tab_button {
+                    2.0 * metrics.cell_size.width as f32
+                } else {
+                    0.0
+                };
                 let tabs_available_pixel_width =
                     (self.dimensions.pixel_width as f32 - new_tab_button_width).max(0.);
-                let tab_count = (num_tabs - 1.0).max(1.0);
-                (tabs_available_pixel_width / tab_count).max(0.)
+                let tab_count = items
+                    .iter()
+                    .filter(|item| matches!(item.item, TabBarItem::Tab { .. }))
+                    .count() as f32;
+                (tabs_available_pixel_width / tab_count.max(1.0)).max(0.)
             }
             TabBarWidth::Content => {
                 // Reserve room at the right edge of the bar for the new-tab
