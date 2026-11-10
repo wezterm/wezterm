@@ -785,6 +785,8 @@ impl XWindowInner {
                         );
                         if protocol_atom == conn.atom_delete {
                             self.events.dispatch(WindowEvent::CloseRequested);
+                        } else if protocol_atom == conn.atom_take_focus {
+                            self.take_focus(data[1]);
                         }
                     } else {
                         log::warn!("Received ClientMessage {type_atom_name} with wrong format");
@@ -862,6 +864,27 @@ impl XWindowInner {
             self.appearance = appearance;
             self.events
                 .dispatch(WindowEvent::AppearanceChanged(appearance));
+        }
+    }
+
+    /// Respond to ICCCM WM_TAKE_FOCUS (section 4.1.7) by assigning
+    /// input focus to ourselves, using the timestamp supplied by the
+    /// window manager.
+    /// Some window managers, such as xfwm4, can otherwise leave focus
+    /// on the desktop after switching to a workspace that holds a
+    /// fullscreen wezterm window.
+    fn take_focus(&mut self, time: xcb::x::Timestamp) {
+        log::trace!("WM_TAKE_FOCUS time={time}");
+        let conn = self.conn();
+        // This can legitimately fail with BadMatch if the window was
+        // unmapped again before we processed the message, for example
+        // when rapidly switching workspaces.
+        if let Err(err) = conn.send_request_no_reply(&xcb::x::SetInputFocus {
+            revert_to: xcb::x::InputFocus::Parent,
+            focus: self.window_id,
+            time,
+        }) {
+            log::debug!("WM_TAKE_FOCUS: SetInputFocus failed: {err:#}");
         }
     }
 
@@ -1536,7 +1559,7 @@ impl XWindow {
             window: window_id,
             property: conn.atom_protocols,
             r#type: xcb::x::ATOM_ATOM,
-            data: &[conn.atom_delete],
+            data: &[conn.atom_delete, conn.atom_take_focus],
         })?;
 
         conn.send_request_no_reply(&xcb::x::ChangeProperty {
