@@ -66,7 +66,7 @@ return {}
 
 {{since('20220319-142410-0fcdea07')}}
 
-The `has_unseen_output` field returns true if the there has been output
+The `has_unseen_output` field returns true if there has been output
 in the pane since the last time it was focused.
 
 This example shows how to use this event to change the color of the

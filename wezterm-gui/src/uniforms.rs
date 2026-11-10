@@ -8,7 +8,7 @@ use std::borrow::Cow;
 /// The builder works a bit more dynamically by accumulating references to
 /// the names and values.
 /// When binding structs to the shader, the name strings are dynamically
-/// allocated because glsl expects to bind the the `bar` field of struct `foo`
+/// allocated because glsl expects to bind the `bar` field of struct `foo`
 /// using a name like "foo.bar".
 /// A companion trait `UniformStruct` is used to aid in defining structs
 /// that can be passed as uniforms.

@@ -115,6 +115,7 @@ pub enum SelectionMode {
 pub enum Pattern {
     CaseSensitiveString(String),
     CaseInSensitiveString(String),
+    CaseSmartString(String),
     Regex(String),
     CurrentSelectionOrEmptyString,
 }
@@ -122,9 +123,10 @@ pub enum Pattern {
 impl Pattern {
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::CaseSensitiveString(s) | Self::CaseInSensitiveString(s) | Self::Regex(s) => {
-                s.is_empty()
-            }
+            Self::CaseSensitiveString(s)
+            | Self::CaseInSensitiveString(s)
+            | Self::CaseSmartString(s)
+            | Self::Regex(s) => s.is_empty(),
             Self::CurrentSelectionOrEmptyString => true,
         }
     }
@@ -279,7 +281,7 @@ pub enum PaneDirection {
 impl PaneDirection {
     pub fn direction_from_str(arg: &str) -> Result<PaneDirection, String> {
         for candidate in PaneDirection::variants() {
-            if candidate.to_lowercase() == arg.to_lowercase() {
+            if candidate.eq_ignore_ascii_case(arg) {
                 if let Ok(direction) = PaneDirection::from_dynamic(
                     &Value::String(candidate.to_string()),
                     FromDynamicOptions::default(),

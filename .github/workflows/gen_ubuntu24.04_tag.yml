@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: "git config --global --add safe.directory /__w/wezterm/wezterm"
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: "recursive"
       - name: "Install Rust"
@@ -55,7 +55,7 @@ jobs:
             vendor
             .cargo/config
           key: "cargo-deps-${{ hashFiles('**/Cargo.lock') }}"
-      - name: "Vendor dependecies"
+      - name: "Vendor dependencies"
         if: steps.cache-cargo-vendor.outputs.cache-hit != 'true'
         shell: bash
         run: "cargo vendor --locked --versioned-dirs >> .cargo/config"
@@ -82,11 +82,14 @@ jobs:
       - name: "Test"
         shell: bash
         run: "cargo nextest run --all --no-fail-fast"
+      - name: "Test wezterm-escape-parser (no_std)"
+        shell: bash
+        run: "cargo nextest run -p wezterm-escape-parser"
       - name: "Package"
         shell: bash
         run: "bash ci/deploy.sh"
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "ubuntu24.04"
           path: |
@@ -107,9 +110,9 @@ jobs:
         shell: bash
         run: "git config --global --add safe.directory /__w/wezterm/wezterm"
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: "Download artifact"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: "ubuntu24.04"
       - name: "Checksum"

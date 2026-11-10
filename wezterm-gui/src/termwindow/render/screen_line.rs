@@ -303,6 +303,23 @@ impl crate::TermWindow {
             0.0..0.0
         };
 
+        // Render composition/IME preview background
+        if composition_width > 0 {
+            if let Some(compose_bg) = &params.config.resolved_palette.compose_bg {
+                let start = params.left_pixel_x + (params.cursor.x as f32 * cell_width);
+                let width = composition_width as f32 * cell_width;
+                let mut quad = self
+                    .filled_rectangle(
+                        layers,
+                        0,
+                        euclid::rect(start, params.top_pixel_y, width, cell_height),
+                        compose_bg.to_linear(),
+                    )
+                    .context("filled_rectangle")?;
+                quad.set_hsv(hsv);
+            }
+        }
+
         // Consider cursor
         if !cursor_range.is_empty() {
             let (fg_color, bg_color) = if let Some(c) = &cursor_cell {
@@ -445,7 +462,7 @@ impl crate::TermWindow {
             };
 
             // TODO: remember logical/visual mapping for selection
-            #[allow(unused_variables)]
+            #[allow(unused_variables, unused_assignments)]
             let mut phys_cell_idx = cluster.first_cell_idx;
 
             // Pre-decrement by the cluster width when doing RTL,
@@ -674,7 +691,10 @@ impl crate::TermWindow {
                         }
                     }
                 }
-                phys_cell_idx += info.pos.num_cells as usize;
+                #[allow(unused_assignments)]
+                {
+                    phys_cell_idx += info.pos.num_cells as usize;
+                }
                 visual_cell_idx += info.pos.num_cells as usize;
                 cluster_x_pos += if params.use_pixel_positioning {
                     glyph.x_advance.get() as f32 * width_scale
@@ -733,7 +753,14 @@ impl crate::TermWindow {
             // Create an updated line with the composition overlaid
             let mut line = params.line.clone();
             let seqno = line.current_seqno();
-            line.overlay_text_with_attribute(*cursor_x, &composing, CellAttributes::blank(), seqno);
+
+            let mut compose_attrs = CellAttributes::blank();
+            if let Some(fg) = &params.config.resolved_palette.compose_fg {
+                compose_attrs
+                    .set_foreground(ColorAttribute::TrueColorWithDefaultFallback((*fg).into()));
+            }
+
+            line.overlay_text_with_attribute(*cursor_x, &composing, compose_attrs, seqno);
             line.cluster(bidi_hint)
         } else {
             params.line.cluster(bidi_hint)

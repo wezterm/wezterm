@@ -62,4 +62,4 @@ config.keys = {
 }
 ```
 
-See also [wezterm.open_with](../wezterm/open_with.md).
+See also [`QuickSelect` action](QuickSelect.md) & [`wezterm.open_with` function](../wezterm/open_with.md).

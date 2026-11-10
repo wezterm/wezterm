@@ -15,25 +15,29 @@ use crate::{Clipboard, ConnectionOps};
 use super::data_device::TEXT_MIME_TYPE;
 use super::state::WaylandState;
 
+/// Holds the most recent clipboard offer received from another Wayland client.
+/// Updated on every `wl_data_device::selection` event.
 #[derive(Default)]
-pub struct CopyAndPaste {
+pub struct CopyPasteOffer {
     data_offer: Option<SelectionOffer>,
 }
 
-impl std::fmt::Debug for CopyAndPaste {
+impl std::fmt::Debug for CopyPasteOffer {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        fmt.debug_struct("CopyAndPaste")
+        fmt.debug_struct("CopyPasteOffer")
             .field("data_offer", &self.data_offer.is_some())
             .finish()
     }
 }
 
-impl CopyAndPaste {
+impl CopyPasteOffer {
+    /// Creates a new empty offer.
     pub(super) fn create() -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Default::default()))
     }
 
-    pub(super) fn get_clipboard_data(&mut self, clipboard: Clipboard) -> anyhow::Result<ReadPipe> {
+    /// Returns a pipe to read the current clipboard contents for the given clipboard type.
+    pub(super) fn get_clipboard_data(&self, clipboard: Clipboard) -> anyhow::Result<ReadPipe> {
         let conn = crate::Connection::get().unwrap().wayland();
         let wayland_state = conn.wayland_state.borrow();
         let primary_selection = if let Clipboard::PrimarySelection = clipboard {
@@ -62,6 +66,7 @@ impl CopyAndPaste {
         }
     }
 
+    /// Claims clipboard ownership and advertises `data` as the current selection.
     pub(super) fn set_clipboard_data(&mut self, clipboard: Clipboard, data: String) {
         let conn = crate::Connection::get().unwrap().wayland();
         let qh = conn.event_queue.borrow().handle();
@@ -94,17 +99,9 @@ impl CopyAndPaste {
         }
     }
 
+    /// Stores the latest selection offer from the compositor, replacing any previous one.
     pub(super) fn confirm_selection(&mut self, offer: SelectionOffer) {
         self.data_offer.replace(offer);
-    }
-}
-
-impl WaylandState {
-    pub(super) fn resolve_copy_and_paste(&mut self) -> Option<Arc<Mutex<CopyAndPaste>>> {
-        let active_surface_id = self.active_surface_id.borrow();
-        let active_surface_id = active_surface_id.as_ref()?;
-        let pending = self.surface_to_pending.get(&active_surface_id)?;
-        Some(Arc::clone(&pending.lock().unwrap().copy_and_paste))
     }
 }
 

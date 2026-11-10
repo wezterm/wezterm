@@ -2,6 +2,8 @@ use crate::termwindow::{PaneInformation, TabInformation, UIItem, UIItemType};
 use config::{ConfigHandle, TabBarColors};
 use finl_unicode::grapheme_clusters::Graphemes;
 use mlua::FromLua;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use termwiz::cell::{unicode_column_width, Cell, CellAttributes};
 use termwiz::color::{AnsiColor, ColorSpec};
 use termwiz::escape::csi::Sgr;
@@ -16,6 +18,10 @@ use window::{IntegratedTitleButton, IntegratedTitleButtonAlignment, IntegratedTi
 pub struct TabBarState {
     line: Line,
     items: Vec<TabEntry>,
+    /// When a tab shows the built-in indeterminate progress spinner, the instant
+    /// at which the tab bar should be rebuilt to advance to the next frame;
+    /// None when no spinner is visible.
+    next_progress_frame_due: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +46,9 @@ pub struct TabEntry {
 struct TitleText {
     items: Vec<FormatItem>,
     len: usize,
+    /// True when the built-in title path rendered an indeterminate spinner
+    /// frame. A custom format-tab-title callback always leaves this false.
+    has_indeterminate: bool,
 }
 
 fn call_format_tab_title(
@@ -80,6 +89,7 @@ fn call_format_tab_title(
                     Ok(Some(TitleText {
                         items,
                         len: line.len(),
+                        has_indeterminate: false,
                     }))
                 }
                 _ => {
@@ -88,6 +98,7 @@ fn call_format_tab_title(
                     Ok(Some(TitleText {
                         len: line.len(),
                         items: vec![FormatItem::Text(s)],
+                        has_indeterminate: false,
                     }))
                 }
             }
@@ -130,6 +141,65 @@ fn pct_to_glyph(pct: u8) -> char {
     }
 }
 
+/// How long each indeterminate progress spinner frame is shown before the next
+/// is due.
+const INDETERMINATE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Reference instant for the indeterminate spinner. The displayed frame and its
+/// next-due time are both derived from the elapsed time since this instant, so
+/// they stay in step no matter when a repaint happens to rebuild the tab bar.
+static SPINNER_EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// Renders `value` as a braille cell whose lit dots count up in the cell's
+/// reading order, down the left column then down the right column. Stepping
+/// `value` through 0..=255 reproduces the `dots8Bit` animation of
+/// https://github.com/sindresorhus/cli-spinners without a lookup table.
+fn braille_counter(value: u8) -> char {
+    // Unicode braille dot bit values in reading order: dots 1, 2, 3, 7 fill the
+    // left column and dots 4, 5, 6, 8 the right column.
+    const DOTS: [u32; 8] = [0x01, 0x02, 0x04, 0x40, 0x08, 0x10, 0x20, 0x80];
+    let mut pattern = 0u32;
+    for (bit, dot) in DOTS.iter().enumerate() {
+        if value & (1 << bit) != 0 {
+            pattern |= dot;
+        }
+    }
+    char::from_u32(0x2800 + pattern).expect("braille pattern is a valid codepoint")
+}
+
+/// Returns the spinner glyph to show for the current moment, advancing one
+/// frame per INDETERMINATE_SPINNER_INTERVAL. `seed` offsets the starting frame
+/// so that tabs busy at the same time do not animate in lock step.
+fn indeterminate_spinner_glyph(seed: u64) -> char {
+    let elapsed = SPINNER_EPOCH.elapsed().as_millis() as u64;
+    let interval = INDETERMINATE_SPINNER_INTERVAL.as_millis() as u64;
+    // braille_counter wraps at 256, matching the animation's frame count.
+    braille_counter((elapsed / interval + seed) as u8)
+}
+
+/// Returns the instant at which the spinner next advances a frame, snapped to
+/// the frame grid measured from SPINNER_EPOCH. Because the result falls on a
+/// grid boundary rather than a fixed offset from now, repeated rebuilds within
+/// one frame all return the same instant and the animation advances steadily
+/// even when unrelated repaints rebuild the tab bar in between.
+fn next_spinner_frame_due() -> Instant {
+    let interval = INDETERMINATE_SPINNER_INTERVAL.as_nanos();
+    let elapsed = SPINNER_EPOCH.elapsed().as_nanos();
+    let next_frame = elapsed / interval + 1;
+    *SPINNER_EPOCH + Duration::from_nanos((next_frame * interval) as u64)
+}
+
+/// Scrambles a tab id into a spinner phase offset. Tab ids are usually handed
+/// out sequentially, which would leave adjacent tabs only one frame apart; the
+/// splitmix64 finalizer avalanches the low bits so their spinners spread across
+/// the animation instead.
+fn spinner_phase(tab_id: usize) -> u64 {
+    let mut z = tab_id as u64;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+    z ^ (z >> 31)
+}
+
 fn compute_tab_title(
     tab: &TabInformation,
     tab_info: &[TabInformation],
@@ -145,6 +215,7 @@ fn compute_tab_title(
         None => {
             let mut items = vec![];
             let mut len = 0;
+            let mut has_indeterminate = false;
 
             if let Some(pane) = &tab.active_pane {
                 let mut title = if tab.tab_title.is_empty() {
@@ -185,7 +256,17 @@ fn compute_tab_title(
                         items.push(FormatItem::Foreground(FormatColor::Default));
                     }
                     Progress::Indeterminate => {
-                        // TODO: Decide what to do here to indicate this
+                        has_indeterminate = true;
+                        let graphic = format!(
+                            "{} ",
+                            indeterminate_spinner_glyph(spinner_phase(tab.tab_id))
+                        );
+                        len += unicode_column_width(&graphic, None);
+                        items.push(FormatItem::Foreground(FormatColor::AnsiColor(
+                            AnsiColor::Green,
+                        )));
+                        items.push(FormatItem::Text(graphic));
+                        items.push(FormatItem::Foreground(FormatColor::Default));
                     }
                 }
 
@@ -207,7 +288,11 @@ fn compute_tab_title(
                 items.push(FormatItem::Text(title));
             };
 
-            TitleText { len, items }
+            TitleText {
+                len,
+                items,
+                has_indeterminate,
+            }
         }
     }
 }
@@ -228,6 +313,7 @@ impl TabBarState {
                 x: 1,
                 width: 1,
             }],
+            next_progress_frame_due: None,
         }
     }
 
@@ -237,6 +323,10 @@ impl TabBarState {
 
     pub fn items(&self) -> &[TabEntry] {
         &self.items
+    }
+
+    pub fn next_progress_frame_due(&self) -> Option<Instant> {
+        self.next_progress_frame_due
     }
 
     fn integrated_title_buttons(
@@ -415,6 +505,7 @@ impl TabBarState {
 
         let mut x = 0;
         let mut items = vec![];
+        let mut has_indeterminate_progress = false;
 
         let black_cell = Cell::blank_with_attrs(
             CellAttributes::default()
@@ -477,6 +568,8 @@ impl TabBarState {
             };
 
             let tab_start_idx = x;
+
+            has_indeterminate_progress |= tab_title.has_indeterminate;
 
             let esc = format_as_escapes(tab_title.items.clone()).expect("already parsed ok above");
             let mut tab_line = parse_status_text(
@@ -603,7 +696,11 @@ impl TabBarState {
             Self::integrated_title_buttons(mouse_x, &mut x, config, &mut items, &mut line, &colors);
         }
 
-        Self { line, items }
+        Self {
+            line,
+            items,
+            next_progress_frame_due: has_indeterminate_progress.then(next_spinner_frame_due),
+        }
     }
 
     pub fn compute_ui_items(&self, y: usize, cell_height: usize, cell_width: usize) -> Vec<UIItem> {

@@ -194,7 +194,7 @@ impl crate::TermWindow {
                     LinearRgba::with_components(r, g, b, intensity)
                 } else {
                     // otherwise We'll interpolate between the background color
-                    // and the the target color
+                    // and the target color
                     let (r1, g1, b1, a) = palette
                         .background
                         .to_linear()

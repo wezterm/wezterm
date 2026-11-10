@@ -2,8 +2,8 @@ use super::*;
 use crate::connection::ConnectionOps;
 use crate::parameters::{self, Parameters};
 use crate::{
-    Appearance, Clipboard, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent, Modifiers,
-    MouseButtons, MouseCursor, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
+    Appearance, Clipboard, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent,
+    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
     RequestedWindowGeometry, ResolvedGeometry, ScreenPoint, ScreenRect, ULength, WindowDecorations,
     WindowEvent, WindowEventSender, WindowOps, WindowState,
 };
@@ -624,7 +624,7 @@ impl WindowInner {
         .detach();
     }
 
-    fn set_cursor(&mut self, cursor: Option<MouseCursor>) {
+    fn set_cursor(&mut self, cursor: Option<CursorIcon>) {
         apply_mouse_cursor(cursor);
     }
 
@@ -854,7 +854,7 @@ impl WindowOps for Window {
         schedule_show_window(self.0, ShowWindowCommand::Normal);
     }
 
-    fn set_cursor(&self, cursor: Option<MouseCursor>) {
+    fn set_cursor(&self, cursor: Option<CursorIcon>) {
         Connection::with_window_inner(self.0, move |inner| {
             inner.set_cursor(cursor);
             Ok(())
@@ -1710,24 +1710,46 @@ fn client_to_screen(hwnd: HWND, point: Point) -> ScreenPoint {
     ScreenPoint::new(point.x.try_into().unwrap(), point.y.try_into().unwrap())
 }
 
-fn apply_mouse_cursor(cursor: Option<MouseCursor>) {
+fn apply_mouse_cursor(cursor: Option<CursorIcon>) {
     match cursor {
         None => unsafe {
             SetCursor(null_mut());
         },
         Some(cursor) => unsafe {
-            SetCursor(LoadCursorW(
-                null_mut(),
-                match cursor {
-                    MouseCursor::Arrow => IDC_ARROW,
-                    MouseCursor::Hand => IDC_HAND,
-                    MouseCursor::Text => IDC_IBEAM,
-                    MouseCursor::SizeUpDown => IDC_SIZENS,
-                    MouseCursor::SizeLeftRight => IDC_SIZEWE,
-                },
-            ));
+            SetCursor(LoadCursorW(null_mut(), mouse_cursor_id(cursor)));
         },
     }
+}
+
+fn mouse_cursor_id(cursor: CursorIcon) -> LPCWSTR {
+    match cursor {
+        CursorIcon::Cell | CursorIcon::Crosshair => IDC_CROSS,
+        CursorIcon::EResize
+        | CursorIcon::EwResize
+        | CursorIcon::WResize
+        | CursorIcon::ColResize => IDC_SIZEWE,
+        CursorIcon::Grab | CursorIcon::Grabbing | CursorIcon::Pointer => IDC_HAND,
+        CursorIcon::Help | CursorIcon::ContextMenu => IDC_HELP,
+        CursorIcon::Move | CursorIcon::AllScroll | CursorIcon::AllResize => IDC_SIZEALL,
+        CursorIcon::NResize
+        | CursorIcon::NsResize
+        | CursorIcon::SResize
+        | CursorIcon::RowResize => IDC_SIZENS,
+        CursorIcon::NeResize | CursorIcon::NeswResize | CursorIcon::SwResize => IDC_SIZENESW,
+        CursorIcon::NoDrop | CursorIcon::NotAllowed => IDC_NO,
+        CursorIcon::NwResize | CursorIcon::NwseResize | CursorIcon::SeResize => IDC_SIZENWSE,
+        CursorIcon::Progress => IDC_APPSTARTING,
+        CursorIcon::Text | CursorIcon::VerticalText => IDC_IBEAM,
+        CursorIcon::Wait => IDC_WAIT,
+        _ => IDC_ARROW,
+    }
+}
+
+#[test]
+fn cursor_icons_use_windows_cursors() {
+    assert_eq!(mouse_cursor_id(CursorIcon::Pointer), IDC_HAND);
+    assert_eq!(mouse_cursor_id(CursorIcon::NsResize), IDC_SIZENS);
+    assert_eq!(mouse_cursor_id(CursorIcon::Text), IDC_IBEAM);
 }
 
 unsafe fn mouse_button(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
@@ -2068,14 +2090,19 @@ unsafe fn ime_set_context(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> Option<LRESULT> {
-    let inner = rc_from_hwnd(hwnd)?;
-    let inner = inner.borrow_mut();
+    let use_system_rendering = {
+        let inner = rc_from_hwnd(hwnd)?;
+        let inner = inner.borrow();
+        inner.config.ime_preedit_rendering == ImePreeditRendering::System
+    };
 
-    if inner.config.ime_preedit_rendering == ImePreeditRendering::System {
+    if use_system_rendering {
         return None;
     }
 
-    // Don't show system CompositionWindow because application itself draws it
+    // Don't show system CompositionWindow because application itself draws it.
+    // Note: DefWindowProcW may trigger other window messages, so we must
+    // release the borrow before calling it.
     let lparam = lparam & !(ISC_SHOWUICOMPOSITIONWINDOW as LPARAM);
     let result = DefWindowProcW(hwnd, msg, wparam, lparam);
     Some(result)
@@ -2523,6 +2550,11 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
         // or `ime_endcomposition` when it completes.
 
         if msg == WM_KEYDOWN {
+            // Release the borrow before calling translate_message:
+            // TranslateMessage can trigger other window messages (like WM_SIZE)
+            // via CtfImeCreateInputContext, which would otherwise cause a
+            // RefCell borrow conflict while inner is still borrowed.
+            drop(inner);
             // Explicitly allow the built-in translation to occur for the IME
             translate_message(hwnd, msg, wparam, lparam);
             return Some(0);

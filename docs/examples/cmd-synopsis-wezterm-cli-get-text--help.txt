@@ -13,7 +13,7 @@ Options:
       --end-line <END_LINE>
           The ending line number. 0 is the first line of terminal screen.
           Negative numbers proceed backwards into the scrollback. The default
-          value if unspecified is the bottom of the the terminal screen
+          value if unspecified is the bottom of the terminal screen
       --escapes
           Include escape sequences that color and style the text. If omitted,
           unattributed text will be returned
