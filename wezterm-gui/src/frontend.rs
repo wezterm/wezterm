@@ -449,11 +449,13 @@ impl GuiFrontEnd {
         false
     }
 
-    pub fn switch_workspace(&self, workspace: &str) {
+    /// The returned future completes when the gui windows have been
+    /// arranged to match the mux windows of the workspace
+    pub fn switch_workspace(&self, workspace: &str) -> Future<()> {
         let mux = Mux::get();
         mux.set_active_workspace_for_client(&self.client_id, workspace);
         *self.switching_workspaces.borrow_mut() = false;
-        self.reconcile_workspace();
+        self.reconcile_workspace()
     }
 
     pub fn record_known_window(&self, window: Window, mux_window_id: MuxWindowId) {
@@ -752,26 +754,58 @@ fn focus_pane_for_notification(pane_id: PaneId) {
         log::debug!("notification clicked, but cannot focus pane {pane_id}: {err:#}");
         return;
     }
-    // If the pane is in a workspace that isn't the active one, then no
-    // gui window shows it and there is nothing to bring to the front
-    if let Some(gui_window) = try_front_end().and_then(|fe| fe.gui_window_for_mux_window(window_id))
-    {
-        gui_window
-            .window
-            .notify(TermWindowNotif::Apply(Box::new(|term_window| {
-                if let Some(window) = term_window.window.as_ref() {
-                    // Changing the active pane within the already active tab
-                    // doesn't invalidate the window by itself
-                    window.invalidate();
-                    // Focusing the window is intrusive on some systems (on
-                    // Windows it synthesizes a key press to be allowed to
-                    // take the foreground), so only do it when it is needed
-                    if term_window.focused.is_none() {
-                        window.focus();
-                    }
-                }
-            })));
+    let Some(fe) = try_front_end() else {
+        return;
+    };
+    if let Some(gui_window) = fe.gui_window_for_mux_window(window_id) {
+        raise_window_for_notification(gui_window);
+        return;
     }
+
+    // No gui window shows the pane, which means that it belongs to a
+    // workspace that isn't the active one
+    if !config::configuration().toast_notification_click_switches_workspace {
+        return;
+    }
+    let workspace = mux
+        .get_window(window_id)
+        .map(|window| window.get_workspace().to_string());
+    let Some(workspace) = workspace else {
+        return;
+    };
+    let switched = fe.switch_workspace(&workspace);
+    promise::spawn::spawn(async move {
+        // Existing gui windows are re-used for the mux windows of the
+        // workspace, and more are created if there aren't enough of them
+        if let Err(err) = switched.await {
+            log::debug!("notification clicked, but cannot switch to {workspace}: {err:#}");
+            return;
+        }
+        if let Some(gui_window) =
+            try_front_end().and_then(|fe| fe.gui_window_for_mux_window(window_id))
+        {
+            raise_window_for_notification(gui_window);
+        }
+    })
+    .detach();
+}
+
+fn raise_window_for_notification(gui_window: GuiWin) {
+    gui_window
+        .window
+        .notify(TermWindowNotif::Apply(Box::new(|term_window| {
+            if let Some(window) = term_window.window.as_ref() {
+                // Changing the active pane within the already active tab
+                // doesn't invalidate the window by itself
+                window.invalidate();
+                // Focusing the window is intrusive on some systems (on
+                // Windows it synthesizes a key press to be allowed to
+                // take the foreground), so only do it when it is needed
+                if term_window.focused.is_none() {
+                    window.focus();
+                }
+            }
+        })));
 }
 
 thread_local! {

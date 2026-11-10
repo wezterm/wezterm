@@ -46,7 +46,9 @@ window that contains the pane that generated it to the front, and activates
 that pane and its tab. Nothing happens if the pane has since been closed.
 If the pane belongs to a workspace that isn't the active one, the pane and
 its tab are activated but the workspace is not switched, so no window is
-brought to the front.
+brought to the front, unless
+[toast_notification_click_switches_workspace](toast_notification_click_switches_workspace.md)
+is enabled.
 
 ## One notification per pane
 

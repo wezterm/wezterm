@@ -85,6 +85,8 @@ As features stabilize some brief notes about them will accumulate here.
   controls how long toast notifications stay on screen and
   [toast_notification_silent](config/lua/config/toast_notification_silent.md)
   turns off their sound.
+  [toast_notification_click_switches_workspace](config/lua/config/toast_notification_click_switches_workspace.md)
+  makes the click switch to the workspace of the pane.
 * Windows: [win32_focus_alt_key_workaround](config/lua/config/win32_focus_alt_key_workaround.md)
   controls whether a press of the `ALT` key is simulated when bringing a
   window to the front.

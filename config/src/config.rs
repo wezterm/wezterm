@@ -744,6 +744,13 @@ pub struct Config {
     #[dynamic(default)]
     pub toast_notification_silent: bool,
 
+    /// If true, clicking on the toast notification of a pane that
+    /// belongs to a workspace other than the active one switches to
+    /// that workspace. Otherwise the click only activates the pane
+    /// and its tab within that workspace.
+    #[dynamic(default)]
+    pub toast_notification_click_switches_workspace: bool,
+
     /// Whether to simulate a press of the ALT key when bringing a
     /// window to the front on Windows.
     #[dynamic(default)]
