@@ -5,15 +5,19 @@ use crate::TermWindow;
 use ::window::*;
 use anyhow::{Context, Error};
 use config::keyassignment::{KeyAssignment, SpawnCommand};
-use config::{ConfigSubscription, NotificationHandling};
+use config::{ConfigHandle, ConfigSubscription, NotificationHandling, ToastNotificationDuration};
+use luahelper::from_lua_value_dynamic;
 use mux::client::ClientId;
+use mux::pane::PaneId;
 use mux::window::WindowId as MuxWindowId;
 use mux::{Mux, MuxNotification};
+use mux_lua::MuxPane;
 use promise::{Future, Promise};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
+use wezterm_dynamic::FromDynamic;
 use wezterm_term::{Alert, ClipboardSelection};
 use wezterm_toast_notification::*;
 
@@ -90,47 +94,30 @@ impl GuiFrontEnd {
                 MuxNotification::WindowTitleChanged { .. } => {}
                 MuxNotification::TabResized(_) => {}
                 MuxNotification::TabAddedToWindow { .. } => {}
-                MuxNotification::PaneRemoved(_) => {}
+                MuxNotification::PaneRemoved(pane_id) => {
+                    // Clicking on its notification can no longer do anything
+                    dismiss_pane_toast_notification(pane_id);
+                }
                 MuxNotification::WindowInvalidated(_) => {}
                 MuxNotification::PaneOutput(_) => {}
                 MuxNotification::PaneAdded(_) => {}
                 MuxNotification::Alert {
                     pane_id,
-                    alert:
-                        Alert::ToastNotification {
-                            title,
-                            body,
-                            focus: _,
-                        },
+                    alert: Alert::ToastNotification { title, body, focus },
                 } => {
-                    let mux = Mux::get();
-
-                    if let Some((_domain, window_id, tab_id)) = mux.resolve_pane_id(pane_id) {
-                        let config = config::configuration();
-
-                        if let Some((_fdomain, f_window, f_tab, f_pane)) =
-                            mux.resolve_focused_pane(&client_id)
-                        {
-                            let show = match config.notification_handling {
-                                NotificationHandling::NeverShow => false,
-                                NotificationHandling::AlwaysShow => true,
-                                NotificationHandling::SuppressFromFocusedPane => f_pane != pane_id,
-                                NotificationHandling::SuppressFromFocusedTab => f_tab != tab_id,
-                                NotificationHandling::SuppressFromFocusedWindow => {
-                                    f_window != window_id
-                                }
-                            };
-
-                            if show {
-                                let message = if title.is_none() { "" } else { &body };
-                                let title = title.as_ref().unwrap_or(&body);
-                                // FIXME: if notification.focus is true, we should do
-                                // something here to arrange to focus pane_id when the
-                                // notification is clicked
-                                persistent_toast_notification(title, message);
-                            }
-                        }
-                    }
+                    let client_id = client_id.clone();
+                    promise::spawn::spawn_into_main_thread(async move {
+                        handle_pane_toast_notification(
+                            client_id,
+                            PaneToastNotification {
+                                pane_id,
+                                title,
+                                body,
+                                focus,
+                            },
+                        );
+                    })
+                    .detach();
                 }
                 MuxNotification::Alert {
                     pane_id: _,
@@ -500,6 +487,290 @@ impl GuiFrontEnd {
             }
         }
         None
+    }
+}
+
+/// Maps the configured duration to its equivalent in the toast crate,
+/// which doesn't know about the config crate.
+pub fn configured_toast_duration(config: &ConfigHandle) -> ToastDuration {
+    match config.toast_notification_duration {
+        ToastNotificationDuration::Short => ToastDuration::Short,
+        ToastNotificationDuration::Long => ToastDuration::Long,
+    }
+}
+
+/// A toast notification that was requested by a pane via OSC 9 or OSC 777
+struct PaneToastNotification {
+    pane_id: PaneId,
+    title: Option<String>,
+    body: String,
+    /// Whether clicking on the notification should focus the pane
+    focus: bool,
+}
+
+/// Decides whether a toast notification that was requested by a pane
+/// should be shown, and shows it if so.
+/// Must be called on the main thread.
+fn handle_pane_toast_notification(client_id: Arc<ClientId>, notif: PaneToastNotification) {
+    let Some(mux) = Mux::try_get() else {
+        return;
+    };
+    let pane_id = notif.pane_id;
+    let Some((_domain, window_id, tab_id)) = mux.resolve_pane_id(pane_id) else {
+        return;
+    };
+
+    let handling = config::configuration().notification_handling;
+    match handling {
+        NotificationHandling::NeverShow => return,
+        NotificationHandling::AlwaysShow => {
+            show_pane_toast_notification(notif);
+            return;
+        }
+        NotificationHandling::SuppressFromFocusedPane
+        | NotificationHandling::SuppressFromFocusedTab
+        | NotificationHandling::SuppressFromFocusedWindow => {}
+    }
+
+    // The focused pane that the mux tracks for us is the pane that most
+    // recently had the focus; it isn't cleared when our window loses the
+    // focus. We only want to suppress the notification if the user is
+    // actually looking at its source, so we must also check that the gui
+    // window that shows the pane has the OS level focus, and only the
+    // TermWindow knows that.
+    let gui_window = try_front_end().and_then(|fe| fe.gui_window_for_mux_window(window_id));
+    let Some(gui_window) = gui_window else {
+        // Not shown by any gui window (eg: it is in another workspace),
+        // so it cannot be focused
+        show_pane_toast_notification(notif);
+        return;
+    };
+
+    gui_window
+        .window
+        .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+            let os_focused =
+                term_window.focused.is_some() && term_window.mux_window_id == window_id;
+
+            let focused_pane = Mux::try_get().and_then(|mux| mux.resolve_focused_pane(&client_id));
+
+            let suppress = os_focused
+                && match focused_pane {
+                    Some((_fdomain, f_window, f_tab, f_pane)) => match handling {
+                        NotificationHandling::SuppressFromFocusedPane => f_pane == pane_id,
+                        NotificationHandling::SuppressFromFocusedTab => f_tab == tab_id,
+                        NotificationHandling::SuppressFromFocusedWindow => f_window == window_id,
+                        NotificationHandling::AlwaysShow | NotificationHandling::NeverShow => false,
+                    },
+                    None => false,
+                };
+
+            if !suppress {
+                show_pane_toast_notification(notif);
+            }
+        })));
+}
+
+/// What the `format-toast-notification` event may return to change
+/// how the notification looks. Fields that aren't set keep their
+/// default values.
+#[derive(Debug, FromDynamic)]
+struct ToastNotificationFormat {
+    title: Option<String>,
+    message: Option<String>,
+    attribution: Option<String>,
+    silent: Option<bool>,
+    duration: Option<ToastNotificationDuration>,
+}
+
+/// Shows the toast notification that was requested by a pane, after
+/// giving the `format-toast-notification` event the opportunity to
+/// change how it looks, or to veto it.
+/// Must be called on the main thread.
+fn show_pane_toast_notification(notif: PaneToastNotification) {
+    promise::spawn::spawn(config::with_lua_config_on_main_thread(move |lua| {
+        format_and_show_pane_toast_notification(lua, notif)
+    }))
+    .detach();
+}
+
+async fn format_and_show_pane_toast_notification(
+    lua: Option<Rc<mlua::Lua>>,
+    notif: PaneToastNotification,
+) -> anyhow::Result<()> {
+    let pane_id = notif.pane_id;
+
+    let mut toast = {
+        let (title, message) = match notif.title.clone() {
+            Some(title) => (title, notif.body.clone()),
+            None => (notif.body.clone(), String::new()),
+        };
+        ToastNotification {
+            title,
+            message,
+            url: None,
+            timeout: None,
+            duration: configured_toast_duration(&config::configuration()),
+            on_click: if notif.focus {
+                Some(ClickHandler::new(move || {
+                    // We're called in the context of some thread that belongs
+                    // to the notification system
+                    promise::spawn::spawn_into_main_thread(async move {
+                        focus_pane_for_notification(pane_id);
+                    })
+                    .detach();
+                }))
+            } else {
+                None
+            },
+            attribution: None,
+            silent: config::configuration().toast_notification_silent,
+            // A pane has at most one notification at a time; a new one
+            // replaces the one that it showed earlier
+            tag: Some(pane_toast_notification_tag(pane_id)),
+        }
+    };
+
+    if let Some(lua) = lua {
+        match call_format_toast_notification(&lua, notif).await {
+            Ok(mlua::Value::Nil) | Ok(mlua::Value::Boolean(true)) => {}
+            Ok(mlua::Value::Boolean(false)) => {
+                // The event handler doesn't want it to be shown
+                return Ok(());
+            }
+            Ok(value) => match from_lua_value_dynamic::<ToastNotificationFormat>(value) {
+                Ok(format) => {
+                    if let Some(title) = format.title {
+                        toast.title = title;
+                    }
+                    if let Some(message) = format.message {
+                        toast.message = message;
+                    }
+                    toast.attribution = format.attribution.filter(|s| !s.is_empty());
+                    if let Some(silent) = format.silent {
+                        toast.silent = silent;
+                    }
+                    if let Some(duration) = format.duration {
+                        toast.duration = match duration {
+                            ToastNotificationDuration::Short => ToastDuration::Short,
+                            ToastNotificationDuration::Long => ToastDuration::Long,
+                        };
+                    }
+                }
+                Err(err) => {
+                    log::warn!("format-toast-notification returned an invalid value: {err:#}");
+                }
+            },
+            // A broken event handler shouldn't cause notifications to be
+            // lost, so we fall through and show it with the default look
+            Err(err) => log::warn!("format-toast-notification: {err:#}"),
+        }
+    }
+
+    PANES_WITH_TOAST_NOTIFICATION.with(|panes| panes.borrow_mut().insert(pane_id));
+    toast.show();
+    Ok(())
+}
+
+thread_local! {
+    /// The panes that have shown a toast notification that we haven't
+    /// dismissed since
+    static PANES_WITH_TOAST_NOTIFICATION: RefCell<HashSet<PaneId>> = RefCell::new(HashSet::new());
+    /// The pane that the user was most recently known to be looking at
+    static LAST_FOCUSED_PANE: Cell<Option<PaneId>> = Cell::new(None);
+}
+
+fn pane_toast_notification_tag(pane_id: PaneId) -> String {
+    format!("pane-{pane_id}")
+}
+
+/// Removes the toast notification that was shown for pane_id, if any.
+/// Must be called on the main thread.
+fn dismiss_pane_toast_notification(pane_id: PaneId) {
+    let had_notification =
+        PANES_WITH_TOAST_NOTIFICATION.with(|panes| panes.borrow_mut().remove(&pane_id));
+    if had_notification {
+        wezterm_toast_notification::dismiss(&pane_toast_notification_tag(pane_id));
+    }
+}
+
+/// Called with the active pane of a window while that window has the
+/// OS level focus, and with None when a window loses the focus.
+/// When the user moves to a pane, the toast notification that it showed
+/// earlier has served its purpose, so we remove it. We only do that at
+/// the moment that the user moves to the pane, so that a notification
+/// that is shown while its pane has the focus isn't removed immediately.
+/// Must be called on the main thread.
+pub fn note_focused_pane(pane_id: Option<PaneId>) {
+    let changed = LAST_FOCUSED_PANE.with(|last| last.replace(pane_id) != pane_id);
+    if changed {
+        if let Some(pane_id) = pane_id {
+            dismiss_pane_toast_notification(pane_id);
+        }
+    }
+}
+
+async fn call_format_toast_notification<'lua>(
+    lua: &'lua mlua::Lua,
+    notif: PaneToastNotification,
+) -> mlua::Result<mlua::Value<'lua>> {
+    // The gui window is nil if the pane isn't shown by any of them;
+    // for example, when it is in a different workspace
+    let gui_window = Mux::try_get()
+        .and_then(|mux| mux.resolve_pane_id(notif.pane_id))
+        .and_then(|(_domain, window_id, _tab_id)| {
+            try_front_end().and_then(|fe| fe.gui_window_for_mux_window(window_id))
+        });
+
+    let notification = lua.create_table()?;
+    notification.set("title", notif.title)?;
+    notification.set("body", notif.body)?;
+
+    config::lua::emit_async_callback(
+        lua,
+        (
+            "format-toast-notification".to_string(),
+            (gui_window, MuxPane(notif.pane_id), notification),
+        ),
+    )
+    .await
+}
+
+/// Called when the toast notification that was generated by pane_id
+/// is clicked: activates that pane and its tab, and brings the window
+/// that contains it to the front.
+/// If the pane has since been closed then we do nothing.
+fn focus_pane_for_notification(pane_id: PaneId) {
+    let Some(mux) = Mux::try_get() else {
+        return;
+    };
+    let Some((_domain, window_id, _tab_id)) = mux.resolve_pane_id(pane_id) else {
+        log::debug!("notification clicked, but pane {pane_id} no longer exists");
+        return;
+    };
+    if let Err(err) = mux.focus_pane_and_containing_tab(pane_id) {
+        log::debug!("notification clicked, but cannot focus pane {pane_id}: {err:#}");
+        return;
+    }
+    // If the pane is in a workspace that isn't the active one, then no
+    // gui window shows it and there is nothing to bring to the front
+    if let Some(gui_window) = try_front_end().and_then(|fe| fe.gui_window_for_mux_window(window_id))
+    {
+        gui_window
+            .window
+            .notify(TermWindowNotif::Apply(Box::new(|term_window| {
+                if let Some(window) = term_window.window.as_ref() {
+                    // Changing the active pane within the already active tab
+                    // doesn't invalidate the window by itself
+                    window.invalidate();
+                    // Focusing the window is intrusive on some systems (on
+                    // Windows it synthesizes a key press to be allowed to
+                    // take the foreground), so only do it when it is needed
+                    if term_window.focused.is_none() {
+                        window.focus();
+                    }
+                }
+            })));
     }
 }
 

@@ -13,6 +13,10 @@ a timeout without specifying a url, set the url parameter to `nil`.  The timeout
 you specify may not be respected by the system, particularly in X11/Wayland
 environments, and Windows will always use a fixed, unspecified, duration.
 
+{{since('nightly', inline=True)}}
+On Windows, [toast_notification_duration](../config/toast_notification_duration.md)
+selects between the two durations that the system offers.
+
 The notification will persist on screen until dismissed or clicked, or until its
 timeout duration elapses.
 

@@ -533,6 +533,7 @@ impl TermWindow {
         self.load_os_parameters();
 
         if self.focused.is_none() {
+            crate::frontend::note_focused_pane(None);
             self.last_mouse_click = None;
             self.current_mouse_buttons.clear();
             self.current_mouse_capture = None;

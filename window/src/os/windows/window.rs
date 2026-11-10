@@ -9,7 +9,7 @@ use crate::{
 };
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use config::{ConfigHandle, ImePreeditRendering, SystemBackdrop};
+use config::{ConfigHandle, ImePreeditRendering, SystemBackdrop, Win32FocusAltKeyWorkaround};
 use lazy_static::lazy_static;
 use promise::Future;
 use raw_window_handle::{
@@ -593,6 +593,42 @@ enum ShowWindowCommand {
     Maximize,
 }
 
+/// Simulates a press and release of the ALT key
+unsafe fn simulate_alt_key_press() {
+    let alt_sc = MapVirtualKeyW(VK_MENU as u32, MAPVK_VK_TO_VSC);
+
+    let mut inputs: [INPUT; 2] = [
+        INPUT {
+            type_: INPUT_KEYBOARD,
+            u: Default::default(),
+        },
+        INPUT {
+            type_: INPUT_KEYBOARD,
+            u: Default::default(),
+        },
+    ];
+    *inputs[0].u.ki_mut() = KEYBDINPUT {
+        wVk: VK_LMENU as u16,
+        wScan: alt_sc as u16,
+        dwFlags: KEYEVENTF_EXTENDEDKEY,
+        dwExtraInfo: 0,
+        time: 0,
+    };
+    *inputs[1].u.ki_mut() = KEYBDINPUT {
+        wVk: VK_LMENU as u16,
+        wScan: alt_sc as u16,
+        dwFlags: KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP,
+        dwExtraInfo: 0,
+        time: 0,
+    };
+
+    SendInput(
+        inputs.len() as u32,
+        inputs.as_mut_ptr(),
+        std::mem::size_of::<INPUT>() as i32,
+    );
+}
+
 fn schedule_show_window(hwnd: HWindow, show: ShowWindowCommand) {
     // ShowWindow can call to the window proc and may attempt
     // to lock inner, so we avoid locking it ourselves here
@@ -801,46 +837,35 @@ impl WindowOps for Window {
         let window = self.0;
         let handle = window.0;
         promise::spawn::spawn(async move {
-            // In some situation, calling SetForegroundWindow could not bring up the window,
-            // This is a little hack which can "steal" the foreground window permission
-            // We only call this function in the window creation, so it should be fine.
-            // See : https://stackoverflow.com/questions/10740346/setforegroundwindow-only-working-while-visual-studio-is-open
             unsafe {
-                let alt_sc = MapVirtualKeyW(VK_MENU as u32, MAPVK_VK_TO_VSC);
+                // Focusing a minimized window would otherwise leave it
+                // minimized. SW_RESTORE returns it to the state it had
+                // before it was minimized, so a maximized window stays
+                // maximized.
+                if IsIconic(handle) != 0 {
+                    ShowWindow(handle, SW_RESTORE);
+                }
 
-                let mut inputs: [INPUT; 2] = [
-                    INPUT {
-                        type_: INPUT_KEYBOARD,
-                        u: Default::default(),
-                    },
-                    INPUT {
-                        type_: INPUT_KEYBOARD,
-                        u: Default::default(),
-                    },
-                ];
-                *inputs[0].u.ki_mut() = KEYBDINPUT {
-                    wVk: VK_LMENU as u16,
-                    wScan: alt_sc as u16,
-                    dwFlags: KEYEVENTF_EXTENDEDKEY,
-                    dwExtraInfo: 0,
-                    time: 0,
-                };
-                *inputs[1].u.ki_mut() = KEYBDINPUT {
-                    wVk: VK_LMENU as u16,
-                    wScan: alt_sc as u16,
-                    dwFlags: KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP,
-                    dwExtraInfo: 0,
-                    time: 0,
-                };
-
-                // Simulate a key press and release
-                SendInput(
-                    inputs.len() as u32,
-                    inputs.as_mut_ptr(),
-                    std::mem::size_of::<INPUT>() as i32,
-                );
-
-                SetForegroundWindow(handle);
+                // In some situation, calling SetForegroundWindow could not bring up the window,
+                // This is a little hack which can "steal" the foreground window permission
+                // See : https://stackoverflow.com/questions/10740346/setforegroundwindow-only-working-while-visual-studio-is-open
+                // The simulated key press is seen by whichever window has
+                // the focus at the time, so it can be turned off.
+                match config::configuration().win32_focus_alt_key_workaround {
+                    Win32FocusAltKeyWorkaround::Always => {
+                        simulate_alt_key_press();
+                        SetForegroundWindow(handle);
+                    }
+                    Win32FocusAltKeyWorkaround::WhenNeeded => {
+                        if SetForegroundWindow(handle) == 0 {
+                            simulate_alt_key_press();
+                            SetForegroundWindow(handle);
+                        }
+                    }
+                    Win32FocusAltKeyWorkaround::Never => {
+                        SetForegroundWindow(handle);
+                    }
+                }
             }
         })
         .detach();

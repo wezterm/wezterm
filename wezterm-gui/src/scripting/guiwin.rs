@@ -90,7 +90,14 @@ impl UserData for GuiWin {
                     title,
                     message,
                     url,
-                    timeout: timeout.map(std::time::Duration::from_millis)
+                    timeout: timeout.map(std::time::Duration::from_millis),
+                    duration: crate::frontend::configured_toast_duration(
+                        &config::configuration(),
+                    ),
+                    on_click: None,
+                    attribution: None,
+                    silent: config::configuration().toast_notification_silent,
+                    tag: None,
                 });
                 Ok(())
             },
