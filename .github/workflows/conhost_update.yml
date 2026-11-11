@@ -1,0 +1,40 @@
+name: conhost-update
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # weekly
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: windows-2025
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: update binaries
+        shell: pwsh
+        run: python assets/windows/conhost/versions.py --download
+
+      - name: open PR if changed
+        shell: pwsh
+        run: |
+          $files = "assets/windows/conhost/OpenConsole.exe", "assets/windows/conhost/conpty.dll"
+          if (-not (git status --porcelain -- $files)) { exit 0 }
+
+          $tag = gh release view --repo microsoft/terminal --json tagName --jq .tagName
+          $branch = "conhost-update-$tag"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b $branch
+          git add -- $files
+          git commit -m "conhost: update to microsoft/terminal $tag"
+          git push --force origin $branch
+          gh pr create --base main --head $branch `
+            --title "conhost: update to microsoft/terminal $tag" `
+            --body "Automated update of OpenConsole.exe and conpty.dll from microsoft/terminal $tag."
