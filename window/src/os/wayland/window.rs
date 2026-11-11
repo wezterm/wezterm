@@ -1415,6 +1415,10 @@ impl WaylandState {
                 if configure.state.contains(SCTKWindowState::MAXIMIZED) {
                     state |= WindowState::MAXIMIZED;
                 }
+                // TILED contains multiple independent bits for screen edges
+                if configure.state.intersects(SCTKWindowState::TILED) {
+                    state |= WindowState::TILED;
+                }
 
                 log::debug!(
                     "Config: self.window_state={:?}, states: {:?} {:?}",
