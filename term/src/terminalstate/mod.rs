@@ -1926,6 +1926,9 @@ impl TerminalState {
             Mode::SetDecPrivateMode(DecPrivateMode::Code(DecPrivateModeCode::FocusTracking)) => {
                 self.focus_tracking = true;
                 self.last_mouse_move.take();
+                // For compatibility with other terminals, send a focus event right away.
+                write!(self.writer, "{CSI}{}", if self.focused { "I" } else { "O" }).ok();
+                self.writer.flush().ok();
             }
             Mode::ResetDecPrivateMode(DecPrivateMode::Code(DecPrivateModeCode::FocusTracking)) => {
                 self.focus_tracking = false;
