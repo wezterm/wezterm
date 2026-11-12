@@ -441,9 +441,6 @@ impl crate::TermWindow {
         let tex_width = sprite.coords.width() as f32;
         let tex_height = sprite.coords.height() as f32;
 
-        let scale_width = pixel_width / tex_width as f32;
-        let scale_height = pixel_height / tex_height as f32;
-
         let h_context = DimensionContext {
             dpi: self.dimensions.dpi as f32,
             pixel_max: pixel_width,
@@ -453,6 +450,18 @@ impl crate::TermWindow {
             dpi: self.dimensions.dpi as f32,
             pixel_max: pixel_height,
             pixel_cell: self.render_metrics.cell_size.height as f32,
+        };
+
+        let scale_width = if let BackgroundSize::Contain(Some(dim)) = layer.def.width {
+            dim.evaluate_as_pixels(h_context) / tex_width as f32
+        } else {
+            pixel_width / tex_width as f32
+        };
+
+        let scale_height = if let BackgroundSize::Contain(Some(dim)) = layer.def.height {
+            dim.evaluate_as_pixels(v_context) / tex_height as f32
+        } else {
+            pixel_height / tex_height as f32
         };
 
         // log::info!("tex {tex_width}x{tex_height} aspect={aspect}");
@@ -469,13 +478,13 @@ impl crate::TermWindow {
         };
 
         let width = match layer.def.width {
-            BackgroundSize::Contain => min_aspect_width as f32,
+            BackgroundSize::Contain(_) => min_aspect_width as f32,
             BackgroundSize::Cover => max_aspect_width as f32,
             BackgroundSize::Dimension(n) => n.evaluate_as_pixels(h_context),
         };
 
         let height = match layer.def.height {
-            BackgroundSize::Contain => min_aspect_height as f32,
+            BackgroundSize::Contain(_) => min_aspect_height as f32,
             BackgroundSize::Cover => max_aspect_height as f32,
             BackgroundSize::Dimension(n) => n.evaluate_as_pixels(v_context),
         };

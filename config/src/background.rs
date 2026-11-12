@@ -138,7 +138,7 @@ pub enum BackgroundSize {
     /// Scales image as large as possible without cropping or stretching.
     /// If the container is larger than the image, tiles the image unless
     /// the correspond `repeat` is NoRepeat.
-    Contain,
+    Contain(Option<Dimension>),
     /// Scale the image (preserving aspect ratio) to the smallest possible
     /// size to the fill the container leaving no empty space.
     /// If the aspect ratio differs from the background, the image is
@@ -155,9 +155,27 @@ impl FromDynamic for BackgroundSize {
     ) -> Result<Self, wezterm_dynamic::Error> {
         match value {
             Value::String(label) => match label.as_str() {
-                "Contain" => return Ok(Self::Contain),
                 "Cover" => return Ok(Self::Cover),
-                _ => {}
+                other => {
+                    if other.starts_with("Contain") {
+                        let mut dim = None;
+                        if let Some((_, dim_str)) = other.split_once("Contain,") {
+                            match PixelUnit::from_dynamic(&dim_str.to_dynamic(), options) {
+                                Ok(pix) => dim = Some(pix.into()),
+                                Err(_) => {
+                                    return Err(wezterm_dynamic::Error::Message(format!(
+                                        "expected a string of \
+                                        the form '123px' where 'px' is a unit and \
+                                        can be one of 'px', '%', 'pt' or 'cell', \
+                                        but got {}",
+                                        dim_str
+                                    )))
+                                }
+                            }
+                        }
+                        return Ok(Self::Contain(dim));
+                    }
+                }
             },
             _ => {}
         }
@@ -179,7 +197,11 @@ impl ToDynamic for BackgroundSize {
     fn to_dynamic(&self) -> Value {
         let s = match self {
             Self::Cover => "Cover".to_string(),
-            Self::Contain => "Contain".to_string(),
+            Self::Contain(None) => "Contain".to_string(),
+            Self::Contain(Some(d)) => match d.to_dynamic() {
+                Value::String(s) => format!("Contain,{s}"),
+                _ => unreachable!(),
+            },
             Self::Dimension(d) => return d.to_dynamic(),
         };
         Value::String(s)
