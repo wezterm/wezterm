@@ -1089,6 +1089,13 @@ impl TermWindow {
     }
 
     fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
+        if self.webgpu.as_ref().unwrap().is_lost() {
+            if let Err(err) = self.recreate_webgpu() {
+                // There's nothing left to draw with: exit, as before this tried to recover
+                log::error!("failed to replace the lost webgpu device: {err:#}");
+                std::process::exit(1);
+            }
+        }
         self.webgpu.as_mut().unwrap().resize(self.dimensions);
         match self.do_paint_webgpu_impl() {
             Ok(ok) => Ok(ok),
@@ -1107,7 +1114,39 @@ impl TermWindow {
 
     fn do_paint_webgpu_impl(&mut self) -> anyhow::Result<bool> {
         self.paint_impl(&mut RenderFrame::WebGpu);
+        if self.webgpu.as_ref().unwrap().is_lost() {
+            // Paint again, with a new device
+            if let Some(window) = self.window.as_ref() {
+                window.invalidate();
+            }
+        }
         Ok(true)
+    }
+
+    /// Replaces a lost webgpu device, and everything that was created with it
+    fn recreate_webgpu(&mut self) -> anyhow::Result<()> {
+        // Reuse the window handle: the window can't be asked for it while
+        // dispatching this paint.
+        let handle = self.webgpu.as_ref().unwrap().handle;
+        // Release everything that refers to the old device first: a window can
+        // only have one swap chain, and D3D12 returns the same removed device for
+        // as long as it is referenced. That includes shaped lines, through the
+        // glyphs they hold from the texture atlas.
+        self.render_state.take();
+        self.webgpu.take();
+        self.shape_generation += 1;
+        self.shape_cache.borrow_mut().clear();
+        self.line_to_ele_shape_cache.borrow_mut().clear();
+        self.invalidate_fancy_tab_bar();
+        self.invalidate_modal();
+
+        let webgpu =
+            promise::spawn::block_on(WebGpuState::new_impl(handle, self.dimensions, &self.config))?;
+        let webgpu = Rc::new(webgpu);
+        self.webgpu.replace(Rc::clone(&webgpu));
+        self.created(RenderContext::WebGpu(webgpu))?;
+        log::info!("replaced the lost webgpu device");
+        Ok(())
     }
 
     fn dispatch_notif(&mut self, notif: TermWindowNotif, window: &Window) -> anyhow::Result<()> {
