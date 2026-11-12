@@ -12,6 +12,7 @@ dhat-heap.json
 /wezterm*.deb
 /wezterm*.tar.xz
 /pkg
+/dist
 /target/
 /wezterm-char-props/codegen/target
 /wezterm-char-props/codegen/Cargo.lock
