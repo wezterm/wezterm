@@ -398,6 +398,7 @@ pub struct TermWindow {
     pub right_status: String,
     pub left_status: String,
     last_ui_item: Option<UIItem>,
+    taskbar_progress: TaskbarProgress,
     /// Tracks whether the current mouse-down event is part of click-focus.
     /// If so, we ignore mouse events until released
     is_click_to_focus_window: bool,
@@ -789,6 +790,7 @@ impl TermWindow {
             ui_items: vec![],
             dragging: None,
             last_ui_item: None,
+            taskbar_progress: TaskbarProgress::None,
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
             modal: RefCell::new(None),
@@ -2009,6 +2011,27 @@ impl TermWindow {
             self.invalidate_modal();
             if let Some(window) = self.window.as_ref() {
                 window.invalidate();
+            }
+        }
+
+        // Like Windows Terminal, the taskbar shows the most important
+        // progress of any pane in any tab, not just the active one
+        let taskbar_progress = TaskbarProgress::most_important(
+            window
+                .iter_tabs()
+                .flat_map(|tab| tab.iter_panes_ignoring_zoom())
+                .map(|pos| match pos.pane.get_progress() {
+                    Progress::None => TaskbarProgress::None,
+                    Progress::Percentage(pct) => TaskbarProgress::Normal(pct),
+                    Progress::Error(pct) => TaskbarProgress::Error(pct),
+                    Progress::Indeterminate => TaskbarProgress::Indeterminate,
+                    Progress::Paused(pct) => TaskbarProgress::Paused(pct),
+                }),
+        );
+        if taskbar_progress != self.taskbar_progress {
+            self.taskbar_progress = taskbar_progress;
+            if let Some(window) = self.window.as_ref() {
+                window.set_taskbar_progress(taskbar_progress);
             }
         }
 

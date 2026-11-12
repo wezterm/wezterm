@@ -4,8 +4,8 @@ use crate::parameters::{self, Parameters};
 use crate::{
     Appearance, Clipboard, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent,
     Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
-    RequestedWindowGeometry, ResolvedGeometry, ScreenPoint, ScreenRect, ULength, WindowDecorations,
-    WindowEvent, WindowEventSender, WindowOps, WindowState,
+    RequestedWindowGeometry, ResolvedGeometry, ScreenPoint, ScreenRect, TaskbarProgress, ULength,
+    WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
 };
 use anyhow::{bail, Context};
 use async_trait::async_trait;
@@ -47,6 +47,14 @@ use winapi::um::uxtheme::{
 use winapi::um::wingdi::{LOGFONTW, MAKEPOINTS};
 use winapi::um::winnt::OSVERSIONINFOW;
 use winapi::um::winuser::*;
+use windows::Win32::Foundation::HWND as WinHWND;
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+};
+use windows::Win32::UI::Shell::{
+    ITaskbarList3, TaskbarList, TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL,
+    TBPF_PAUSED,
+};
 use windows::UI::Color as WUIColor;
 use windows::UI::ViewManagement::{UIColorType, UISettings};
 use winreg::enums::HKEY_CURRENT_USER;
@@ -97,6 +105,29 @@ lazy_static! {
         }
     };
     static ref TITLE_FONT: Mutex<Option<parameters::FontAndSize>> = Mutex::new(None);
+    /// Sent once the taskbar button of a window exists, and again whenever
+    /// it is recreated, for example after Explorer restarts.
+    /// 0 if the message could not be registered.
+    static ref TASKBAR_BUTTON_CREATED: UINT =
+        unsafe { RegisterWindowMessageW(wide_string("TaskbarButtonCreated").as_ptr()) };
+}
+
+thread_local! {
+    /// Shared by all windows; only ever used from the gui thread.
+    static TASKBAR_LIST: Option<ITaskbarList3> = unsafe {
+        // If COM is already initialized on this thread, this fails with
+        // S_FALSE or RPC_E_CHANGED_MODE, which is fine.
+        let _ = CoInitializeEx(null(), COINIT_APARTMENTTHREADED);
+        match CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+            .and_then(|list| list.HrInit().map(|_| list))
+        {
+            Ok(list) => Some(list),
+            Err(err) => {
+                log::warn!("Taskbar progress is unavailable: {err:#}");
+                None
+            }
+        }
+    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -123,6 +154,8 @@ pub(crate) struct WindowInner {
 
     keyboard_info: KeyboardLayoutInfo,
     appearance: Appearance,
+    /// Kept so it can be applied again when the taskbar button is recreated
+    taskbar_progress: TaskbarProgress,
 
     config: ConfigHandle,
     paint_throttled: bool,
@@ -546,6 +579,7 @@ impl Window {
             maximize_button_position: None,
             config: config.clone(),
             paint_throttled: false,
+            taskbar_progress: TaskbarProgress::None,
             invalidated: true,
         }));
 
@@ -664,6 +698,45 @@ impl WindowInner {
         unsafe {
             SetWindowTextW(self.hwnd.0, title.as_ptr());
         }
+    }
+
+    fn set_taskbar_progress(&mut self, progress: TaskbarProgress) {
+        self.taskbar_progress = progress;
+        self.apply_taskbar_progress();
+    }
+
+    fn apply_taskbar_progress(&self) {
+        let progress = self.taskbar_progress;
+        // The error and paused states usually come without a value, which
+        // is reported as 0. An empty bar would hide the red or yellow
+        // state, so show a full one instead.
+        fn full_if_zero(pct: u8) -> u8 {
+            if pct == 0 {
+                100
+            } else {
+                pct
+            }
+        }
+        let (state, value) = match progress {
+            TaskbarProgress::None => (TBPF_NOPROGRESS, None),
+            TaskbarProgress::Normal(pct) => (TBPF_NORMAL, Some(pct)),
+            TaskbarProgress::Error(pct) => (TBPF_ERROR, Some(full_if_zero(pct))),
+            TaskbarProgress::Indeterminate => (TBPF_INDETERMINATE, None),
+            TaskbarProgress::Paused(pct) => (TBPF_PAUSED, Some(full_if_zero(pct))),
+        };
+        let hwnd = WinHWND(self.hwnd.0 as isize);
+        TASKBAR_LIST.with(|list| {
+            if let Some(list) = list {
+                unsafe {
+                    // Setting the value keeps the error and paused states,
+                    // so the state goes first
+                    let _ = list.SetProgressState(hwnd, state);
+                    if let Some(pct) = value {
+                        let _ = list.SetProgressValue(hwnd, pct.min(100) as u64, 100);
+                    }
+                }
+            }
+        });
     }
 
     fn set_text_cursor_position(&mut self, cursor: Rect) {
@@ -873,6 +946,13 @@ impl WindowOps for Window {
         let title = title.to_owned();
         Connection::with_window_inner(self.0, move |inner| {
             inner.set_title(&title);
+            Ok(())
+        });
+    }
+
+    fn set_taskbar_progress(&self, progress: TaskbarProgress) {
+        Connection::with_window_inner(self.0, move |inner| {
+            inner.set_taskbar_progress(progress);
             Ok(())
         });
     }
@@ -2981,6 +3061,26 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
                 inner.events.dispatch(WindowEvent::CloseRequested);
                 // Don't let it close
                 return Some(0);
+            }
+            None
+        }
+        // 0 is WM_NULL, which must not be taken for this message
+        _ if *TASKBAR_BUTTON_CREATED != 0 && msg == *TASKBAR_BUTTON_CREATED => {
+            // A new taskbar button has no progress, so show it again.
+            // Calls made before the button existed were dropped.
+            if let Some(inner) = rc_from_hwnd(hwnd) {
+                match inner.try_borrow() {
+                    Ok(inner) => {
+                        if inner.taskbar_progress != TaskbarProgress::None {
+                            inner.apply_taskbar_progress();
+                        }
+                    }
+                    // Arrived while the window is being updated; try again
+                    // once that is done
+                    Err(_) => {
+                        PostMessageW(hwnd, msg, wparam, lparam);
+                    }
+                }
             }
             None
         }
