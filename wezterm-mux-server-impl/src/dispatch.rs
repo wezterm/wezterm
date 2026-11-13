@@ -23,6 +23,24 @@ enum Item {
     Readable,
 }
 
+async fn next_item<T>(
+    stream: &Async<T>,
+    item_rx: &smol::channel::Receiver<Item>,
+    prefer_read: &mut bool,
+) -> Result<Item, smol::channel::RecvError> {
+    let rx_msg = item_rx.recv();
+    // Keep readiness state on the stream when a queued item wins this selection.
+    let wait_for_read =
+        smol::future::poll_fn(|cx| stream.poll_readable(cx)).map(|_| Ok(Item::Readable));
+    let item = if *prefer_read {
+        smol::future::or(wait_for_read, rx_msg).await
+    } else {
+        smol::future::or(rx_msg, wait_for_read).await
+    };
+    *prefer_read = !*prefer_read;
+    item
+}
+
 pub async fn process<T>(stream: T) -> anyhow::Result<()>
 where
     T: 'static,
@@ -64,11 +82,9 @@ where
         mux.subscribe(move |n| tx.try_send(Item::Notif(n)).is_ok());
     }
 
+    let mut prefer_read = true;
     loop {
-        let rx_msg = item_rx.recv();
-        let wait_for_read = stream.readable().map(|_| Ok(Item::Readable));
-
-        match smol::future::or(rx_msg, wait_for_read).await {
+        match next_item(&stream, &item_rx, &mut prefer_read).await {
             Ok(Item::Readable) => {
                 let decoded = match Pdu::decode_async(&mut stream, None).await {
                     Ok(data) => data,
@@ -209,5 +225,70 @@ where
                 return Ok(());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn reads_rpc_while_queued_items_remain() -> anyhow::Result<()> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let mut peer = TcpStream::connect(listener.local_addr()?)?;
+        let (stream, _) = listener.accept()?;
+        let mut stream = Async::new(stream)?;
+        let (item_tx, item_rx) = smol::channel::unbounded();
+        item_tx.try_send(Item::Notif(MuxNotification::PaneOutput(11)))?;
+        item_tx.try_send(Item::WritePdu(DecodedPdu {
+            serial: 7,
+            pdu: Pdu::UnitResponse(codec::UnitResponse {}),
+        }))?;
+        item_tx.try_send(Item::Notif(MuxNotification::PaneOutput(33)))?;
+
+        let exercise = async {
+            let mut prefer_read = true;
+            // A channel item can win while the read branch is registering interest.
+            assert!(matches!(
+                next_item(&stream, &item_rx, &mut prefer_read).await?,
+                Item::Notif(MuxNotification::PaneOutput(11))
+            ));
+
+            Pdu::Ping(codec::Ping {}).encode(&mut peer, 42)?;
+            // Wait for a real reactor event without consuming the pending frame.
+            stream.readable().await?;
+
+            assert!(matches!(
+                next_item(&stream, &item_rx, &mut prefer_read).await?,
+                Item::WritePdu(DecodedPdu { serial: 7, .. })
+            ));
+            assert_eq!(item_rx.len(), 1);
+            let item = next_item(&stream, &item_rx, &mut prefer_read).await?;
+            assert!(
+                matches!(&item, Item::Readable),
+                "expected socket readability before draining the channel, got {:?}",
+                item
+            );
+            assert_eq!(item_rx.len(), 1);
+
+            let decoded = Pdu::decode_async(&mut stream, None).await?;
+            assert_eq!(decoded.serial, 42);
+            assert!(matches!(decoded.pdu, Pdu::Ping(_)));
+            assert!(matches!(
+                next_item(&stream, &item_rx, &mut prefer_read).await?,
+                Item::Notif(MuxNotification::PaneOutput(33))
+            ));
+            assert!(item_rx.is_empty());
+            drop(item_tx);
+            assert!(next_item(&stream, &item_rx, &mut prefer_read)
+                .await
+                .is_err());
+            Ok(())
+        };
+        smol::block_on(smol::future::or(exercise, async {
+            smol::Timer::after(std::time::Duration::from_secs(5)).await;
+            anyhow::bail!("timed out waiting for dispatch readiness")
+        }))
     }
 }
