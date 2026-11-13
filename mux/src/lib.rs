@@ -7,7 +7,9 @@ use anyhow::{anyhow, Context, Error};
 use config::keyassignment::SpawnTabDomain;
 use config::{configuration, ExitBehavior, GuiPosition};
 use domain::{Domain, DomainId, DomainState, SplitSource};
-use filedescriptor::{poll, pollfd, socketpair, AsRawSocketDescriptor, FileDescriptor, POLLIN};
+use filedescriptor::{
+    poll, pollfd, socketpair, AsRawSocketDescriptor, Error as FdError, FileDescriptor, POLLIN,
+};
 #[cfg(unix)]
 use libc::{c_int, SOL_SOCKET, SO_RCVBUF, SO_SNDBUF};
 use log::error;
@@ -26,7 +28,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
-use termwiz::escape::csi::{DecPrivateMode, DecPrivateModeCode, Device, Mode};
+use termwiz::escape::csi::{
+    DecPrivateMode, DecPrivateModeCode, Device, Keyboard, Mode, Window as CsiWindow,
+};
 use termwiz::escape::{Action, CSI};
 use thiserror::*;
 use wezterm_term::{Clipboard, ClipboardSelection, DownloadHandler, TerminalSize};
@@ -44,6 +48,8 @@ pub mod ssh;
 pub mod ssh_agent;
 pub mod tab;
 pub mod termwiztermtab;
+#[cfg(test)]
+mod test;
 pub mod tmux;
 pub mod tmux_commands;
 mod tmux_pty;
@@ -137,6 +143,86 @@ fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: V
     histogram!("send_actions_to_mux.rate").record(1.);
 }
 
+/// Returns true for queries that are safe to answer while a synchronized
+/// update (DEC private mode 2026) is holding back the output stream:
+/// their responses reflect terminal capabilities rather than screen state,
+/// so they don't need to wait for the held actions to be applied.
+/// Applications commonly block waiting for these responses, and would
+/// otherwise stall until the update closes.
+fn is_passthrough_query(action: &Action) -> bool {
+    match action {
+        Action::CSI(CSI::Device(dev)) => matches!(
+            **dev,
+            Device::RequestPrimaryDeviceAttributes
+                | Device::RequestSecondaryDeviceAttributes
+                | Device::RequestTertiaryDeviceAttributes
+                | Device::RequestTerminalNameAndVersion
+                | Device::StatusReport
+        ),
+        // The query is answered eagerly, but kitty state mutations stay
+        // held: the keyboard stacks live on the screens themselves, so a
+        // held screen switch or reset could route an eager mutation to
+        // the wrong screen's stack.
+        Action::CSI(CSI::Keyboard(Keyboard::QueryKittySupport)) => true,
+        // Held output cannot resize the pane, so its size reports are
+        // already final. The title report and rectangle checksum stay
+        // held: held output can change the title and the screen.
+        Action::CSI(CSI::Window(window)) => matches!(
+            **window,
+            CsiWindow::ReportTextAreaSizePixels
+                | CsiWindow::ReportCellSizePixels
+                | CsiWindow::ReportTextAreaSizeCells
+        ),
+        // Notably, CPR and DECRQM stay held: their answers (the cursor
+        // position, the state of a mode) may be changed by the actions
+        // that are being held back.
+        _ => false,
+    }
+}
+
+/// A pane stays frozen while an update is held, and a timeout that
+/// fires only costs a non-atomic frame, so a long hold is never worth it
+const MAX_HOLD_TIMEOUT_MS: u64 = 10_000;
+
+fn hold_timeout_from(config: &config::ConfigHandle) -> Duration {
+    Duration::from_millis(
+        config
+            .mux_synchronized_output_timeout_ms
+            .min(MAX_HOLD_TIMEOUT_MS),
+    )
+}
+
+enum PollResult {
+    Ready,
+    TimedOut,
+    Failed(FdError),
+}
+
+/// Waits until `rx` has data to read or `deadline` passes
+fn poll_for_input(rx: &FileDescriptor, deadline: Instant) -> PollResult {
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return PollResult::TimedOut;
+        };
+        let mut pfd = [pollfd {
+            fd: rx.as_socket_descriptor(),
+            events: POLLIN,
+            revents: 0,
+        }];
+        return match poll(&mut pfd, Some(remaining)) {
+            Ok(0) => PollResult::TimedOut,
+            Ok(_) => PollResult::Ready,
+            // Interrupted; poll again against the same deadline
+            Err(FdError::Poll(err) | FdError::Io(err))
+                if err.kind() == std::io::ErrorKind::Interrupted =>
+            {
+                continue;
+            }
+            Err(err) => PollResult::Failed(err),
+        };
+    }
+}
+
 /// This is the parsing loop for the given pane.
 /// It reads all data sent to `rx` (from pane PTY) and handles all terminal events for this pane.
 fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
@@ -147,8 +233,50 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
     let mut action_size = 0;
     let mut delay = Duration::from_millis(configuration().mux_output_parser_coalesce_delay_ms);
     let mut deadline = None;
+    let mut hold_timeout = hold_timeout_from(&configuration());
+    let mut hold_deadline: Option<Instant> = None;
 
     loop {
+        // While a synchronized update is open, output is held until it
+        // closes or times out, so that a stalled application cannot
+        // freeze the pane indefinitely. Otherwise, if we haven't
+        // accumulated too much data, pause for a short while to increase
+        // the chances that we coalesce a full "frame" from an unoptimized
+        // TUI program. With nothing pending, just block on the next read
+        let send_at = if hold {
+            hold_deadline
+        } else if actions.is_empty() {
+            None
+        } else if action_size >= buf.len() {
+            Some(Instant::now())
+        } else {
+            Some(*deadline.get_or_insert_with(|| Instant::now() + delay))
+        };
+        if let Some(send_at) = send_at {
+            let due = match poll_for_input(&rx, send_at) {
+                PollResult::Ready => false,
+                PollResult::TimedOut => true,
+                PollResult::Failed(err) => {
+                    // Polling is what enforces the deadline, so if
+                    // it is broken the only way to keep the promise
+                    // that a stalled client cannot freeze the pane
+                    // is to fail open and send what we have
+                    log::error!("error polling for pane output: {err:#}; giving up waiting");
+                    true
+                }
+            };
+            if due {
+                hold = false;
+                hold_deadline = None;
+                deadline = None;
+                if !actions.is_empty() {
+                    send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
+                    action_size = 0;
+                }
+                continue;
+            }
+        }
+
         match rx.read(&mut buf) {
             Ok(size) if size == 0 => {
                 dead.store(true, Ordering::Relaxed);
@@ -160,6 +288,12 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
             }
             Ok(size) => {
                 parser.parse(&buf[0..size], |action| {
+                    if hold && is_passthrough_query(&action) {
+                        // Only the query is sent; the held actions stay
+                        // pending, so action_size is left alone
+                        send_actions_to_mux(&pane, &dead, vec![action]);
+                        return;
+                    }
                     let mut flush = false;
                     match &action {
                         Action::CSI(CSI::Mode(Mode::SetDecPrivateMode(DecPrivateMode::Code(
@@ -167,10 +301,16 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                         )))) => {
                             // Synchronized output frame started:
                             // => We hold off ~all actions that applies changes to the terminal.
-                            hold = true;
+                            // Setting the mode while it is already active is
+                            // idempotent: the update keeps its original
+                            // deadline and the frame held so far stays held
+                            if !hold {
+                                hold = true;
+                                hold_deadline = Some(Instant::now() + hold_timeout);
 
-                            // => We also flush prior actions
-                            flush = true;
+                                // => We also flush prior actions
+                                flush = true;
+                            }
                         }
                         Action::CSI(CSI::Mode(Mode::ResetDecPrivateMode(
                             DecPrivateMode::Code(DecPrivateModeCode::SynchronizedOutput),
@@ -178,11 +318,13 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                             // Synchronized output frame ended:
                             // => We flush out all pending actions to the terminal.
                             hold = false;
+                            hold_deadline = None;
                             flush = true;
                         }
                         Action::CSI(CSI::Device(dev)) if matches!(**dev, Device::SoftReset) => {
                             // Soft reset requested
                             hold = false;
+                            hold_deadline = None;
                             flush = true;
                         }
                         _ => {}
@@ -195,44 +337,11 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                     }
                 });
                 action_size += size;
-                if !actions.is_empty() && !hold {
-                    // If we haven't accumulated too much data,
-                    // pause for a short while to increase the chances
-                    // that we coalesce a full "frame" from an unoptimized
-                    // TUI program
-                    if action_size < buf.len() {
-                        let poll_delay = match deadline {
-                            None => {
-                                deadline.replace(Instant::now() + delay);
-                                Some(delay)
-                            }
-                            Some(target) => target.checked_duration_since(Instant::now()),
-                        };
-                        if poll_delay.is_some() {
-                            let mut pfd = [pollfd {
-                                fd: rx.as_socket_descriptor(),
-                                events: POLLIN,
-                                revents: 0,
-                            }];
-                            if let Ok(1) = poll(&mut pfd, poll_delay) {
-                                // We can read now without blocking, so accumulate
-                                // more data into actions
-                                continue;
-                            }
-
-                            // Not readable in time: let the data we have flow into
-                            // the terminal model
-                        }
-                    }
-
-                    send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
-                    deadline = None;
-                    action_size = 0;
-                }
 
                 let config = configuration();
                 buf.resize(config.mux_output_parser_buffer_size, 0);
                 delay = Duration::from_millis(config.mux_output_parser_coalesce_delay_ms);
+                hold_timeout = hold_timeout_from(&config);
             }
         }
     }
