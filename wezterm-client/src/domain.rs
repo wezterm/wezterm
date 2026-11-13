@@ -278,7 +278,7 @@ fn mux_notify_client_domain(local_domain_id: DomainId, notif: MuxNotification) -
     };
 
     match notif {
-        MuxNotification::ActiveWorkspaceChanged(_client_id) => {
+        MuxNotification::ActiveWorkspaceChanged { .. } => {
             // TODO: advice remote host of interesting workspaces
         }
         MuxNotification::WorkspaceRenamed {

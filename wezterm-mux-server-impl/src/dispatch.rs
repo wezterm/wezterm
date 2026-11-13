@@ -202,7 +202,7 @@ where
                 .await?;
                 stream.flush().await.context("flushing PDU to client")?;
             }
-            Ok(Item::Notif(MuxNotification::ActiveWorkspaceChanged(_))) => {}
+            Ok(Item::Notif(MuxNotification::ActiveWorkspaceChanged { .. })) => {}
             Ok(Item::Notif(MuxNotification::Empty)) => {}
             Err(err) => {
                 log::error!("process_async Err {}", err);
