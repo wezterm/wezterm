@@ -60,7 +60,7 @@
               pkg-config
               python3
             ]
-            ++ lib.optional stdenv.isDarwin perl;
+            ++ lib.optional stdenv.hostPlatform.isDarwin perl;
 
           buildInputs =
             with pkgs;
@@ -72,7 +72,7 @@
               zlib
               zstd
             ]
-            ++ lib.optionals stdenv.isLinux [
+            ++ lib.optionals stdenv.hostPlatform.isLinux [
               libxkbcommon
               wayland
 
@@ -83,7 +83,7 @@
               libxcb-keysyms
               libxcb-wm # contains xcb-ewmh among others
             ]
-            ++ lib.optionals stdenv.isDarwin ([
+            ++ lib.optionals stdenv.hostPlatform.isDarwin ([
               libiconv
             ]);
 
@@ -154,13 +154,13 @@
             auditable = false;
 
             preFixup =
-              lib.optionalString stdenv.isLinux /* bash */ ''
+              lib.optionalString stdenv.hostPlatform.isLinux /* bash */ ''
                 patchelf \
                   --add-needed "${pkgs.libGL}/lib/libEGL.so.1" \
                   --add-needed "${pkgs.vulkan-loader}/lib/libvulkan.so.1" \
                   $out/bin/wezterm-gui
               ''
-              + lib.optionalString stdenv.isDarwin /* bash */ ''
+              + lib.optionalString stdenv.hostPlatform.isDarwin /* bash */ ''
                 mkdir -p "$out/Applications"
                 OUT_APP="$out/Applications/WezTerm.app"
                 cp -r assets/macos/WezTerm.app "$OUT_APP"
@@ -263,7 +263,7 @@
                 nightly.latest.rustfmt
                 nightly.latest.rust-analyzer
               ]
-              ++ lib.optionals stdenv.isLinux [
+              ++ lib.optionals stdenv.hostPlatform.isLinux [
                 # For local flatpak builds
                 pkgs.flatpak-builder
                 pkgs.flatpak-builder-tools # for flatpak-cargo-generator
