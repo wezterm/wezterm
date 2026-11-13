@@ -142,6 +142,23 @@ struct DiffState {
     /// Tracking the cursor and attributes in this way helps to coalesce
     /// lines of text into simpler strings.
     attr: Option<CellAttributes>,
+    /// The text of the cell drawn last, which the next cell's text follows
+    /// when the cursor is left where that cell ended.
+    last_text: String,
+}
+
+/// Whether `next`, read straight after `previous`, would join its grapheme
+/// rather than begin one of its own: an emoji modifier after an emoji, a
+/// regional indicator after another, a combining mark after a letter.
+fn joins_grapheme(previous: &str, next: &str) -> bool {
+    if previous.is_empty() || next.is_empty() {
+        return false;
+    }
+    let mut joined = String::with_capacity(previous.len() + next.len());
+    joined.push_str(previous);
+    joined.push_str(next);
+    Graphemes::new(&joined).count()
+        < Graphemes::new(previous).count() + Graphemes::new(next).count()
 }
 
 impl DiffState {
@@ -156,8 +173,16 @@ impl DiffState {
 
     #[inline]
     fn set_cell(&mut self, col_num: usize, row_num: usize, other_cell: CellRef) {
+        // A cell whose text would join the grapheme of the cell drawn just
+        // before it is placed explicitly, so that whatever reads the changes
+        // keeps the two cells apart, as they are here.
+        let joins = joins_grapheme(&self.last_text, other_cell.str());
+        self.last_text.clear();
+        self.last_text.push_str(other_cell.str());
         self.cursor = match self.cursor.take() {
-            Some((cursor_row, cursor_col)) if cursor_row == row_num && cursor_col == col_num => {
+            Some((cursor_row, cursor_col))
+                if cursor_row == row_num && cursor_col == col_num && !joins =>
+            {
                 // It is on the current column, so we don't need
                 // to explicitly move it.  Move the cursor by the
                 // width of the text we're about to add.
@@ -1807,6 +1832,71 @@ mod test {
                     )))
                     .clone()
             ),]]
+        );
+    }
+
+    /// The graphemes each cell of the first line holds, by column, blanks left out.
+    fn graphemes(surface: &Surface) -> Vec<(usize, String)> {
+        surface.screen_lines()[0]
+            .visible_cells()
+            .filter(|cell| cell.str() != " ")
+            .map(|cell| (cell.cell_index(), cell.str().to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn cells_whose_graphemes_would_join_are_drawn_apart() {
+        // A program can write graphemes in cells of their own that, read one
+        // after another, make one: an emoji then a skin tone modifier, two
+        // regional indicators. The changes must keep each in its own cell,
+        // or whatever reads them draws both in the cells of one.
+        let mut line = Line::with_width(10, 0);
+        for (idx, text) in [(0, "👍"), (2, "🏽"), (4, "🇸"), (6, "🇪")] {
+            line.set_cell(
+                idx,
+                Cell::new_grapheme_with_width(text, 2, CellAttributes::default()),
+                0,
+            );
+        }
+        line.set_cell(8, Cell::new('x', CellAttributes::default()), 0);
+
+        let mut surface = Surface::new(10, 1);
+        let changes = surface.diff_lines(vec![&line]);
+        surface.add_changes(changes);
+        let expected: Vec<(usize, String)> = [(0, "👍"), (2, "🏽"), (4, "🇸"), (6, "🇪"), (8, "x")]
+            .iter()
+            .map(|(idx, text)| (*idx, text.to_string()))
+            .collect();
+        assert_eq!(graphemes(&surface), expected);
+    }
+
+    #[test]
+    fn cells_whose_graphemes_stay_apart_are_drawn_in_one_run() {
+        let mut line = Line::with_width(6, 0);
+        line.set_cell(
+            0,
+            Cell::new_grapheme_with_width("👍🏽", 2, CellAttributes::default()),
+            0,
+        );
+        line.set_cell(
+            2,
+            Cell::new_grapheme("e\u{301}", CellAttributes::default(), None),
+            0,
+        );
+        line.set_cell(3, Cell::new('x', CellAttributes::default()), 0);
+
+        let surface = Surface::new(6, 1);
+        let changes = surface.diff_lines(vec![&line]);
+        assert_eq!(
+            changes,
+            vec![
+                Change::CursorPosition {
+                    x: Position::Absolute(0),
+                    y: Position::Absolute(0),
+                },
+                Change::AllAttributes(CellAttributes::default()),
+                Change::Text("👍🏽e\u{301}x".to_string()),
+            ]
         );
     }
 }
