@@ -61,8 +61,27 @@ impl CopyAndPaste {
     }
 }
 
+#[derive(Clone, Copy)]
+struct PendingDrop {
+    source: xcb::x::Window,
+    action: Atom,
+    target: Atom,
+    time: u32,
+    version: u32,
+    property: Atom,
+    slot: u8,
+    started: std::time::Instant,
+}
+
 struct DragAndDrop {
     src_window: Option<xcb::x::Window>,
+    // A selection transfer outlives hover state (Leave or a new Enter).
+    pending_drop: Option<PendingDrop>,
+    src_version: u32,
+    drop_properties: [Atom; 8],
+    next_drop_slot: u8,
+    // Abandoned slots cannot be reused until their own late reply arrives.
+    retired_drop_slots: [bool; 8],
     src_types: Vec<Atom>,
     src_action: Atom,
     time: u32,
@@ -74,6 +93,11 @@ impl Default for DragAndDrop {
     fn default() -> DragAndDrop {
         DragAndDrop {
             src_window: None,
+            pending_drop: None,
+            src_version: 0,
+            drop_properties: [xcb::x::ATOM_NONE; 8],
+            next_drop_slot: 0,
+            retired_drop_slots: [false; 8],
             src_types: Vec::new(),
             src_action: xcb::x::ATOM_NONE,
             time: 0,
@@ -564,6 +588,43 @@ impl XWindowInner {
         Ok(())
     }
 
+    fn finish_xdnd(&self, srcwin: xcb::x::Window, version: u32, action: Atom) {
+        let conn = self.conn();
+        conn.send_request_no_reply_log(&xcb::x::SendEvent {
+            propagate: false,
+            destination: xcb::x::SendEventDest::Window(srcwin),
+            event_mask: xcb::x::EventMask::empty(),
+            event: &xcb::x::ClientMessageEvent::new(
+                srcwin,
+                conn.atom_xdndfinished,
+                xcb::x::ClientMessageData::Data32([
+                    self.window_id.resource_id(),
+                    (version >= 5 && action != xcb::x::ATOM_NONE) as u32,
+                    if version >= 5 {
+                        action.resource_id()
+                    } else {
+                        0
+                    },
+                    0,
+                    0,
+                ]),
+            ),
+        });
+        // CloseRequested can terminate the GUI before the event loop flushes.
+        if let Err(err) = conn.flush() {
+            log::error!("Unable to flush XdndFinished: {err:#}");
+        }
+    }
+
+    // A conversion may still write its property after we fail the drop.
+    // Never reuse that slot until its own SelectionNotify has been discarded.
+    fn abandon_pending_drop(&mut self) {
+        if let Some(pending) = self.drag_and_drop.pending_drop.take() {
+            self.drag_and_drop.retired_drop_slots[pending.slot as usize] = true;
+            self.finish_xdnd(pending.source, pending.version, xcb::x::ATOM_NONE);
+        }
+    }
+
     fn xdnd_event(&mut self, msgtype: Atom, data: &[u32]) -> anyhow::Result<()> {
         use xcb::XidNew;
         let conn = self.conn();
@@ -573,6 +634,7 @@ impl XWindowInner {
             self.drag_and_drop.src_window = Some(srcwin);
             let moretypes = data[1] & 0x01 != 0;
             let xdndversion = data[1] >> 24 as u8;
+            self.drag_and_drop.src_version = xdndversion.min(5);
             log::trace!("ClientMessage {msgtype_name}, Version {xdndversion}, more than 3 types: {moretypes}");
             if !moretypes {
                 self.drag_and_drop.src_types = data[2..]
@@ -590,7 +652,13 @@ impl XWindowInner {
                         long_offset: 0,
                         long_length: u32::max_value(),
                     }) {
-                        Ok(prop) => prop.value::<Atom>().to_vec(),
+                        Ok(prop) if prop.format() == 32 && prop.r#type() == xcb::x::ATOM_ATOM => {
+                            prop.value::<Atom>().to_vec()
+                        }
+                        Ok(_) => {
+                            log::warn!("xdnd: ignoring XdndTypeList with invalid type or format");
+                            Vec::<Atom>::new()
+                        }
                         Err(err) => {
                             log::error!(
                                 "xdnd: unable to get type list from source window: {:?}",
@@ -655,32 +723,80 @@ impl XWindowInner {
                 "ClientMessage {msgtype_name}, timestamp: {}",
                 self.drag_and_drop.time
             );
-            if self.drag_and_drop.target_type != xcb::x::ATOM_NONE {
-                conn.send_request_no_reply_log(&xcb::x::ConvertSelection {
+            let version = self.drag_and_drop.src_version;
+            if let Some(pending) = self.drag_and_drop.pending_drop {
+                // Fail a duplicate once, without leaving its conversion reusable.
+                if pending.source == srcwin {
+                    self.abandon_pending_drop();
+                } else {
+                    self.finish_xdnd(srcwin, version, xcb::x::ATOM_NONE);
+                }
+            } else if self.drag_and_drop.target_type != xcb::x::ATOM_NONE {
+                let slot = (0..8u8)
+                    .map(|offset| (self.drag_and_drop.next_drop_slot + offset) % 8)
+                    .find(|slot| !self.drag_and_drop.retired_drop_slots[*slot as usize]);
+                let Some(slot) = slot else {
+                    log::warn!("All Xdnd properties await late replies. Rejecting drop.");
+                    self.finish_xdnd(srcwin, version, xcb::x::ATOM_NONE);
+                    return Ok(());
+                };
+                self.drag_and_drop.next_drop_slot = (slot + 1) % 8;
+                let property = &mut self.drag_and_drop.drop_properties[slot as usize];
+                if *property == xcb::x::ATOM_NONE {
+                    let name = format!("_WEZTERM_XDND_{slot}");
+                    match conn.send_and_wait_request(&xcb::x::InternAtom {
+                        only_if_exists: false,
+                        name: name.as_bytes(),
+                    }) {
+                        Ok(reply) => *property = reply.atom(),
+                        Err(err) => {
+                            log::error!("Unable to intern Xdnd property: {err:#}");
+                            self.finish_xdnd(srcwin, version, xcb::x::ATOM_NONE);
+                            return Ok(());
+                        }
+                    }
+                }
+                let property = *property;
+                let started = std::time::Instant::now();
+                self.drag_and_drop.pending_drop = Some(PendingDrop {
+                    source: srcwin,
+                    action: self.drag_and_drop.target_action,
+                    target: self.drag_and_drop.target_type,
+                    time: self.drag_and_drop.time,
+                    version,
+                    property,
+                    slot,
+                    started,
+                });
+                let window_id = self.window_id;
+                promise::spawn::spawn(async move {
+                    async_io::Timer::after(std::time::Duration::from_secs(3)).await;
+                    XConnection::with_window_inner(window_id, move |inner| {
+                        if let Some(pending) = inner.drag_and_drop.pending_drop {
+                            if pending.started == started {
+                                log::warn!("Xdnd selection transfer timed out.");
+                                inner.abandon_pending_drop();
+                            }
+                        }
+                        Ok(())
+                    });
+                })
+                .detach();
+                if let Err(err) = conn.send_request_no_reply(&xcb::x::ConvertSelection {
                     requestor: self.window_id,
                     selection: conn.atom_xdndselection,
                     target: self.drag_and_drop.target_type,
-                    property: conn.atom_xsel_data,
+                    property,
                     time: self.drag_and_drop.time,
-                });
+                }) {
+                    log::error!("Unable to convert Xdnd selection: {err:#}");
+                    if let Some(pending) = self.drag_and_drop.pending_drop.take() {
+                        self.finish_xdnd(pending.source, pending.version, xcb::x::ATOM_NONE);
+                    }
+                }
             } else {
                 log::warn!("XdndDrop received, but no target type selected. Ignoring.");
-                conn.send_request_no_reply_log(&xcb::x::SendEvent {
-                    propagate: false,
-                    destination: xcb::x::SendEventDest::Window(srcwin),
-                    event_mask: xcb::x::EventMask::empty(),
-                    event: &xcb::x::ClientMessageEvent::new(
-                        srcwin,
-                        conn.atom_xdndfinished,
-                        xcb::x::ClientMessageData::Data32([
-                            self.window_id.resource_id(),
-                            0,
-                            0,
-                            0,
-                            0,
-                        ]),
-                    ),
-                });
+                self.finish_xdnd(srcwin, version, xcb::x::ATOM_NONE);
             }
         }
         return Ok(());
@@ -784,6 +900,7 @@ impl XWindowInner {
                             conn.atom_name(protocol_atom)
                         );
                         if protocol_atom == conn.atom_delete {
+                            self.abandon_pending_drop();
                             self.events.dispatch(WindowEvent::CloseRequested);
                         }
                     } else {
@@ -792,6 +909,7 @@ impl XWindowInner {
                 }
             }
             Event::X(xcb::x::Event::DestroyNotify(_)) => {
+                self.abandon_pending_drop();
                 self.events.dispatch(WindowEvent::Destroyed);
                 conn.windows.borrow_mut().remove(&self.window_id);
                 conn.child_to_parent_id.borrow_mut().remove(&self.child_id);
@@ -1139,10 +1257,51 @@ impl XWindowInner {
                     }
                 }
             }
-        } else if selection.selection() == conn.atom_xdndselection
-            && selection.property() == conn.atom_xsel_data
-        {
-            if let Some(srcwin) = self.drag_and_drop.src_window {
+        } else if selection.selection() == conn.atom_xdndselection {
+            // Discard late data before it can overwrite a newer transfer.
+            if selection.property() != xcb::x::ATOM_NONE {
+                for (slot, property) in self.drag_and_drop.drop_properties.iter().enumerate() {
+                    if *property == selection.property()
+                        && self.drag_and_drop.retired_drop_slots[slot]
+                    {
+                        self.drag_and_drop.retired_drop_slots[slot] = false;
+                        conn.send_request_no_reply_log(&xcb::x::DeleteProperty {
+                            window: self.window_id,
+                            property: *property,
+                        });
+                        return Ok(());
+                    }
+                }
+            }
+            if let Some(pending) = self.drag_and_drop.pending_drop {
+                if selection.target() != pending.target || selection.time() != pending.time {
+                    log::warn!("Ignoring stale Xdnd selection target or timestamp.");
+                    return Ok(());
+                }
+                if selection.property() != xcb::x::ATOM_NONE
+                    && selection.property() != pending.property
+                {
+                    log::warn!("Ignoring stale Xdnd selection property.");
+                    return Ok(());
+                }
+                // NONE has no property identity. Reuse the slot only when no
+                // retired transfer could have sent this reply.
+                if selection.property() == xcb::x::ATOM_NONE {
+                    if self
+                        .drag_and_drop
+                        .retired_drop_slots
+                        .iter()
+                        .any(|slot| *slot)
+                    {
+                        self.abandon_pending_drop();
+                    } else {
+                        self.drag_and_drop.pending_drop = None;
+                        self.finish_xdnd(pending.source, pending.version, xcb::x::ATOM_NONE);
+                    }
+                    return Ok(());
+                }
+                self.drag_and_drop.pending_drop = None;
+                let mut action = xcb::x::ATOM_NONE;
                 match conn.send_and_wait_request(&xcb::x::GetProperty {
                     delete: true,
                     window: selection.requestor(),
@@ -1151,41 +1310,48 @@ impl XWindowInner {
                     long_offset: 0,
                     long_length: u32::max_value(),
                 }) {
-                    Ok(prop) => {
+                    Ok(prop) if prop.format() == 8 && prop.r#type() == pending.target => {
                         if selection.target() == conn.atom_utf8_string {
                             let text = String::from_utf8_lossy(prop.value()).to_string();
                             self.events.dispatch(WindowEvent::DroppedString(text));
+                            action = pending.action;
                         } else if selection.target() == conn.atom_xmozurl {
                             let data = decode_dropped_url_string(prop.value());
                             let urls = parse_xmozurl_list(&data);
                             self.events.dispatch(WindowEvent::DroppedUrl(urls));
+                            action = pending.action;
                         } else if selection.target() == conn.atom_texturilist {
                             let paths = parse_texturi_list(prop.value());
                             self.events.dispatch(WindowEvent::DroppedFile(paths));
+                            action = pending.action;
                         }
+                    }
+                    Ok(_) => {
+                        log::warn!("Invalid Xdnd selection property type or format.");
+                        conn.send_request_no_reply_log(&xcb::x::DeleteProperty {
+                            window: self.window_id,
+                            property: selection.property(),
+                        });
                     }
                     Err(err) => {
                         log::error!("clipboard: err while getting clipboard property: {err:#}");
                     }
                 }
-                conn.send_request_no_reply_log(&xcb::x::SendEvent {
-                    propagate: false,
-                    destination: xcb::x::SendEventDest::Window(srcwin),
-                    event_mask: xcb::x::EventMask::empty(),
-                    event: &xcb::x::ClientMessageEvent::new(
-                        srcwin,
-                        conn.atom_xdndfinished,
-                        xcb::x::ClientMessageData::Data32([
-                            window_id.resource_id(),
-                            1,
-                            self.drag_and_drop.target_action.resource_id(),
-                            0,
-                            0,
-                        ]),
-                    ),
-                });
+                self.finish_xdnd(pending.source, pending.version, action);
             } else {
-                log::warn!("No Xdnd in progress, but received Xdnd selection. Ignoring.");
+                // A lone retired transfer is the only possible source of NONE.
+                if selection.property() == xcb::x::ATOM_NONE
+                    && self
+                        .drag_and_drop
+                        .retired_drop_slots
+                        .iter()
+                        .filter(|slot| **slot)
+                        .count()
+                        == 1
+                {
+                    self.drag_and_drop.retired_drop_slots.fill(false);
+                }
+                log::trace!("Ignoring Xdnd selection without a pending transfer.");
             }
         } else {
             log::trace!("SEL: window_id={window_id:?} unknown selection {selection_name}");
@@ -1592,6 +1758,7 @@ impl XWindow {
 
 impl XWindowInner {
     fn close(&mut self) {
+        self.abandon_pending_drop();
         let conn = self.conn();
         conn.flush()
             .context("flush pending requests prior to issuing DestroyWindow")
