@@ -60,6 +60,7 @@ docs = ["widgets", "use_serde", "image", "tmux_cc"]
 criterion.workspace = true
 env_logger.workspace = true
 k9.workspace = true
+rstest.workspace = true
 
 [target."cfg(unix)".dependencies]
 signal-hook.workspace = true
