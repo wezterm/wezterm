@@ -854,7 +854,14 @@ impl Line {
             }
         }
 
-        self.invalidate_grapheme_at_or_before(idx);
+        // An attribute-only write to a wide grapheme's continuation cell
+        // (for example, attaching a Sixel/iTerm/Kitty image) must not
+        // erase that grapheme. invalidate_grapheme_at_or_before() would
+        // otherwise blank the preceding wide character.
+        // https://github.com/wezterm/wezterm/issues/8315
+        if !self.is_attribute_only_update_to_wide_continuation(idx, &cell) {
+            self.invalidate_grapheme_at_or_before(idx);
+        }
 
         // For double-wide or wider chars, ensure that the cells that
         // are overlapped by this one are blanked out.
@@ -883,6 +890,19 @@ impl Line {
             // double width characters
             start_idx += width.saturating_sub(1);
         }
+    }
+
+    /// True when `cell` is an in-place attribute update of the continuation
+    /// cell of a width>1 grapheme (same text, single-cell write).
+    fn is_attribute_only_update_to_wide_continuation(&mut self, idx: usize, cell: &Cell) -> bool {
+        if idx == 0 || cell.width().max(1) != 1 {
+            return false;
+        }
+        let cells = self.coerce_vec_storage();
+        if idx >= cells.len() {
+            return false;
+        }
+        cells[idx - 1].width() > 1 && cells[idx].str() == cell.str()
     }
 
     fn invalidate_grapheme_at_or_before(&mut self, idx: usize) {
