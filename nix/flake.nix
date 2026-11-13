@@ -66,8 +66,11 @@
             with pkgs;
             [
               fontconfig
+              libgit2
               openssl
+              sqlite # Required by the sync-color-schemes workspace member
               zlib
+              zstd
             ]
             ++ lib.optionals stdenv.isLinux [
               libxkbcommon
@@ -208,7 +211,11 @@
 
                 nativeBuildInputs = [ pkgs.pkg-config ];
 
-                buildInputs = [ pkgs.openssl ];
+                buildInputs = [
+                  pkgs.libgit2
+                  pkgs.openssl
+                  pkgs.zstd
+                ];
 
                 cargoBuildFlags = [
                   "--package"
