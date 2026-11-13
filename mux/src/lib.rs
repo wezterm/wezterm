@@ -13,11 +13,12 @@ use libc::{c_int, SOL_SOCKET, SO_RCVBUF, SO_SNDBUF};
 use log::error;
 use metrics::histogram;
 use parking_lot::{
-    MappedRwLockReadGuard, MappedRwLockWriteGuard, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    Condvar, MappedRwLockReadGuard, MappedRwLockWriteGuard, Mutex, RwLock, RwLockReadGuard,
+    RwLockWriteGuard,
 };
 use percent_encoding::percent_decode_str;
 use portable_pty::{CommandBuilder, ExitStatus, PtySize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::io::{Read, Write};
 #[cfg(windows)]
@@ -113,6 +114,78 @@ pub struct Mux {
     num_panes_by_workspace: RwLock<HashMap<String, usize>>,
     main_thread_id: std::thread::ThreadId,
     agent: Option<AgentProxy>,
+    initial_pane_exit: Mutex<Option<InitialPaneExit>>,
+    initial_pane_exit_changed: Condvar,
+    pane_exit_codes: Mutex<(HashMap<PaneId, u32>, VecDeque<PaneId>)>,
+    pane_exit_changed: Condvar,
+}
+
+/// Opt-in status retention for the program passed to `wezterm start`. A very
+/// short-lived child can finish before `spawn` returns its pane id, so keep
+/// early statuses until that id has been selected.
+#[derive(Default)]
+struct InitialPaneExit {
+    pane_id: Option<PaneId>,
+    early: HashMap<PaneId, u32>,
+    code: Option<u32>,
+}
+
+impl InitialPaneExit {
+    fn record(&mut self, pane_id: PaneId, code: u32) {
+        match self.pane_id {
+            Some(target) if target == pane_id => self.code = Some(code),
+            Some(_) => {}
+            None => {
+                self.early.insert(pane_id, code);
+            }
+        }
+    }
+
+    fn set_initial_pane(&mut self, pane_id: PaneId) {
+        self.pane_id = Some(pane_id);
+        self.code = self.early.remove(&pane_id);
+        self.early.clear();
+    }
+
+    fn exit_code(&self) -> Option<u32> {
+        self.code
+    }
+}
+
+#[cfg(test)]
+mod initial_pane_exit_tests {
+    use super::*;
+
+    #[test]
+    fn early_child_failure_survives_until_initial_pane_is_identified() {
+        let mut tracked = InitialPaneExit::default();
+        tracked.record(42, 23);
+        tracked.record(43, 7);
+        tracked.set_initial_pane(42);
+        assert_eq!(tracked.exit_code(), Some(23));
+        tracked.record(43, 8);
+        assert_eq!(tracked.exit_code(), Some(23));
+    }
+
+    #[test]
+    fn only_selected_pane_can_change_exit_status() {
+        let mut tracked = InitialPaneExit::default();
+        tracked.set_initial_pane(42);
+        tracked.record(43, 7);
+        assert_eq!(tracked.exit_code(), None);
+        tracked.record(42, 23);
+        assert_eq!(tracked.exit_code(), Some(23));
+    }
+
+    #[test]
+    fn fast_exits_keep_independent_codes_for_concurrent_launchers() {
+        let mux = Mux::new(None);
+        mux.record_child_exit(42, &ExitStatus::with_exit_code(23));
+        mux.record_child_exit(43, &ExitStatus::with_exit_code(7));
+        assert_eq!(mux.wait_for_pane_exit_code(43).unwrap(), 7);
+        assert_eq!(mux.wait_for_pane_exit_code(42).unwrap(), 23);
+        assert!(mux.wait_for_pane_exit_code(42).is_err());
+    }
 }
 
 const BUFSIZE: usize = 1024 * 1024;
@@ -456,7 +529,75 @@ impl Mux {
             num_panes_by_workspace: RwLock::new(HashMap::new()),
             main_thread_id: std::thread::current().id(),
             agent,
+            initial_pane_exit: Mutex::new(None),
+            initial_pane_exit_changed: Condvar::new(),
+            pane_exit_codes: Mutex::new((HashMap::new(), VecDeque::new())),
+            pane_exit_changed: Condvar::new(),
         }
+    }
+
+    /// Enable status tracking only for a caller that explicitly requested it.
+    /// Start before spawning so a fast child cannot race the registration.
+    pub fn begin_initial_pane_exit_tracking(&self) {
+        *self.initial_pane_exit.lock() = Some(InitialPaneExit::default());
+    }
+
+    pub fn set_initial_pane_for_exit_tracking(&self, pane_id: PaneId) {
+        if let Some(tracked) = self.initial_pane_exit.lock().as_mut() {
+            tracked.set_initial_pane(pane_id);
+            self.initial_pane_exit_changed.notify_all();
+        }
+    }
+
+    pub fn record_child_exit(&self, pane_id: PaneId, status: &ExitStatus) {
+        {
+            let mut exits = self.pane_exit_codes.lock();
+            exits.0.insert(pane_id, status.exit_code());
+            exits.1.push_back(pane_id);
+            // Keep fast exits available until the spawning client can ask for
+            // their status, while bounding retention in a long lived GUI.
+            while exits.1.len() > 4096 {
+                if let Some(oldest) = exits.1.pop_front() {
+                    exits.0.remove(&oldest);
+                }
+            }
+            self.pane_exit_changed.notify_all();
+        }
+        if let Some(tracked) = self.initial_pane_exit.lock().as_mut() {
+            tracked.record(pane_id, status.exit_code());
+            self.initial_pane_exit_changed.notify_all();
+        }
+    }
+
+    pub fn wait_for_pane_exit_code(&self, pane_id: PaneId) -> anyhow::Result<u32> {
+        let mut exits = self.pane_exit_codes.lock();
+        if !exits.0.contains_key(&pane_id) && self.get_pane(pane_id).is_none() {
+            anyhow::bail!("pane {pane_id} has no running child or retained exit status");
+        }
+        loop {
+            if let Some(code) = exits.0.remove(&pane_id) {
+                return Ok(code);
+            }
+            self.pane_exit_changed.wait(&mut exits);
+        }
+    }
+
+    /// The child waiter can complete just after the last GUI window closes.
+    /// Give it a bounded interval to report the result before returning to
+    /// the process that launched WezTerm.
+    pub fn wait_for_initial_pane_exit_code(&self, timeout: Duration) -> Option<u32> {
+        let mut tracked = self.initial_pane_exit.lock();
+        self.initial_pane_exit_changed.wait_while_for(
+            &mut tracked,
+            |state| {
+                state
+                    .as_ref()
+                    .and_then(InitialPaneExit::exit_code)
+                    .is_none()
+            },
+            timeout,
+        );
+        tracked.as_ref().and_then(InitialPaneExit::exit_code)
     }
 
     fn get_default_workspace(&self) -> String {

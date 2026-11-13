@@ -726,6 +726,18 @@ impl SessionHandler {
                 .detach();
             }
 
+            Pdu::WaitPaneExit(request) => {
+                std::thread::spawn(move || {
+                    let result =
+                        Mux::get()
+                            .wait_for_pane_exit_code(request.pane_id)
+                            .map(|exit_code| {
+                                Pdu::WaitPaneExitResponse(WaitPaneExitResponse { exit_code })
+                            });
+                    send_response(result);
+                });
+            }
+
             Pdu::SplitPane(split) => {
                 let client_id = self.client_id.clone();
                 spawn_into_main_thread(async move {
@@ -1019,6 +1031,7 @@ impl SessionHandler {
             | Pdu::MovePaneToNewTabResponse { .. }
             | Pdu::TabAddedToWindow { .. }
             | Pdu::GetPaneRenderableDimensionsResponse { .. }
+            | Pdu::WaitPaneExitResponse { .. }
             | Pdu::ErrorResponse { .. } => {
                 send_response(Err(anyhow!("expected a request, got {:?}", decoded.pdu)))
             }
