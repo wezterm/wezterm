@@ -387,6 +387,31 @@ impl TerminalState {
         self.writer.flush().ok();
     }
 
+    fn kitty_replace_image_data(&mut self, image_id: u32, data: ImageDataType) {
+        let data = Arc::new(ImageData::with_data(data));
+        let seqno = self.seqno;
+        // Find the actual cells, including scrollback and the inactive screen:
+        // scrolling and reflow can move them away from the recorded placement.
+        for screen in [&mut self.screen.screen, &mut self.screen.alt_screen] {
+            screen.for_each_phys_line_mut(|_, line| {
+                if !line
+                    .visible_cells()
+                    .any(|cell| cell.attrs().images().is_some())
+                {
+                    return;
+                }
+                let mut changed = false;
+                for cell in line.cells_mut_for_attr_changes_only() {
+                    changed |= cell.attrs_mut().replace_image_data(image_id, &data);
+                }
+                if changed {
+                    line.update_last_change_seqno(seqno);
+                }
+            });
+        }
+        self.kitty_img.record_id_to_data(image_id, data);
+    }
+
     fn kitty_frame_compose(
         &mut self,
         frame: KittyImageFrameCompose,
@@ -445,8 +470,10 @@ impl TerminalState {
             .get(&image_id)
             .ok_or_else(|| anyhow::anyhow!("invalid image id {}", image_id))?;
 
-        let mut img = img.data();
-        match &mut *img {
+        // Images may be shared by placements and the content-addressed cache.
+        // Edit a copy so that cached data retains its original content identity.
+        let mut img = img.data().clone();
+        match &mut img {
             ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => {
                 anyhow::bail!("invalid image type")
             }
@@ -534,6 +561,7 @@ impl TerminalState {
             }
         }
 
+        self.kitty_replace_image_data(image_id, img);
         Ok(())
     }
 
@@ -593,7 +621,7 @@ impl TerminalState {
             }
         };
 
-        let mut anim = anim.data();
+        let mut anim = anim.data().clone();
         let x = frame.x.unwrap_or(0);
         let y = frame.y.unwrap_or(0);
         let frame_gap = Duration::from_millis(match frame.duration_ms {
@@ -601,7 +629,7 @@ impl TerminalState {
             Some(n) => n.into(),
         });
 
-        match &mut *anim {
+        match &mut anim {
             ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => {
                 anyhow::bail!("Expected decoded image for image id {}", image_id)
             }
@@ -659,7 +687,7 @@ impl TerminalState {
                         let durations = vec![Duration::from_millis(0), frame_gap];
                         let hashes = vec![*hash, new_frame_hash];
 
-                        *anim = ImageDataType::AnimRgba8 {
+                        anim = ImageDataType::AnimRgba8 {
                             width: *width,
                             height: *height,
                             frames,
@@ -737,6 +765,7 @@ impl TerminalState {
             }
         }
 
+        self.kitty_replace_image_data(image_id, anim);
         Ok(())
     }
 

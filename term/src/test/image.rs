@@ -102,7 +102,16 @@ fn kitty_frame_edit_keeps_the_stored_hash_current() {
     // a=T: transmit and display, f=32: RGBA, s/v: 2x2 pixels.
     let seq = format!("\x1b_Ga=T,t=d,f=32,s=2,v=2,i=1;{}\x1b\\", TINY_RGBA_BASE64);
     term.advance_bytes(seq.as_bytes());
-    let transmitted_hash = first_image(&term).data().compute_hash();
+    let transmitted_image = first_image(&term);
+    let transmitted_hash = transmitted_image.data().compute_hash();
+    // A second placement must be updated without another display command.
+    term.cup(0, 1);
+    term.advance_bytes(b"\x1b_Ga=p,i=1,p=2,C=1;\x1b\\");
+    let line_hashes: Vec<_> = term.screen().visible_lines()[..2]
+        .iter()
+        .map(|line| line.compute_shape_hash())
+        .collect();
+    let seqno = term.current_seqno();
 
     // a=f: transmit a frame, r=1: edit frame 1 in place, painting the top left
     // pixel opaque red over the 0x01,0x02,0x03 it arrived with.
@@ -123,4 +132,15 @@ fn kitty_frame_edit_keeps_the_stored_hash_current() {
     }
 
     assert_ne!(edited_hash, transmitted_hash);
+    drop(image);
+
+    // Rendering caches both the line shape and its quads. Editing pixels must
+    // invalidate the line and give its image a new content identity.
+    for (line, hash) in term.screen().visible_lines().iter().zip(line_hashes) {
+        assert_ne!(line.compute_shape_hash(), hash);
+        assert!(line.changed_since(seqno));
+    }
+    k9::assert_equal!(first_image(&term).hash(), edited_hash);
+    // The original data can still be shared by other image IDs or the cache.
+    k9::assert_equal!(transmitted_image.data().compute_hash(), transmitted_hash);
 }
