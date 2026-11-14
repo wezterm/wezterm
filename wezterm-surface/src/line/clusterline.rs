@@ -372,6 +372,38 @@ impl<'a> Iterator for ClusterLineCellIter<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::line::storage::CellStorage;
+    use crate::line::Line;
+
+    #[test]
+    fn cluster_representation_double_width() {
+        let text = "❤ 😍🤢he❤ 😍🤢llo❤ 😍🤢";
+        let line: Line = text.into();
+        let mut compressed = line.clone();
+        compressed.compress_for_scrollback();
+        let clustered = match &compressed.cells {
+            CellStorage::C(clustered) => clustered,
+            _ => panic!("expected clustered storage"),
+        };
+
+        // Check wide-cell positions rather than FixedBitSet's internal Debug format.
+        let wide = clustered.is_double_wide.as_ref().unwrap();
+        assert_eq!(wide.ones().collect::<Vec<_>>(), vec![2, 4, 10, 12, 19, 21]);
+        assert_eq!(wide.len(), 23);
+        assert_eq!(clustered.text, text);
+        assert_eq!(
+            clustered.clusters,
+            vec![Cluster {
+                cell_width: 23,
+                attrs: CellAttributes::default(),
+            }]
+        );
+        assert_eq!(clustered.len, 23);
+        assert_eq!(clustered.last_cell_width, NonZeroU8::new(1));
+
+        compressed.coerce_vec_storage();
+        assert_eq!(line, compressed);
+    }
 
     #[test]
     #[cfg(target_pointer_width = "64")]
