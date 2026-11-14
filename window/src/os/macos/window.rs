@@ -50,6 +50,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Instant;
+use url::Url;
 use wezterm_font::FontConfiguration;
 use wezterm_input_types::{is_ascii_control, IntegratedTitleButtonStyle, KeyboardLedStatus};
 
@@ -627,10 +628,21 @@ impl Window {
             ];
 
             // register for drag and drop operations.
+            // `NSFilenamesPboardType` is deprecated, but it is still the only
+            // way to receive multiple files at once from Finder, so we keep
+            // it alongside the modern UTIs that browsers use for links.
+            let file_url_type = nsstring(PASTEBOARD_TYPE_FILE_URL);
+            let url_type = nsstring(PASTEBOARD_TYPE_URL);
+            let string_type = nsstring(PASTEBOARD_TYPE_STRING);
+            let drag_types = [
+                appkit::NSFilenamesPboardType,
+                *file_url_type,
+                *url_type,
+                *string_type,
+            ];
             let () = msg_send![
                 *window,
-                registerForDraggedTypes:
-                    NSArray::arrayWithObject(nil, appkit::NSFilenamesPboardType)
+                registerForDraggedTypes: NSArray::arrayWithObjects(nil, &drag_types)
             ];
 
             let frame = NSView::frame(*view);
@@ -1915,6 +1927,83 @@ fn dpi_for_window_screen(ns_window: *mut Object, config: &ConfigHandle) -> Optio
     config.dpi_by_screen.get(&info.name).copied()
 }
 
+/// Pasteboard type used by browsers (and other apps) when dragging links.
+const PASTEBOARD_TYPE_URL: &str = "public.url";
+/// Pasteboard type used for file URLs; this is the modern replacement for
+/// `NSFilenamesPboardType` and is also used by some apps when dragging links
+/// that refer to local files.
+const PASTEBOARD_TYPE_FILE_URL: &str = "public.file-url";
+/// Pasteboard type used for plain text drags, such as a text selection.
+const PASTEBOARD_TYPE_STRING: &str = "public.utf8-plain-text";
+
+/// The kinds of data that we know how to extract from a drag and drop
+/// pasteboard.
+enum DroppedData {
+    Files(Vec<PathBuf>),
+    Urls(Vec<Url>),
+    Text(String),
+}
+
+unsafe fn pasteboard_string(pb: id, type_name: &str) -> Option<String> {
+    let type_name = nsstring(type_name);
+    let value: id = msg_send![pb, stringForType: *type_name];
+    if value.is_null() {
+        None
+    } else {
+        Some(nsstring_to_str(value).to_string())
+    }
+}
+
+/// Extract the dropped data from the pasteboard using the types that we
+/// registered for drag and drop.
+///
+/// Returns `None` if the pasteboard doesn't contain any data that we
+/// understand, so that the drop can be rejected.
+unsafe fn dropped_data(pb: id) -> Option<DroppedData> {
+    if pb.is_null() {
+        return None;
+    }
+
+    // Finder and other file managers still populate the deprecated
+    // `NSFilenamesPboardType`, and it is the only way to receive all of
+    // the paths for a multi-file drag in one go, so prefer it when present.
+    let filenames = NSPasteboard::propertyListForType(pb, appkit::NSFilenamesPboardType);
+    if !filenames.is_null() {
+        let paths = filenames
+            .iter()
+            .map(|file| PathBuf::from(nsstring_to_str(file)))
+            .collect::<Vec<_>>();
+        if !paths.is_empty() {
+            return Some(DroppedData::Files(paths));
+        }
+    }
+
+    if let Some(url) = pasteboard_string(pb, PASTEBOARD_TYPE_FILE_URL) {
+        if let Ok(url) = Url::parse(&url) {
+            if let Ok(path) = url.to_file_path() {
+                return Some(DroppedData::Files(vec![path]));
+            }
+        }
+    }
+
+    if let Some(url) = pasteboard_string(pb, PASTEBOARD_TYPE_URL) {
+        if let Ok(url) = Url::parse(&url) {
+            if let Ok(path) = url.to_file_path() {
+                return Some(DroppedData::Files(vec![path]));
+            }
+            return Some(DroppedData::Urls(vec![url]));
+        }
+    }
+
+    if let Some(text) = pasteboard_string(pb, PASTEBOARD_TYPE_STRING) {
+        if !text.is_empty() {
+            return Some(DroppedData::Text(text));
+        }
+    }
+
+    None
+}
+
 #[allow(clippy::identity_op)]
 fn decode_mouse_buttons(mask: u64) -> MouseButtons {
     let mut buttons = MouseButtons::NONE;
@@ -3168,54 +3257,53 @@ impl WindowView {
 
     extern "C" fn dragging_entered(this: &mut Object, _: Sel, sender: id) -> BOOL {
         if let Some(this) = Self::get_this(this) {
-            let mut inner = this.inner.borrow_mut();
-
             let pb: id = unsafe { msg_send![sender, draggingPasteboard] };
-            if pb.is_null() {
-                return NO;
-            }
 
-            let filenames =
-                unsafe { NSPasteboard::propertyListForType(pb, appkit::NSFilenamesPboardType) };
-            if filenames.is_null() {
-                return NO;
+            match unsafe { dropped_data(pb) } {
+                Some(DroppedData::Files(paths)) => {
+                    this.inner
+                        .borrow_mut()
+                        .events
+                        .dispatch(WindowEvent::DraggedFile(paths));
+                    YES
+                }
+                // Links and text don't have a "dragged" event, but we still
+                // accept the drop so that performDragOperation: is called.
+                Some(DroppedData::Urls(_)) | Some(DroppedData::Text(_)) => YES,
+                None => NO,
             }
-
-            let paths = unsafe { filenames.iter() }
-                .map(|file| unsafe {
-                    let path = nsstring_to_str(file);
-                    PathBuf::from(path)
-                })
-                .collect::<Vec<_>>();
-            inner.events.dispatch(WindowEvent::DraggedFile(paths));
+        } else {
+            NO
         }
+    }
+
+    extern "C" fn prepare_for_drag_operation(_this: &mut Object, _: Sel, _sender: id) -> BOOL {
         YES
     }
 
     extern "C" fn perform_drag_operation(this: &mut Object, _: Sel, sender: id) -> BOOL {
         if let Some(this) = Self::get_this(this) {
+            let pb: id = unsafe { msg_send![sender, draggingPasteboard] };
             let mut inner = this.inner.borrow_mut();
 
-            let pb: id = unsafe { msg_send![sender, draggingPasteboard] };
-            if pb.is_null() {
-                return NO;
+            match unsafe { dropped_data(pb) } {
+                Some(DroppedData::Files(paths)) => {
+                    inner.events.dispatch(WindowEvent::DroppedFile(paths));
+                    YES
+                }
+                Some(DroppedData::Urls(urls)) => {
+                    inner.events.dispatch(WindowEvent::DroppedUrl(urls));
+                    YES
+                }
+                Some(DroppedData::Text(text)) => {
+                    inner.events.dispatch(WindowEvent::DroppedString(text));
+                    YES
+                }
+                None => NO,
             }
-
-            let filenames =
-                unsafe { NSPasteboard::propertyListForType(pb, appkit::NSFilenamesPboardType) };
-            if filenames.is_null() {
-                return NO;
-            }
-
-            let paths = unsafe { filenames.iter() }
-                .map(|file| unsafe {
-                    let path = nsstring_to_str(file);
-                    PathBuf::from(path)
-                })
-                .collect::<Vec<_>>();
-            inner.events.dispatch(WindowEvent::DroppedFile(paths));
+        } else {
+            NO
         }
-        YES
     }
 
     fn get_this(this: &Object) -> Option<&mut Self> {
@@ -3504,6 +3592,10 @@ impl WindowView {
             cls.add_method(
                 sel!(draggingEntered:),
                 Self::dragging_entered as extern "C" fn(&mut Object, Sel, id) -> BOOL,
+            );
+            cls.add_method(
+                sel!(prepareForDragOperation:),
+                Self::prepare_for_drag_operation as extern "C" fn(&mut Object, Sel, id) -> BOOL,
             );
             cls.add_method(
                 sel!(performDragOperation:),
