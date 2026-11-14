@@ -144,7 +144,15 @@ impl crate::TermWindow {
 
         // submit will accept anything that implements IntoIter
         webgpu.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        // wgpu panics if presenting fails. When that is because the device was
+        // lost, the next paint replaces it instead.
+        let presented =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || output.present()));
+        if let Err(panic) = presented {
+            if !webgpu.is_lost() {
+                std::panic::resume_unwind(panic);
+            }
+        }
 
         Ok(())
     }
