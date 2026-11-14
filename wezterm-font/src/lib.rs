@@ -50,6 +50,55 @@ pub fn alloc_font_id() -> LoadedFontId {
 
 lazy_static::lazy_static! {
     static ref LAST_WARNING: Mutex<Option<(Instant, usize)>> = Mutex::new(None);
+    static ref LAST_SLOW_LOAD_WARNING_GENERATION: Mutex<Option<usize>> = Mutex::new(None);
+}
+
+/// Resolving a font that takes longer than this is reported to the user,
+/// because it delays both startup and changing the font size.
+const SLOW_FONT_LOAD_THRESHOLD: Duration = Duration::from_secs(1);
+
+fn warn_if_font_load_was_slow(style: &TextStyle, config: &ConfigHandle, elapsed: Duration) {
+    if elapsed < SLOW_FONT_LOAD_THRESHOLD {
+        return;
+    }
+
+    // Warn only once per configuration generation, as changing the font
+    // size or loading the bold and italic variants would otherwise repeat
+    // the warning for the same underlying problem.
+    let generation = config.generation();
+    {
+        let mut last_generation = LAST_SLOW_LOAD_WARNING_GENERATION.lock().unwrap();
+        if last_generation.replace(generation) == Some(generation) {
+            return;
+        }
+    }
+
+    let families = style
+        .font
+        .iter()
+        .map(|attributes| attributes.family.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let summary = format!("Loading the font {} took {:.1?}", families, elapsed);
+    let hint = "Run `wezterm ls-fonts` to see which font files are being used.";
+
+    log::warn!(
+        "{}, which delays starting wezterm and changing the font size. This is \
+         usually caused by a very large font file, such as a .ttc collection \
+         that bundles every variant of a font family. {}",
+        summary,
+        hint
+    );
+
+    // Keep the notification short so that the hint is not cut off.
+    ToastNotification {
+        title: "Font problem".to_string(),
+        message: format!("{}, which slows down starting wezterm. {}", summary, hint),
+        url: None,
+        timeout: Some(Duration::from_secs(15)),
+    }
+    .show();
 }
 
 pub struct LoadedFont {
@@ -879,6 +928,7 @@ impl FontConfigInner {
         let dpi = *self.dpi.borrow() as u32;
         let pixel_size = (font_size * dpi as f64 / 72.0) as u16;
 
+        let start = Instant::now();
         let (mut shaper, mut handles) = self.resolve_font_helper(style, &config, pixel_size)?;
 
         let mut metrics = shaper.metrics(font_size, dpi).with_context(|| {
@@ -925,6 +975,8 @@ impl FontConfigInner {
                 _ => {}
             }
         }
+
+        warn_if_font_load_was_slow(style, &config, start.elapsed());
 
         let loaded = Rc::new(LoadedFont {
             rasterizers: RefCell::new(HashMap::new()),
