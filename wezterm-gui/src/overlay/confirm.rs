@@ -115,6 +115,11 @@ fn run_confirmation_impl(message: &str, term: &mut TermWizTerminal) -> anyhow::R
                 mouse_buttons,
                 ..
             }) => {
+                if mouse_buttons.intersects(MouseButtons::VERT_WHEEL | MouseButtons::HORZ_WHEEL) {
+                    // Ignore mouswheel/touchpad scrolls 
+                    continue;
+                }
+
                 let x = x as usize;
                 let y = y as usize;
                 if y == button_row && x >= yes_x && x < yes_x + yes_w {
