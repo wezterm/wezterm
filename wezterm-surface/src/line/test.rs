@@ -6,7 +6,7 @@ use crate::line::clusterline::ClusteredLine;
 use crate::SEQ_ZERO;
 use alloc::sync::Arc;
 use k9::assert_equal as assert_eq;
-use wezterm_cell::{Cell, CellAttributes};
+use wezterm_cell::{Cell, CellAttributes, Underline};
 
 /// There are 4 double-wide graphemes that occupy 2 cells each.
 /// When we join the lines, we must preserve the invisible blank
@@ -611,4 +611,42 @@ Line {
 }
 "#
     );
+}
+
+/// Attaching attributes (e.g. an image) to the continuation cell of a
+/// double-width grapheme must not erase that grapheme.
+/// <https://github.com/wezterm/wezterm/issues/8315>
+#[test]
+fn attribute_update_on_wide_continuation_preserves_grapheme() {
+    let mut line: Line = "A中B".into();
+    assert_eq!(line.len(), 4);
+    // visible_cells() skips continuation columns, so index the physical
+    // storage (the same cells Screen::get_cell uses for image attachment).
+    assert_eq!(line.cells_mut()[1].str(), "中");
+    assert_eq!(line.cells_mut()[1].width(), 2);
+
+    // Column 2 is the continuation cell of 中. Clone it, change only
+    // attributes, and write it back — the same path image attachment uses.
+    let mut continuation = line.cells_mut()[2].clone();
+    assert_eq!(continuation.width(), 1);
+    continuation.attrs_mut().set_underline(Underline::Single);
+    line.set_cell(2, continuation, SEQ_ZERO);
+
+    assert_eq!(line.cells_mut()[0].str(), "A");
+    assert_eq!(line.cells_mut()[1].str(), "中");
+    assert_eq!(line.cells_mut()[1].width(), 2);
+    assert_eq!(line.cells_mut()[2].str(), " ");
+    assert_eq!(line.cells_mut()[2].attrs().underline(), Underline::Single);
+    assert_eq!(line.cells_mut()[3].str(), "B");
+}
+
+/// Replacing the continuation cell with different text should still
+/// invalidate the preceding wide grapheme.
+#[test]
+fn replacing_wide_continuation_invalidates_grapheme() {
+    let mut line: Line = "A中B".into();
+    line.set_cell(2, Cell::new('X', CellAttributes::default()), SEQ_ZERO);
+    assert_eq!(line.get_cell(1).unwrap().str(), " ");
+    assert_eq!(line.get_cell(2).unwrap().str(), "X");
+    assert_eq!(line.get_cell(3).unwrap().str(), "B");
 }
