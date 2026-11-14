@@ -74,6 +74,15 @@ fn handles_from_descriptor(descriptor: &CTFontDescriptor) -> Vec<ParsedFont> {
     result
 }
 
+fn is_normal(font: &ParsedFont) -> bool {
+    let weight = font.weight();
+    // Allow 300-500 weight fonts
+    weight >= FontWeight::LIGHT
+        && weight <= FontWeight::MEDIUM
+        && font.stretch() == FontStretch::Normal
+        && font.style() == FontStyle::Normal
+}
+
 impl FontLocator for CoreTextFontLocator {
     fn load_fonts(
         &self,
@@ -163,10 +172,7 @@ impl FontLocator for CoreTextFontLocator {
                     continue;
                 }
 
-                let is_normal = font.weight() == FontWeight::REGULAR
-                    && font.stretch() == FontStretch::Normal
-                    && font.style() == FontStyle::Normal;
-                if !is_normal {
+                if !is_normal(&font) {
                     // Only use normal attributed text for fallbacks,
                     // otherwise we'll end up picking something with
                     // undefined and undesirable attributes
@@ -295,11 +301,7 @@ fn build_fallback_list_impl() -> anyhow::Result<Vec<ParsedFont>> {
     }
 
     // Constrain to default weight/stretch/style
-    fonts.retain(|f| {
-        f.weight() == FontWeight::REGULAR
-            && f.stretch() == FontStretch::Normal
-            && f.style() == FontStyle::Normal
-    });
+    fonts.retain(|f| is_normal(f));
 
     let mut seen = HashSet::new();
     let fonts: Vec<ParsedFont> = fonts
