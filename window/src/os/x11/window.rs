@@ -33,8 +33,8 @@ use xcb::{Event, Xid};
 struct CopyAndPaste {
     clipboard_owned: Option<String>,
     primary_selection_owned: Option<String>,
-    clipboard_request: Option<Promise<String>>,
-    selection_request: Option<Promise<String>>,
+    clipboard_request: Option<SelectionRequest>,
+    selection_request: Option<SelectionRequest>,
     time: u32,
 }
 
@@ -53,11 +53,118 @@ impl CopyAndPaste {
         }
     }
 
-    fn request_mut(&mut self, clipboard: Clipboard) -> &mut Option<Promise<String>> {
+    fn request_mut(&mut self, clipboard: Clipboard) -> &mut Option<SelectionRequest> {
         match clipboard {
             Clipboard::PrimarySelection => &mut self.selection_request,
             Clipboard::Clipboard => &mut self.clipboard_request,
         }
+    }
+}
+
+/// Each read has its own requestor so that a superseded INCR transfer cannot
+/// write chunks into a subsequent clipboard read.
+struct SelectionRequest {
+    promise: Option<Promise<String>>,
+    requestor: xcb::x::Window,
+    target: Atom,
+    data: SelectionData,
+}
+
+impl SelectionRequest {
+    fn new(promise: Promise<String>) -> Self {
+        Self {
+            promise: Some(promise),
+            requestor: xcb::x::Window::none(),
+            target: xcb::x::ATOM_NONE,
+            data: SelectionData::default(),
+        }
+    }
+}
+
+impl Drop for SelectionRequest {
+    fn drop(&mut self) {
+        // This also covers a queued get_clipboard closure that never runs
+        // because its terminal window has already been destroyed.
+        if let Some(mut promise) = self.promise.take() {
+            promise.err(anyhow!("clipboard request was cancelled"));
+        }
+    }
+}
+
+#[derive(Default)]
+struct SelectionData {
+    incremental: bool,
+    target: Option<Atom>,
+    bytes: Vec<u8>,
+}
+
+impl SelectionData {
+    fn read_property(
+        &mut self,
+        property: &xcb::x::GetPropertyReply,
+        incr: Atom,
+        utf8: Atom,
+    ) -> anyhow::Result<Option<String>> {
+        anyhow::ensure!(property.bytes_after() == 0, "incomplete clipboard property");
+        let target = property.r#type();
+        if target == incr {
+            anyhow::ensure!(property.format() == 32, "invalid INCR property format");
+            self.receive(target, None, incr, utf8)
+        } else {
+            // Check before value::<u8>(), which panics on a different format.
+            anyhow::ensure!(property.format() == 8, "invalid clipboard text format");
+            self.receive(target, Some(property.value::<u8>()), incr, utf8)
+        }
+    }
+
+    fn receive(
+        &mut self,
+        target: Atom,
+        bytes: Option<&[u8]>,
+        incr: Atom,
+        utf8: Atom,
+    ) -> anyhow::Result<Option<String>> {
+        let bytes = match bytes {
+            None => {
+                anyhow::ensure!(
+                    target == incr && !self.incremental,
+                    "unexpected INCR marker"
+                );
+                // The marker contains a size estimate, not text. Do not reserve
+                // memory based on a size supplied by another client.
+                self.incremental = true;
+                return Ok(None);
+            }
+            Some(bytes) => bytes,
+        };
+        anyhow::ensure!(
+            target == utf8 || target == xcb::x::ATOM_STRING,
+            "unsupported clipboard text type"
+        );
+        let bytes = if self.incremental {
+            if let Some(previous) = self.target {
+                anyhow::ensure!(
+                    previous == target,
+                    "clipboard type changed during INCR transfer"
+                );
+            }
+            self.target = Some(target);
+            self.bytes.extend_from_slice(bytes);
+            if !bytes.is_empty() {
+                return Ok(None);
+            }
+            self.bytes.as_slice()
+        } else {
+            bytes
+        };
+
+        // Decode only after the complete transfer, since chunks can split a
+        // UTF-8 character. STRING retains its existing Latin-1 interpretation.
+        Ok(Some(if target == xcb::x::ATOM_STRING {
+            bytes.iter().map(|&c| c as char).collect()
+        } else {
+            String::from_utf8_lossy(bytes).to_string()
+        }))
     }
 }
 
@@ -118,6 +225,8 @@ const _NET_WM_MOVERESIZE_CANCEL: u32 = 11;
 
 impl Drop for XWindowInner {
     fn drop(&mut self) {
+        self.finish_selection(Clipboard::Clipboard, None);
+        self.finish_selection(Clipboard::PrimarySelection, None);
         if self.window_id != xcb::x::Window::none() {
             if let Some(conn) = self.conn.upgrade() {
                 self.conn()
@@ -791,7 +900,9 @@ impl XWindowInner {
                     }
                 }
             }
-            Event::X(xcb::x::Event::DestroyNotify(_)) => {
+            Event::X(xcb::x::Event::DestroyNotify(e)) if e.window() == self.window_id => {
+                self.finish_selection(Clipboard::Clipboard, None);
+                self.finish_selection(Clipboard::PrimarySelection, None);
                 self.events.dispatch(WindowEvent::Destroyed);
                 conn.windows.borrow_mut().remove(&self.window_id);
                 conn.child_to_parent_id.borrow_mut().remove(&self.child_id);
@@ -814,6 +925,16 @@ impl XWindowInner {
                 }
             }
             Event::X(xcb::x::Event::PropertyNotify(msg)) => {
+                if msg.state() == xcb::x::Property::NewValue && msg.atom() == conn.atom_xsel_data {
+                    for clipboard in [Clipboard::Clipboard, Clipboard::PrimarySelection] {
+                        let receiving = matches!(self.copy_and_paste.request_mut(clipboard).as_ref(),
+                            Some(request) if request.requestor == msg.window() && request.data.incremental);
+                        if receiving {
+                            self.read_selection_property(clipboard);
+                            break;
+                        }
+                    }
+                }
                 let atom_name = conn.atom_name(msg.atom());
                 log::trace!("PropertyNotifyEvent {atom_name}");
 
@@ -970,7 +1091,6 @@ impl XWindowInner {
         log::debug!("SEL: window_id={window_id:?} {:?}", request);
         if let Some(clipboard) = self.selection_atom_to_clipboard(request.selection()) {
             self.copy_and_paste.clipboard_mut(clipboard).take();
-            self.copy_and_paste.request_mut(clipboard).take();
             self.update_selection_owner(clipboard)?;
         }
 
@@ -1057,6 +1177,55 @@ impl XWindowInner {
         Ok(())
     }
 
+    /// Retire the requestor before another read can start. Late events from its
+    /// owner will no longer route to this window.
+    fn finish_selection(&mut self, clipboard: Clipboard, result: Option<anyhow::Result<String>>) {
+        if let Some(mut request) = self.copy_and_paste.request_mut(clipboard).take() {
+            if let Some(conn) = self.conn.upgrade() {
+                if !request.requestor.is_none() {
+                    conn.child_to_parent_id
+                        .borrow_mut()
+                        .remove(&request.requestor);
+                    conn.send_request_no_reply_log(&xcb::x::DestroyWindow {
+                        window: request.requestor,
+                    });
+                }
+            }
+            if let Some(result) = result {
+                request.promise.take().unwrap().result(result);
+            }
+        }
+    }
+
+    fn read_selection_property(&mut self, clipboard: Clipboard) {
+        let conn = self.conn();
+        let result = {
+            let request = self.copy_and_paste.request_mut(clipboard).as_mut().unwrap();
+            conn.send_and_wait_request(&xcb::x::GetProperty {
+                // Deletion acknowledges the INCR marker and each chunk.
+                delete: true,
+                window: request.requestor,
+                property: conn.atom_xsel_data,
+                r#type: xcb::x::ATOM_ANY,
+                long_offset: 0,
+                long_length: u32::MAX,
+            })
+            .and_then(|property| {
+                request
+                    .data
+                    .read_property(&property, conn.atom_incr, conn.atom_utf8_string)
+            })
+        };
+        match result {
+            Ok(None) => {}
+            Ok(Some(text)) => self.finish_selection(clipboard, Some(Ok(text))),
+            Err(err) => {
+                log::error!("Error reading clipboard selection: {err:#}");
+                self.finish_selection(clipboard, Some(Err(err)));
+            }
+        }
+    }
+
     fn selection_notify(&mut self, selection: &xcb::x::SelectionNotifyEvent) -> anyhow::Result<()> {
         let conn = self.conn();
         let window_id = self.window_id;
@@ -1069,75 +1238,46 @@ impl XWindowInner {
         );
 
         if let Some(clipboard) = self.selection_atom_to_clipboard(selection.selection()) {
+            let request = match self.copy_and_paste.request_mut(clipboard).as_mut() {
+                Some(request)
+                    if request.requestor == selection.requestor()
+                        && request.target == selection.target() =>
+                {
+                    request
+                }
+                _ => return Ok(()),
+            };
             if selection.property() == xcb::x::ATOM_NONE {
                 if selection.target() == conn.atom_utf8_string {
                     log::trace!(
                         "SEL: window_id={window_id:?} -> UTF-8 selection data \
                          available, requesting STRING instead"
                     );
-                    conn.send_request_no_reply_log(&xcb::x::ConvertSelection {
-                        requestor: window_id,
+                    request.target = xcb::x::ATOM_STRING;
+                    let result = conn.send_request_no_reply(&xcb::x::ConvertSelection {
+                        requestor: request.requestor,
                         selection: selection.selection(),
                         target: xcb::x::ATOM_STRING,
                         property: conn.atom_xsel_data,
                         time: self.copy_and_paste.time,
                     });
+                    if let Err(err) = result {
+                        self.finish_selection(clipboard, Some(Err(err)));
+                    }
                     return Ok(());
                 }
 
-                if let Some(mut promise) = self.copy_and_paste.request_mut(clipboard).take() {
-                    log::trace!(
-                        "SEL: window_id={window_id:?} -> no compatible selection data \
-                         available, fulfil promise with empty string"
-                    );
-                    promise.ok("".to_owned());
-                    return Ok(());
-                }
-                log::trace!(
-                    "SEL: window_id={window_id:?} -> no compatible selection data \
-                     available, and no promise. weird!"
-                );
-
+                self.finish_selection(clipboard, Some(Ok(String::new())));
                 return Ok(());
             }
 
-            match conn.send_and_wait_request(&xcb::x::GetProperty {
-                delete: false,
-                window: selection.requestor(),
-                property: selection.property(),
-                r#type: selection.target(),
-                long_offset: 0,
-                long_length: u32::max_value(),
-            }) {
-                Ok(prop) => {
-                    if let Some(mut promise) = self.copy_and_paste.request_mut(clipboard).take() {
-                        fn latin1_to_string(s: &[u8]) -> String {
-                            s.iter().map(|&c| c as char).collect()
-                        }
-
-                        let data = if selection.target() == xcb::x::ATOM_STRING {
-                            latin1_to_string(prop.value())
-                        } else {
-                            // selection.target() is probably == conn.atom_utf8_string,
-                            // because we only ever ask for either STRING or UTF8_STRING.
-                            // If it isn't, we'll just try to convert it anyway.
-                            String::from_utf8_lossy(prop.value()).to_string()
-                        };
-
-                        promise.ok(data);
-                    }
-
-                    conn.send_request_no_reply(&xcb::x::DeleteProperty {
-                        window: self.window_id,
-                        property: conn.atom_xsel_data,
-                    })?;
-                }
-                Err(err) => {
-                    log::error!("clipboard: err while getting clipboard property: {:?}", err);
-                    if let Some(mut promise) = self.copy_and_paste.request_mut(clipboard).take() {
-                        promise.ok("".to_owned());
-                    }
-                }
+            if selection.property() == conn.atom_xsel_data {
+                self.read_selection_property(clipboard);
+            } else {
+                self.finish_selection(
+                    clipboard,
+                    Some(Err(anyhow!("unexpected clipboard property"))),
+                );
             }
         } else if selection.selection() == conn.atom_xdndselection
             && selection.property() == conn.atom_xsel_data
@@ -1592,6 +1732,8 @@ impl XWindow {
 
 impl XWindowInner {
     fn close(&mut self) {
+        self.finish_selection(Clipboard::Clipboard, None);
+        self.finish_selection(Clipboard::PrimarySelection, None);
         let conn = self.conn();
         conn.flush()
             .context("flush pending requests prior to issuing DestroyWindow")
@@ -2123,7 +2265,7 @@ impl WindowOps for XWindow {
         log::trace!("SEL: window_id={window_id:?} Window::get_clipboard {clipboard:?} called");
         let mut promise = Promise::new();
         let future = promise.get_future().unwrap();
-        let mut promise = Some(promise);
+        let mut request = SelectionRequest::new(promise);
 
         XConnection::with_window_inner(window_id, move |inner| {
             // In theory, we could simply consult inner.copy_and_paste to see
@@ -2133,17 +2275,36 @@ impl WindowOps for XWindow {
             // invalidate that state, so we always ask the X server to for
             // the selection, even if it is a little slower.
             // <https://github.com/wezterm/wezterm/issues/2110>
-            let promise = promise.take().unwrap();
             log::debug!(
                 "SEL: window_id={window_id:?} Window::get_clipboard: \
                         {clipboard:?}, prepare promise, time={}",
                 inner.copy_and_paste.time
             );
-            inner.copy_and_paste.request_mut(clipboard).replace(promise);
             let conn = inner.conn();
+            inner.finish_selection(clipboard, None);
+            let requestor = conn.generate_id();
+            conn.send_request_no_reply(&xcb::x::CreateWindow {
+                depth: 0,
+                wid: requestor,
+                parent: conn.root,
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                border_width: 0,
+                class: xcb::x::WindowClass::InputOnly,
+                visual: 0,
+                value_list: &[xcb::x::Cw::EventMask(xcb::x::EventMask::PROPERTY_CHANGE)],
+            })?;
+            request.requestor = requestor;
+            request.target = conn.atom_utf8_string;
+            conn.child_to_parent_id
+                .borrow_mut()
+                .insert(requestor, inner.window_id);
+            inner.copy_and_paste.request_mut(clipboard).replace(request);
             // Find the owner and ask them to send us the buffer
-            conn.send_request_no_reply_log(&xcb::x::ConvertSelection {
-                requestor: inner.window_id,
+            let result = conn.send_request_no_reply(&xcb::x::ConvertSelection {
+                requestor,
                 selection: match clipboard {
                     Clipboard::Clipboard => conn.atom_clipboard,
                     Clipboard::PrimarySelection => xcb::x::ATOM_PRIMARY,
@@ -2152,6 +2313,9 @@ impl WindowOps for XWindow {
                 property: conn.atom_xsel_data,
                 time: inner.copy_and_paste.time,
             });
+            if let Err(err) = result {
+                inner.finish_selection(clipboard, Some(Err(err)));
+            }
             Ok(())
         });
 
@@ -2253,5 +2417,134 @@ impl NetWmStateAction {
         } else {
             Self::Remove
         }
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::{SelectionData, SelectionRequest};
+    use promise::Promise;
+    use xcb::x::{Atom, ATOM_ATOM, ATOM_CARDINAL, ATOM_NONE, ATOM_STRING};
+
+    // Distinct atoms stand in for the dynamically interned INCR and UTF8_STRING.
+    const INCR: Atom = ATOM_CARDINAL;
+    const UTF8: Atom = ATOM_ATOM;
+
+    #[test]
+    fn clipboard_direct_and_incremental_boundaries() {
+        // KWin switches to INCR at 64,512 bytes in the reported reproduction.
+        // Completion depends on the protocol terminator, not that size.
+        for size in [0, 1, 64_511, 64_512, 64_513, 173_600] {
+            let expected = "x".repeat(size);
+            let mut direct = SelectionData::default();
+            assert_eq!(
+                direct
+                    .receive(UTF8, Some(expected.as_bytes()), INCR, UTF8)
+                    .unwrap(),
+                Some(expected.clone())
+            );
+
+            let mut incremental = SelectionData::default();
+            assert_eq!(incremental.receive(INCR, None, INCR, UTF8).unwrap(), None);
+            for chunk in expected.as_bytes().chunks(4093) {
+                assert_eq!(
+                    incremental.receive(UTF8, Some(chunk), INCR, UTF8).unwrap(),
+                    None
+                );
+            }
+            assert_eq!(
+                incremental.receive(UTF8, Some(&[]), INCR, UTF8).unwrap(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn clipboard_decodes_utf8_after_all_chunks_arrive() {
+        // Every multi-byte code point is split across separate properties.
+        let expected = "Grüße 日本語 🦀 e\u{301}\n";
+        let mut data = SelectionData::default();
+        assert!(data.receive(INCR, None, INCR, UTF8).unwrap().is_none());
+        for byte in expected.as_bytes() {
+            assert!(data
+                .receive(UTF8, Some(&[*byte]), INCR, UTF8)
+                .unwrap()
+                .is_none());
+        }
+        assert_eq!(
+            data.receive(UTF8, Some(&[]), INCR, UTF8).unwrap(),
+            Some(expected.into())
+        );
+    }
+
+    #[test]
+    fn clipboard_string_retains_latin1_decoding() {
+        let mut data = SelectionData::default();
+        data.receive(INCR, None, INCR, UTF8).unwrap();
+        assert!(data
+            .receive(ATOM_STRING, Some(b"caf"), INCR, UTF8)
+            .unwrap()
+            .is_none());
+        assert!(data
+            .receive(ATOM_STRING, Some(&[0xe9]), INCR, UTF8)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            data.receive(ATOM_STRING, Some(&[]), INCR, UTF8).unwrap(),
+            Some("café".into())
+        );
+        assert_eq!(
+            SelectionData::default()
+                .receive(ATOM_STRING, Some(&[0xe9]), INCR, UTF8)
+                .unwrap(),
+            Some("é".into())
+        );
+    }
+
+    #[test]
+    fn clipboard_rejects_invalid_incremental_types() {
+        let mut data = SelectionData::default();
+        data.receive(INCR, None, INCR, UTF8).unwrap();
+        assert!(data
+            .receive(UTF8, Some(b"partial"), INCR, UTF8)
+            .unwrap()
+            .is_none());
+        // A type change must not return the partial text, even on an empty chunk.
+        assert!(data.receive(ATOM_STRING, Some(&[]), INCR, UTF8).is_err());
+        assert!(data.receive(INCR, None, INCR, UTF8).is_err());
+        assert!(SelectionData::default()
+            .receive(ATOM_NONE, Some(&[]), INCR, UTF8)
+            .is_err());
+    }
+
+    #[test]
+    fn clipboard_and_primary_buffers_are_independent() {
+        let mut clipboard = SelectionData::default();
+        let mut primary = SelectionData::default();
+        clipboard.receive(INCR, None, INCR, UTF8).unwrap();
+        primary.receive(INCR, None, INCR, UTF8).unwrap();
+        clipboard
+            .receive(UTF8, Some(b"clipboard"), INCR, UTF8)
+            .unwrap();
+        primary.receive(UTF8, Some(b"primary"), INCR, UTF8).unwrap();
+        assert_eq!(
+            primary.receive(UTF8, Some(&[]), INCR, UTF8).unwrap(),
+            Some("primary".into())
+        );
+        assert_eq!(
+            clipboard.receive(UTF8, Some(&[]), INCR, UTF8).unwrap(),
+            Some("clipboard".into())
+        );
+    }
+
+    #[test]
+    fn clipboard_abandoned_request_completes_its_future() {
+        // The same guard is moved into the GUI queue before a requestor exists,
+        // so dropping a closure for an already-closed window also wakes callers.
+        let mut promise = Promise::new();
+        let future = promise.get_future().unwrap();
+        let request = SelectionRequest::new(promise);
+        drop(request);
+        assert!(futures_lite::future::block_on(future).is_err());
     }
 }
