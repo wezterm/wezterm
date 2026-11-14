@@ -611,6 +611,29 @@ fn scroll_up_within_left_and_right_margins() {
 }
 
 #[test]
+fn left_and_right_margins_zero_right_means_last_column() {
+    let mut term = TestTerm::new(3, 5, 0);
+    term.print("abcde");
+    term.cup(3, 2);
+
+    // Allow left/right margins to be set
+    term.set_mode("?69", true);
+
+    // A right margin of 0 selects the last column, as it does in xterm,
+    // so this sets the margins to columns 2 through 5.
+    term.print(CSI);
+    term.print("2;0s");
+
+    // Setting the margins homes the cursor
+    term.assert_cursor_pos(0, 0, Some("DECSLRM homes the cursor"), None);
+
+    // Column 1 is now outside the margins, so ICH has no effect there
+    term.print(CSI);
+    term.print("@");
+    assert_visible_contents(&term, file!(), line!(), &["abcde", "", ""]);
+}
+
+#[test]
 fn scroll_down_within_left_and_right_margins() {
     let ones = "1".repeat(NUM_COLS);
     let twos = "2".repeat(NUM_COLS);
