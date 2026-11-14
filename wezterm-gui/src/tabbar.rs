@@ -243,15 +243,15 @@ fn compute_tab_title(
 
                 match pane.progress {
                     Progress::None => {}
-                    Progress::Percentage(pct) | Progress::Error(pct) => {
+                    Progress::Percentage(pct) | Progress::Error(pct) | Progress::Paused(pct) => {
                         let graphic = format!("{} ", pct_to_glyph(pct));
                         len += unicode_column_width(&graphic, None);
-                        let color = if matches!(pane.progress, Progress::Percentage(_)) {
-                            FormatItem::Foreground(FormatColor::AnsiColor(AnsiColor::Green))
-                        } else {
-                            FormatItem::Foreground(FormatColor::AnsiColor(AnsiColor::Red))
+                        let color = match pane.progress {
+                            Progress::Error(_) => AnsiColor::Red,
+                            Progress::Paused(_) => AnsiColor::Yellow,
+                            _ => AnsiColor::Green,
                         };
-                        items.push(color);
+                        items.push(FormatItem::Foreground(FormatColor::AnsiColor(color)));
                         items.push(FormatItem::Text(graphic));
                         items.push(FormatItem::Foreground(FormatColor::Default));
                     }

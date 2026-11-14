@@ -343,7 +343,10 @@ impl OperatingSystemCommand {
                             ));
                         }
                         b"4" => {
-                            return Ok(OperatingSystemCommand::ConEmuProgress(Progress::Paused));
+                            let pct = osc.get(3).map(get_pct).unwrap_or(0);
+                            return Ok(OperatingSystemCommand::ConEmuProgress(Progress::Paused(
+                                pct,
+                            )));
                         }
                         _ => {}
                     }
@@ -611,7 +614,7 @@ impl Display for OperatingSystemCommand {
             ConEmuProgress(Progress::SetPercentage(pct)) => write!(f, "9;4;1;{pct}")?,
             ConEmuProgress(Progress::SetError(pct)) => write!(f, "9;4;2;{pct}")?,
             ConEmuProgress(Progress::SetIndeterminate) => write!(f, "9;4;3")?,
-            ConEmuProgress(Progress::Paused) => write!(f, "9;4;4")?,
+            ConEmuProgress(Progress::Paused(pct)) => write!(f, "9;4;4;{pct}")?,
         };
         // Use the longer form ST as neovim doesn't like the BEL version
         write!(f, "\x1b\\")?;
@@ -886,7 +889,7 @@ pub enum Progress {
     SetPercentage(u8),
     SetError(u8),
     SetIndeterminate,
-    Paused,
+    Paused(u8),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1740,8 +1743,12 @@ mod test {
             OperatingSystemCommand::ConEmuProgress(Progress::SetIndeterminate)
         );
         assert_eq!(
-            parse(&["9", "4", "4"], "\x1b]9;4;4\x1b\\"),
-            OperatingSystemCommand::ConEmuProgress(Progress::Paused)
+            parse(&["9", "4", "4", "80"], "\x1b]9;4;4;80\x1b\\"),
+            OperatingSystemCommand::ConEmuProgress(Progress::Paused(80))
+        );
+        assert_eq!(
+            parse(&["9", "4", "4"], "\x1b]9;4;4;0\x1b\\"),
+            OperatingSystemCommand::ConEmuProgress(Progress::Paused(0))
         );
     }
 
