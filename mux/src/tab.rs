@@ -2004,11 +2004,15 @@ impl TabInner {
                 // Pre-emptively resize the tab contents down to
                 // match the target size; it's easier to reuse
                 // existing resize logic that way
-                if request.target_is_second {
-                    self.resize(split_info.first.clone());
+                let (pane_size, rest_size) = if request.target_is_second {
+                    (split_info.second, split_info.first)
                 } else {
-                    self.resize(split_info.second.clone());
-                }
+                    (split_info.first, split_info.second)
+                };
+                pane.resize(pane_size)?;
+                self.resize(rest_size);
+                // Restore the overall tab size
+                self.size = tab_size;
             }
 
             let mut cursor = self.pane.take().unwrap().cursor();
