@@ -391,6 +391,21 @@ impl CellAttributes {
         self.deallocate_fat_attributes_if_none();
     }
 
+    /// Replace the data for all slices of a Kitty image, preserving placement
+    /// attributes and z-order. Returns whether any attachments were updated.
+    pub fn replace_image_data(&mut self, image_id: u32, data: &Arc<image::ImageData>) -> bool {
+        let mut changed = false;
+        if let Some(fat) = self.fat.as_mut() {
+            for im in &mut fat.image {
+                if im.image_id() == Some(image_id) {
+                    im.data = Arc::clone(data);
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     /// Add an image attachement, preserving any existing attachments.
     /// The list of images is maintained in z-index order
     pub fn attach_image(&mut self, image: Box<ImageCell>) -> &mut Self {
