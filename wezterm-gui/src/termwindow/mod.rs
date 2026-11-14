@@ -890,6 +890,29 @@ impl TermWindow {
             myself.load_os_parameters();
             window.show();
             myself.subscribe_to_pane_updates();
+            // Tabs may have been added to the mux window while we were
+            // awaiting window creation above, before we subscribed, in
+            // which case we missed their TabAddedToWindow notifications.
+            // This is common when attaching to a local unix domain,
+            // because the attach completes very quickly.
+            // Replay those notifications for the tabs that are already
+            // present. This is queued rather than applied right away, so
+            // that it runs in the same way as the notifications would.
+            window.notify(TermWindowNotif::Apply(Box::new(|tw| {
+                let window = match tw.window.clone() {
+                    Some(window) => window,
+                    None => return,
+                };
+                let tabs: Vec<Arc<Tab>> = match Mux::get().get_window(tw.mux_window_id) {
+                    Some(mux_window) => mux_window.iter_tabs().cloned().collect(),
+                    None => return,
+                };
+                for tab in tabs {
+                    if let Err(err) = tw.fit_to_tab(&tab, &window) {
+                        log::error!("fit_to_tab: {:#}", err);
+                    }
+                }
+            })));
             myself.emit_window_event("window-config-reloaded", None);
             myself.emit_status_event();
         }
@@ -1259,31 +1282,8 @@ impl TermWindow {
                     window_id: _,
                     tab_id,
                 } => {
-                    let mux = Mux::get();
-                    let mut size = self.terminal_size;
-                    if let Some(tab) = mux.get_tab(tab_id) {
-                        // If we attached to a remote domain and loaded in
-                        // a tab async, we need to fixup its size, either
-                        // by resizing it or resizes ourselves.
-                        // The strategy here is to adjust both by taking
-                        // the maximal size in both horizontal and vertical
-                        // dimensions and applying that. In practice that
-                        // means that a new local client will resize larger
-                        // to adjust to the size of an existing client.
-                        let tab_size = tab.get_size();
-                        size.rows = size.rows.max(tab_size.rows);
-                        size.cols = size.cols.max(tab_size.cols);
-
-                        if size.rows != self.terminal_size.rows
-                            || size.cols != self.terminal_size.cols
-                            || size.pixel_width != self.terminal_size.pixel_width
-                            || size.pixel_height != self.terminal_size.pixel_height
-                        {
-                            self.set_window_size(size, window)?;
-                        } else if tab_size.dpi == 0 {
-                            log::debug!("fixup dpi in newly added tab");
-                            tab.resize(self.terminal_size);
-                        }
+                    if let Some(tab) = Mux::get().get_tab(tab_id) {
+                        self.fit_to_tab(&tab, window)?;
                     }
                 }
                 MuxNotification::PaneOutput(pane_id) => {
@@ -1360,6 +1360,39 @@ impl TermWindow {
             }
         }
 
+        Ok(())
+    }
+
+    /// If we attached to a remote domain and loaded in a tab async, we
+    /// need to fixup its size, either by resizing it or resizes ourselves.
+    /// The strategy here is to adjust both by taking the maximal size in
+    /// both horizontal and vertical dimensions and applying that. In
+    /// practice that means that a new local client will resize larger to
+    /// adjust to the size of an existing client.
+    fn fit_to_tab(&mut self, tab: &Arc<Tab>, window: &Window) -> anyhow::Result<()> {
+        let mut size = self.terminal_size;
+        let tab_size = tab.get_size();
+        size.rows = size.rows.max(tab_size.rows);
+        size.cols = size.cols.max(tab_size.cols);
+
+        if size.rows != self.terminal_size.rows
+            || size.cols != self.terminal_size.cols
+            || size.pixel_width != self.terminal_size.pixel_width
+            || size.pixel_height != self.terminal_size.pixel_height
+        {
+            log::debug!(
+                "resize window from {}x{} to {}x{} to fit tab {}",
+                self.terminal_size.cols,
+                self.terminal_size.rows,
+                size.cols,
+                size.rows,
+                tab.tab_id()
+            );
+            self.set_window_size(size, window)?;
+        } else if tab_size.dpi == 0 {
+            log::debug!("fixup dpi in newly added tab");
+            tab.resize(self.terminal_size);
+        }
         Ok(())
     }
 
