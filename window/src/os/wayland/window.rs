@@ -839,13 +839,19 @@ impl WaylandWindowInner {
             self.events.dispatch(WindowEvent::CloseRequested);
         }
 
+        let mut need_resize_event = false;
+        let mut need_repaint = false;
+
         if let Some(window_state) = pending.window_state.take() {
             log::debug!(
                 "dispatch_pending_event self.window_state={:?}, pending:{:?}",
                 self.window_state,
                 window_state
             );
-            self.window_state = window_state;
+            if self.window_state != window_state {
+                need_resize_event = true;
+                self.window_state = window_state;
+            }
         }
 
         if pending.configure.is_none() {
@@ -868,6 +874,7 @@ impl WaylandWindowInner {
         if let Some((mut w, mut h)) = pending.configure.take() {
             log::trace!("Pending configure: w:{w}, h{h} -- {:?}", self.window);
             if self.window.is_some() {
+                need_repaint = true;
                 let surface_udata = SurfaceUserData::from_wl(self.surface());
                 let factor = surface_udata.surface_data.scale_factor() as f64;
                 let old_dimensions = self.dimensions;
@@ -931,15 +938,9 @@ impl WaylandWindowInner {
                 // Only trigger a resize if the new dimensions are different;
                 // this makes things more efficient and a little more smooth
                 if new_dimensions != old_dimensions {
+                    need_resize_event = true;
                     self.dimensions = new_dimensions;
 
-                    self.events.dispatch(WindowEvent::Resized {
-                        dimensions: self.dimensions,
-                        window_state: self.window_state,
-                        // We don't know if we're live resizing or not, so
-                        // assume no.
-                        live_resizing: false,
-                    });
                     // Avoid blurring by matching the scaling factor of the
                     // compositor; if it is going to double the size then
                     // we render at double the size anyway and tell it that
@@ -976,8 +977,20 @@ impl WaylandWindowInner {
                     }
                     self.update_window_background_blur();
                 }
-                self.do_paint().unwrap();
             }
+        }
+        if need_resize_event && self.window.is_some() {
+            self.events.dispatch(WindowEvent::Resized {
+                dimensions: self.dimensions,
+                window_state: self.window_state,
+                // We don't know if we're live resizing or not, so
+                // assume no.
+                live_resizing: false,
+            });
+            need_repaint = true;
+        }
+        if need_repaint {
+            self.do_paint().unwrap();
         }
         if pending.refresh_decorations && self.window.is_some() {
             self.refresh_frame();
@@ -1414,6 +1427,10 @@ impl WaylandState {
                 }
                 if configure.state.contains(SCTKWindowState::MAXIMIZED) {
                     state |= WindowState::MAXIMIZED;
+                }
+                // TILED contains multiple independent bits for screen edges
+                if configure.state.intersects(SCTKWindowState::TILED) {
+                    state |= WindowState::TILED;
                 }
 
                 log::debug!(
