@@ -145,7 +145,7 @@ impl super::TermWindow {
         self.quad_generation += 1;
 
         if scale_changed_cells.is_some() && !self.window_state.can_resize() {
-            log::warn!(
+            log::trace!(
                 "cannot resize window to match {:?} because window_state is {:?}",
                 scale_changed_cells,
                 self.window_state
