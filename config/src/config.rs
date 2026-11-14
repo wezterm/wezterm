@@ -300,6 +300,19 @@ pub struct Config {
     pub freetype_render_target: Option<FreeTypeLoadTarget>,
     #[dynamic(default)]
     pub freetype_load_flags: Option<FreeTypeLoadFlags>,
+    /// Draw fonts with a thicker stroke, if supported.
+    #[dynamic(default)]
+    pub font_thicken: bool,
+    /// Strength of thickening when `font_thicken` is enabled.
+    ///
+    /// Valid values are integers between `0` and `255`. `0` does not
+    /// correspond to *no* thickening, rather it corresponds to the
+    /// lightest available thickening.
+    ///
+    /// Has no effect when `font_thicken` is set to `false`.
+    ///
+    #[dynamic(default = "default_font_thicken_strength")]
+    pub font_thicken_strength: u8,
 
     /// Selects the freetype interpret version to use.
     /// Likely values are 35, 38 and 40 which have different
@@ -2211,4 +2224,8 @@ fn default_macos_forward_mods() -> Modifiers {
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {
     FontRasterizerSelection::Harfbuzz
+}
+
+fn default_font_thicken_strength() -> u8 {
+    255
 }
