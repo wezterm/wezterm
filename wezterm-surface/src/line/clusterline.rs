@@ -112,7 +112,7 @@ impl ClusteredLine {
 
         for cell in iter {
             len += cell.width();
-            last_cell_width = NonZeroU8::new(1);
+            last_cell_width = NonZeroU8::new(cell.width() as u8);
 
             if cell.width() > 1 {
                 any_double = true;
@@ -300,12 +300,17 @@ impl ClusteredLine {
     }
 
     fn compute_last_cell_width(&mut self) -> Option<NonZeroU8> {
-        if self.last_cell_width.is_none() {
-            if let Some(last_cell) = self.iter().last() {
-                self.last_cell_width = NonZeroU8::new(last_cell.width() as u8);
-            }
-        }
-        self.last_cell_width
+        let len = self.len();
+        let width = if len == 0 {
+            return None;
+        } else if len > 1 && self.is_double_wide(len - 2) {
+            2
+        } else {
+            1
+        };
+        let width = NonZeroU8::new(width).unwrap();
+        self.last_cell_width = Some(width);
+        Some(width)
     }
 
     pub fn set_last_cell_was_wrapped(&mut self, wrapped: bool) {
@@ -372,6 +377,23 @@ impl<'a> Iterator for ClusterLineCellIter<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn set_wrapped_uses_double_width_metadata() {
+        let cell = Cell::new_grapheme("界", CellAttributes::default(), None);
+        let mut line = ClusteredLine::from_cell_vec(
+            2,
+            core::iter::once(CellRef::CellRef {
+                cell_index: 0,
+                cell: &cell,
+            }),
+        );
+        line.last_cell_width = NonZeroU8::new(1);
+
+        line.set_last_cell_was_wrapped(true);
+
+        assert!(line.iter().last().unwrap().attrs().wrapped());
+    }
 
     #[test]
     #[cfg(target_pointer_width = "64")]
