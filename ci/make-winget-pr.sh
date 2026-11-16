@@ -2,19 +2,58 @@
 # Create a winget-pkgs branch for a WezTerm Windows installer and push it.
 #
 # Usage:
-#   ./ci/make-winget-pr.sh <winget_repo_path> <setup_exe>
-#   ./ci/make-winget-pr.sh <winget_repo_path> <setup_exe> nightly
+#   bash ci/make-winget-pr.sh <winget_repo_path> <setup_exe>
+#   bash ci/make-winget-pr.sh <winget_repo_path> <setup_exe> nightly
 #
 # <winget_repo_path> is a checkout of the winget-pkgs fork. The script hashes
 # <setup_exe>, writes the manifest, commits, and pushes a branch. The caller
 # opens the pull request. Pass nightly to publish wez.wezterm.nightly against
 # the rolling nightly release instead of a tagged stable build.
-set -xe
+set -xeo pipefail
 
 winget_repo=$1
 setup_exe=$2
-channel=$3
+channel=${3:-stable}
+
+case "$channel" in
+  stable|nightly) ;;
+  *)
+    echo "unknown channel '$channel': expected 'stable' or 'nightly'" >&2
+    exit 1
+    ;;
+esac
+
+if [ ! -f "$setup_exe" ]; then
+  echo "installer '$setup_exe' not found" >&2
+  exit 1
+fi
+
+# Derive everything that depends on the wezterm checkout or the installer
+# before we cd into the winget repo.
 VERSION=$(ci/tag-name.sh)
+release_date=$(git show -s "--format=%cd" "--date=format:%Y-%m-%d")
+exehash=$(sha256sum -b "$setup_exe" | cut -f1 -d' ' | tr a-f A-F)
+setup_exe_name=$(basename "$setup_exe")
+
+if [ "$channel" = "nightly" ]; then
+  branch="update-wezterm-nightly-${VERSION}"
+  package_id="wez.wezterm.nightly"
+  package_dir="manifests/w/wez/wezterm/nightly"
+  installer_url="https://github.com/wezterm/wezterm/releases/download/nightly/${setup_exe_name}"
+  package_name="WezTerm (Nightly)"
+  short_description="A GPU-accelerated cross-platform terminal emulator and multiplexer implemented in Rust (nightly build)"
+  release_notes_url="https://github.com/wezterm/wezterm/releases/tag/nightly"
+else
+  branch="$VERSION"
+  package_id="wez.wezterm"
+  package_dir="manifests/w/wez/wezterm"
+  installer_url="https://github.com/wezterm/wezterm/releases/download/${VERSION}/${setup_exe_name}"
+  package_name="WezTerm"
+  short_description="A GPU-accelerated cross-platform terminal emulator and multiplexer implemented in Rust"
+  release_notes_url="https://wezterm.org/changelog.html#${VERSION}"
+fi
+manifest_dir="${package_dir}/${VERSION}"
+commit_message="New version: ${package_id} version ${VERSION}"
 
 cd "$winget_repo" || exit 1
 
@@ -22,37 +61,20 @@ cd "$winget_repo" || exit 1
 git remote add upstream https://github.com/microsoft/winget-pkgs.git || true
 git fetch upstream master --quiet
 
-if [ "$channel" = "nightly" ]; then
-  branch="update-wezterm-nightly-${VERSION}"
-  package_id="wez.wezterm.nightly"
-  manifest_dir="manifests/w/wez/wezterm/nightly/${VERSION}"
-  installer_url="https://github.com/wezterm/wezterm/releases/download/nightly/${setup_exe}"
-  package_name="WezTerm (Nightly)"
-  short_description="A GPU-accelerated cross-platform terminal emulator and multiplexer implemented in Rust (nightly build)"
-  release_notes_url="https://wezterm.org/changelog.html"
-  release_date=$(date +%Y-%m-%d)
-  commit_message="New version: wez.wezterm.nightly version ${VERSION}"
-else
-  branch="$VERSION"
-  package_id="wez.wezterm"
-  manifest_dir="manifests/w/wezterm/wezterm/${VERSION}"
-  installer_url="https://github.com/wezterm/wezterm/releases/download/${VERSION}/${setup_exe}"
-  package_name="WezTerm"
-  short_description="A GPU-accelerated cross-platform terminal emulator and multiplexer implemented in Rust"
-  release_notes_url="https://wezterm.org/changelog.html#${VERSION}"
-  commit_message="New version: wez.wezterm version ${VERSION}"
-fi
-
 git checkout -b "$branch" upstream/master
 
-exehash=$(sha256sum -b ../$setup_exe | cut -f1 -d' ' | tr a-f A-F)
-
-if [ "$channel" != "nightly" ]; then
-  release_date=$(git show -s "--format=%cd" "--date=format:%Y-%m-%d")
+if [ "$channel" = "nightly" ]; then
+  # The nightly installer URL is fixed and its contents are replaced by every
+  # build, so any previously published nightly version now has a stale hash.
+  # Replace it rather than accumulating broken versions.
+  for old in "$package_dir"/*/; do
+    [ -f "${old}${package_id}.yaml" ] || continue
+    git rm -r --quiet "$old"
+  done
 fi
 
 # Create the directory structure
-mkdir "$manifest_dir"
+mkdir -p "$manifest_dir"
 
 cat > "$manifest_dir/${package_id}.installer.yaml" <<-EOT
 PackageIdentifier: ${package_id}

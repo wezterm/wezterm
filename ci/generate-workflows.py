@@ -770,10 +770,15 @@ rustup default {toolchain}
         if "windows" in self.name:
             if nightly:
                 manifest_name = "Update nightly winget manifest and push to fork"
-                manifest_run = "./ci/make-winget-pr.sh winget-pkgs WezTerm-nightly-setup.exe nightly"
+                manifest_run = "bash ci/make-winget-pr.sh winget-pkgs WezTerm-nightly-setup.exe nightly"
+                # The continuous workflow also runs on every push to main;
+                # only publish to winget from the scheduled nightly build so
+                # that we don't open a winget-pkgs PR for every commit.
+                condition = "github.event_name == 'schedule'"
             else:
                 manifest_name = "Create winget manifest and push to fork"
                 manifest_run = "bash ci/make-winget-pr.sh winget-pkgs WezTerm-*.exe"
+                condition = None
             steps += [
                 ActionStep(
                     "Checkout winget-pkgs",
@@ -783,18 +788,22 @@ rustup default {toolchain}
                         "path": "winget-pkgs",
                         "token": "${{ secrets.GH_PAT }}",
                     },
+                    condition=condition,
                 ),
                 RunStep(
                     "Setup email for winget repo",
                     "cd winget-pkgs && git config user.email wez@wezfurlong.org",
+                    condition=condition,
                 ),
                 RunStep(
                     "Setup name for winget repo",
                     "cd winget-pkgs && git config user.name 'Wez Furlong'",
+                    condition=condition,
                 ),
                 RunStep(
                     manifest_name,
                     manifest_run,
+                    condition=condition,
                 ),
                 RunStep(
                     "Submit PR",
@@ -802,6 +811,7 @@ rustup default {toolchain}
                     env={
                         "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
                     },
+                    condition=condition,
                 ),
             ]
 
