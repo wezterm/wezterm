@@ -4,6 +4,7 @@
 use super::*;
 mod c0;
 use bitflags::bitflags;
+mod ascii_fast_path;
 mod c1;
 mod csi;
 mod image;
