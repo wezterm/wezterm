@@ -128,26 +128,18 @@ jobs:
         run: "bash ci/retry.sh gh release upload --clobber nightly WezTerm-*.zip WezTerm-*.exe *.sha256"
       - name: "Checkout winget-pkgs"
         uses: actions/checkout@v5
-        if: github.event_name == 'schedule'
         with:
           repository: "wez/winget-pkgs"
           path: "winget-pkgs"
           token: "${{ secrets.GH_PAT }}"
       - name: "Setup email for winget repo"
-        if: github.event_name == 'schedule'
         shell: bash
         run: "cd winget-pkgs && git config user.email wez@wezfurlong.org"
       - name: "Setup name for winget repo"
-        if: github.event_name == 'schedule'
         shell: bash
         run: "cd winget-pkgs && git config user.name 'Wez Furlong'"
-      - name: "Update nightly winget manifest and push to fork"
-        if: github.event_name == 'schedule'
-        shell: bash
-        run: "bash ci/make-winget-pr.sh winget-pkgs WezTerm-nightly-setup.exe nightly"
-      - name: "Submit PR"
-        if: github.event_name == 'schedule'
+      - name: "Update nightly winget manifest PR"
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
         shell: bash
-        run: 'cd winget-pkgs && gh pr create --fill --body "PR automatically created by release automation in the wezterm repo"'
+        run: "bash ci/make-winget-pr.sh winget-pkgs WezTerm-nightly-setup.exe nightly"

@@ -6,9 +6,16 @@
 #   bash ci/make-winget-pr.sh <winget_repo_path> <setup_exe> nightly
 #
 # <winget_repo_path> is a checkout of the winget-pkgs fork. The script hashes
-# <setup_exe>, writes the manifest, commits, and pushes a branch. The caller
-# opens the pull request. Pass nightly to publish wez.wezterm.nightly against
-# the rolling nightly release instead of a tagged stable build.
+# <setup_exe>, writes the manifest, commits, and pushes a branch.
+#
+# For a stable build the caller opens the pull request.
+#
+# Pass nightly to publish wez.wezterm.nightly against the rolling nightly
+# release. The nightly installer lives at a fixed URL that every upload
+# replaces, so this runs after each upload and manages the pull request
+# itself (GITHUB_TOKEN must be set): it reuses a single fork branch, so at
+# most one PR is open at a time, and it does nothing when winget-pkgs or the
+# open PR already carries the current hash.
 set -xeo pipefail
 
 winget_repo=$1
@@ -36,7 +43,7 @@ exehash=$(sha256sum -b "$setup_exe" | cut -f1 -d' ' | tr a-f A-F)
 setup_exe_name=$(basename "$setup_exe")
 
 if [ "$channel" = "nightly" ]; then
-  branch="update-wezterm-nightly-${VERSION}"
+  branch="wezterm-nightly"
   package_id="wez.wezterm.nightly"
   package_dir="manifests/w/wez/wezterm/nightly"
   installer_url="https://github.com/wezterm/wezterm/releases/download/nightly/${setup_exe_name}"
@@ -61,7 +68,30 @@ cd "$winget_repo" || exit 1
 git remote add upstream https://github.com/microsoft/winget-pkgs.git || true
 git fetch upstream master --quiet
 
-git checkout -b "$branch" upstream/master
+if [ "$channel" = "nightly" ]; then
+  upstream_repo="microsoft/winget-pkgs"
+  fork_owner=$(git remote get-url origin | sed -E 's#^.*github\.com[:/]([^/]+)/.*$#\1#')
+  open_pr=$(gh pr list -R "$upstream_repo" --state open --head "$branch" \
+    --json number,headRepositoryOwner \
+    --jq ".[] | select(.headRepositoryOwner.login == \"${fork_owner}\") | .number" | head -n1)
+
+  if git grep -q -i "InstallerSha256: ${exehash}" upstream/master -- "$package_dir"; then
+    echo "winget-pkgs already has the current nightly hash; nothing to do"
+    if [ -n "$open_pr" ]; then
+      gh pr close "$open_pr" -R "$upstream_repo" --delete-branch \
+        --comment "Superseded: winget-pkgs already has the current nightly installer hash."
+    fi
+    exit 0
+  fi
+
+  if [ -n "$open_pr" ] && git fetch origin "$branch" --quiet \
+    && git grep -q -i "InstallerSha256: ${exehash}" FETCH_HEAD -- "$package_dir"; then
+    echo "open PR #${open_pr} already has the current nightly hash; nothing to do"
+    exit 0
+  fi
+fi
+
+git checkout -B "$branch" upstream/master
 
 if [ "$channel" = "nightly" ]; then
   # The nightly installer URL is fixed and its contents are replaced by every
@@ -121,4 +151,17 @@ EOT
 git add --all
 git diff --cached
 git commit -m "$commit_message"
-git push --set-upstream origin "$branch" --quiet
+
+if [ "$channel" = "nightly" ]; then
+  # The branch is reused across builds, so replace whatever it held before.
+  git push --force --set-upstream origin "$branch" --quiet
+  if [ -n "$open_pr" ]; then
+    gh pr edit "$open_pr" -R "$upstream_repo" --title "$commit_message"
+  else
+    gh pr create -R "$upstream_repo" --base master --head "${fork_owner}:${branch}" \
+      --title "$commit_message" \
+      --body "PR automatically created by release automation in the wezterm repo"
+  fi
+else
+  git push --set-upstream origin "$branch" --quiet
+fi
