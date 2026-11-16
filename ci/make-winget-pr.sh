@@ -14,8 +14,9 @@
 # release. The nightly installer lives at a fixed URL that every upload
 # replaces, so this runs after each upload and manages the pull request
 # itself (GITHUB_TOKEN must be set): it reuses a single fork branch, so at
-# most one PR is open at a time, and it does nothing when winget-pkgs or the
-# open PR already carries the current hash.
+# most one PR is open at a time, and it does nothing when winget-pkgs, our
+# open PR, or another open wez.wezterm.nightly PR (such as wingetbot's)
+# already carries the current hash.
 set -xeo pipefail
 
 winget_repo=$1
@@ -83,6 +84,24 @@ if [ "$channel" = "nightly" ]; then
     fi
     exit 0
   fi
+
+  # wingetbot and community contributors also open wez.wezterm.nightly PRs
+  # from their own forks. If one of them already carries the current hash,
+  # leave the update to it rather than racing it with a duplicate.
+  other_prs=$(gh pr list -R "$upstream_repo" --state open \
+    --search "${package_id} in:title" \
+    --json number,headRepositoryOwner,headRefName \
+    --jq ".[] | select((.headRepositoryOwner.login + \":\" + .headRefName) != \"${fork_owner}:${branch}\") | .number")
+  for pr in $other_prs; do
+    if gh pr diff "$pr" -R "$upstream_repo" | grep -q -i "^+.*InstallerSha256: ${exehash}"; then
+      echo "open PR #${pr} already has the current nightly hash; nothing to do"
+      if [ -n "$open_pr" ]; then
+        gh pr close "$open_pr" -R "$upstream_repo" --delete-branch \
+          --comment "Superseded by #${pr}, which already has the current nightly installer hash."
+      fi
+      exit 0
+    fi
+  done
 
   if [ -n "$open_pr" ] && git fetch origin "$branch" --quiet \
     && git grep -q -i "InstallerSha256: ${exehash}" FETCH_HEAD -- "$package_dir"; then
