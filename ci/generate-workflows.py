@@ -765,9 +765,15 @@ rustup default {toolchain}
             ),
         ]
 
-    def create_winget_pr(self):
+    def create_winget_pr(self, nightly=False):
         steps = []
         if "windows" in self.name:
+            if nightly:
+                manifest_name = "Update nightly winget manifest and push to fork"
+                manifest_run = "./ci/make-winget-pr.sh winget-pkgs WezTerm-nightly-setup.exe nightly"
+            else:
+                manifest_name = "Create winget manifest and push to fork"
+                manifest_run = "bash ci/make-winget-pr.sh winget-pkgs WezTerm-*.exe"
             steps += [
                 ActionStep(
                     "Checkout winget-pkgs",
@@ -787,8 +793,8 @@ rustup default {toolchain}
                     "cd winget-pkgs && git config user.name 'Wez Furlong'",
                 ),
                 RunStep(
-                    "Create winget manifest and push to fork",
-                    "bash ci/make-winget-pr.sh winget-pkgs WezTerm-*.exe",
+                    manifest_name,
+                    manifest_run,
                 ),
                 RunStep(
                     "Submit PR",
@@ -1001,7 +1007,9 @@ rustup default {toolchain}
 
         uploader = Job(
             runs_on="ubuntu-latest",
-            steps=self.checkout(submodules=False) + self.upload_asset_nightly(),
+            steps=self.checkout(submodules=False)
+            + self.upload_asset_nightly()
+            + self.create_winget_pr(nightly=True),
         )
 
         return (
