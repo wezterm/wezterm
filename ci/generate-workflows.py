@@ -768,17 +768,6 @@ rustup default {toolchain}
     def create_winget_pr(self, nightly=False):
         steps = []
         if "windows" in self.name:
-            if nightly:
-                manifest_name = "Update nightly winget manifest and push to fork"
-                manifest_run = "bash ci/make-winget-pr.sh winget-pkgs WezTerm-nightly-setup.exe nightly"
-                # The continuous workflow also runs on every push to main;
-                # only publish to winget from the scheduled nightly build so
-                # that we don't open a winget-pkgs PR for every commit.
-                condition = "github.event_name == 'schedule'"
-            else:
-                manifest_name = "Create winget manifest and push to fork"
-                manifest_run = "bash ci/make-winget-pr.sh winget-pkgs WezTerm-*.exe"
-                condition = None
             steps += [
                 ActionStep(
                     "Checkout winget-pkgs",
@@ -788,32 +777,44 @@ rustup default {toolchain}
                         "path": "winget-pkgs",
                         "token": "${{ secrets.GH_PAT }}",
                     },
-                    condition=condition,
                 ),
                 RunStep(
                     "Setup email for winget repo",
                     "cd winget-pkgs && git config user.email wez@wezfurlong.org",
-                    condition=condition,
                 ),
                 RunStep(
                     "Setup name for winget repo",
                     "cd winget-pkgs && git config user.name 'Wez Furlong'",
-                    condition=condition,
-                ),
-                RunStep(
-                    manifest_name,
-                    manifest_run,
-                    condition=condition,
-                ),
-                RunStep(
-                    "Submit PR",
-                    'cd winget-pkgs && gh pr create --fill --body "PR automatically created by release automation in the wezterm repo"',
-                    env={
-                        "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
-                    },
-                    condition=condition,
                 ),
             ]
+            if nightly:
+                # Every upload (scheduled or push) replaces the installer at
+                # the fixed nightly URL, so refresh the manifest each time.
+                # The script reuses one fork branch and opens a PR only when
+                # none is open, so this never stacks up PRs upstream.
+                steps += [
+                    RunStep(
+                        "Update nightly winget manifest PR",
+                        "bash ci/make-winget-pr.sh winget-pkgs WezTerm-nightly-setup.exe nightly",
+                        env={
+                            "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
+                        },
+                    ),
+                ]
+            else:
+                steps += [
+                    RunStep(
+                        "Create winget manifest and push to fork",
+                        "bash ci/make-winget-pr.sh winget-pkgs WezTerm-*.exe",
+                    ),
+                    RunStep(
+                        "Submit PR",
+                        'cd winget-pkgs && gh pr create --fill --body "PR automatically created by release automation in the wezterm repo"',
+                        env={
+                            "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
+                        },
+                    ),
+                ]
 
         return steps
 
