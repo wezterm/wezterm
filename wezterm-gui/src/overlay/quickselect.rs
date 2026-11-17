@@ -47,7 +47,7 @@ const PATTERNS: [&str; 14] = [
     // ip
     r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}",
     // ipv6
-    r"[A-f0-9:]+:+[A-f0-9:]+[%\w\d]+",
+    r"[a-fA-F0-9:]+:+[a-fA-F0-9:]+[%\w\d]+",
     // address
     r"0x[0-9a-fA-F]+",
     // number
