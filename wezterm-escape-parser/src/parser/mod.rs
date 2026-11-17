@@ -1303,4 +1303,115 @@ mod test {
 "
         );
     }
+
+    #[test]
+    fn decstbm() {
+        assert_eq!(
+            round_trip_parse("\x1b[r"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetTopAndBottomMargins {
+                    top: OneBased::new(1),
+                    bottom: OneBased::new(u32::max_value()),
+                }
+            ))]
+        );
+        assert_eq!(
+            parse_as("\x1b[;r", "\x1b[r"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetTopAndBottomMargins {
+                    top: OneBased::new(1),
+                    bottom: OneBased::new(u32::max_value()),
+                }
+            ))]
+        );
+        assert_eq!(
+            parse_as("\x1b[1;r", "\x1b[r"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetTopAndBottomMargins {
+                    top: OneBased::new(1),
+                    bottom: OneBased::new(u32::max_value()),
+                }
+            ))]
+        );
+        assert_eq!(
+            parse_as("\x1b[0;0r", "\x1b[r"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetTopAndBottomMargins {
+                    top: OneBased::new(1),
+                    bottom: OneBased::new(u32::max_value()),
+                }
+            ))]
+        );
+        assert_eq!(
+            parse_as("\x1b[5;r", "\x1b[5;4294967295r"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetTopAndBottomMargins {
+                    top: OneBased::new(5),
+                    bottom: OneBased::new(u32::max_value()),
+                }
+            ))]
+        );
+        assert_eq!(
+            round_trip_parse("\x1b[10;50r"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetTopAndBottomMargins {
+                    top: OneBased::new(10),
+                    bottom: OneBased::new(50),
+                }
+            ))]
+        );
+    }
+
+    #[test]
+    fn decslrm() {
+        assert_eq!(
+            round_trip_parse("\x1b[s"),
+            vec![Action::CSI(CSI::Cursor(crate::csi::Cursor::SaveCursor))]
+        );
+        assert_eq!(
+            parse_as("\x1b[;s", "\x1b[s"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetLeftAndRightMargins {
+                    left: OneBased::new(1),
+                    right: OneBased::new(u32::max_value()),
+                }
+            ))]
+        );
+        assert_eq!(
+            parse_as("\x1b[1;s", "\x1b[s"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetLeftAndRightMargins {
+                    left: OneBased::new(1),
+                    right: OneBased::new(u32::max_value()),
+                }
+            ))]
+        );
+        assert_eq!(
+            parse_as("\x1b[0;0s", "\x1b[s"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetLeftAndRightMargins {
+                    left: OneBased::new(1),
+                    right: OneBased::new(u32::max_value()),
+                }
+            ))]
+        );
+        assert_eq!(
+            parse_as("\x1b[5;s", "\x1b[5;4294967295s"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetLeftAndRightMargins {
+                    left: OneBased::new(5),
+                    right: OneBased::new(u32::max_value()),
+                }
+            ))]
+        );
+        assert_eq!(
+            round_trip_parse("\x1b[10;40s"),
+            vec![Action::CSI(CSI::Cursor(
+                crate::csi::Cursor::SetLeftAndRightMargins {
+                    left: OneBased::new(10),
+                    right: OneBased::new(40),
+                }
+            ))]
+        );
+    }
 }

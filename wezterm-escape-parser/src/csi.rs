@@ -2103,8 +2103,24 @@ impl<'a> CSIParser<'a> {
                 top: OneBased::new(1),
                 bottom: OneBased::new(u32::max_value()),
             })),
+            [CsiParam::P(b';')] => Ok(self.advance_by(
+                1,
+                params,
+                CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                    top: OneBased::new(1),
+                    bottom: OneBased::new(u32::max_value()),
+                }),
+            )),
             [p] => Ok(self.advance_by(
                 1,
+                params,
+                CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                    top: OneBased::from_esc_param(p)?,
+                    bottom: OneBased::new(u32::max_value()),
+                }),
+            )),
+            [p, CsiParam::P(b';')] => Ok(self.advance_by(
+                2,
                 params,
                 CSI::Cursor(Cursor::SetTopAndBottomMargins {
                     top: OneBased::from_esc_param(p)?,
@@ -2183,8 +2199,24 @@ impl<'a> CSIParser<'a> {
                 // with default parameters!
                 Ok(CSI::Cursor(Cursor::SaveCursor))
             }
+            [CsiParam::P(b';')] => Ok(self.advance_by(
+                1,
+                params,
+                CSI::Cursor(Cursor::SetLeftAndRightMargins {
+                    left: OneBased::new(1),
+                    right: OneBased::new(u32::max_value()),
+                }),
+            )),
             [p] => Ok(self.advance_by(
                 1,
+                params,
+                CSI::Cursor(Cursor::SetLeftAndRightMargins {
+                    left: OneBased::from_esc_param(p)?,
+                    right: OneBased::new(u32::max_value()),
+                }),
+            )),
+            [p, CsiParam::P(b';')] => Ok(self.advance_by(
+                2,
                 params,
                 CSI::Cursor(Cursor::SetLeftAndRightMargins {
                     left: OneBased::from_esc_param(p)?,
@@ -2196,7 +2228,7 @@ impl<'a> CSIParser<'a> {
                 params,
                 CSI::Cursor(Cursor::SetLeftAndRightMargins {
                     left: OneBased::from_esc_param(a)?,
-                    right: OneBased::from_esc_param(b)?,
+                    right: OneBased::from_esc_param_with_big_default(b)?,
                 }),
             )),
             [CsiParam::P(b';'), b] => Ok(self.advance_by(
@@ -2204,7 +2236,7 @@ impl<'a> CSIParser<'a> {
                 params,
                 CSI::Cursor(Cursor::SetLeftAndRightMargins {
                     left: OneBased::new(1),
-                    right: OneBased::from_esc_param(b)?,
+                    right: OneBased::from_esc_param_with_big_default(b)?,
                 }),
             )),
             _ => Err(()),
@@ -3282,6 +3314,175 @@ mod test {
             vec![CSI::Cursor(Cursor::Position {
                 line: OneBased::new(2),
                 col: OneBased::new(3)
+            })]
+        );
+    }
+
+    #[test]
+    fn decstbm() {
+        // CSI r -> default top (1) and bottom (max)
+        assert_eq!(
+            parse('r', &[], "\x1b[r"),
+            vec![CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                top: OneBased::new(1),
+                bottom: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI ; r -> default top (1) and bottom (max)
+        let res: Vec<_> = CSI::parse(&[CsiParam::P(b';')], false, 'r').collect();
+        assert_eq!(encode(&res), "\x1b[r");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                top: OneBased::new(1),
+                bottom: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI 1 r -> top: 1, bottom: max
+        assert_eq!(
+            parse('r', &[1], "\x1b[r"),
+            vec![CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                top: OneBased::new(1),
+                bottom: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI 5 r -> top: 5, bottom: max
+        assert_eq!(
+            parse('r', &[5], "\x1b[5;4294967295r"),
+            vec![CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                top: OneBased::new(5),
+                bottom: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI 1 ; r -> top: 1, bottom: max
+        let res: Vec<_> =
+            CSI::parse(&[CsiParam::Integer(1), CsiParam::P(b';')], false, 'r').collect();
+        assert_eq!(encode(&res), "\x1b[r");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                top: OneBased::new(1),
+                bottom: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI 5 ; r -> top: 5, bottom: max
+        let res: Vec<_> =
+            CSI::parse(&[CsiParam::Integer(5), CsiParam::P(b';')], false, 'r').collect();
+        assert_eq!(encode(&res), "\x1b[5;4294967295r");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                top: OneBased::new(5),
+                bottom: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI ; 50 r -> top: 1, bottom: 50
+        let res: Vec<_> =
+            CSI::parse(&[CsiParam::P(b';'), CsiParam::Integer(50)], false, 'r').collect();
+        assert_eq!(encode(&res), "\x1b[1;50r");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                top: OneBased::new(1),
+                bottom: OneBased::new(50),
+            })]
+        );
+
+        // CSI 0 ; 0 r -> top: 1, bottom: max
+        assert_eq!(
+            parse('r', &[0, 0], "\x1b[r"),
+            vec![CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                top: OneBased::new(1),
+                bottom: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI 10 ; 50 r -> top: 10, bottom: 50
+        assert_eq!(
+            parse('r', &[10, 50], "\x1b[10;50r"),
+            vec![CSI::Cursor(Cursor::SetTopAndBottomMargins {
+                top: OneBased::new(10),
+                bottom: OneBased::new(50),
+            })]
+        );
+    }
+
+    #[test]
+    fn decslrm() {
+        // CSI s with no params -> SaveCursor (SCOSC)
+        assert_eq!(
+            parse('s', &[], "\x1b[s"),
+            vec![CSI::Cursor(Cursor::SaveCursor)]
+        );
+
+        // CSI ; s -> left: 1, right: max
+        let res: Vec<_> = CSI::parse(&[CsiParam::P(b';')], false, 's').collect();
+        assert_eq!(encode(&res), "\x1b[s");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::SetLeftAndRightMargins {
+                left: OneBased::new(1),
+                right: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI 1 ; s -> left: 1, right: max
+        let res: Vec<_> =
+            CSI::parse(&[CsiParam::Integer(1), CsiParam::P(b';')], false, 's').collect();
+        assert_eq!(encode(&res), "\x1b[s");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::SetLeftAndRightMargins {
+                left: OneBased::new(1),
+                right: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI 5 ; s -> left: 5, right: max
+        let res: Vec<_> =
+            CSI::parse(&[CsiParam::Integer(5), CsiParam::P(b';')], false, 's').collect();
+        assert_eq!(encode(&res), "\x1b[5;4294967295s");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::SetLeftAndRightMargins {
+                left: OneBased::new(5),
+                right: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI ; 40 s -> left: 1, right: 40
+        let res: Vec<_> =
+            CSI::parse(&[CsiParam::P(b';'), CsiParam::Integer(40)], false, 's').collect();
+        assert_eq!(encode(&res), "\x1b[1;40s");
+        assert_eq!(
+            res,
+            vec![CSI::Cursor(Cursor::SetLeftAndRightMargins {
+                left: OneBased::new(1),
+                right: OneBased::new(40),
+            })]
+        );
+
+        // CSI 0 ; 0 s -> left: 1, right: max
+        assert_eq!(
+            parse('s', &[0, 0], "\x1b[s"),
+            vec![CSI::Cursor(Cursor::SetLeftAndRightMargins {
+                left: OneBased::new(1),
+                right: OneBased::new(u32::max_value()),
+            })]
+        );
+
+        // CSI 10 ; 40 s -> left: 10, right: 40
+        assert_eq!(
+            parse('s', &[10, 40], "\x1b[10;40s"),
+            vec![CSI::Cursor(Cursor::SetLeftAndRightMargins {
+                left: OneBased::new(10),
+                right: OneBased::new(40),
             })]
         );
     }
