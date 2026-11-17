@@ -1,3 +1,4 @@
+mod accessibility;
 pub mod connection;
 pub mod event;
 mod extra_constants;
