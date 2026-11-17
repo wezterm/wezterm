@@ -77,10 +77,18 @@ fn libpng() {
     if let Ok(arch) = env::var("CARGO_CFG_TARGET_ARCH") {
         match arch.as_str() {
             "aarch64" | "arm" => {
-                cfg.file("libpng/arm/arm_init.c")
-                    .file("libpng/arm/filter_neon.S")
-                    .file("libpng/arm/filter_neon_intrinsics.c")
-                    .file("libpng/arm/palette_neon_intrinsics.c");
+                // MSVC cannot assemble the GNU-syntax filter_neon.S, and this
+                // libpng only enables NEON under __ARM_NEON__ (GCC/Clang) —
+                // under MSVC (_M_ARM64) PNG_ARM_NEON_OPT defaults to 0 and the
+                // arm/*.c files compile to empty objects anyway. Skip the whole
+                // set there; NEON filter optimizations are simply off, exactly
+                // as upstream libpng behaves when built with MSVC on ARM64.
+                if env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
+                    cfg.file("libpng/arm/arm_init.c")
+                        .file("libpng/arm/filter_neon.S")
+                        .file("libpng/arm/filter_neon_intrinsics.c")
+                        .file("libpng/arm/palette_neon_intrinsics.c");
+                }
             }
             _ => {}
         }
