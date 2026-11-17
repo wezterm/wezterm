@@ -681,6 +681,10 @@ impl Tab {
         self.inner.lock().remove_pane(pane_id)
     }
 
+    pub fn replace_pane(&self, pane_id: PaneId, new_pane: Arc<dyn Pane>) -> bool {
+        self.inner.lock().replace_pane(pane_id, new_pane)
+    }
+
     pub fn can_close_without_prompting(&self, reason: CloseReason) -> bool {
         self.inner.lock().can_close_without_prompting(reason)
     }
@@ -1591,6 +1595,31 @@ impl TabInner {
         !self
             .remove_pane_if(|_, pane| pane.domain_id() == domain, true)
             .is_empty()
+    }
+
+    fn replace_pane(&mut self, pane_id: PaneId, new_pane: Arc<dyn Pane>) -> bool {
+        let mut cursor = self.pane.take().unwrap().cursor();
+        let mut found = false;
+
+        loop {
+            if let Some(leaf) = cursor.leaf_mut() {
+                if leaf.pane_id() == pane_id {
+                    *leaf = new_pane;
+                    found = true;
+                    break;
+                }
+            }
+            match cursor.preorder_next() {
+                Ok(c) => cursor = c,
+                Err(c) => {
+                    cursor = c;
+                    break;
+                }
+            }
+        }
+
+        self.pane.replace(cursor.tree());
+        found
     }
 
     fn remove_pane(&mut self, pane_id: PaneId) -> Option<Arc<dyn Pane>> {
