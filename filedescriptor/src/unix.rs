@@ -335,6 +335,10 @@ impl FileDescriptor {
 
         Ok(std_original)
     }
+
+    pub(crate) fn as_stdio_pair_impl(&self) -> Result<(std::process::Stdio, std::process::Stdio)> {
+        Ok((self.as_stdio()?, self.as_stdio()?))
+    }
 }
 
 impl Pipe {
