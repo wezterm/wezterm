@@ -15,7 +15,8 @@ use winapi::um::dwrite::*;
 use winapi::um::winbase::MulDiv;
 use winapi::um::wingdi::{
     CreateCompatibleDC, CreateFontIndirectW, DeleteDC, DeleteObject, GetDeviceCaps, GetFontData,
-    SelectObject, FIXED_PITCH, GDI_ERROR, LF_FACESIZE, LOGFONTW, LOGPIXELSY, OUT_TT_ONLY_PRECIS,
+    SelectObject, DEFAULT_CHARSET, FIXED_PITCH, GDI_ERROR, LF_FACESIZE, LOGFONTW, LOGPIXELSY,
+    OUT_TT_ONLY_PRECIS,
 };
 
 /// A FontLocator implemented using the system font loading
@@ -108,7 +109,8 @@ fn load_font(font_attr: &FontAttributes, pixel_size: u16) -> anyhow::Result<Pars
         },
         lfUnderline: 0,
         lfStrikeOut: 0,
-        lfCharSet: 0,
+        // Locate the named font without requiring ANSI character coverage.
+        lfCharSet: DEFAULT_CHARSET as u8,
         lfOutPrecision: OUT_TT_ONLY_PRECIS as u8,
         lfClipPrecision: 0,
         lfQuality: 0,
