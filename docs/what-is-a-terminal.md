@@ -1,7 +1,7 @@
 # What is a Terminal?
 
 WezTerm is a Terminal Emulator, but what actually is that, and what is a PTY,
-and what is a shell?  This section of the docs aims to summarize how these
+and what is a shell? This section of the docs aims to summarize how these
 things relate to each other to help clarify how things work.
 
 This section tries to group concepts together to aid in understanding; it is not
@@ -57,13 +57,13 @@ kernel, which manages the actual communication with the terminal.
 flowchart LR
     subgraph Kernel
         direction LR
-        TTY["TTY device\n(e.g. /dev/tty/0)"] 
+        TTY["TTY device<br>(e.g. <code>/dev/tty/0</code>)"]
     end
-    
+
     subgraph Userspace
-    SHELL["Shell Program (e.g. zsh)"] <-- "input\noutput" --> TTY
+    SHELL["Shell Program (e.g. <code>zsh</code>)"] <-- "input<br>output" --> TTY
     end
-    TTY  <-- "input\noutput" -->  TE["Terminal Device"]:::td
+    TTY  <-- "input<br>output" -->  TE["Terminal Device"]:::td
     classDef td stroke:#00F,stroke-width:2px
 ```
 
@@ -77,7 +77,7 @@ terminal, what are they?
 
 The various terminal devices typically used
 [ASCII](https://en.wikipedia.org/wiki/ASCII) to represent English text and then
-a range of special byte sequences to control things like bold text.  Different
+a range of special byte sequences to control things like bold text. Different
 vendors may have selected different byte sequences for the same concept.
 
 [ANSI](https://www.ansi.org/) is the American National Standards Institute and
@@ -121,10 +121,10 @@ The value of the `TERM` environment variable would then be used to resolve
 the data from the terminal database by the library linked into the shell
 so that it could produce appropriately formatted output.
 
-## Running other programs
+## Running Other Programs
 
 When a shell spawns a child process it passes to it the input/output streams
-associated with the TTY and allows it to run.  The shell is not involved in the
+associated with the TTY and allows it to run. The shell is not involved in the
 transfer of data between the spawned program and the TTY; that program is
 directly sending data to the TTY interface and the kernel then sends it on to
 the attached hardware.
@@ -134,16 +134,16 @@ on the associated terminal also needs to respect the setting of `TERM` and use
 an appropriate library to resolve the correct escape sequences.
 
 ```mermaid
-flowchart 
+flowchart
     subgraph Kernel
         direction TB
-        TTY["TTY device\n(e.g. /dev/tty/0)"] 
+        TTY["TTY device<br>(e.g. <code>/dev/tty/0</code>)"]
     end
-    
+
     subgraph Userspace
-    SHELL["Shell Program (e.g. zsh)"] <-- input/output --> TTY
+    SHELL["Shell Program (e.g. <code>zsh</code>)"] <-- input/output --> TTY
     SHELL -. "starts" .-> APP
-    APP["Application\n(e.g. vim)"] <-- input/output --> TTY
+    APP["Application<br>(e.g. <code>vim</code>)"] <-- input/output --> TTY
 
     end
     TTY  <-- input/output -->  TE["Terminal Device"]:::td
@@ -157,13 +157,13 @@ specific file descriptors.
 
 The shell program is started up with `stdin` assigned to the input stream from
 the associated TTY and both `stdout` AND `stderr` are assigned to the output
-stream.  `stderr` is a duplicate of the `stdout` stream, and writing to either
+stream. `stderr` is a duplicate of the `stdout` stream, and writing to either
 of them will send data to the terminal output.
 
 The terminal only has a single stream of output data. As far as it is
 concerned, `stdout` and `stderr` do not exist, there is only "output".
 
-## Foreground process
+## Foreground Process
 
 Seeing the above diagram, you might wonder how the input/output is kept
 straight when there are multiple programs that are consuming/producing it.
@@ -221,19 +221,19 @@ side allowing for passing information about the window size, and the client side
 essentially just being the I/O stream.
 
 ```mermaid
-flowchart 
+flowchart
     subgraph Kernel
         direction TB
-        PTYC["PTY client\n(e.g. /dev/pts/0)"] 
+        PTYC["PTY client<br>(e.g. <code>/dev/pts/0</code>)"]
         PTYM[PTY master]
         PTYC <--> PTYM
     end
-    
+
     subgraph Userspace
-    SHELL["Shell Program (e.g. zsh)"] <-- input/output --> PTYC
+    SHELL["Shell Program (e.g. <code>zsh</code>)"] <-- input/output --> PTYC
     SHELL -. "starts" .-> APP
-    APP["Application\n(e.g. vim)"] <-- input/output --> PTYC
-    PTYM  <-- input/output -->  TE["Terminal Emulator\n(e.g. wezterm)"]:::wezterm
+    APP["Application<br>(e.g. <code>vim</code>)"] <-- input/output --> PTYC
+    PTYM  <-- input/output -->  TE["Terminal Emulator<br>(e.g. <code>wezterm</code>)"]:::wezterm
     classDef wezterm stroke:#00F,stroke-width:2px
     end
 ```
@@ -258,7 +258,7 @@ emulator, the way it works is so fundamentally different from the unix approach
 that it has caused headaches for portable software.
 
 There was no PTY equivalent and the terminal emulation was closed off and
-restricted to that provided by the system.  Some enterprising developers were
+restricted to that provided by the system. Some enterprising developers were
 able to build terminal emulators that worked a little more like the unix
 equivalents with clever tricks that were essentially screen-scraping, but there
 were many cases that got in the way of a perfect experience.
