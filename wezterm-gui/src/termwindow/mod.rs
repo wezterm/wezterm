@@ -2020,8 +2020,12 @@ impl TermWindow {
 
         let title = match config::run_immediate_with_lua_config(|lua| {
             if let Some(lua) = lua {
+                if !config::lua::has_event_subscribers(&lua, "format-window-title") {
+                    return Ok(None);
+                }
                 let tabs = lua.create_sequence_from(tabs.clone().into_iter())?;
                 let panes = lua.create_sequence_from(panes.clone().into_iter())?;
+                let lua_config = config::lua::config_handle_to_lua(&lua, &self.config)?;
 
                 let v = config::lua::emit_sync_callback(
                     &*lua,
@@ -2032,7 +2036,7 @@ impl TermWindow {
                             active_pane.clone(),
                             tabs,
                             panes,
-                            (*self.config).clone(),
+                            lua_config,
                         ),
                     ),
                 )?;
