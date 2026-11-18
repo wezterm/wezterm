@@ -607,7 +607,9 @@ impl TerminfoRenderer {
                             match &*image.image.data() {
                                 ImageDataType::EncodedFile(data) => data.to_vec(),
                                 ImageDataType::EncodedLease(lease) => lease.get_data()?,
-                                ImageDataType::AnimRgba8 { .. } | ImageDataType::Rgba8 { .. } => {
+                                ImageDataType::AnimRgba8 { .. }
+                                | ImageDataType::Rgba8 { .. }
+                                | ImageDataType::Indexed { .. } => {
                                     unimplemented!()
                                 }
                             }

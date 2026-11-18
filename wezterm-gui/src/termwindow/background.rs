@@ -428,6 +428,7 @@ impl crate::TermWindow {
         let (sprite, next_due, load_state) = gl_state.glyph_cache.borrow_mut().cached_image(
             &layer.source,
             None,
+            None,
             self.allow_images,
         )?;
         self.update_next_frame_time(next_due);

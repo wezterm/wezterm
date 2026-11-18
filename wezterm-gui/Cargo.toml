@@ -76,6 +76,7 @@ rayon.workspace = true
 regex.workspace = true
 serde = {workspace=true, features = ["rc", "derive"]}
 serde_json.workspace = true
+sha2.workspace = true
 shlex.workspace = true
 smol.workspace = true
 tabout.workspace = true

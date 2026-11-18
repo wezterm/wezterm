@@ -67,6 +67,7 @@ impl crate::TermWindow {
                 selection: 0..0,
                 cursor: &Default::default(),
                 palette: &palette,
+                palette_hash: None,
                 dims: &RenderableDimensions {
                     cols: self.dimensions.pixel_width
                         / self.render_metrics.cell_size.width as usize,
