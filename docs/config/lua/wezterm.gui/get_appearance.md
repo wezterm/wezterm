@@ -13,6 +13,12 @@ can be one of the following 4 values:
 wezterm is able to detect when the appearance has changed and will reload the
 configuration when that happens.
 
+The returned value always reflects the appearance of the system, even when the
+[window_appearance](../config/window_appearance.md) setting forces a light or
+dark appearance for the window. Use
+[window:get_appearance()](../window/get_appearance.md) if you want the
+appearance of a particular window, including that setting.
+
 This example configuration shows how you can have your color scheme
 automatically adjust to the current appearance:
 

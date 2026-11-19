@@ -888,6 +888,7 @@ impl TermWindow {
                 myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
             }
             myself.load_os_parameters();
+            front_end().set_window_appearance(&window, myself.config.window_appearance);
             window.show();
             myself.subscribe_to_pane_updates();
             myself.emit_window_event("window-config-reloaded", None);
@@ -1826,6 +1827,7 @@ impl TermWindow {
             self.apply_scale_change(&dimensions, self.fonts.get_font_scale());
             self.apply_dimensions(&dimensions, None, &window);
             window.config_did_change(&config);
+            front_end().set_window_appearance(&window, config.window_appearance);
             window.invalidate();
         }
 

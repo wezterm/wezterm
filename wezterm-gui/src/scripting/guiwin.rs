@@ -95,8 +95,15 @@ impl UserData for GuiWin {
                 Ok(())
             },
         );
-        methods.add_method("get_appearance", |_, _, _: ()| {
-            Ok(Connection::get().unwrap().get_appearance().to_string())
+        methods.add_method("get_appearance", |_, this, _: ()| {
+            // Unlike wezterm.gui.get_appearance(), this honors the
+            // window_appearance config of this window
+            let window_appearance = crate::frontend::front_end().window_appearance(&this.window);
+            Ok(Connection::get()
+                .unwrap()
+                .get_appearance()
+                .with_window_appearance(window_appearance)
+                .to_string())
         });
         methods.add_method("set_right_status", |_, this, status: String| {
             this.window.notify(TermWindowNotif::SetRightStatus(status));

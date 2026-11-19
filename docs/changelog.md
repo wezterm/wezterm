@@ -158,6 +158,12 @@ As features stabilize some brief notes about them will accumulate here.
   search matching. Thanks to @mrdziuban! #7385
 * The line editor used by prompt overlays and the debug overlay now supports
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
+* [window_appearance](config/lua/config/window_appearance.md) option to force
+  the window to use a light or dark appearance, independently of the system
+  appearance. [window:get_appearance()](config/lua/window/get_appearance.md)
+  now honors it, while
+  [wezterm.gui.get_appearance()](config/lua/wezterm.gui/get_appearance.md)
+  keeps reporting the system appearance. #8088 #5873 #6767
 
 #### Fixed
 * Multiplexer: the mouse wheel was not mapped to cursor up/down keys in the

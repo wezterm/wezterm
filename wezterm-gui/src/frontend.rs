@@ -5,6 +5,7 @@ use crate::TermWindow;
 use ::window::*;
 use anyhow::{Context, Error};
 use config::keyassignment::{KeyAssignment, SpawnCommand};
+use config::window::WindowAppearance;
 use config::{ConfigSubscription, NotificationHandling};
 use mux::client::ClientId;
 use mux::window::WindowId as MuxWindowId;
@@ -22,6 +23,10 @@ pub struct GuiFrontEnd {
     switching_workspaces: RefCell<bool>,
     spawned_mux_window: RefCell<HashSet<MuxWindowId>>,
     known_windows: RefCell<BTreeMap<Window, MuxWindowId>>,
+    /// The effective `window_appearance` of each window, including any
+    /// per-window config overrides. Kept here so that it can be read
+    /// synchronously, without touching the config lock.
+    window_appearances: RefCell<BTreeMap<Window, WindowAppearance>>,
     client_id: Arc<ClientId>,
     config_subscription: RefCell<Option<ConfigSubscription>>,
 }
@@ -45,6 +50,7 @@ impl GuiFrontEnd {
             switching_workspaces: RefCell::new(false),
             spawned_mux_window: RefCell::new(HashSet::new()),
             known_windows: RefCell::new(BTreeMap::new()),
+            window_appearances: RefCell::new(BTreeMap::new()),
             client_id: client_id.clone(),
             config_subscription: RefCell::new(None),
         });
@@ -480,9 +486,24 @@ impl GuiFrontEnd {
 
     pub fn forget_known_window(&self, window: &Window) {
         self.known_windows.borrow_mut().remove(window);
+        self.window_appearances.borrow_mut().remove(window);
         if !self.is_switching_workspace() {
             self.reconcile_workspace();
         }
+    }
+
+    pub fn set_window_appearance(&self, window: &Window, appearance: WindowAppearance) {
+        self.window_appearances
+            .borrow_mut()
+            .insert(window.clone(), appearance);
+    }
+
+    pub fn window_appearance(&self, window: &Window) -> WindowAppearance {
+        self.window_appearances
+            .borrow()
+            .get(window)
+            .copied()
+            .unwrap_or_default()
     }
 
     pub fn is_switching_workspace(&self) -> bool {

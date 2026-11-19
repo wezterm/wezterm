@@ -1,16 +1,31 @@
 # window:get_appearance()
 
-**NOTE: You probably want to use [wezterm.gui.get_appearance()](../wezterm.gui/get_appearance.md) instead, as it is easier to use!**
-
 {{since('20210814-124438-54e29167')}}
 
-This method returns the appearance of the window environment.  The appearance
+This method returns the appearance of the window.  The appearance
 can be one of the following 4 values:
 
 * `"Light"` - the normal appearance, with dark text on a light background
 * `"Dark"` - "dark mode", with predominantly dark colors and probably a lighter, lower contrasting, text color on a dark background
 * `"LightHighContrast"` - light mode but with high contrast colors (not reported on all systems)
 * `"DarkHighContrast"` - dark mode but with high contrast colors (not reported on all systems)
+
+{{since('nightly')}}
+
+The appearance honors the [window_appearance](../config/window_appearance.md)
+setting of this window: when it is set to `"ForcedDark"` or `"ForcedLight"`,
+this method returns the forced appearance rather than the appearance of the
+system.
+
+!!! note "`window:get_appearance()` vs. `wezterm.gui.get_appearance()`"
+    [wezterm.gui.get_appearance()](../wezterm.gui/get_appearance.md) always
+    returns the appearance of the system, ignoring `window_appearance`, and
+    can be used anywhere in your configuration, so it is the simpler choice
+    when you just want to follow the system appearance.
+
+    Use `window:get_appearance()` when you want to know how the window
+    actually looks, for example to pick a color scheme that matches a forced
+    `window_appearance`.
 
 wezterm is able to detect when the appearance has changed and will generate a
 [window-config-reloaded](../window-events/window-config-reloaded.md) event for
