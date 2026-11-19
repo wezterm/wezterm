@@ -486,8 +486,16 @@ rustup default {toolchain}
         run = prefix + "cargo nextest run --all --no-fail-fast" + target
         run_no_std = prefix + "cargo nextest run -p wezterm-escape-parser" + target
         steps = [
-            # Install cargo-nextest
-            InstallCrateStep("cargo-nextest", key=self.name),
+            # Install cargo-nextest. On Windows, use a prebuilt binary, as
+            # building it from source exceeds the 32K Windows command line
+            # limit (os error 206)
+            ActionStep(
+                "Install cargo-nextest",
+                action="taiki-e/install-action@v2",
+                params={"tool": "cargo-nextest"},
+            )
+            if "win" in self.name
+            else InstallCrateStep("cargo-nextest", key=self.name),
             # Run tests
             RunStep(name="Test", run=self.fixup_windows_path(run), shell="cmd")
             if "win" in self.name
@@ -835,7 +843,7 @@ rustup default {toolchain}
             self.env["RUSTUP_WINDOWS_PATH_ADD_BIN"] = "1"
             # Keep intermediate build artifacts in a short path: the many
             # `-L dependency=...` args rustc receives otherwise exceed the
-            # 32K Windows command line limit when the repo path is long
+            # 32K Windows command line limit (os error 206)
             self.env["CARGO_BUILD_BUILD_DIR"] = "D:/b"
         return
 
