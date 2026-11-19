@@ -905,13 +905,17 @@ impl TerminalState {
             }
         }
         if self.focus_tracking {
-            write!(self.writer, "{}{}", CSI, if focused { "I" } else { "O" }).ok();
-            self.writer.flush().ok();
+            self.send_focus_changed(focused);
         }
         self.focused = focused;
         if !focused {
             self.lost_focus_seqno = self.seqno;
         }
+    }
+
+    fn send_focus_changed(&mut self, focused: bool) {
+        write!(self.writer, "{CSI}{}", if focused { "I" } else { "O" }).ok();
+        self.writer.flush().ok();
     }
 
     /// Returns true if there is new output since the terminal
@@ -1926,6 +1930,8 @@ impl TerminalState {
             Mode::SetDecPrivateMode(DecPrivateMode::Code(DecPrivateModeCode::FocusTracking)) => {
                 self.focus_tracking = true;
                 self.last_mouse_move.take();
+                // For compatibility with other terminals, send a focus event right away.
+                self.send_focus_changed(self.focused);
             }
             Mode::ResetDecPrivateMode(DecPrivateMode::Code(DecPrivateModeCode::FocusTracking)) => {
                 self.focus_tracking = false;
