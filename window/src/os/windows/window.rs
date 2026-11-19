@@ -1400,11 +1400,16 @@ fn apply_theme(hwnd: HWND) -> Option<LRESULT> {
         update_title_font(hwnd);
 
         let appearance = get_appearance();
-        let theme_string = if appearance == Appearance::Dark {
-            "DarkMode_Explorer"
-        } else {
-            ""
-        };
+        // The window chrome honors `window_appearance`, while
+        // `appearance` stays the raw system value so that changes to it
+        // are still reported below
+        let window_appearance = rc_from_hwnd(hwnd)
+            .map(|inner| inner.borrow().config.window_appearance)
+            .unwrap_or_default();
+        let dark = appearance
+            .with_window_appearance(window_appearance)
+            .is_dark();
+        let theme_string = if dark { "DarkMode_Explorer" } else { "" };
 
         SetWindowTheme(
             hwnd as _,
@@ -1412,7 +1417,7 @@ fn apply_theme(hwnd: HWND) -> Option<LRESULT> {
             std::ptr::null_mut(),
         );
 
-        let mut enabled: BOOL = if appearance == Appearance::Dark { 1 } else { 0 };
+        let mut enabled: BOOL = if dark { 1 } else { 0 };
         DwmSetWindowAttribute(
             hwnd as _,
             DWMWA_USE_IMMERSIVE_DARK_MODE,
