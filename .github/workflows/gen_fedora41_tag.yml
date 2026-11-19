@@ -32,7 +32,7 @@ jobs:
         run: "yum install -y openssh-server"
       - name: "Workaround git permissions issue"
         shell: bash
-        run: "git config --global --add safe.directory /__w/wezterm/wezterm"
+        run: "git config --global --add safe.directory $GITHUB_WORKSPACE"
       - name: "checkout repo"
         uses: actions/checkout@v5
         with:
@@ -103,7 +103,7 @@ jobs:
     steps:
       - name: "Workaround git permissions issue"
         shell: bash
-        run: "git config --global --add safe.directory /__w/wezterm/wezterm"
+        run: "git config --global --add safe.directory $GITHUB_WORKSPACE"
       - name: "checkout repo"
         uses: actions/checkout@v5
       - name: "Download artifact"

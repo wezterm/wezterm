@@ -833,6 +833,10 @@ rustup default {toolchain}
             self.env["RUSTFLAGS"] = "-C target-feature=-crt-static"
         if "win" in self.name:
             self.env["RUSTUP_WINDOWS_PATH_ADD_BIN"] = "1"
+            # Keep intermediate build artifacts in a short path: the many
+            # `-L dependency=...` args rustc receives otherwise exceed the
+            # 32K Windows command line limit when the repo path is long
+            self.env["CARGO_BUILD_BUILD_DIR"] = "D:/b"
         return
 
     def prep_environment(self, cache=True):
@@ -953,7 +957,7 @@ rustup default {toolchain}
             steps += [
                 RunStep(
                     "Workaround git permissions issue",
-                    "git config --global --add safe.directory /__w/wezterm/wezterm",
+                    "git config --global --add safe.directory $GITHUB_WORKSPACE",
                 )
             ]
         steps += [CheckoutStep(submodules=submodules, container=self.container)]

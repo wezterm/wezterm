@@ -14,6 +14,7 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
       RUSTUP_WINDOWS_PATH_ADD_BIN: "1"
+      CARGO_BUILD_BUILD_DIR: "D:/b"
 
     steps:
       - name: "checkout repo"
