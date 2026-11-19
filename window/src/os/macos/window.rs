@@ -26,7 +26,7 @@ use cocoa::foundation::{
     NSArray, NSAutoreleasePool, NSFastEnumeration, NSInteger, NSNotFound, NSPoint, NSRect, NSSize,
     NSString, NSUInteger,
 };
-use config::window::WindowLevel;
+use config::window::{WindowAppearance, WindowLevel};
 use config::{ConfigHandle, RgbaColor, SrgbaTuple};
 use core_foundation::base::{CFTypeID, TCFType};
 use core_foundation::bundle::{CFBundleGetBundleWithIdentifier, CFBundleGetFunctionPointerForName};
@@ -1420,7 +1420,27 @@ impl WindowInner {
         self.update_window_shadow();
         self.update_window_background_blur();
         self.update_titlebar_background();
+        self.update_window_appearance();
         self.apply_decorations();
+    }
+
+    /// Applies `window_appearance` to this window only. This deliberately
+    /// doesn't touch `NSApp.appearance`, so that the application-level
+    /// effectiveAppearance (and thus `wezterm.gui.get_appearance()`)
+    /// keeps reporting the system appearance.
+    fn update_window_appearance(&mut self) {
+        let name = match self.config.window_appearance {
+            WindowAppearance::System => None,
+            WindowAppearance::ForcedDark => Some("NSAppearanceNameDarkAqua"),
+            WindowAppearance::ForcedLight => Some("NSAppearanceNameAqua"),
+        };
+        unsafe {
+            let appearance: id = match name {
+                Some(name) => msg_send![class!(NSAppearance), appearanceNamed: *nsstring(name)],
+                None => nil,
+            };
+            let () = msg_send![*self.window, setAppearance: appearance];
+        }
     }
 }
 
