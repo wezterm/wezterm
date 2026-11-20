@@ -1,3 +1,6 @@
+// Suppress warnings about `anyhow` going unused; the uses are target-specific.
+use anyhow as _;
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
