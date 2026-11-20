@@ -187,7 +187,7 @@ impl SelectionRange {
                 return Self {
                     start: SelectionCoordinate::x_y(0, logical.first_row),
                     end: SelectionCoordinate::x_y(
-                        usize::max_value(),
+                        usize::MAX,
                         logical.first_row + (logical.physical_lines.len() - 1) as StableRowIndex,
                     ),
                 };
@@ -315,7 +315,7 @@ impl SelectionRange {
     }
 
     /// Yields a range representing the selected columns for the specified row.
-    /// Not that the range may include usize::max_value() for some rows; this
+    /// Note that the range may include `usize::MAX` for some rows; this
     /// indicates that the selection extends to the end of that row.
     /// Since this struct has no knowledge of line length, it cannot be
     /// more precise than that.
@@ -348,10 +348,10 @@ impl SelectionRange {
                 SelectionX::Cell(0).range(norm.end.x.saturating_add(1))
             } else if row == norm.start.y {
                 // first line of multi-line
-                norm.start.x.range(SelectionX::Cell(usize::max_value()))
+                norm.start.x.range(SelectionX::Cell(usize::MAX))
             } else {
                 // some "middle" line of multi-line
-                0..usize::max_value()
+                0..usize::MAX
             }
         }
     }

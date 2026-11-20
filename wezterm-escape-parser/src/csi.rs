@@ -1311,14 +1311,14 @@ impl Display for Cursor {
             Cursor::LinePositionBackward(n) => n.write_csi(f, "k")?,
             Cursor::LinePositionForward(n) => n.write_csi(f, "e")?,
             Cursor::SetTopAndBottomMargins { top, bottom } => {
-                if top.as_one_based() == 1 && bottom.as_one_based() == u32::max_value() {
+                if top.as_one_based() == 1 && bottom.as_one_based() == u32::MAX {
                     write!(f, "r")?;
                 } else {
                     write!(f, "{};{}r", top, bottom)?;
                 }
             }
             Cursor::SetLeftAndRightMargins { left, right } => {
-                if left.as_one_based() == 1 && right.as_one_based() == u32::max_value() {
+                if left.as_one_based() == 1 && right.as_one_based() == u32::MAX {
                     write!(f, "s")?;
                 } else {
                     write!(f, "{};{}s", left, right)?;
@@ -1733,7 +1733,7 @@ fn to_u8(v: &CsiParam) -> Result<u8, ()> {
     match v {
         CsiParam::P(_) => Err(()),
         CsiParam::Integer(v) => {
-            if *v <= i64::from(u8::max_value()) {
+            if *v <= i64::from(u8::MAX) {
                 Ok(*v as u8)
             } else {
                 Err(())
@@ -1756,7 +1756,7 @@ fn to_u8(v: &CsiParam) -> Result<u8, ()> {
 fn to_1b_u32(v: &CsiParam) -> Result<u32, ()> {
     match v {
         CsiParam::Integer(v) if *v == 0 => Ok(1),
-        CsiParam::Integer(v) if *v > 0 && *v <= i64::from(u32::max_value()) => Ok(*v as u32),
+        CsiParam::Integer(v) if *v > 0 && *v <= i64::from(u32::MAX) => Ok(*v as u32),
         _ => Err(()),
     }
 }
@@ -2101,14 +2101,14 @@ impl<'a> CSIParser<'a> {
         match params {
             [] => Ok(CSI::Cursor(Cursor::SetTopAndBottomMargins {
                 top: OneBased::new(1),
-                bottom: OneBased::new(u32::max_value()),
+                bottom: OneBased::new(u32::MAX),
             })),
             [p] => Ok(self.advance_by(
                 1,
                 params,
                 CSI::Cursor(Cursor::SetTopAndBottomMargins {
                     top: OneBased::from_esc_param(p)?,
-                    bottom: OneBased::new(u32::max_value()),
+                    bottom: OneBased::new(u32::MAX),
                 }),
             )),
             [a, CsiParam::P(b';'), b] => Ok(self.advance_by(
@@ -2188,7 +2188,7 @@ impl<'a> CSIParser<'a> {
                 params,
                 CSI::Cursor(Cursor::SetLeftAndRightMargins {
                     left: OneBased::from_esc_param(p)?,
-                    right: OneBased::new(u32::max_value()),
+                    right: OneBased::new(u32::MAX),
                 }),
             )),
             [a, CsiParam::P(b';'), b] => Ok(self.advance_by(

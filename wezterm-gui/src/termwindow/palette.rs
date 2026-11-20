@@ -183,7 +183,7 @@ impl MatchResult {
                 // Pump up the score for an exact match, otherwise
                 // the order may be undesirable if there are a lot
                 // of candidates with the same score
-                u32::max_value()
+                u32::MAX
             } else {
                 score
             },
