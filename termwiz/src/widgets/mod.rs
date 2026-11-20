@@ -372,7 +372,7 @@ impl<'widget> Ui<'widget> {
                 abs_coords.x + render_data.coordinates.x,
                 abs_coords.y + render_data.coordinates.y,
             );
-            surface.flush_changes_older_than(SequenceNo::max_value());
+            surface.flush_changes_older_than(SequenceNo::MAX);
             render_data.coordinates
         };
 

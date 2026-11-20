@@ -42,10 +42,10 @@ impl MuxPane {
                 0..zone.end_x.saturating_add(1)
             } else if row == zone.start_y {
                 // first line of multi-line
-                zone.start_x..usize::max_value()
+                zone.start_x..usize::MAX
             } else {
                 // some "middle" line of multi-line
-                0..usize::max_value()
+                0..usize::MAX
             }
         }
 

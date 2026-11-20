@@ -36,7 +36,7 @@ fn read_xsettings_grabbed(
             property: atom_xsettings_settings,
             r#type: atom_xsettings_settings,
             long_offset: 0,
-            long_length: u32::max_value(),
+            long_length: u32::MAX,
         }))
         .context("get_property")?;
 
