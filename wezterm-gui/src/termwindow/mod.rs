@@ -436,6 +436,10 @@ pub struct TermWindow {
     line_quad_cache: RefCell<LfuCache<LineQuadCacheKey, LineQuadCacheValue>>,
 
     last_status_call: Instant,
+    /// Inputs of the last tab bar / window title computation and when it
+    /// happened; see update_title_impl.
+    last_title_inputs: Option<String>,
+    last_title_rebuild: Instant,
     cursor_blink_state: RefCell<ColorEase>,
     blink_state: RefCell<ColorEase>,
     rapid_blink_state: RefCell<ColorEase>,
@@ -467,6 +471,57 @@ pub struct TermWindow {
     gl: Option<Rc<glium::backend::Context>>,
     webgpu: Option<Rc<WebGpuState>>,
     config_subscription: Option<config::ConfigSubscription>,
+}
+
+/// A string capturing everything about the tabs and panes that can affect
+/// the tab bar or the window title. user_vars is a HashMap, so it is sorted
+/// first to keep the result stable.
+fn title_inputs_fingerprint(
+    tabs: &[TabInformation],
+    panes: &[PaneInformation],
+    hover_x: Option<usize>,
+    extra: &str,
+) -> String {
+    use std::fmt::Write;
+    fn pane(out: &mut String, p: &PaneInformation) {
+        let mut vars: Vec<_> = p.user_vars.iter().collect();
+        vars.sort();
+        let _ = write!(
+            out,
+            "[{} {} {} {} {} {}x{} {}x{} @{},{} {:?} {:?} {:?}]",
+            p.pane_id,
+            p.pane_index,
+            p.is_active,
+            p.is_zoomed,
+            p.has_unseen_output,
+            p.width,
+            p.height,
+            p.pixel_width,
+            p.pixel_height,
+            p.left,
+            p.top,
+            p.progress,
+            vars,
+            p.title
+        );
+    }
+    let mut out = String::new();
+    for t in tabs {
+        let _ = write!(
+            out,
+            "<{} {} {} {} {} {:?} ",
+            t.tab_id, t.tab_index, t.is_active, t.is_last_active, t.window_id, t.tab_title
+        );
+        if let Some(p) = &t.active_pane {
+            pane(&mut out, p);
+        }
+        out.push('>');
+    }
+    for p in panes {
+        pane(&mut out, p);
+    }
+    let _ = write!(out, "{:?}|{}", hover_x, extra);
+    out
 }
 
 impl TermWindow {
@@ -759,6 +814,8 @@ impl TermWindow {
                 &config,
             )),
             last_status_call: Instant::now(),
+            last_title_inputs: None,
+            last_title_rebuild: Instant::now(),
             cursor_blink_state: RefCell::new(ColorEase::new(
                 config.cursor_blink_rate,
                 config.cursor_blink_ease_in,
@@ -1988,6 +2045,48 @@ impl TermWindow {
             }
             None => false,
         };
+
+        // update_title is called very often: on every WindowInvalidated
+        // notification (for mux client domains that is every output from any
+        // pane), focus change, tab resize and so on. Rebuilding the tab bar
+        // calls format-tab-title once per tab, and each call converts the
+        // info of every tab and pane, plus the config, to Lua: that is
+        // O(tabs^2) Lua work per update and can keep the GUI thread busy with
+        // a handful of busy panes.
+        //
+        // Skip the rebuild when nothing that feeds the tab bar or the window
+        // title has changed. A format-tab-title/format-window-title handler may
+        // also depend on state we can't see (time, globals...), so still
+        // rebuild at least once per status_update_interval, which is when
+        // update-status runs anyway.
+        let inputs = title_inputs_fingerprint(
+            &tabs,
+            &panes,
+            if hovering_in_tab_bar {
+                Some(self.last_mouse_coords.0)
+            } else {
+                None
+            },
+            &format!(
+                "{}|{}|{}|{:p}|{}|{}|{:?}",
+                self.dimensions.pixel_width,
+                self.render_metrics.cell_size.width,
+                self.config.generation(),
+                &*self.config,
+                self.left_status,
+                self.right_status,
+                self.window_state,
+            ),
+        );
+        let refresh_due = self.last_title_rebuild.elapsed()
+            >= Duration::from_millis(self.config.status_update_interval);
+        if !refresh_due && self.last_title_inputs.as_deref() == Some(inputs.as_str()) {
+            drop(window);
+            self.schedule_next_status_update();
+            return;
+        }
+        self.last_title_inputs = Some(inputs);
+        self.last_title_rebuild = Instant::now();
 
         let new_tab_bar = TabBarState::new(
             self.dimensions.pixel_width / self.render_metrics.cell_size.width as usize,
