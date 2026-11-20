@@ -29,6 +29,8 @@ pub struct FreeTypeRasterizer {
     face: RefCell<ftwrap::Face>,
     _lib: ftwrap::Library,
     synthesize_bold: bool,
+    font_thicken: bool,
+    font_thicken_strength: u8,
     freetype_load_target: Option<FreeTypeLoadTarget>,
     freetype_render_target: Option<FreeTypeLoadTarget>,
     freetype_load_flags: Option<FreeTypeLoadFlags>,
@@ -62,6 +64,8 @@ impl FontRasterizer for FreeTypeRasterizer {
             load_flags,
             render_mode,
             self.synthesize_bold,
+            self.font_thicken,
+            self.font_thicken_strength,
         ) {
             Ok(g) => g,
             Err(err) => {
@@ -380,6 +384,7 @@ impl FreeTypeRasterizer {
     pub fn from_locator(
         parsed: &ParsedFont,
         display_pixel_geometry: DisplayPixelGeometry,
+        config: &config::Config,
     ) -> anyhow::Result<Self> {
         log::trace!("Rasterizier wants {:?}", parsed);
         let lib = ftwrap::Library::new()?;
@@ -402,6 +407,8 @@ impl FreeTypeRasterizer {
             face: RefCell::new(face),
             has_color,
             synthesize_bold: parsed.synthesize_bold,
+            font_thicken: config.font_thicken,
+            font_thicken_strength: config.font_thicken_strength,
             freetype_load_flags: parsed.freetype_load_flags,
             freetype_load_target: parsed.freetype_load_target,
             freetype_render_target: parsed.freetype_render_target,
