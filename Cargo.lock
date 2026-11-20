@@ -5982,7 +5982,6 @@ dependencies = [
  "libc",
  "log",
  "memmem",
- "nix",
  "num-derive",
  "num-traits",
  "ordered-float 4.6.0",
