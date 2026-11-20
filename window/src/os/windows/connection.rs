@@ -70,7 +70,7 @@ impl ConnectionOps for Connection {
     fn run_message_loop(&self) -> anyhow::Result<()> {
         let mut msg: MSG = unsafe { std::mem::zeroed() };
         loop {
-            SPAWN_QUEUE.run();
+            SPAWN_QUEUE.run_one();
 
             let res = unsafe { PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) };
             if res != 0 {
