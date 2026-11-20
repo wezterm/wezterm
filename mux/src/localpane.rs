@@ -147,13 +147,13 @@ impl Pane for LocalPane {
 
         #[cfg(unix)]
         if let Some(tio) = self.pty.lock().get_termios() {
-            use nix::sys::termios::LocalFlags;
+            use rustix::termios::LocalModes;
             // Detect whether we might be in password input mode.
             // If local echo is disabled and canonical input mode
             // is enabled, then we assume that we're in some kind
             // of password-entry mode.
-            let pw_input = !tio.local_flags.contains(LocalFlags::ECHO)
-                && tio.local_flags.contains(LocalFlags::ICANON);
+            let pw_input = !tio.local_modes.contains(LocalModes::ECHO)
+                && tio.local_modes.contains(LocalModes::ICANON);
             map.insert(
                 Value::String("password_input".to_string()),
                 Value::Bool(pw_input),

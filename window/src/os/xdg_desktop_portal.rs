@@ -66,7 +66,7 @@ lazy_static::lazy_static! {
 }
 
 pub async fn read_setting(namespace: &str, key: &str) -> anyhow::Result<OwnedValue> {
-    let connection = zbus::ConnectionBuilder::session()?.build().await?;
+    let connection = zbus::connection::Builder::session()?.build().await?;
     let proxy = PortalSettingsProxy::new(&connection)
         .await
         .context("make proxy")?;
@@ -139,7 +139,7 @@ pub async fn get_appearance() -> anyhow::Result<Option<Appearance>> {
     }
 }
 
-pub async fn run_signal_loop(stream: &mut SettingChangedStream<'_>) -> Result<(), anyhow::Error> {
+pub async fn run_signal_loop(stream: &mut SettingChangedStream) -> Result<(), anyhow::Error> {
     // query appearance again as it might have changed without us knowing
     if let Ok(value) =
         value_to_appearance(read_setting("org.freedesktop.appearance", "color-scheme").await?)
@@ -173,7 +173,7 @@ pub async fn run_signal_loop(stream: &mut SettingChangedStream<'_>) -> Result<()
 
 pub fn subscribe() {
     promise::spawn::spawn(async move {
-        let connection = zbus::ConnectionBuilder::session()?.build().await?;
+        let connection = zbus::connection::Builder::session()?.build().await?;
         let proxy = PortalSettingsProxy::new(&connection)
             .await
             .context("make proxy")?;

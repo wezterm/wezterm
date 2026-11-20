@@ -121,7 +121,7 @@ pub trait MasterPty: Downcast + Send {
     /// If applicable to the type of the tty, return the termios
     /// associated with the stream
     #[cfg(unix)]
-    fn get_termios(&self) -> Option<nix::sys::termios::Termios> {
+    fn get_termios(&self) -> Option<rustix::termios::Termios> {
         None
     }
 }
