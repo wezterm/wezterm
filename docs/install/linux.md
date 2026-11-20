@@ -449,4 +449,26 @@ hide:
     [Raw Linux Binary :material-tray-arrow-down:]({{ linux_raw_bin_stable }}){ .md-button }
     [Nightly Raw Linux Binary :material-tray-arrow-down:]({{ linux_raw_bin_nightly }}){ .md-button }
 
+=== "Local build (deb/rpm)"
+    ## Building packages from a local checkout
+
+    If you maintain your own fork, the `Makefile` can build the release
+    binaries and native packages for your distro by delegating to
+    `ci/deploy.sh`:
+
+    ```console
+    $ make deb          # Debian/Ubuntu hosts: builds wezterm-<tag>.deb
+    $ make rpm          # Fedora/RHEL/openSUSE hosts: builds the .rpm
+    ```
+
+    Notes:
+
+    * These targets must run on Linux — the packages need to contain Linux ELF
+      binaries, so they cannot be built on macOS. On macOS they will fail with
+      guidance, including a ready-made docker one-liner for deb.
+    * `deb` requires `dpkg-dev` and `fakeroot`; `rpm` requires `rpm-build`.
+    * The resulting packages land in the repository root; install with
+      `sudo apt install ./wezterm-<tag>.deb` or
+      `sudo dnf install ./wezterm-<tag>.rpm`.
+
 

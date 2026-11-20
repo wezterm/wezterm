@@ -66,3 +66,23 @@ $ sudo port selfupdate
 $ sudo port install wezterm
 ```
 
+## Building and installing from a local checkout
+
+If you maintain your own fork (or want to run a build of your local tree),
+the `Makefile` can build and install a proper `WezTerm.app` bundle:
+
+```console
+$ make install-app          # builds release binaries, assembles dist/WezTerm.app, installs to /Applications
+```
+
+Notes:
+
+* The bundle is ad-hoc signed (`codesign --sign -`); since it was built locally,
+  macOS Gatekeeper won't quarantine it.
+* The installed bundle is independent of any `~/.local/bin` CLI copies you may
+  have made; refresh either after pulling new changes:
+  `make install-app` for the app, `cp target/release/{wezterm,wezterm-gui,wezterm-mux-server} ~/.local/bin/` for the CLIs.
+* `make app` builds the bundle into `dist/` without installing it.
+* Homebrew's `wezterm` cask is not required; if it is installed, remove it first
+  with `brew uninstall --cask wezterm` to avoid two competing installations.
+
