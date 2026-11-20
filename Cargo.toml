@@ -186,6 +186,7 @@ reqwest = "0.12"
 resize = "0.5"
 rstest = "0.21"
 rusqlite = "0.32"
+rustix = "1.1.6"
 serde = {version="1.0", default-features=false, features = ["derive"]}
 serde-funcs = { path = "lua-api-crates/serde-funcs" }
 serde_json = "1.0"

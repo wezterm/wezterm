@@ -28,7 +28,7 @@ luahelper.workspace = true
 metrics.workspace = true
 mlua.workspace = true
 names.workspace = true
-nix = {workspace=true, features=["term"]}
+rustix = {workspace=true, features=["termios"]}
 parking_lot.workspace = true
 percent-encoding.workspace = true
 portable-pty = { workspace=true, features = ["serde_support"]}

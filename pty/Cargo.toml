@@ -14,7 +14,7 @@ downcast-rs.workspace = true
 filedescriptor.workspace = true
 libc.workspace = true
 log.workspace = true
-nix = {workspace=true, features=["term", "fs"]}
+rustix = {workspace=true, features=["termios", "fs"]}
 serde = {workspace=true, optional=true, features=["derive"]}
 serial2.workspace = true
 shell-words.workspace = true

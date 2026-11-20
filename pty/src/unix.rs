@@ -378,8 +378,8 @@ impl MasterPty for UnixMasterPty {
         }
     }
 
-    fn get_termios(&self) -> Option<nix::sys::termios::Termios> {
-        nix::sys::termios::tcgetattr(self.fd.0.as_fd()).ok()
+    fn get_termios(&self) -> Option<rustix::termios::Termios> {
+        rustix::termios::tcgetattr(self.fd.0.as_fd()).ok()
     }
 }
 
