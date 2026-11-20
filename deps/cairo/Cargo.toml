@@ -17,19 +17,27 @@ name = "cairo_sys"
 [features]
 v1_16 = []
 v1_18 = ["v1_16"]
-png = []
-pdf = []
-svg = []
-ps = []
-script = []
-win32-surface = []
-xlib = []
-xcb = []
-freetype = []
-use_glib = []
 
 [dependencies]
 libc.workspace = true
 
 [build-dependencies]
 cc.workspace = true
+
+# Hacked out of the vendored copy, so don't we don't provide them as features
+# that `--all-features` would enable, but we make them known to rustc so it
+# doesn't warn about unknown features in `cfg`.
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['''cfg(feature, values(
+    "freetype",
+    "pdf",
+    "png",
+    "ps",
+    "script",
+    "svg",
+    "use_glib",
+    "win32-surface",
+    "xcb",
+    "xlib",
+))''']
