@@ -628,7 +628,7 @@ impl Line {
     }
 
     /// Recompose line into the corresponding utf8 string.
-    pub fn as_str(&self) -> Cow<str> {
+    pub fn as_str(&self) -> Cow<'_, str> {
         match &self.cells {
             CellStorage::V(_) => {
                 let mut s = String::new();
@@ -1035,7 +1035,7 @@ impl Line {
         }
     }
 
-    pub fn get_cell(&self, cell_index: usize) -> Option<CellRef> {
+    pub fn get_cell(&self, cell_index: usize) -> Option<CellRef<'_>> {
         self.visible_cells()
             .find(|cell| cell.cell_index() == cell_index)
     }

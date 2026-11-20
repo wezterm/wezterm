@@ -8,6 +8,12 @@ use window::color::LinearRgba;
 
 impl crate::TermWindow {
     pub fn paint_tab_bar(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
+        // While any tab shows the indeterminate progress spinner, ask to be
+        // repainted when its next frame is due. The paint scheduler wakes us
+        // when this is the soonest pending animation and rebuilds the tab bar
+        // to advance the frame.
+        self.update_next_frame_time(self.tab_bar.next_progress_frame_due());
+
         if self.config.use_fancy_tab_bar {
             if self.fancy_tab_bar.is_none() {
                 let palette = self.palette().clone();

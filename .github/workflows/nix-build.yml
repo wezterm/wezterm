@@ -1,4 +1,4 @@
-name: Nix
+name: Nix / Build
 
 on:
   pull_request:
@@ -18,19 +18,24 @@ on:
       - 'nix/**'
 
 jobs:
-  lints:
-    name: Build
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
+
       - name: Install nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/determinate-nix-action@v3.21.1
+
       - name: Cache build artifacts
-        uses: DeterminateSystems/flakehub-cache-action@main
+        uses: DeterminateSystems/flakehub-cache-action@v3
+
       - name: Check flake inputs
+        # note: waiting for a release with node24 upgrade
+        # see: https://github.com/DeterminateSystems/flake-checker-action/pull/110
         uses: DeterminateSystems/flake-checker-action@main
         with:
           flake-lock-path: ./nix/flake.lock
           ignore-missing-flake-lock: false
+
       - name: Build default package
         run: nix build ./nix

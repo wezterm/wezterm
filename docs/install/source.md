@@ -5,7 +5,7 @@ for yourself.  WezTerm should run on any modern unix as well as Windows 10 and
 macOS.
 
 * Install `rustup` to get the `rust` compiler installed on your system.
-  [Install rustup](https://www.rust-lang.org/en-US/install.html).
+  [Install rustup](https://rust-lang.org/tools/install/).
 * Rust version 1.71 or later is required
 * Build in release mode: `cargo build --release`
 * Run it via either `cargo run --release --bin wezterm` or `target/release/wezterm`

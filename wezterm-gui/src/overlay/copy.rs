@@ -466,19 +466,11 @@ impl CopyRenderable {
                     let cursor_is_above_start = self.cursor.y < sel_start.y;
 
                     let start = SelectionCoordinate::x_y(
-                        if cursor_is_above_start {
-                            usize::max_value()
-                        } else {
-                            0
-                        },
+                        if cursor_is_above_start { usize::MAX } else { 0 },
                         sel_start.y,
                     );
                     let end = SelectionCoordinate::x_y(
-                        if cursor_is_above_start {
-                            0
-                        } else {
-                            usize::max_value()
-                        },
+                        if cursor_is_above_start { 0 } else { usize::MAX },
                         self.cursor.y,
                     );
                     (start, end)
@@ -645,6 +637,7 @@ impl CopyRenderable {
         match self.pattern_type {
             PatternType::CaseSensitiveString => Pattern::CaseSensitiveString(pattern),
             PatternType::CaseInSensitiveString => Pattern::CaseInSensitiveString(pattern),
+            PatternType::CaseSmartString => Pattern::CaseSmartString(pattern),
             PatternType::Regex => Pattern::Regex(pattern),
         }
     }
@@ -694,7 +687,8 @@ impl CopyRenderable {
     fn cycle_match_type(&mut self) {
         let pattern_type = match &self.pattern_type {
             PatternType::CaseSensitiveString => PatternType::CaseInSensitiveString,
-            PatternType::CaseInSensitiveString => PatternType::Regex,
+            PatternType::CaseInSensitiveString => PatternType::CaseSmartString,
+            PatternType::CaseSmartString => PatternType::Regex,
             PatternType::Regex => PatternType::CaseSensitiveString,
         };
         self.pattern_type = pattern_type;
@@ -757,7 +751,7 @@ impl CopyRenderable {
 
     fn move_to_bottom(&mut self) {
         // This will get fixed up by clamp_cursor_to_scrollback
-        self.cursor.y = isize::max_value();
+        self.cursor.y = isize::MAX;
         self.select_to_cursor_pos();
     }
 
@@ -824,7 +818,7 @@ impl CopyRenderable {
 
     fn move_backward_one_word(&mut self) {
         let y = if self.cursor.x == 0 && self.cursor.y > 0 {
-            self.cursor.x = usize::max_value();
+            self.cursor.x = usize::MAX;
             self.cursor.y.saturating_sub(1)
         } else {
             self.cursor.y
@@ -833,7 +827,7 @@ impl CopyRenderable {
         let (top, lines) = self.delegate.get_lines(y..y + 1);
         if let Some(line) = lines.get(0) {
             self.cursor.y = top;
-            if self.cursor.x == usize::max_value() {
+            if self.cursor.x == usize::MAX {
                 self.cursor.x = line.len().saturating_sub(1);
             }
             let s = line.columns_as_str(0..self.cursor.x.saturating_add(1));
@@ -869,7 +863,7 @@ impl CopyRenderable {
 
             if last_was_whitespace && self.cursor.y > 0 {
                 // The line begins with whitespace
-                self.cursor.x = usize::max_value();
+                self.cursor.x = usize::MAX;
                 self.cursor.y -= 1;
                 return self.move_backward_one_word();
             }
@@ -1121,7 +1115,7 @@ impl Pane for CopyOverlay {
         Ok(None)
     }
 
-    fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+    fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
         MutexGuard::map(self.writer.lock(), |writer| {
             let w: &mut dyn std::io::Write = writer;
             w
@@ -1433,6 +1427,7 @@ impl Pane for CopyOverlay {
                         let mode = &match pattern {
                             Pattern::CaseSensitiveString(_) => "case-sensitive",
                             Pattern::CaseInSensitiveString(_) => "ignore-case",
+                            Pattern::CaseSmartString(_) => "smart-case",
                             Pattern::Regex(_) => "regex",
                         };
 
@@ -1534,6 +1529,7 @@ impl Pane for CopyOverlay {
                 let mode = &match pattern {
                     Pattern::CaseSensitiveString(_) => "case-sensitive",
                     Pattern::CaseInSensitiveString(_) => "ignore-case",
+                    Pattern::CaseSmartString(_) => "smart-case",
                     Pattern::Regex(_) => "regex",
                 };
                 line.overlay_text_with_attribute(

@@ -1,5 +1,6 @@
-#![cfg(all(not(target_os = "macos"), not(windows)))]
 //! See <https://developer.gnome.org/notification-spec/>
+
+#![cfg(all(not(target_os = "macos"), not(windows)))]
 
 use crate::ToastNotification;
 use futures_util::stream::{abortable, StreamExt};
@@ -9,6 +10,7 @@ use zbus::proxy;
 use zvariant::{Type, Value};
 
 #[derive(Debug, Type, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ServerInformation {
     /// The product name of the server.
     pub name: String,
@@ -100,7 +102,7 @@ async fn show_notif_impl(notif: ToastNotification) -> Result<(), Box<dyn std::er
     }
 
     let mut hints = HashMap::new();
-    hints.insert("urgency", Value::U8(2 /* Critical */));
+    hints.insert("urgency", Value::U8(1 /* Normal */));
     let notification = proxy
         .notify(
             "wezterm",

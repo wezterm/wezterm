@@ -4,7 +4,7 @@ WezTerm is available [via the ports system](https://www.freshports.org/x11/wezte
 
 The most common FreeBSD architectures have pre-built binaries which you can install via:
 
-```bash
+```console
 $ pkg install wezterm
 ```
 

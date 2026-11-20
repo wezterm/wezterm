@@ -146,7 +146,7 @@ impl HarfbuzzShaper {
         &self,
         font_idx: FallbackIdx,
         dpi: u32,
-    ) -> anyhow::Result<Option<RefMut<FontPair>>> {
+    ) -> anyhow::Result<Option<RefMut<'_, FontPair>>> {
         if font_idx >= self.handles.len() {
             return Ok(None);
         }

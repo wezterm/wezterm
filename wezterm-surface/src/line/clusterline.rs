@@ -168,7 +168,7 @@ impl ClusteredLine {
         }
     }
 
-    pub fn iter(&self) -> ClusterLineCellIter {
+    pub fn iter(&self) -> ClusterLineCellIter<'_> {
         let mut clusters = self.clusters.iter();
         let cluster = clusters.next();
         ClusterLineCellIter {

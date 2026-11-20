@@ -23,7 +23,7 @@ pub trait Modal: Downcast {
     fn computed_element(
         &self,
         term_window: &mut TermWindow,
-    ) -> anyhow::Result<Ref<[ComputedElement]>>;
+    ) -> anyhow::Result<Ref<'_, [ComputedElement]>>;
     fn reconfigure(&self, term_window: &mut TermWindow);
 }
 impl_downcast!(Modal);

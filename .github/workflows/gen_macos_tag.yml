@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: "recursive"
       - name: "Install Rust (ARM)"
@@ -36,7 +36,7 @@ jobs:
             vendor
             .cargo/config
           key: "cargo-deps-${{ hashFiles('**/Cargo.lock') }}"
-      - name: "Vendor dependecies"
+      - name: "Vendor dependencies"
         if: steps.cache-cargo-vendor.outputs.cache-hit != 'true'
         shell: bash
         run: "cargo vendor --locked --versioned-dirs >> .cargo/config"
@@ -75,6 +75,9 @@ jobs:
       - name: "Test"
         shell: bash
         run: "cargo nextest run --all --no-fail-fast --target=x86_64-apple-darwin"
+      - name: "Test wezterm-escape-parser (no_std)"
+        shell: bash
+        run: "cargo nextest run -p wezterm-escape-parser --target=x86_64-apple-darwin"
       - name: "Package"
         env:
           MACOS_APPLEID: ${{ secrets.MACOS_APPLEID }}
@@ -85,7 +88,7 @@ jobs:
         shell: bash
         run: "bash ci/deploy.sh"
       - name: "Upload artifact"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "macos"
           path: "WezTerm-*.zip"
@@ -101,9 +104,9 @@ jobs:
 
     steps:
       - name: "checkout repo"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: "Checkout homebrew tap"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: "wez/homebrew-wezterm"
           path: "homebrew-wezterm"
@@ -117,7 +120,7 @@ jobs:
           commit_message: "Automated update to match latest tag"
           repository: "homebrew-wezterm"
       - name: "Download artifact"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: "macos"
       - name: "Checksum"

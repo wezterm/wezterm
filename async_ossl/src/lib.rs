@@ -21,7 +21,7 @@ impl AsyncSslStream {
 
 #[cfg(unix)]
 impl std::os::fd::AsFd for AsyncSslStream {
-    fn as_fd(&self) -> std::os::fd::BorrowedFd {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
         self.s.get_ref().as_fd()
     }
 }
@@ -42,7 +42,7 @@ impl std::os::windows::io::AsRawSocket for AsyncSslStream {
 
 #[cfg(windows)]
 impl std::os::windows::io::AsSocket for AsyncSslStream {
-    fn as_socket(&self) -> std::os::windows::io::BorrowedSocket {
+    fn as_socket(&self) -> std::os::windows::io::BorrowedSocket<'_> {
         self.s.get_ref().as_socket()
     }
 }

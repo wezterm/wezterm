@@ -1,6 +1,3 @@
-// Ideally this would be scoped to WidgetId, but I can't seem to find the
-// right place for it to take effect
-#![allow(clippy::new_without_default)]
 use crate::color::ColorAttribute;
 use crate::input::InputEvent;
 use crate::surface::{Change, CursorShape, CursorVisibility, Position, SequenceNo, Surface};
@@ -375,7 +372,7 @@ impl<'widget> Ui<'widget> {
                 abs_coords.x + render_data.coordinates.x,
                 abs_coords.y + render_data.coordinates.y,
             );
-            surface.flush_changes_older_than(SequenceNo::max_value());
+            surface.flush_changes_older_than(SequenceNo::MAX);
             render_data.coordinates
         };
 

@@ -973,8 +973,8 @@ impl ChildKiller for WrappedSshChildKiller {
     }
 }
 
-type BoxedReader = Box<(dyn Read + Send + 'static)>;
-type BoxedWriter = Box<(dyn Write + Send + 'static)>;
+type BoxedReader = Box<dyn Read + Send + 'static>;
+type BoxedWriter = Box<dyn Write + Send + 'static>;
 
 pub(crate) struct WrappedSshPty {
     inner: RefCell<WrappedSshPtyInner>,
@@ -1071,7 +1071,7 @@ impl portable_pty::MasterPty for WrappedSshPty {
         }
     }
 
-    fn try_clone_reader(&self) -> anyhow::Result<Box<(dyn Read + Send + 'static)>> {
+    fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send + 'static>> {
         let mut inner = self.inner.borrow_mut();
         inner.check_connected()?;
         match &mut *inner {
@@ -1083,7 +1083,7 @@ impl portable_pty::MasterPty for WrappedSshPty {
         }
     }
 
-    fn take_writer(&self) -> anyhow::Result<Box<(dyn Write + Send + 'static)>> {
+    fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send + 'static>> {
         anyhow::bail!("writer must be created during bootstrap");
     }
 

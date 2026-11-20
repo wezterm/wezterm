@@ -44,27 +44,27 @@ impl<'a> Borrow<dyn ObjectKeyTrait + 'a> for Value {
     }
 }
 
-impl<'a> PartialEq for (dyn ObjectKeyTrait + 'a) {
+impl<'a> PartialEq for dyn ObjectKeyTrait + 'a {
     fn eq(&self, other: &Self) -> bool {
         self.key().eq(&other.key())
     }
 }
 
-impl<'a> Eq for (dyn ObjectKeyTrait + 'a) {}
+impl<'a> Eq for dyn ObjectKeyTrait + 'a {}
 
-impl<'a> PartialOrd for (dyn ObjectKeyTrait + 'a) {
+impl<'a> PartialOrd for dyn ObjectKeyTrait + 'a {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.key().partial_cmp(&other.key())
     }
 }
 
-impl<'a> Ord for (dyn ObjectKeyTrait + 'a) {
+impl<'a> Ord for dyn ObjectKeyTrait + 'a {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key().cmp(&other.key())
     }
 }
 
-impl<'a> core::hash::Hash for (dyn ObjectKeyTrait + 'a) {
+impl<'a> core::hash::Hash for dyn ObjectKeyTrait + 'a {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.key().hash(state)
     }

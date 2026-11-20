@@ -162,6 +162,12 @@ pub struct Config {
     #[dynamic(default = "default_command_palette_font_size")]
     pub command_palette_font_size: f64,
 
+    #[dynamic(
+        default = "default_one_point_oh_f64",
+        validate = "validate_line_height"
+    )]
+    pub command_palette_line_height: f64,
+
     pub command_palette_rows: Option<usize>,
     #[dynamic(default = "default_command_palette_fg_color")]
     pub command_palette_fg_color: RgbaColor,
@@ -259,6 +265,12 @@ pub struct Config {
     /// <https://marc.info/?l=bugtraq&m=104612710031920&w=2>
     #[dynamic(default)]
     pub enable_title_reporting: bool,
+
+    /// Whether the terminal should respond to DECRQCRA checksum requests.
+    /// Disabled by default as it allows programs to read screen contents.
+    /// <https://vt100.net/docs/vt510-rm/DECRQCRA.html>
+    #[dynamic(default)]
+    pub enable_checksum_rectangular_area: bool,
 
     /// Specifies the width of a new window, expressed in character cells
     #[dynamic(default = "default_initial_cols", validate = "validate_row_or_col")]
@@ -565,8 +577,15 @@ pub struct Config {
     pub macos_window_background_blur: i64,
 
     /// Only works on KDE Wayland
-    #[dynamic(default)]
+    #[dynamic(
+        default,
+        deprecated = "this option has been replaced with `wayland_window_background_blur` and will be removed in a future release"
+    )]
     pub kde_window_background_blur: bool,
+
+    /// Only works on Wayland compositors that support ext-background-effect-v1 protocol
+    #[dynamic(default)]
+    pub wayland_window_background_blur: bool,
 
     /// Only works on Windows
     #[dynamic(default)]
@@ -817,7 +836,7 @@ pub struct Config {
     pub unzoom_on_switch_pane: bool,
 
     #[dynamic(default = "default_max_fps")]
-    pub max_fps: u8,
+    pub max_fps: u64,
 
     #[dynamic(default = "default_shape_cache_size")]
     pub shape_cache_size: usize,
@@ -1802,7 +1821,7 @@ fn default_anim_fps() -> u8 {
     10
 }
 
-fn default_max_fps() -> u8 {
+fn default_max_fps() -> u64 {
     60
 }
 
@@ -2164,7 +2183,7 @@ fn validate_row_or_col(value: &u16) -> Result<(), String> {
 fn validate_line_height(value: &f64) -> Result<(), String> {
     if *value <= 0.0 {
         Err(format!(
-            "Illegal value {value} for line_height; it must be positive and greater than zero!"
+            "Illegal value {value}; it must be positive and greater than zero!"
         ))
     } else {
         Ok(())

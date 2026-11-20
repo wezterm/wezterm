@@ -1,4 +1,5 @@
 #![cfg(target_os = "linux")]
+
 use super::*;
 
 impl From<&str> for LocalProcessStatus {
@@ -104,12 +105,17 @@ impl LocalProcessInfo {
 
         let procs: Vec<_> = all_pids().into_iter().filter_map(info_for_pid).collect();
 
-        fn build_proc(info: &LinuxStat, procs: &[LinuxStat]) -> LocalProcessInfo {
+        fn build_proc(
+            info: &LinuxStat,
+            procs: &[LinuxStat],
+            visited: &mut HashSet<u32>,
+        ) -> LocalProcessInfo {
             let mut children = HashMap::new();
 
             for kid in procs {
-                if kid.ppid == info.pid {
-                    children.insert(kid.pid as u32, build_proc(kid, procs));
+                if kid.ppid == info.pid && !visited.contains(&(kid.pid as u32)) {
+                    visited.insert(kid.pid as u32);
+                    children.insert(kid.pid as u32, build_proc(kid, procs, visited));
                 }
             }
 
@@ -131,7 +137,9 @@ impl LocalProcessInfo {
         }
 
         if let Some(info) = procs.iter().find(|info| info.pid == pid) {
-            Some(build_proc(info, &procs))
+            let mut visited = HashSet::new();
+            visited.insert(pid as u32);
+            Some(build_proc(info, &procs, &mut visited))
         } else {
             None
         }

@@ -3,16 +3,17 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # NOTE: @2024-05 Nix flakes does not support getting git submodules of 'self'.
+    # NOTE: @2026-06 Since Nix 2.27 we can set `inputs.self.submodules = true;` but it's silently
+    # ignored for all usage of `github:…` flake refs..
     # refs:
-    # - https://discourse.nixos.org/t/get-nix-flake-to-include-git-submodule/30324
-    # - https://github.com/NixOS/nix/pull/7862
+    # - https://github.com/wezterm/wezterm/pull/7854#issuecomment-4718011398 (previous attempt)
+    # - https://github.com/NixOS/nix/issues/13571
+    # - https://github.com/NixOS/nix/issues/14982
     #
     # ... In the meantime we kinda duplicate the dependencies here then replace the submodules with
     # links to each repo in package sources.
@@ -39,206 +40,104 @@
   };
 
   outputs =
-    inputs@{ self, ... }:
-    inputs.flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        overlays = [ (import inputs.rust-overlay) ];
-        pkgs = import (inputs.nixpkgs) { inherit system overlays; };
+    inputs@{ self, nixpkgs, ... }:
+    let
+      lib = nixpkgs.lib;
 
-        inherit (inputs.nixpkgs) lib;
-        inherit (pkgs) stdenv;
-
-        nativeBuildInputs =
-          with pkgs;
-          [
-            installShellFiles
-            ncurses # tic for terminfo
-            pkg-config
-            python3
-          ]
-          ++ lib.optional stdenv.isDarwin perl;
-
-        buildInputs =
-          with pkgs;
-          [
-            fontconfig
-            openssl
-            zlib
-          ]
-          ++ lib.optionals stdenv.isLinux [
-            libxkbcommon
-            wayland
-
-            xorg.libX11
-            xorg.libxcb
-            xorg.xcbutil
-            xorg.xcbutilimage
-            xorg.xcbutilkeysyms
-            xorg.xcbutilwm # contains xcb-ewmh among others
-          ]
-          ++ lib.optionals stdenv.isDarwin ([
-            libiconv
-          ]);
-
-        libPath = lib.makeLibraryPath (
-          with pkgs;
-          [
-            xorg.xcbutilimage
-            libGL
-            vulkan-loader
-          ]
-        );
-
-        rustPlatform = pkgs.makeRustPlatform {
-          cargo = pkgs.rust-bin.stable.latest.minimal;
-          rustc = pkgs.rust-bin.stable.latest.minimal;
+      systems = builtins.attrNames nixpkgs.legacyPackages;
+      forSystems = lib.genAttrs systems;
+      forSys = system: {
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ (import inputs.rust-overlay) ];
         };
-      in
-      {
-        packages.default = rustPlatform.buildRustPackage rec {
-          inherit buildInputs nativeBuildInputs;
+        repopkgs = self.packages.${system};
+      };
 
-          name = "wezterm";
-          src = ./..;
-          version = self.shortRev or "dev";
-
-          cargoLock = {
-            lockFile = ../Cargo.lock;
-            allowBuiltinFetchGit = true;
-          };
-
-          prePatch = ''
-            rm -rf deps/freetype/{freetype2,libpng,zlib} deps/harfbuzz/harfbuzz
-
-            ln -s ${inputs.freetype2} deps/freetype/freetype2
-            ln -s ${inputs.libpng} deps/freetype/libpng
-            ln -s ${inputs.zlib} deps/freetype/zlib
-            ln -s ${inputs.harfbuzz} deps/harfbuzz/harfbuzz
-          '';
-
-          postPatch = ''
-            echo ${version} > .tag
-
-            # tests are failing with: Unable to exchange encryption keys
-            rm -r wezterm-ssh/tests
-
-            # hash does not work well with NixOS
-            substituteInPlace assets/shell-integration/wezterm.sh \
-              --replace-fail 'hash wezterm 2>/dev/null' 'command type -P wezterm &>/dev/null' \
-              --replace-fail 'hash base64 2>/dev/null' 'command type -P base64 &>/dev/null' \
-              --replace-fail 'hash hostname 2>/dev/null' 'command type -P hostname &>/dev/null' \
-              --replace-fail 'hash hostnamectl 2>/dev/null' 'command type -P hostnamectl &>/dev/null'
-          '';
-
-          # Disable cargo-auditable until https://github.com/rust-secure-code/cargo-auditable/issues/124 is fixed
-          auditable = false;
-
-          preFixup =
-            lib.optionalString stdenv.isLinux /* bash */ ''
-              patchelf \
-                --add-needed "${pkgs.libGL}/lib/libEGL.so.1" \
-                --add-needed "${pkgs.vulkan-loader}/lib/libvulkan.so.1" \
-                $out/bin/wezterm-gui
-            ''
-            + lib.optionalString stdenv.isDarwin /* bash */ ''
-              mkdir -p "$out/Applications"
-              OUT_APP="$out/Applications/WezTerm.app"
-              cp -r assets/macos/WezTerm.app "$OUT_APP"
-              rm $OUT_APP/*.dylib
-              cp -r assets/shell-integration/* "$OUT_APP"
-              # macOS will only recognize our application bundle
-              # if the binaries are inside of it. Move them there
-              # and create symbolic links for them in bin/.
-              mv $out/bin/{wezterm,wezterm-mux-server,wezterm-gui,strip-ansi-escapes} "$OUT_APP"
-              ln -s "$OUT_APP"/{wezterm,wezterm-mux-server,wezterm-gui,strip-ansi-escapes} "$out/bin"
-            '';
-
-          postInstall = ''
-            mkdir -p $out/nix-support
-            echo "${passthru.terminfo}" >> $out/nix-support/propagated-user-env-packages
-
-            install -Dm644 assets/icon/terminal.png $out/share/icons/hicolor/128x128/apps/org.wezfurlong.wezterm.png
-            install -Dm644 assets/wezterm.desktop $out/share/applications/org.wezfurlong.wezterm.desktop
-            install -Dm644 assets/wezterm.appdata.xml $out/share/metainfo/org.wezfurlong.wezterm.appdata.xml
-
-            install -Dm644 assets/shell-integration/wezterm.sh -t $out/etc/profile.d
-            installShellCompletion --cmd wezterm \
-              --bash assets/shell-completion/bash \
-              --fish assets/shell-completion/fish \
-              --zsh assets/shell-completion/zsh
-
-            install -Dm644 assets/wezterm-nautilus.py -t $out/share/nautilus-python/extensions
-          '';
-
-          passthru = {
-            # the headless variant is useful when deploying wezterm's mux server on remote severs
-            headless = rustPlatform.buildRustPackage {
-              pname = "wezterm-headless";
-              inherit
-                version
-                src
-                postPatch
-                cargoLock
-                meta
+      vmTestingSystem = "x86_64-linux";
+    in
+    {
+      packages = forSystems (
+        system:
+        let
+          pkgs = (forSys system).pkgs;
+          wezterm = pkgs.callPackage ./package.nix {
+            flakeInfo = {
+              inherit (self) lastModifiedDate;
+              # note: we can't use `inherit` here because `rev` & `dirtyRev` may not be present.
+              rev = self.rev or null;
+              dirtyRev = self.dirtyRev or null;
+            };
+            inputSubmodules = {
+              inherit (inputs)
+                freetype2
+                harfbuzz
+                libpng
+                zlib
                 ;
+            };
+          };
+        in
+        {
+          default = wezterm;
+          inherit wezterm;
+        }
+      );
 
-              nativeBuildInputs = [ pkgs.pkg-config ];
+      devShells = forSystems (
+        system: with (forSys system); {
+          default = pkgs.mkShell {
+            name = "wezterm-shell";
 
-              buildInputs = [ pkgs.openssl ];
+            # reuse the package build inputs instead of duplicating them
+            inputsFrom = [ repopkgs.wezterm ];
 
-              cargoBuildFlags = [
-                "--package"
-                "wezterm"
-                "--package"
-                "wezterm-mux-server"
+            buildInputs =
+              (with pkgs.rust-bin; [
+                (stable.latest.minimal.override {
+                  extensions = [
+                    "clippy"
+                    "rust-src"
+                  ];
+                })
+
+                nightly.latest.rustfmt
+                nightly.latest.rust-analyzer
+              ])
+              ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                # For local flatpak builds
+                pkgs.flatpak-builder
+                pkgs.flatpak-builder-tools # for flatpak-cargo-generator
+                pkgs.appstream
               ];
 
-              doCheck = false;
-
-              postInstall = ''
-                install -Dm644 assets/shell-integration/wezterm.sh -t $out/etc/profile.d
-                install -Dm644 ${passthru.terminfo}/share/terminfo/w/wezterm -t $out/share/terminfo/w
-              '';
-            };
-
-            terminfo =
-              pkgs.runCommand "wezterm-terminfo"
-                {
-                  nativeBuildInputs = [ pkgs.ncurses ];
-                }
-                ''
-                  mkdir -p $out/share/terminfo $out/nix-support
-                  tic -x -o $out/share/terminfo ${src}/termwiz/data/wezterm.terminfo
-                '';
+            # `inputsFrom` does not provide a library search path.
+            # The GUI dlopens libEGL and libvulkan at runtime, so we expose them in the shell.
+            LD_LIBRARY_PATH = lib.makeLibraryPath repopkgs.wezterm._runtimeLibs;
           };
+        }
+      );
 
-          meta.mainProgram = "wezterm";
-        };
+      formatter = forSystems (system: (forSys system).pkgs.nixfmt-tree);
 
-        devShell = pkgs.mkShell {
-          name = "wezterm-shell";
-          inherit nativeBuildInputs;
-
-          buildInputs =
-            buildInputs
-            ++ (with pkgs.rust-bin; [
-              (stable.latest.minimal.override {
-                extensions = [
-                  "clippy"
-                  "rust-src"
-                ];
-              })
-
-              nightly.latest.rustfmt
-              nightly.latest.rust-analyzer
-            ]);
-
-          LD_LIBRARY_PATH = libPath;
-          RUST_BACKTRACE = 1;
-        };
-
-        formatter = pkgs.nixfmt-rfc-style;
-      }
-    );
+      # 0. Build Wezterm locally: `cargo build`
+      # 1. Build the VM: `nixos-rebuild build-vm --flake ./nix#testing-on-gnome`
+      # 2. Start the VM: `REPO=$PWD ./result/bin/run-nixos-vm`
+      # 3. (In the VM) (optional, 1-time) Adjust your keyboard layout in settings
+      # 4. (In the VM) Open a terminal 'Console' on Gnome, 'Konsole' on KDE
+      # 5. (In the VM) `cd ~/repo`
+      # 6. (In the VM) Run the binary built! ``
+      #
+      # FIXME: cannot write to $REPO in the VM...
+      nixosConfigurations.testing-on-gnome = import ./vm {
+        inherit nixpkgs;
+        system = vmTestingSystem;
+        desktopModule = ./vm/desktop-gnome.nix;
+      };
+      nixosConfigurations.testing-on-plasma = import ./vm {
+        inherit nixpkgs;
+        system = vmTestingSystem;
+        desktopModule = ./vm/desktop-plasma.nix;
+      };
+    };
 }

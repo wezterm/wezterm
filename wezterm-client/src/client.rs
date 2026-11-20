@@ -557,7 +557,7 @@ impl std::fmt::Debug for SshStream {
 
 #[cfg(unix)]
 impl AsFd for SshStream {
-    fn as_fd(&self) -> BorrowedFd {
+    fn as_fd(&self) -> BorrowedFd<'_> {
         self.stdout.as_fd()
     }
 }
@@ -578,7 +578,7 @@ impl AsRawSocket for SshStream {
 
 #[cfg(windows)]
 impl AsSocket for SshStream {
-    fn as_socket(&self) -> BorrowedSocket {
+    fn as_socket(&self) -> BorrowedSocket<'_> {
         self.stdout.as_socket()
     }
 }

@@ -1,4 +1,5 @@
 //! Slightly higher level helper for fontconfig
+
 #![allow(clippy::mutex_atomic)]
 
 use anyhow::{anyhow, ensure, Error};
@@ -57,7 +58,7 @@ impl<'a> Iterator for FontSetIter<'a> {
 }
 
 impl FontSet {
-    pub fn iter(&self) -> FontSetIter {
+    pub fn iter(&self) -> FontSetIter<'_> {
         FontSetIter {
             set: self,
             position: 0,

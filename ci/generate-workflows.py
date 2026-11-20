@@ -4,6 +4,12 @@ import sys
 import glob
 from copy import deepcopy
 
+# The build from this target will be pushed to the gemfury APT repo
+GEMFURY_TARGET = "ubuntu:22.04"
+# The build from this target will be baked into the AppImage
+# This target is also used for updating the flathub & linuxbrew repos
+APPIMAGE_TARGET = "ubuntu:26.04"
+
 TRIGGER_PATHS = [
     "**/*.rs",
     "**/Cargo.lock",
@@ -102,9 +108,12 @@ class RunStep(Step):
 
 
 class ActionStep(Step):
-    def __init__(self, name, action, params=None, env=None, condition=None, id=None):
+    def __init__(
+        self, name, action, params=None, env=None, condition=None, id=None, comment=None
+    ):
         self.name = name
         self.action = action
+        self.comment = comment
         self.params = params
         self.env = env
         self.condition = condition
@@ -112,6 +121,9 @@ class ActionStep(Step):
 
     def render(self, f, depth=0):
         indent = "  " * depth
+        if self.comment:
+            for line in self.comment.splitlines():
+                f.write(f"{indent}# {line}\n".replace("# \n", "#\n"))
         f.write(f"{indent}- name: {yv(self.name)}\n")
         f.write(f"{indent}  uses: {self.action}\n")
         if self.id:
@@ -135,9 +147,24 @@ class CacheStep(ActionStep):
         )
 
 
+WINDOWS_SCCACHE_PIN_COMMENT = """\
+sccache is pinned to v0.16.0 on Windows. sccache 0.17 and later expand
+cargo's rustc argfile and then spawn rustc with the full command line,
+which is over the Windows limit when building `mux` and fails with
+"The filename or extension is too long" (os error 206).
+Remove the pin once a fixed sccache is released:
+https://github.com/mozilla/sccache/issues/2787"""
+
+
 class SccacheStep(ActionStep):
-    def __init__(self, name):
-        super().__init__(name, action="mozilla-actions/sccache-action@v0.0.9")
+    def __init__(self, name, version=None, comment=None):
+        params = {"version": version} if version else None
+        super().__init__(
+            name,
+            action="mozilla-actions/sccache-action@v0.0.9",
+            params=params,
+            comment=comment,
+        )
 
 
 class CheckoutStep(ActionStep):
@@ -145,11 +172,7 @@ class CheckoutStep(ActionStep):
         params = {}
         if submodules:
             params["submodules"] = "recursive"
-        # Newer versions of the checkout action use a binary-incompatible node
-        # binary, so we are pinned back on v3
-        # https://github.com/actions/checkout/issues/1442
-        version = "v3" if container is not None and "centos7" in container else "v4"
-        super().__init__(name, action=f"actions/checkout@{version}", params=params)
+        super().__init__(name, action=f"actions/checkout@v5", params=params)
 
 
 class InstallCrateStep(ActionStep):
@@ -186,7 +209,6 @@ class Target(object):
         bootstrap_git=False,
         rust_target=None,
         continuous_only=False,
-        app_image=False,
         is_tag=False,
     ):
         if not name:
@@ -200,7 +222,7 @@ class Target(object):
         self.bootstrap_git = bootstrap_git
         self.rust_target = rust_target
         self.continuous_only = continuous_only
-        self.app_image = app_image
+        self.app_image = container == APPIMAGE_TARGET
         self.env = {}
         self.is_tag = is_tag
 
@@ -401,8 +423,18 @@ rustup default {toolchain}
             ]
         if cache:
             steps += [
-                SccacheStep(name="Compile with sccache"),
-                # Cache vendored dependecies
+                SccacheStep(
+                    name="Compile with sccache",
+                    **(
+                        {
+                            "version": "v0.16.0",
+                            "comment": WINDOWS_SCCACHE_PIN_COMMENT,
+                        }
+                        if "windows" in self.name
+                        else {}
+                    ),
+                ),
+                # Cache vendored dependencies
                 CacheStep(
                     name="Cache Rust Dependencies",
                     path="vendor\n.cargo/config",
@@ -411,7 +443,7 @@ rustup default {toolchain}
                 ),
                 # Vendor dependencies
                 RunStep(
-                    name="Vendor dependecies",
+                    name="Vendor dependencies",
                     condition="steps.cache-cargo-vendor.outputs.cache-hit != 'true'",
                     run="cargo vendor --locked --versioned-dirs >> .cargo/config",
                 ),
@@ -476,12 +508,15 @@ rustup default {toolchain}
         return steps
 
     def test_all(self):
-        run = "cargo nextest run --all --no-fail-fast"
+        target = ""
         if "macos" in self.name:
-            run += " --target=x86_64-apple-darwin"
+            target = " --target=x86_64-apple-darwin"
+        prefix = ""
         if self.name == "centos7":
-            run = "source /opt/rh/devtoolset-9/enable\n" + run
-        return [
+            prefix = "source /opt/rh/devtoolset-9/enable\n"
+        run = prefix + "cargo nextest run --all --no-fail-fast" + target
+        run_no_std = prefix + "cargo nextest run -p wezterm-escape-parser" + target
+        steps = [
             # Install cargo-nextest
             InstallCrateStep("cargo-nextest", key=self.name),
             # Run tests
@@ -489,6 +524,11 @@ rustup default {toolchain}
             if "win" in self.name
             else RunStep(name="Test", run=run),
         ]
+        if "win" not in self.name:
+            steps += [
+                RunStep(name="Test wezterm-escape-parser (no_std)", run=run_no_std)
+            ]
+        return steps
 
     def package(self, trusted=False):
         steps = []
@@ -503,8 +543,9 @@ rustup default {toolchain}
             }
         steps = [RunStep("Package", "bash ci/deploy.sh", env=deploy_env)]
         if self.app_image:
-            # AppImage needs fuse
+            # AppImage needs fuse and the file command
             steps += self.install_system_package("libfuse2")
+            steps += self.install_system_package("file")
             steps.append(RunStep("Source Tarball", "bash ci/source-archive.sh"))
             steps.append(RunStep("Build AppImage", "bash ci/appimage.sh"))
         return steps
@@ -552,7 +593,7 @@ rustup default {toolchain}
         return steps + [
             ActionStep(
                 "Upload artifact",
-                action="actions/upload-artifact@v4",
+                action="actions/upload-artifact@v7",
                 params={"name": self.name, "path": paths},
             ),
         ]
@@ -581,11 +622,22 @@ rustup default {toolchain}
     def upload_artifact_nightly(self):
         steps = []
 
-        if self.uses_yum():
+        if self.uses_yum() or self.uses_zypper():
+
+            rpmbuild = "~/rpmbuild/RPMS/*"
+            if self.uses_zypper():
+                rpmbuild = "/usr/src/packages/RPMS/*"
+
+            script = ""
+            # Note that 'wezterm' MUST be last in this list,
+            # otherwise the globbing will mess things up
+            for pkg in ['wezterm-common', 'wezterm-gui', 'wezterm-mux-server', 'wezterm']:
+                script = script + f"mv {rpmbuild}/{pkg}-*.rpm {pkg}-nightly-{self.name}.rpm\n"
+
             steps.append(
                 RunStep(
                     "Move RPM",
-                    f"mv ~/rpmbuild/RPMS/*/*.rpm wezterm-nightly-{self.name}.rpm",
+                    script
                 )
             )
         elif self.uses_apk():
@@ -593,13 +645,6 @@ rustup default {toolchain}
                 RunStep(
                     "Move APKs",
                     f"mv ~/packages/wezterm/x86_64/*.apk wezterm-nightly-{self.name}.apk",
-                )
-            )
-        elif self.uses_zypper():
-            steps.append(
-                RunStep(
-                    "Move RPM",
-                    f"mv /usr/src/packages/RPMS/*/*.rpm wezterm-nightly-{self.name}.rpm",
                 )
             )
 
@@ -610,7 +655,7 @@ rustup default {toolchain}
         return steps + [
             ActionStep(
                 "Upload artifact",
-                action="actions/upload-artifact@v4",
+                action="actions/upload-artifact@v7",
                 params={"name": self.name, "path": paths, "retention-days": 5},
             ),
         ]
@@ -627,7 +672,7 @@ rustup default {toolchain}
         patterns.append("*.sha256")
         glob = " ".join(patterns)
 
-        if self.container == "ubuntu:22.04":
+        if self.container == GEMFURY_TARGET:
             steps += [
                 RunStep(
                     "Upload to gemfury",
@@ -639,7 +684,7 @@ rustup default {toolchain}
         return [
             ActionStep(
                 "Download artifact",
-                action="actions/download-artifact@v4",
+                action="actions/download-artifact@v8",
                 params={"name": self.name},
             ),
             checksum,
@@ -662,7 +707,7 @@ rustup default {toolchain}
         patterns.append("*.sha256")
         glob = " ".join(patterns)
 
-        if self.container == "ubuntu:22.04":
+        if self.container == GEMFURY_TARGET:
             steps += [
                 RunStep(
                     "Upload to gemfury",
@@ -674,7 +719,7 @@ rustup default {toolchain}
         return steps + [
             ActionStep(
                 "Download artifact",
-                action="actions/download-artifact@v4",
+                action="actions/download-artifact@v8",
                 params={"name": self.name},
             ),
             checksum,
@@ -700,7 +745,7 @@ rustup default {toolchain}
         return [
             ActionStep(
                 "Checkout flathub/org.wezfurlong.wezterm",
-                action="actions/checkout@v4",
+                action="actions/checkout@v5",
                 params={
                     "repository": "flathub/org.wezfurlong.wezterm",
                     "path": "flathub",
@@ -726,7 +771,7 @@ rustup default {toolchain}
             steps += [
                 ActionStep(
                     "Checkout winget-pkgs",
-                    action="actions/checkout@v4",
+                    action="actions/checkout@v5",
                     params={
                         "repository": "wez/winget-pkgs",
                         "path": "winget-pkgs",
@@ -762,7 +807,7 @@ rustup default {toolchain}
             steps += [
                 ActionStep(
                     "Checkout homebrew tap",
-                    action="actions/checkout@v4",
+                    action="actions/checkout@v5",
                     params={
                         "repository": "wez/homebrew-wezterm",
                         "path": "homebrew-wezterm",
@@ -786,7 +831,7 @@ rustup default {toolchain}
             steps += [
                 ActionStep(
                     "Checkout linuxbrew tap",
-                    action="actions/checkout@v4",
+                    action="actions/checkout@v5",
                     params={
                         "repository": "wez/homebrew-wezterm-linuxbrew",
                         "path": "linuxbrew-wezterm",
@@ -997,33 +1042,33 @@ rustup default {toolchain}
 
 
 TARGETS = [
-    Target(container="ubuntu:20.04", continuous_only=True, app_image=True),
     Target(container="ubuntu:22.04", continuous_only=True),
     Target(container="ubuntu:24.04", continuous_only=True),
-    # debian 8's wayland libraries are too old for wayland-client
-    # Target(container="debian:8.11", continuous_only=True, bootstrap_git=True),
-    # harfbuzz's C++ is too new for debian 9's toolchain
-    # Target(container="debian:9.12", continuous_only=True, bootstrap_git=True),
-    Target(container="debian:10.3", continuous_only=True),
-    Target(container="debian:11", continuous_only=True),
+    Target(container="ubuntu:26.04", continuous_only=True),
     Target(container="debian:12", continuous_only=True),
     Target(name="centos9", container="quay.io/centos/centos:stream9"),
     Target(name="macos", os="macos-latest"),
     # https://fedoraproject.org/wiki/End_of_life?rd=LifeCycle/EOL
-    Target(container="fedora:39"),
-    Target(container="fedora:40"),
     Target(container="fedora:41"),
     # Target(container="alpine:3.15"),
-    Target(name="windows", os="windows-latest", rust_target="x86_64-pc-windows-msvc"),
+
+    Target(name="windows", os="windows-2025", rust_target="x86_64-pc-windows-msvc"),
 ]
 
 
 def generate_actions(namer, jobber, trigger, is_continuous, is_tag=False):
+    have_gemfury = False
+    have_appimage = False
     for t in TARGETS:
         # Clone the definition, as some Target methods called
         # in the body below have side effects that we don't
         # want to bleed across into different schedule types
         t = deepcopy(t)
+
+        if t.app_image:
+            have_appimage = True
+        if t.container == GEMFURY_TARGET:
+            have_gemfury = True
 
         t.is_tag = is_tag
         # if t.continuous_only and not is_continuous:
@@ -1098,6 +1143,10 @@ jobs:
                 yaml.safe_load(f)
         except ImportError:
             pass
+    if not have_appimage:
+        raise NotImplementedError("no appimage target is present")
+    if not have_gemfury:
+        raise NotImplementedError("no gemfury target is present")
 
 
 def generate_pr_actions():

@@ -2,7 +2,7 @@
 tags:
   - ssh
 ---
-# `ssh_backend = "Libssh"`
+# `ssh_backend = "LibSsh"`
 
 {{since('20211204-082213-a66c61ee9')}}
 

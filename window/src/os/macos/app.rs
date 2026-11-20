@@ -144,8 +144,8 @@ extern "C" fn application_dock_menu(
 
 fn get_class() -> &'static Class {
     Class::get(CLS_NAME).unwrap_or_else(|| {
-        let mut cls = ClassDecl::new(CLS_NAME, class!(NSWindow))
-            .expect("Unable to register application class");
+        let mut cls = ClassDecl::new(CLS_NAME, class!(NSObject))
+            .expect("Unable to register application delegate class");
 
         cls.add_ivar::<BOOL>("launched");
 

@@ -15,7 +15,7 @@ control codes have both 7-bit ASCII compatible as well as 8-bit
 representations.  As ASCII is a compatible subset of UTF-8, the 7-bit
 representations are preferred and processed without any special consideration.
 
-The 8-bit values *are* recognized, but only if the 8-bit value is treated as a
+The 8-bit values *are* recognized, but only if the 8-bit value is not treated as a
 unicode code point and encoded via a UTF-8 multi-byte sequence.
 
 ### Printable Codepoints

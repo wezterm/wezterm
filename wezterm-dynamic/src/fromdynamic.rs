@@ -251,10 +251,12 @@ impl FromDynamic for $ty {
         match value {
             Value::I64(n) => match (*n).try_into() {
                 Ok(n) => Ok(n),
+                #[allow(unreachable_code, reason = "unreachable for i64")]
                 Err(err) => Err(Error::Message(err.to_string())),
             },
             Value::U64(n) => match (*n).try_into() {
                 Ok(n) => Ok(n),
+                #[allow(unreachable_code, reason = "unreachable for u64")]
                 Err(err) => Err(Error::Message(err.to_string())),
             },
             other => Err(Error::NoConversion{

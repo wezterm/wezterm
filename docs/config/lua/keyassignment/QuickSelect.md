@@ -12,4 +12,4 @@ config.keys = {
 }
 ```
 
-See also [QuickSelectArgs](QuickSelectArgs.md)
+See also [`QuickSelectArgs` action](QuickSelectArgs.md)

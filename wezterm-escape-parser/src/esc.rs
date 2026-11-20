@@ -142,7 +142,7 @@ impl Display for Esc {
                 let packed = code
                     .to_u16()
                     .expect("num-derive failed to implement ToPrimitive");
-                if packed > u16::from(u8::max_value()) {
+                if packed > u16::from(u8::MAX) {
                     write!(
                         f,
                         "{}{}",
@@ -171,6 +171,8 @@ impl Display for Esc {
 #[cfg(test)]
 mod test {
     use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::format;
     use alloc::string::String;
 
     fn encode(osc: &Esc) -> String {

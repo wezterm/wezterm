@@ -32,7 +32,7 @@ pub struct UnixStream(StreamImpl);
 
 #[cfg(unix)]
 impl AsFd for UnixStream {
-    fn as_fd(&self) -> BorrowedFd {
+    fn as_fd(&self) -> BorrowedFd<'_> {
         self.0.as_fd()
     }
 }
@@ -69,7 +69,7 @@ impl AsRawSocket for UnixStream {
 }
 #[cfg(windows)]
 impl AsSocket for UnixStream {
-    fn as_socket(&self) -> BorrowedSocket {
+    fn as_socket(&self) -> BorrowedSocket<'_> {
         self.0.as_socket()
     }
 }

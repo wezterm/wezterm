@@ -146,7 +146,7 @@ Alt/Option](config/keys.md), as well as options that influence that behavior.
 
 The next thing to verify is what byte sequences are being produced when you
 press keys.  I generally suggest running `xxd`, pressing the relevant key, then
-enter, then CTRL-D.  This should show a hex dump of the the byte sequence.
+enter, then CTRL-D.  This should show a hex dump of the byte sequence.
 This step helps to isolate the input from input processing layers in other
 applications.
 
@@ -355,7 +355,7 @@ wezterm.action.SpawnCommandInNewWindow {
 }
 ```
 Note: For zsh users, you may need to add -l or -i to the above if the PATH settings are specified
-in .zprofile or .zshrc repectively. Homebrew users probably need -l. 
+in .zprofile or .zshrc respectively. Homebrew users probably need -l.
 
 Another option is to explicitly use the full path to the program on your system,
 something like:

@@ -1,4 +1,5 @@
 #![cfg(target_os = "macos")]
+
 use crate::ToastNotification;
 use block2::{Block, RcBlock};
 use objc2::rc::Retained;
@@ -47,8 +48,10 @@ define_class!(
             completion_handler: &block2::Block<dyn Fn(UNNotificationPresentationOptions)>,
         ) {
             log::debug!("will_present");
-            let options =
-                UNNotificationPresentationOptions::List | UNNotificationPresentationOptions::Sound;
+            let options = UNNotificationPresentationOptions::List
+                | UNNotificationPresentationOptions::Sound
+                | UNNotificationPresentationOptions::Badge
+                | UNNotificationPresentationOptions::Banner;
             completion_handler.call((options,));
         }
 
@@ -92,11 +95,11 @@ impl Drop for NotifDelegate {
 }
 
 const CENTER: LazyLock<Retained<UNUserNotificationCenter>> =
-    LazyLock::new(|| unsafe { UNUserNotificationCenter::currentNotificationCenter() });
+    LazyLock::new(UNUserNotificationCenter::currentNotificationCenter);
 
 pub fn initialize() {
     static INIT: Once = Once::new();
-    INIT.call_once(|| unsafe {
+    INIT.call_once(|| {
         CENTER.requestAuthorizationWithOptions_completionHandler(
             UNAuthorizationOptions::Alert
                 | UNAuthorizationOptions::Provisional

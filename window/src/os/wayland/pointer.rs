@@ -15,8 +15,7 @@ use wezterm_input_types::MousePress;
 
 use crate::wayland::SurfaceUserData;
 
-use super::copy_and_paste::CopyAndPaste;
-use super::drag_and_drop::DragAndDrop;
+use super::drag_and_drop::DragAndDropSession;
 use super::state::WaylandState;
 use super::WaylandConnection;
 
@@ -76,11 +75,13 @@ impl PointerUserData {
     }
 }
 
+/// Per-pointer state tracked across pointer events.
 #[derive(Default)]
-pub(super) struct PointerState {
+pub struct PointerState {
     active_surface_id: Option<ObjectId>,
-    pub(super) drag_and_drop: DragAndDrop,
     serial: u32,
+    /// Active drag-and-drop session, if any.
+    pub drag_and_drop_session: Option<DragAndDropSession>,
 }
 
 impl PointerDataExt for PointerUserData {
@@ -92,7 +93,6 @@ impl PointerDataExt for PointerUserData {
 #[derive(Clone, Debug)]
 pub struct PendingMouse {
     window_id: usize,
-    pub(super) copy_and_paste: Arc<Mutex<CopyAndPaste>>,
     surface_coords: Option<(f64, f64)>,
     button: Vec<(MousePress, ButtonState)>,
     scroll: Option<(f64, f64)>,
@@ -100,13 +100,9 @@ pub struct PendingMouse {
 }
 
 impl PendingMouse {
-    pub(super) fn create(
-        window_id: usize,
-        copy_and_paste: &Arc<Mutex<CopyAndPaste>>,
-    ) -> Arc<Mutex<Self>> {
+    pub(super) fn create(window_id: usize) -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self {
             window_id,
-            copy_and_paste: Arc::clone(copy_and_paste),
             button: vec![],
             scroll: None,
             surface_coords: None,

@@ -1,20 +1,25 @@
+//! This module provides the ability to parse escape sequences and attach
+//! semantic meaning to them.  It can also encode the semantic values as
+//! escape sequences.  It provides encoding and decoding functionality
+//! only; it does not provide terminal emulation facilities itself.
+
 // suppress inscrutable useless_attribute clippy that shows up when
 // using derive(FromPrimitive)
 #![allow(clippy::useless_attribute)]
 #![allow(clippy::upper_case_acronyms)]
 #![cfg_attr(not(feature = "std"), no_std)]
-//! This module provides the ability to parse escape sequences and attach
-//! semantic meaning to them.  It can also encode the semantic values as
-//! escape sequences.  It provides encoding and decoding functionality
-//! only; it does not provide terminal emulation facilities itself.
+
 #[cfg(feature = "tmux_cc")]
 use crate::tmux_cc::Event;
 use core::fmt::{Display, Formatter, Result as FmtResult, Write as FmtWrite};
 use num_derive::*;
 use wezterm_color_types::LinearRgba;
 
-#[cfg_attr(not(feature = "std"), macro_use)]
 extern crate alloc;
+#[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(feature = "std")]
+use std::format;
 
 mod allocate;
 use allocate::*;
@@ -568,7 +573,7 @@ impl OneBased {
             CsiParam::Integer(v) if *v == 0 => Ok(Self {
                 value: num_traits::one(),
             }),
-            CsiParam::Integer(v) if *v > 0 && *v <= i64::from(u32::max_value()) => {
+            CsiParam::Integer(v) if *v > 0 && *v <= i64::from(u32::MAX) => {
                 Ok(Self { value: *v as u32 })
             }
             _ => Err(()),
@@ -579,10 +584,8 @@ impl OneBased {
     /// 0 is equivalent to max_value.
     pub fn from_esc_param_with_big_default(v: &CsiParam) -> core::result::Result<Self, ()> {
         match v {
-            CsiParam::Integer(v) if *v == 0 => Ok(Self {
-                value: u32::max_value(),
-            }),
-            CsiParam::Integer(v) if *v > 0 && *v <= i64::from(u32::max_value()) => {
+            CsiParam::Integer(v) if *v == 0 => Ok(Self { value: u32::MAX }),
+            CsiParam::Integer(v) if *v > 0 && *v <= i64::from(u32::MAX) => {
                 Ok(Self { value: *v as u32 })
             }
             _ => Err(()),

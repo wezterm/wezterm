@@ -308,16 +308,18 @@ impl<'a> QuadAllocator for MappedQuads<'a> {
 
     fn extend_with(&mut self, vertices: &[Vertex]) {
         let idx = *self.next;
+        let len = vertices.len();
+
         // idx and next are number of quads, so divide by number of vertices
-        *self.next += vertices.len() / VERTICES_PER_CELL;
+        *self.next += len / VERTICES_PER_CELL;
         // Only copy in if there is enough room.
         // We'll detect the out of space condition at the end of
         // the render pass.
         let idx = idx * VERTICES_PER_CELL;
-        let len = self.capacity * VERTICES_PER_CELL;
-        if idx + vertices.len() < len {
+        let capacity = self.capacity * VERTICES_PER_CELL;
+        if idx + len <= capacity {
             self.mapping
-                .slice_mut(idx..idx + vertices.len())
+                .slice_mut(idx..idx + len)
                 .copy_from_slice(vertices);
         }
     }
@@ -397,7 +399,7 @@ impl TripleVertexBuffer {
         (num_quads * VERTICES_PER_CELL, num_quads * INDICES_PER_CELL)
     }
 
-    pub fn map(&self) -> MappedQuads {
+    pub fn map(&self) -> MappedQuads<'_> {
         let mut bufs = self.current_vb_mut();
 
         // To map the vertex buffer, we need to hold a mutable reference to
@@ -476,7 +478,7 @@ impl RenderLayer {
         }
     }
 
-    pub fn quad_allocator(&self) -> TripleLayerQuadAllocator {
+    pub fn quad_allocator(&self) -> TripleLayerQuadAllocator<'_> {
         // We're creating a self-referential struct here to manage the lifetimes
         // of these related items.  The transmutes are safe because we're only
         // transmuting the lifetimes (not the types), and we're keeping hold
@@ -559,7 +561,7 @@ pub struct BorrowedLayers {
 }
 
 impl TripleLayerQuadAllocatorTrait for BorrowedLayers {
-    fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl> {
+    fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl<'_>> {
         self.layers[layer_num].allocate()
     }
 
