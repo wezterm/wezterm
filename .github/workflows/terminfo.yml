@@ -34,8 +34,10 @@ jobs:
       - name: "Check compiled terminfo is up to date"
         run: |
           bash ci/regen-binary-terminfo.sh
-          if ! git diff --exit-code -- termwiz/data/w/wezterm; then
-            echo "termwiz/data/w/wezterm is out of date with termwiz/data/wezterm.terminfo"
+          if git diff --exit-code -- termwiz/data/w/wezterm; then
+            echo "✅ termwiz/data/w/wezterm is up to date with termwiz/data/wezterm.terminfo"
+          else
+            echo "❌ termwiz/data/w/wezterm is out of date with termwiz/data/wezterm.terminfo"
             echo # blank line
             echo "Regenerate it with:"
             echo "  ci/regen-binary-terminfo.sh"
