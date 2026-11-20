@@ -12,6 +12,7 @@ on:
       - "filedescriptor/**"
       - "vtparse/**"
       - ".github/workflows/termwiz.yml"
+      - "ci/regen-binary-terminfo.sh"
   push:
     branches:
       - main
@@ -23,8 +24,34 @@ on:
       - "filedescriptor/**"
       - "vtparse/**"
       - ".github/workflows/termwiz.yml"
+      - "ci/regen-binary-terminfo.sh"
 
 jobs:
+  check-terminfo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: "Install tic"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ncurses-bin
+
+      - name: "Check compiled terminfo is up to date"
+        run: |
+          bash ci/regen-binary-terminfo.sh
+          if git diff --exit-code -- termwiz/data/w/wezterm; then
+            echo "✅ termwiz/data/w/wezterm is up to date with termwiz/data/wezterm.terminfo"
+          else
+            echo "❌ termwiz/data/w/wezterm is out of date with termwiz/data/wezterm.terminfo"
+            echo # blank line
+            echo "Regenerate it with:"
+            echo "  ci/regen-binary-terminfo.sh"
+            echo # blank line
+            exit 1
+          fi
+
   build-termwiz-all-features:
     runs-on: ubuntu-latest
     steps:
