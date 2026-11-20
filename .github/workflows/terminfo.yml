@@ -1,0 +1,44 @@
+name: terminfo
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "termwiz/data/wezterm.terminfo"
+      - "termwiz/data/w/wezterm"
+      - "ci/regen-binary-terminfo.sh"
+      - ".github/workflows/terminfo.yml"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "termwiz/data/wezterm.terminfo"
+      - "termwiz/data/w/wezterm"
+      - "ci/regen-binary-terminfo.sh"
+      - ".github/workflows/terminfo.yml"
+
+jobs:
+  check-terminfo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: "Install tic"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ncurses-bin
+
+      - name: "Check compiled terminfo is up to date"
+        run: |
+          bash ci/regen-binary-terminfo.sh
+          if ! git diff --exit-code -- termwiz/data/w/wezterm; then
+            echo "termwiz/data/w/wezterm is out of date with termwiz/data/wezterm.terminfo"
+            echo # blank line
+            echo "Regenerate it with:"
+            echo "  ci/regen-binary-terminfo.sh"
+            echo # blank line
+            exit 1
+          fi

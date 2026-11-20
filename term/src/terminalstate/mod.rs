@@ -38,7 +38,7 @@ use crate::terminalstate::kitty::*;
 
 lazy_static::lazy_static! {
     static ref DB: Database = {
-        let data = include_bytes!("../../../termwiz/data/wezterm");
+        let data = include_bytes!("../../../termwiz/data/w/wezterm");
         Database::from_buffer(&data[..]).unwrap()
     };
 }
@@ -2888,5 +2888,86 @@ impl TerminalState {
             .last()
             .copied()
             .unwrap_or(self.keyboard_encoding)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::sync::mpsc::Receiver;
+    use std::sync::Mutex;
+    use std::time::Duration;
+    use wezterm_escape_parser::Action;
+
+    #[derive(Debug)]
+    struct TestConfig;
+
+    impl crate::TerminalConfiguration for TestConfig {
+        fn color_palette(&self) -> ColorPalette {
+            ColorPalette::default()
+        }
+    }
+
+    /// Captures everything the terminal writes and signals on flush, so a test
+    /// can wait for the writer thread to emit the response before reading it.
+    struct CaptureWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+        flushed: Sender<()>,
+    }
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.buffer.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            let _ = self.flushed.send(());
+            Ok(())
+        }
+    }
+
+    /// Builds a terminal whose output is captured into `buffer`.
+    fn capture_terminal(buffer: &Arc<Mutex<Vec<u8>>>) -> (TerminalState, Receiver<()>) {
+        let (flushed, flushed_rx) = channel();
+        let writer = Box::new(CaptureWriter {
+            buffer: Arc::clone(buffer),
+            flushed,
+        });
+        let state = TerminalState::new(
+            TerminalSize::default(),
+            Arc::new(TestConfig),
+            "WezTerm",
+            "O_o",
+            writer,
+        );
+        (state, flushed_rx)
+    }
+
+    #[test]
+    fn embedded_terminfo_is_valid() {
+        // Initializing the lazy_static database panics if the embedded
+        // terminfo file is missing or malformed.
+        assert!(DB.raw("Tc").is_some());
+    }
+
+    #[test]
+    fn xt_get_tcap_responds_from_embedded_terminfo() {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let (mut state, flushed_rx) = capture_terminal(&buffer);
+
+        {
+            let mut performer = performer::Performer::new(&mut state);
+            performer.perform(Action::XtGetTcap(vec!["sitm".to_string()]));
+        }
+
+        // Wait for the writer thread to write and flush the response.
+        flushed_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("terminal did not flush its response");
+
+        let response = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        // 7369746D is hex for "sitm"; 1B5B336D is hex for the SGR italics sequence.
+        assert_eq!(response, "\x1bP1+r7369746D=1B5B336D\x1b\\");
     }
 }
