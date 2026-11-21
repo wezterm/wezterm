@@ -9,6 +9,9 @@ use termwiz::surface::line::DoubleClickRange;
 use termwiz::surface::SequenceNo;
 use wezterm_term::{SemanticZone, StableRowIndex};
 
+#[cfg(test)]
+mod test;
+
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
 pub struct Selection {
     /// Remembers the starting coordinate of the selection prior to
@@ -252,6 +255,9 @@ impl SelectionRange {
                 {
                     DoubleClickRange::RangeWithWrap(click_range)
                     | DoubleClickRange::Range(click_range) => {
+                        if click_range.is_empty() {
+                            return Self { start, end: start };
+                        }
                         let (start_y, start_x) =
                             logical.logical_x_to_physical_coord(click_range.start);
                         let (end_y, end_x) =

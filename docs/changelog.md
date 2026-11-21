@@ -312,6 +312,8 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @bew! #8001
 * IME: committed text is now handled correctly in prompt overlays such as
   `PromptInputLine` and the debug overlay. Thanks to @dyxushuai! #7556
+* Word selection at the leftmost column of a blank or space-indented line
+  underflowed and produced a reversed selection. Debug builds panicked. #713
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
