@@ -791,6 +791,22 @@ impl ConfigHandle {
         self.generation
     }
 
+    /// Returns a value that uniquely identifies the underlying effective
+    /// configuration among configurations that are alive at the same time.
+    ///
+    /// This is useful as a cache key for data derived from the config (eg:
+    /// the Lua table representation of the config): the derived data must
+    /// be recomputed when the effective config changes, and two handles
+    /// can share a generation yet carry different configurations when
+    /// per-window overrides are in play.
+    ///
+    /// A cache using this key must keep either this handle or a clone of
+    /// it alive while it holds the cached value, otherwise the identity
+    /// could be reused by a future configuration.
+    pub fn cache_key(&self) -> usize {
+        Arc::as_ptr(&self.config) as usize
+    }
+
     pub fn default_config() -> Self {
         Self {
             config: Arc::new(Config::default_config()),

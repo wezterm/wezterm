@@ -1,16 +1,18 @@
 use crate::exec_domain::{ExecDomain, ValueOrFunc};
 use crate::keyassignment::KeyAssignment;
 use crate::{
-    Config, FontAttributes, FontStretch, FontStyle, FontWeight, FreeTypeLoadTarget, RgbaColor,
-    TextStyle,
+    Config, ConfigHandle, FontAttributes, FontStretch, FontStyle, FontWeight, FreeTypeLoadTarget,
+    RgbaColor, TextStyle,
 };
 use anyhow::{anyhow, Context};
 use luahelper::{from_lua_value_dynamic, lua_value_to_dynamic, to_lua};
-use mlua::{FromLua, IntoLuaMulti, Lua, Table, Value, Variadic};
+use mlua::{FromLua, IntoLua, IntoLuaMulti, Lua, RegistryKey, Table, Value, Variadic};
 use ordered_float::NotNan;
 use portable_pty::CommandBuilder;
+use std::cell::RefCell;
 use std::convert::TryFrom;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Mutex;
 use wezterm_dynamic::{
     FromDynamic, FromDynamicOptions, ToDynamic, UnknownFieldAction, Value as DynValue,
@@ -792,6 +794,93 @@ pub async fn emit_event<'lua>(
     }
 }
 
+/// Returns true if at least one handler is registered for the named event.
+/// Callers that need to do non-trivial work to prepare event arguments can
+/// use this to skip that work entirely when nobody is listening.
+pub fn has_event_subscribers(lua: &Lua, name: &str) -> bool {
+    let decorated_name = format!("wezterm-event-{}", name);
+    match lua.named_registry_value::<mlua::Value>(&decorated_name) {
+        Ok(mlua::Value::Table(tbl)) => tbl.raw_len() > 0,
+        _ => false,
+    }
+}
+
+struct ConfigLuaCacheEntry {
+    lua: Rc<Lua>,
+    /// Keeps the config that was converted alive, so that the identity used
+    /// as the cache key (see `ConfigHandle::cache_key`) cannot be reused by
+    /// an unrelated future config while this entry is cached.
+    handle: ConfigHandle,
+    value: RegistryKey,
+}
+
+thread_local! {
+    /// Converting the whole effective Config into a Lua table walks every
+    /// field (key tables, colors, fonts, hyperlink rules...), which is
+    /// expensive for large configs. The effective config only changes on
+    /// reload or per-window overrides, so conversions are cached here and
+    /// reused by event dispatch. `format-tab-title` benefits the most: it
+    /// runs twice per tab on every tab bar rebuild, and rebuilds happen on
+    /// every tab title change (eg: spinner animations).
+    static CONFIG_LUA_CACHE: RefCell<Vec<ConfigLuaCacheEntry>> = RefCell::new(Vec::new());
+}
+
+/// Upper bound for `CONFIG_LUA_CACHE`. In practice there is one entry per
+/// window carrying distinct overrides; the bound only prevents unbounded
+/// growth if windows come and go.
+const CONFIG_LUA_CACHE_LIMIT: usize = 8;
+
+#[cfg(test)]
+thread_local! {
+    /// Number of actual Config->Lua conversions performed on this thread.
+    /// Unit tests use it to assert that cache hits skip conversion.
+    static CONVERSIONS: std::cell::Cell<usize> = std::cell::Cell::new(0);
+}
+
+/// Converts the effective config into a Lua table, reusing a previous
+/// conversion when this `(lua, config)` pair was converted before.
+///
+/// The cache is keyed by `ConfigHandle::cache_key` (the identity of the
+/// effective config) rather than by `generation()`: per-window overrides
+/// produce a distinct config without bumping the generation, so generation
+/// alone would alias different effective configs. Entries hold strong
+/// references to both the Lua state and the config, so a stale hit cannot be
+/// produced by either address being recycled. Entries converted for a
+/// previous Lua state are dropped when a new state is seen, and evicted
+/// entries release their registry values via `RegistryKey`'s destructor.
+pub fn config_handle_to_lua<'lua>(
+    lua: &'lua Rc<Lua>,
+    config: &ConfigHandle,
+) -> anyhow::Result<Value<'lua>> {
+    CONFIG_LUA_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let key = config.cache_key();
+
+        for entry in cache.iter() {
+            if entry.handle.cache_key() == key && Rc::ptr_eq(&entry.lua, lua) {
+                if let Ok(value) = lua.registry_value::<Value>(&entry.value) {
+                    return Ok(value);
+                }
+            }
+        }
+
+        #[cfg(test)]
+        CONVERSIONS.with(|count| count.set(count.get() + 1));
+
+        let value = lua.create_registry_value((**config).clone().into_lua(&**lua)?)?;
+        cache.retain(|entry| Rc::ptr_eq(&entry.lua, lua));
+        if cache.len() >= CONFIG_LUA_CACHE_LIMIT {
+            cache.remove(0);
+        }
+        cache.push(ConfigLuaCacheEntry {
+            lua: Rc::clone(lua),
+            handle: config.clone(),
+            value,
+        });
+        Ok(lua.registry_value(&cache.last().unwrap().value)?)
+    })
+}
+
 pub fn emit_sync_callback<'lua, A>(
     lua: &'lua Lua,
     (name, args): (String, A),
@@ -949,6 +1038,88 @@ assert(wezterm.emit('bar', 42, 'woot') == true)
 
         assert_eq!(*total.lock().unwrap(), 6);
 
+        Ok(())
+    }
+
+    fn new_lua() -> Rc<Lua> {
+        Rc::new(Lua::new())
+    }
+
+    fn conversions() -> usize {
+        CONVERSIONS.with(|count| count.get())
+    }
+
+    fn same_table(lua: &Lua, a: Value, b: Value) -> bool {
+        lua.load("return rawequal(...)")
+            .call::<_, bool>((a, b))
+            .expect("rawequal")
+    }
+
+    #[test]
+    fn config_lua_cache_reuses_the_same_table() -> anyhow::Result<()> {
+        let lua = new_lua();
+        let config = ConfigHandle::default_config();
+
+        let first = config_handle_to_lua(&lua, &config)?;
+        let conversions_after_first = conversions();
+        assert!(conversions_after_first > 0);
+
+        let second = config_handle_to_lua(&lua, &config)?;
+        assert_eq!(
+            conversions(),
+            conversions_after_first,
+            "a cache hit must not convert the config again"
+        );
+        assert!(
+            same_table(&lua, first.clone(), second.clone()),
+            "both calls must return the same Lua table, got two distinct tables"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn config_lua_cache_is_per_config_identity_not_generation() -> anyhow::Result<()> {
+        let lua = new_lua();
+        // Per-window overrides produce a different effective config without
+        // bumping the generation, so both of these share generation 0.
+        let a = ConfigHandle::default_config();
+        let b = ConfigHandle::default_config();
+        assert_eq!(a.generation(), b.generation());
+
+        let a_table = config_handle_to_lua(&lua, &a)?;
+        let b_table = config_handle_to_lua(&lua, &b)?;
+        assert!(
+            !same_table(&lua, a_table, b_table),
+            "different configs with the same generation must not share a cache entry"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn config_lua_cache_is_per_lua_state() -> anyhow::Result<()> {
+        let config = ConfigHandle::default_config();
+        let lua_one = new_lua();
+        let lua_two = new_lua();
+
+        config_handle_to_lua(&lua_one, &config)?;
+        let conversions_before = conversions();
+        config_handle_to_lua(&lua_two, &config)?;
+        assert!(
+            conversions() > conversions_before,
+            "a different Lua state must convert the config again"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn has_event_subscribers_requires_a_registered_handler() -> anyhow::Result<()> {
+        let lua = new_lua();
+        assert!(!has_event_subscribers(&lua, "format-tab-title"));
+
+        let handlers = lua.create_table()?;
+        handlers.set(1, lua.create_function(|_: &Lua, _: ()| Ok(()))?)?;
+        lua.set_named_registry_value("wezterm-event-format-tab-title", handlers)?;
+        assert!(has_event_subscribers(&lua, "format-tab-title"));
         Ok(())
     }
 }
