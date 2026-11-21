@@ -160,6 +160,11 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Resizing a tab now keeps the proportions of its splits and repairs split
+  trees whose sizes don't add up (seen in `wezterm connect` windows as panes
+  of different widths in one column, or panes extending past the window).
+  Shrinking a window with nested splits of the same direction could also
+  hang the GUI. #ISSUE
 * Multiplexer: the mouse wheel was not mapped to cursor up/down keys in the
   alternate screen for panes in a `wezterm connect` domain, because the client
   always reported the alternate screen as inactive. The server now advises the
