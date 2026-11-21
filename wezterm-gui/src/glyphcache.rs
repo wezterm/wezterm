@@ -28,6 +28,7 @@ use termwiz::surface::CursorShape;
 use wezterm_blob_leases::{BlobLease, BlobManager, BoxedReader};
 use wezterm_font::units::*;
 use wezterm_font::{FontConfiguration, GlyphInfo, LoadedFont, LoadedFontId};
+use wezterm_term::color::{ColorPalette, SrgbaTuple};
 use wezterm_term::Underline;
 
 static FRAME_ERROR_REPORTED: AtomicBool = AtomicBool::new(false);
@@ -205,7 +206,9 @@ impl<'a> BitmapImage for DecodedImageHandle<'a> {
         match &*self.h {
             ImageDataType::Rgba8 { data, .. } => data.as_ptr(),
             ImageDataType::AnimRgba8 { frames, .. } => frames[self.current_frame].as_ptr(),
-            ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => unreachable!(),
+            ImageDataType::Indexed { .. }
+            | ImageDataType::EncodedFile(_)
+            | ImageDataType::EncodedLease(_) => unreachable!(),
         }
     }
 
@@ -216,7 +219,8 @@ impl<'a> BitmapImage for DecodedImageHandle<'a> {
     fn image_dimensions(&self) -> (usize, usize) {
         match &*self.h {
             ImageDataType::Rgba8 { width, height, .. }
-            | ImageDataType::AnimRgba8 { width, height, .. } => (*width as usize, *height as usize),
+            | ImageDataType::AnimRgba8 { width, height, .. }
+            | ImageDataType::Indexed { width, height, .. } => (*width as usize, *height as usize),
             ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => unreachable!(),
         }
     }
@@ -900,6 +904,7 @@ impl GlyphCache {
         frame_cache: &mut HashMap<[u8; 32], Sprite>,
         atlas: &mut Atlas,
         decoded: &DecodedImage,
+        palette: Option<(&ColorPalette, &[u8; 32], bool)>,
         padding: Option<usize>,
         min_frame_duration: Duration,
         allow_image: AllowImage,
@@ -924,6 +929,67 @@ impl GlyphCache {
                     .context("atlas.allocate_with_padding")?;
                 frame_cache.insert(*hash, sprite.clone());
 
+                return Ok((sprite, None, LoadState::Loaded));
+            }
+            ImageDataType::Indexed {
+                hash,
+                width,
+                height,
+                has_alpha,
+                data,
+            } => {
+                use sha2::{Digest, Sha256};
+                let (palette, palette_hash, do_cursor_color_fallback) =
+                    palette.context("indexed image requires palette")?;
+                let mut hasher = Sha256::new();
+                hasher.update(hash);
+                hasher.update(palette_hash);
+                hasher.update(&[u8::from(do_cursor_color_fallback)]);
+                let hash = hasher.finalize().into();
+                if let Some(sprite) = frame_cache.get(&hash) {
+                    return Ok((sprite.clone(), None, LoadState::Loaded));
+                }
+                let width = *width as usize;
+                let height = *height as usize;
+                let num_bytes: usize = width
+                    .checked_mul(height)
+                    .context("image size overflow")?
+                    .checked_mul(4)
+                    .context("image size overflow")?;
+                let mut rgba_bytes = Vec::with_capacity(num_bytes);
+                let fallback = |c1: SrgbaTuple, c2| if c1.3 == 0.0 { c2 } else { c1 };
+                let mut push_color = |c: u8, alpha: u8| {
+                    let (r, g, b, _) = match c {
+                        0..=247 => palette.colors.0[usize::from(c)],
+                        248 => palette.background,
+                        249 => palette.foreground,
+                        // Fallbacks match kitty: yes, cursor_bg falls back to fg and vice versa
+                        250 => fallback(palette.selection_bg, palette.foreground),
+                        251 => fallback(palette.selection_fg, palette.background),
+                        252 if do_cursor_color_fallback => palette.foreground,
+                        252 => fallback(palette.cursor_bg, palette.foreground),
+                        253 if do_cursor_color_fallback => palette.background,
+                        253 => fallback(palette.cursor_fg, palette.background),
+                        // We don't have an URL hover color, so use fg
+                        254 => palette.foreground,
+                        // Reserved, currently default foreground
+                        255 => palette.foreground,
+                    }
+                    .as_rgba_u8();
+                    rgba_bytes.extend([r, g, b, alpha]);
+                };
+                if *has_alpha {
+                    for &[c, alpha] in data.as_chunks().0 {
+                        push_color(c, alpha);
+                    }
+                } else {
+                    for &c in data {
+                        push_color(c, 255);
+                    }
+                }
+                let frame = Image::from_raw(width, height, rgba_bytes);
+                let sprite = atlas.allocate_with_padding(&frame, padding, scale_down)?;
+                frame_cache.insert(hash, sprite.clone());
                 return Ok((sprite, None, LoadState::Loaded));
             }
             ImageDataType::AnimRgba8 {
@@ -1084,6 +1150,7 @@ impl GlyphCache {
     pub fn cached_image(
         &mut self,
         image_data: &Arc<ImageData>,
+        palette: Option<(&ColorPalette, &[u8; 32], bool)>,
         padding: Option<usize>,
         allow_image: AllowImage,
     ) -> anyhow::Result<(Sprite, Option<Instant>, LoadState)> {
@@ -1094,6 +1161,7 @@ impl GlyphCache {
                 &mut self.frame_cache,
                 &mut self.atlas,
                 decoded,
+                palette,
                 padding,
                 self.min_frame_duration,
                 allow_image,
@@ -1104,6 +1172,7 @@ impl GlyphCache {
                 &mut self.frame_cache,
                 &mut self.atlas,
                 &decoded,
+                palette,
                 padding,
                 self.min_frame_duration,
                 allow_image,

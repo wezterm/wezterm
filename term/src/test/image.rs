@@ -78,6 +78,11 @@ const TINY_RGBA_BASE64: &str = "AQID/wQFBv8HCAn/CgsM/w==";
 
 /// The image data attached to the first cell that carries one.
 fn first_image(term: &TestTerm) -> Arc<ImageData> {
+    opt_first_image(term).expect("no image was attached to the screen")
+}
+
+/// The image data attached to the first cell that carries one, or None.
+fn opt_first_image(term: &TestTerm) -> Option<Arc<ImageData>> {
     for line in term.screen().visible_lines().iter() {
         for cell in line.visible_cells() {
             if let Some(im) = cell
@@ -85,11 +90,11 @@ fn first_image(term: &TestTerm) -> Arc<ImageData> {
                 .images()
                 .and_then(|images| images.into_iter().next())
             {
-                return Arc::clone(im.image_data());
+                return Some(Arc::clone(im.image_data()));
             }
         }
     }
-    panic!("no image was attached to the screen");
+    None
 }
 
 /// An Rgba8 stores the hash of its pixels and `compute_hash` reports it without
@@ -123,4 +128,70 @@ fn kitty_frame_edit_keeps_the_stored_hash_current() {
     }
 
     assert_ne!(edited_hash, transmitted_hash);
+}
+
+/// Indexed image uploads produce the expected images.
+#[test]
+fn kitty_indexed_image() {
+    let mut term = TestTerm::new(3, 10, 0);
+    // a=T: transmit and display, f=8: Indexed, s/v: 2x1 pixels, .
+    let seq = format!("\x1b_Ga=T,t=d,f=8,s=2,v=1,i=1;AgE=\x1b\\");
+    term.advance_bytes(seq.as_bytes());
+    let image = first_image(&term);
+    let image = image.data();
+    match &*image {
+        ImageDataType::Indexed {
+            data,
+            width,
+            height,
+            has_alpha,
+            hash: _,
+        } => {
+            k9::assert_equal!(data, &[2, 1]);
+            k9::assert_equal!(*width, 2);
+            k9::assert_equal!(*height, 1);
+            k9::assert_equal!(*has_alpha, false);
+        }
+        other => panic!("expected Indexed, got {:?}", other),
+    }
+}
+
+/// IndexedAlpha image uploads produce the expected images.
+#[test]
+fn kitty_indexed_alpha_image() {
+    let mut term = TestTerm::new(3, 10, 0);
+    // a=T: transmit and display, f=16: IndexedAlpha, s/v: 2x1 pixels, .
+    let seq = format!("\x1b_Ga=T,t=d,f=16,s=2,v=1,i=1;Av8BQA==\x1b\\");
+    term.advance_bytes(seq.as_bytes());
+    let image = first_image(&term);
+    let image = image.data();
+    match &*image {
+        ImageDataType::Indexed {
+            data,
+            width,
+            height,
+            has_alpha,
+            hash: _,
+        } => {
+            k9::assert_equal!(data, &[2, 255, 1, 64]);
+            k9::assert_equal!(*width, 2);
+            k9::assert_equal!(*height, 1);
+            k9::assert_equal!(*has_alpha, true);
+        }
+        other => panic!("expected Indexed, got {:?}", other),
+    }
+}
+
+/// Indexed image uploads with the wrong size produce no image (but don't crash).
+#[test]
+fn kitty_indexed_image_wrong_size() {
+    let mut term = TestTerm::new(3, 10, 0);
+    // f=16 2x1 with only 2 bytes
+    let seq = format!("\x1b_Ga=T,t=d,f=16,s=2,v=1,i=1;AgE=\x1b\\");
+    term.advance_bytes(seq.as_bytes());
+    k9::assert_equal!(opt_first_image(&term).is_none(), true);
+    // f=8 2x1 with 4 bytes
+    let seq = format!("\x1b_Ga=T,t=d,f=8,s=2,v=1,i=1;Av8BQA==\x1b\\");
+    term.advance_bytes(seq.as_bytes());
+    k9::assert_equal!(opt_first_image(&term).is_none(), true);
 }

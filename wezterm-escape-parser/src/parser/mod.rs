@@ -921,6 +921,44 @@ mod test {
                 Action::Esc(Esc::Code(EscCode::StringTerminator)),
             ]
         );
+        assert_eq!(
+            round_trip_parse("\x1b_Gf=8,s=2,v=1;AgE=\x1b\\"),
+            vec![
+                Action::KittyImage(Box::new(KittyImage::TransmitData {
+                    transmit: KittyImageTransmit {
+                        format: Some(KittyImageFormat::Indexed),
+                        data: KittyImageData::Direct("AgE=".to_string()),
+                        width: Some(2),
+                        height: Some(1),
+                        image_id: None,
+                        image_number: None,
+                        compression: KittyImageCompression::None,
+                        more_data_follows: false,
+                    },
+                    verbosity: KittyImageVerbosity::Verbose,
+                })),
+                Action::Esc(Esc::Code(EscCode::StringTerminator)),
+            ]
+        );
+        assert_eq!(
+            round_trip_parse("\x1b_Gf=16,s=2,v=1;Av8BQA==\x1b\\"),
+            vec![
+                Action::KittyImage(Box::new(KittyImage::TransmitData {
+                    transmit: KittyImageTransmit {
+                        format: Some(KittyImageFormat::IndexedAlpha),
+                        data: KittyImageData::Direct("Av8BQA==".to_string()),
+                        width: Some(2),
+                        height: Some(1),
+                        image_id: None,
+                        image_number: None,
+                        compression: KittyImageCompression::None,
+                        more_data_follows: false,
+                    },
+                    verbosity: KittyImageVerbosity::Verbose,
+                })),
+                Action::Esc(Esc::Code(EscCode::StringTerminator)),
+            ]
+        );
 
         assert_eq!(
             parse_as(

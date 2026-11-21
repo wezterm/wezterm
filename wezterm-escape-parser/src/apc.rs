@@ -476,6 +476,10 @@ impl KittyImageVerbosity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KittyImageFormat {
+    /// f=8
+    Indexed,
+    /// f=16
+    IndexedAlpha,
     /// f=24
     Rgb,
     /// f=32
@@ -488,6 +492,8 @@ impl KittyImageFormat {
     fn from_keys(keys: &BTreeMap<&str, &str>) -> Option<Option<Self>> {
         match get(keys, "f") {
             None => Some(None),
+            Some("8") => Some(Some(Self::Indexed)),
+            Some("16") => Some(Some(Self::IndexedAlpha)),
             Some("32") => Some(Some(Self::Rgba)),
             Some("24") => Some(Some(Self::Rgb)),
             Some("100") => Some(Some(Self::Png)),
@@ -497,6 +503,8 @@ impl KittyImageFormat {
 
     fn to_keys(&self, keys: &mut BTreeMap<&'static str, String>) {
         match self {
+            Self::Indexed => keys.insert("f", "8".to_string()),
+            Self::IndexedAlpha => keys.insert("f", "16".to_string()),
             Self::Rgb => keys.insert("f", "24".to_string()),
             Self::Rgba => keys.insert("f", "32".to_string()),
             Self::Png => keys.insert("f", "100".to_string()),
