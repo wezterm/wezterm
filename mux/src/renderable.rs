@@ -2,6 +2,7 @@ use crate::pane::{ForEachPaneLogicalLine, WithPaneLines};
 use luahelper::impl_lua_conversion_dynamic;
 use rangeset::RangeSet;
 use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
 use std::ops::Range;
 use termwiz::surface::SequenceNo;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
@@ -46,6 +47,13 @@ pub struct RenderableDimensions {
     pub reverse_video: bool,
 }
 impl_lua_conversion_dynamic!(RenderableDimensions);
+
+impl RenderableDimensions {
+    pub fn scrollback_bottom(&self) -> StableRowIndex {
+        self.scrollback_top
+            .saturating_add(self.scrollback_rows.try_into().unwrap_or(isize::MAX))
+    }
+}
 
 /// Implements Pane::get_cursor_position for Terminal
 pub fn terminal_get_cursor_position(term: &mut Terminal) -> StableCursorPosition {

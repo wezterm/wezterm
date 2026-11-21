@@ -165,6 +165,24 @@ impl LogicalLine {
         }
         (y - 1, x - idx + self.physical_lines.last().unwrap().len())
     }
+
+    /// Determine if this is a single empty line.
+    ///
+    /// To be visually empty, it must contain one physical line containing only whitespace.
+    /// [`Line`]s don't track which cells are empty, so we can't distinguish between
+    /// whitespace and empty cells, so we just look at whitespace. This is also how Wezterm
+    /// deals with whitespace when copying to the clipboard, so this should be fine.
+    pub fn is_visually_empty(&self) -> bool {
+        if self.physical_lines.len() != 1 {
+            false
+        } else {
+            let physical_line = &self.physical_lines[0];
+            physical_line
+                .columns_as_str(0..usize::MAX)
+                .trim_end()
+                .is_empty()
+        }
+    }
 }
 
 /// A Pane represents a view on a terminal
