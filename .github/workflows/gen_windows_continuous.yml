@@ -28,6 +28,7 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
       RUSTUP_WINDOWS_PATH_ADD_BIN: "1"
+      CARGO_BUILD_BUILD_DIR: "D:/b"
 
     steps:
       - name: "checkout repo"
@@ -80,11 +81,10 @@ jobs:
         run: |
           PATH C:\Strawberry\perl\bin;%PATH%
           cargo build -p strip-ansi-escapes --release
-      - name: "Install cargo-nextest from Cargo"
-        uses: baptiste0928/cargo-install@v3
+      - name: "Install cargo-nextest"
+        uses: taiki-e/install-action@v2
         with:
-          crate: "cargo-nextest"
-          cache-key: "windows"
+          tool: "cargo-nextest"
       - name: "Test"
         shell: cmd
         run: |

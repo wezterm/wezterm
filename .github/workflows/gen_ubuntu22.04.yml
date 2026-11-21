@@ -56,7 +56,7 @@ jobs:
         run: "apt-get install -y openssh-server"
       - name: "Workaround git permissions issue"
         shell: bash
-        run: "git config --global --add safe.directory /__w/wezterm/wezterm"
+        run: "git config --global --add safe.directory $GITHUB_WORKSPACE"
       - name: "checkout repo"
         uses: actions/checkout@v5
         with:
