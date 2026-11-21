@@ -312,6 +312,11 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @bew! #8001
 * IME: committed text is now handled correctly in prompt overlays such as
   `PromptInputLine` and the debug overlay. Thanks to @dyxushuai! #7556
+* Capability queries (DA1, the kitty keyboard probe, etc.) are now answered
+  while a synchronized update is open, and an update held open for too long
+  now times out; see
+  [mux_synchronized_output_timeout_ms](config/lua/config/mux_synchronized_output_timeout_ms.md).
+  Thanks to @luizribeiro! #7918
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
