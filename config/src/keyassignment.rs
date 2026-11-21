@@ -718,6 +718,8 @@ pub enum CopyModeAssignment {
     MoveForwardSemanticZone,
     MoveBackwardZoneOfType(SemanticType),
     MoveForwardZoneOfType(SemanticType),
+    MoveBackwardParagraph,
+    MoveForwardParagraph,
     JumpForward { prev_char: bool },
     JumpBackward { prev_char: bool },
     JumpAgain,

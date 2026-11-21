@@ -61,6 +61,8 @@ The default key assignments in copy mode are as follows:
 |                                | <kbd>^</kbd> |
 | Move to bottom of scrollback   | <kbd>Shift</kbd> + <kbd>G</kbd> |
 | Move to top of scrollback      | <kbd>g</kbd> |
+| Move backward one paragraph    | <kbd>{</kbd> {{since('nightly', inline=True)}}|
+| Move forward one paragraph     | <kbd>}</kbd> {{since('nightly', inline=True)}}|
 | Move to top of viewport        | <kbd>Shift</kbd> + <kbd>H</kbd> |
 | Move to middle of viewport     | <kbd>Shift</kbd> + <kbd>M</kbd> |
 | Move to bottom of viewport     | <kbd>Shift</kbd> + <kbd>L</kbd> |
