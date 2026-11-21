@@ -42,6 +42,14 @@ return {
       { key = ',', mods = 'NONE', action = act.CopyMode 'JumpReverse' },
       { key = '0', mods = 'NONE', action = act.CopyMode 'MoveToStartOfLine' },
       { key = ';', mods = 'NONE', action = act.CopyMode 'JumpAgain' },
+      { key = 'B', mods = 'NONE', action = act.CopyMode 'MoveBackwardBigWord' },
+      { key = 'B', mods = 'SHIFT', action = act.CopyMode 'MoveBackwardBigWord' },
+      { key = 'E', mods = 'NONE', action = act.CopyMode 'MoveForwardBigWordEnd' },
+      {
+        key = 'E',
+        mods = 'SHIFT',
+        action = act.CopyMode 'MoveForwardBigWordEnd',
+      },
       {
         key = 'F',
         mods = 'NONE',
@@ -118,6 +126,8 @@ return {
         mods = 'SHIFT',
         action = act.CopyMode { SetSelectionMode = 'Line' },
       },
+      { key = 'W', mods = 'NONE', action = act.CopyMode 'MoveForwardBigWord' },
+      { key = 'W', mods = 'SHIFT', action = act.CopyMode 'MoveForwardBigWord' },
       {
         key = '^',
         mods = 'NONE',

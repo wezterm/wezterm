@@ -947,6 +947,60 @@ impl CopyRenderable {
         self.select_to_cursor_pos();
     }
 
+    fn move_big_word(&mut self, dir: BigWordDirection) {
+        let dims = self.delegate.get_dimensions();
+        if dims.scrollback_rows == 0 {
+            return;
+        }
+        let min_row = dims.scrollback_top;
+        let max_row = dims.scrollback_top + dims.scrollback_rows as isize - 1;
+        let start_y = self.cursor.y.clamp(min_row, max_row);
+        let mut y = start_y;
+
+        loop {
+            let (top, lines) = self.delegate.get_lines(y..y + 1);
+            if let Some(line) = lines.first() {
+                let segments = big_word_segments_in_line(line);
+                let col = match dir {
+                    BigWordDirection::Backward => {
+                        find_backward_big_word_col(&segments, self.cursor.x, y == start_y)
+                    }
+                    BigWordDirection::Forward => {
+                        find_forward_big_word_col(&segments, self.cursor.x, y == start_y)
+                    }
+                    BigWordDirection::ForwardEnd => {
+                        find_end_of_big_word_col(&segments, self.cursor.x, y == start_y)
+                    }
+                };
+                if let Some(col) = col {
+                    self.cursor.y = top;
+                    self.cursor.x = col;
+                    self.select_to_cursor_pos();
+                    return;
+                }
+            }
+
+            match dir {
+                BigWordDirection::Backward => {
+                    if y <= min_row {
+                        self.cursor.y = min_row;
+                        self.cursor.x = 0;
+                        self.select_to_cursor_pos();
+                        return;
+                    }
+                    y -= 1;
+                }
+                BigWordDirection::Forward | BigWordDirection::ForwardEnd => {
+                    if y >= max_row {
+                        self.select_to_cursor_pos();
+                        return;
+                    }
+                    y += 1;
+                }
+            }
+        }
+    }
+
     fn move_by_zone(&mut self, mut delta: isize, zone_type: Option<SemanticType>) {
         if delta == 0 {
             return;
@@ -1257,6 +1311,9 @@ impl Pane for CopyOverlay {
                     MoveBackwardWord => render.move_backward_one_word(),
                     MoveForwardWord => render.move_forward_one_word(),
                     MoveForwardWordEnd => render.move_to_end_of_word(),
+                    MoveBackwardBigWord => render.move_big_word(BigWordDirection::Backward),
+                    MoveForwardBigWord => render.move_big_word(BigWordDirection::Forward),
+                    MoveForwardBigWordEnd => render.move_big_word(BigWordDirection::ForwardEnd),
                     MoveRight => render.move_right_single_cell(),
                     MoveLeft => render.move_left_single_cell(),
                     MoveUp => render.move_up_single_row(),
@@ -1620,6 +1677,143 @@ fn is_whitespace_word(word: &str) -> bool {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BigWordDirection {
+    Backward,
+    Forward,
+    ForwardEnd,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct BigWordSegment {
+    /// Cell column index of the first cell in this non-whitespace run
+    start: usize,
+    /// Cell column index of the last cell in this non-whitespace run
+    last_cell: usize,
+}
+
+fn big_word_segments_in_line(line: &Line) -> Vec<BigWordSegment> {
+    let mut segments: Vec<BigWordSegment> = Vec::new();
+    let mut in_word = false;
+
+    for cell in line.visible_cells() {
+        if cell.str().trim().is_empty() {
+            in_word = false;
+        } else {
+            let idx = cell.cell_index();
+            if in_word {
+                if let Some(last) = segments.last_mut() {
+                    last.last_cell = idx;
+                }
+            } else {
+                segments.push(BigWordSegment {
+                    start: idx,
+                    last_cell: idx,
+                });
+                in_word = true;
+            }
+        }
+    }
+
+    segments
+}
+
+fn find_backward_big_word_col(
+    segments: &[BigWordSegment],
+    cursor_x: usize,
+    is_start_line: bool,
+) -> Option<usize> {
+    if is_start_line {
+        segments
+            .iter()
+            .rev()
+            .find(|seg| seg.start < cursor_x)
+            .map(|seg| seg.start)
+    } else {
+        segments.last().map(|seg| seg.start)
+    }
+}
+
+fn find_forward_big_word_col(
+    segments: &[BigWordSegment],
+    cursor_x: usize,
+    is_start_line: bool,
+) -> Option<usize> {
+    if is_start_line {
+        segments
+            .iter()
+            .find(|seg| seg.start > cursor_x)
+            .map(|seg| seg.start)
+    } else {
+        segments.first().map(|seg| seg.start)
+    }
+}
+
+fn find_end_of_big_word_col(
+    segments: &[BigWordSegment],
+    cursor_x: usize,
+    is_start_line: bool,
+) -> Option<usize> {
+    if is_start_line {
+        segments
+            .iter()
+            .find(|seg| seg.last_cell > cursor_x)
+            .map(|seg| seg.last_cell)
+    } else {
+        segments.first().map(|seg| seg.last_cell)
+    }
+}
+
+#[cfg(test)]
+mod big_word_tests {
+    use super::*;
+
+    fn segs(pairs: &[(usize, usize)]) -> Vec<BigWordSegment> {
+        pairs
+            .iter()
+            .map(|&(start, last_cell)| BigWordSegment { start, last_cell })
+            .collect()
+    }
+
+    #[test]
+    fn forward_big_word() {
+        let s = segs(&[(2, 8), (11, 13)]);
+        assert_eq!(find_forward_big_word_col(&s, 0, true), Some(2));
+        assert_eq!(find_forward_big_word_col(&s, 2, true), Some(11));
+        assert_eq!(find_forward_big_word_col(&s, 5, true), Some(11));
+        assert_eq!(find_forward_big_word_col(&s, 9, true), Some(11));
+        assert_eq!(find_forward_big_word_col(&s, 11, true), None);
+        // Wrapped onto next line: must not skip word at col 0
+        let next = segs(&[(0, 2), (4, 6)]);
+        assert_eq!(find_forward_big_word_col(&next, 0, false), Some(0));
+    }
+
+    #[test]
+    fn backward_big_word() {
+        let s = segs(&[(2, 8), (11, 13)]);
+        assert_eq!(find_backward_big_word_col(&s, 13, true), Some(11));
+        assert_eq!(find_backward_big_word_col(&s, 11, true), Some(2));
+        assert_eq!(find_backward_big_word_col(&s, 9, true), Some(2));
+        assert_eq!(find_backward_big_word_col(&s, 2, true), None);
+        assert_eq!(find_backward_big_word_col(&s, 0, true), None);
+        // Wrapped onto previous line: lands on start of last BigWord
+        assert_eq!(find_backward_big_word_col(&s, usize::MAX, false), Some(11));
+    }
+
+    #[test]
+    fn end_of_big_word() {
+        let s = segs(&[(2, 8), (11, 13)]);
+        assert_eq!(find_end_of_big_word_col(&s, 0, true), Some(8));
+        assert_eq!(find_end_of_big_word_col(&s, 2, true), Some(8));
+        assert_eq!(find_end_of_big_word_col(&s, 8, true), Some(13));
+        assert_eq!(find_end_of_big_word_col(&s, 9, true), Some(13));
+        assert_eq!(find_end_of_big_word_col(&s, 13, true), None);
+        // Wrapped onto next line with 1-char word at col 0: must land on col 0
+        let single = segs(&[(0, 0), (2, 4)]);
+        assert_eq!(find_end_of_big_word_col(&single, 0, false), Some(0));
+    }
+}
+
 pub fn search_key_table() -> KeyTable {
     let mut table = KeyTable::default();
     for (key, mods, action) in [
@@ -1770,9 +1964,29 @@ pub fn copy_key_table() -> KeyTable {
             KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardWord),
         ),
         (
+            WKeyCode::Char('W'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardBigWord),
+        ),
+        (
+            WKeyCode::Char('W'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardBigWord),
+        ),
+        (
             WKeyCode::Char('e'),
             Modifiers::NONE,
             KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardWordEnd),
+        ),
+        (
+            WKeyCode::Char('E'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardBigWordEnd),
+        ),
+        (
+            WKeyCode::Char('E'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardBigWordEnd),
         ),
         (
             WKeyCode::LeftArrow,
@@ -1783,6 +1997,16 @@ pub fn copy_key_table() -> KeyTable {
             WKeyCode::Char('b'),
             Modifiers::ALT,
             KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardWord),
+        ),
+        (
+            WKeyCode::Char('B'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardBigWord),
+        ),
+        (
+            WKeyCode::Char('B'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardBigWord),
         ),
         (
             WKeyCode::Char('\t'),
