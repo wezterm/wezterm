@@ -56,10 +56,27 @@ pub trait Domain: Downcast + Send + Sync {
         command_dir: Option<String>,
         window: WindowId,
     ) -> anyhow::Result<Arc<Tab>> {
+        Ok(self
+            .spawn_with_pane_id(size, command, command_dir, window)
+            .await?
+            .0)
+    }
+
+    /// Return the pane identity captured directly from the spawned pane. It
+    /// remains available even if a short-lived child exits and is pruned
+    /// before the caller resumes from `spawn`.
+    async fn spawn_with_pane_id(
+        &self,
+        size: TerminalSize,
+        command: Option<CommandBuilder>,
+        command_dir: Option<String>,
+        window: WindowId,
+    ) -> anyhow::Result<(Arc<Tab>, PaneId)> {
         let pane = self
             .spawn_pane(size, command, command_dir)
             .await
             .context("spawn")?;
+        let pane_id = pane.pane_id();
 
         let tab = Arc::new(Tab::new(&size));
         tab.assign_pane(&pane);
@@ -68,7 +85,7 @@ pub trait Domain: Downcast + Send + Sync {
         mux.add_tab_and_active_pane(&tab)?;
         mux.add_tab_to_window(&tab, window)?;
 
-        Ok(tab)
+        Ok((tab, pane_id))
     }
 
     async fn split_pane(

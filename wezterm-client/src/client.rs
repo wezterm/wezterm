@@ -1341,6 +1341,7 @@ impl Client {
     rpc!(ping, Ping = (), Pong);
     rpc!(list_panes, ListPanes = (), ListPanesResponse);
     rpc!(spawn_v2, SpawnV2, SpawnResponse);
+    rpc!(wait_pane_exit, WaitPaneExit, WaitPaneExitResponse);
     rpc!(split_pane, SplitPane, SpawnResponse);
     rpc!(
         move_pane_to_new_tab,
