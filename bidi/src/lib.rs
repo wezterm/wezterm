@@ -24,7 +24,7 @@ pub use direction::Direction;
 pub use level::Level;
 
 /// Placeholder codepoint index that corresponds to NO_LEVEL
-const DELETED: usize = usize::max_value();
+const DELETED: usize = usize::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
 pub enum ParagraphDirectionHint {

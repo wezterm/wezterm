@@ -583,7 +583,7 @@ impl CursorInfo {
 
         let num_pixels = (width as usize) * (height as usize);
         ensure!(
-            num_pixels < u32::max_value() as usize,
+            num_pixels < u32::MAX as usize,
             "cursor image is larger than fits in u32"
         );
 

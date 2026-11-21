@@ -35,8 +35,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           target: "x86_64-pc-windows-msvc"
+      # sccache is pinned to v0.16.0 on Windows. sccache 0.17 and later expand
+      # cargo's rustc argfile and then spawn rustc with the full command line,
+      # which is over the Windows limit when building `mux` and fails with
+      # "The filename or extension is too long" (os error 206).
+      # Remove the pin once a fixed sccache is released:
+      # https://github.com/mozilla/sccache/issues/2787
       - name: "Compile with sccache"
         uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: "v0.16.0"
       - name: "Cache Rust Dependencies"
         uses: actions/cache@v4
         id: cache-cargo-vendor

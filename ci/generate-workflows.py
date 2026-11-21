@@ -108,9 +108,12 @@ class RunStep(Step):
 
 
 class ActionStep(Step):
-    def __init__(self, name, action, params=None, env=None, condition=None, id=None):
+    def __init__(
+        self, name, action, params=None, env=None, condition=None, id=None, comment=None
+    ):
         self.name = name
         self.action = action
+        self.comment = comment
         self.params = params
         self.env = env
         self.condition = condition
@@ -118,6 +121,9 @@ class ActionStep(Step):
 
     def render(self, f, depth=0):
         indent = "  " * depth
+        if self.comment:
+            for line in self.comment.splitlines():
+                f.write(f"{indent}# {line}\n".replace("# \n", "#\n"))
         f.write(f"{indent}- name: {yv(self.name)}\n")
         f.write(f"{indent}  uses: {self.action}\n")
         if self.id:
@@ -141,9 +147,24 @@ class CacheStep(ActionStep):
         )
 
 
+WINDOWS_SCCACHE_PIN_COMMENT = """\
+sccache is pinned to v0.16.0 on Windows. sccache 0.17 and later expand
+cargo's rustc argfile and then spawn rustc with the full command line,
+which is over the Windows limit when building `mux` and fails with
+"The filename or extension is too long" (os error 206).
+Remove the pin once a fixed sccache is released:
+https://github.com/mozilla/sccache/issues/2787"""
+
+
 class SccacheStep(ActionStep):
-    def __init__(self, name):
-        super().__init__(name, action="mozilla-actions/sccache-action@v0.0.9")
+    def __init__(self, name, version=None, comment=None):
+        params = {"version": version} if version else None
+        super().__init__(
+            name,
+            action="mozilla-actions/sccache-action@v0.0.9",
+            params=params,
+            comment=comment,
+        )
 
 
 class CheckoutStep(ActionStep):
@@ -402,7 +423,17 @@ rustup default {toolchain}
             ]
         if cache:
             steps += [
-                SccacheStep(name="Compile with sccache"),
+                SccacheStep(
+                    name="Compile with sccache",
+                    **(
+                        {
+                            "version": "v0.16.0",
+                            "comment": WINDOWS_SCCACHE_PIN_COMMENT,
+                        }
+                        if "windows" in self.name
+                        else {}
+                    ),
+                ),
                 # Cache vendored dependencies
                 CacheStep(
                     name="Cache Rust Dependencies",

@@ -57,13 +57,13 @@ kernel, which manages the actual communication with the terminal.
 flowchart LR
     subgraph Kernel
         direction LR
-        TTY["TTY device\n(e.g. /dev/tty/0)"] 
+        TTY["TTY device<br>(e.g. /dev/tty/0)"]
     end
-    
+
     subgraph Userspace
-    SHELL["Shell Program (e.g. zsh)"] <-- "input\noutput" --> TTY
+    SHELL["Shell Program (e.g. zsh)"] <-- "input/output" --> TTY
     end
-    TTY  <-- "input\noutput" -->  TE["Terminal Device"]:::td
+    TTY  <-- "input/output" -->  TE["Terminal Device"]:::td
     classDef td stroke:#00F,stroke-width:2px
 ```
 
@@ -134,19 +134,20 @@ on the associated terminal also needs to respect the setting of `TERM` and use
 an appropriate library to resolve the correct escape sequences.
 
 ```mermaid
-flowchart 
+flowchart
     subgraph Kernel
         direction TB
-        TTY["TTY device\n(e.g. /dev/tty/0)"] 
+        TTY["TTY device<br>(e.g. /dev/tty/0)"]
     end
-    
-    subgraph Userspace
-    SHELL["Shell Program (e.g. zsh)"] <-- input/output --> TTY
-    SHELL -. "starts" .-> APP
-    APP["Application\n(e.g. vim)"] <-- input/output --> TTY
 
+    subgraph Userspace
+        SHELL["Shell Program (e.g. zsh)"] <-- input/output --> TTY
+        SHELL -. "starts" .-> APP
+        APP["Application<br>(e.g. neovim)"] <-- input/output --> TTY
     end
+
     TTY  <-- input/output -->  TE["Terminal Device"]:::td
+
     classDef td stroke:#00F,stroke-width:2px
 ```
 
@@ -221,21 +222,24 @@ side allowing for passing information about the window size, and the client side
 essentially just being the I/O stream.
 
 ```mermaid
-flowchart 
+flowchart
     subgraph Kernel
         direction TB
-        PTYC["PTY client\n(e.g. /dev/pts/0)"] 
+        PTYC["PTY client<br>(e.g. /dev/pts/0)"]
         PTYM[PTY master]
         PTYC <--> PTYM
     end
-    
+
     subgraph Userspace
-    SHELL["Shell Program (e.g. zsh)"] <-- input/output --> PTYC
-    SHELL -. "starts" .-> APP
-    APP["Application\n(e.g. vim)"] <-- input/output --> PTYC
-    PTYM  <-- input/output -->  TE["Terminal Emulator\n(e.g. wezterm)"]:::wezterm
-    classDef wezterm stroke:#00F,stroke-width:2px
+        SHELL["Shell Program (e.g. zsh)"] <-- input/output --> PTYC
+        SHELL -. "starts" .-> APP
+        APP["Application<br>(e.g. neovim)"] <-- input/output --> PTYC
+        PTYM  <-- input/output -->  TE
+        TE["Terminal Emulator<br>(e.g. wezterm)"]:::wezterm
+
     end
+
+    classDef wezterm stroke:#00F,stroke-width:2px
 ```
 
 A *Terminal Emulator* is a program that creates a PTY and then spawns a child
