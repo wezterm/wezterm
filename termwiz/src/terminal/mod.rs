@@ -74,7 +74,7 @@ pub trait Terminal {
     fn exit_alternate_screen(&mut self) -> Result<()>;
 
     /// Queries the current screen size, returning width, height.
-    fn get_screen_size(&mut self) -> Result<ScreenSize>;
+    fn get_screen_size(&self) -> Result<ScreenSize>;
 
     /// Returns a capability probing helper that will use escape
     /// sequences to attempt to probe information from the terminal

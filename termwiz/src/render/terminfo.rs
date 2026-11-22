@@ -805,7 +805,7 @@ mod test {
     }
 
     impl UnixTty for FakeTty {
-        fn get_size(&mut self) -> Result<winsize> {
+        fn get_size(&self) -> Result<winsize> {
             Ok(self.size.clone())
         }
         fn set_size(&mut self, size: winsize) -> Result<()> {
@@ -886,7 +886,7 @@ mod test {
             self.renderer.render_to(changes, &mut self.write)
         }
 
-        fn get_screen_size(&mut self) -> Result<ScreenSize> {
+        fn get_screen_size(&self) -> Result<ScreenSize> {
             let size = self.write.get_size()?;
             Ok(ScreenSize {
                 rows: cast(size.ws_row)?,

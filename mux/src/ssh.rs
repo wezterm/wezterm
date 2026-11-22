@@ -501,7 +501,7 @@ fn connect_ssh_session(
             termwiz::bail!("TerminalShim has no alt screen");
         }
 
-        fn get_screen_size(&mut self) -> termwiz::Result<ScreenSize> {
+        fn get_screen_size(&self) -> termwiz::Result<ScreenSize> {
             let size = *self.size.lock().unwrap();
             Ok(ScreenSize {
                 cols: size.cols as _,
