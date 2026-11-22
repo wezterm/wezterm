@@ -204,9 +204,14 @@ impl ScreenOrAlt {
         cursor_alt: CursorPosition,
         seqno: SequenceNo,
         is_conpty: bool,
+        bidi_mode: BidiMode,
     ) -> (CursorPosition, CursorPosition) {
-        let cursor_main = self.screen.resize(size, cursor_main, seqno, is_conpty);
-        let cursor_alt = self.alt_screen.resize(size, cursor_alt, seqno, is_conpty);
+        let cursor_main =
+            self.screen
+                .resize_with_bidi_mode(size, cursor_main, seqno, is_conpty, bidi_mode);
+        let cursor_alt = self
+            .alt_screen
+            .resize_with_bidi_mode(size, cursor_alt, seqno, is_conpty, bidi_mode);
         (cursor_main, cursor_alt)
     }
 
@@ -997,12 +1002,14 @@ impl TerminalState {
             )
         };
 
+        let bidi_mode = self.get_bidi_mode();
         let (adjusted_cursor_main, adjusted_cursor_alt) = self.screen.resize(
             size,
             cursor_main,
             cursor_alt,
             self.seqno,
             self.enable_conpty_quirks,
+            bidi_mode,
         );
         self.top_and_bottom_margins = 0..size.rows as i64;
         self.left_and_right_margins = 0..size.cols;

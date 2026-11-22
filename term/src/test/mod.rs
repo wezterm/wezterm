@@ -760,6 +760,69 @@ fn test_dec_double_width() {
     assert!(lines[3].is_single_width());
 }
 
+#[test]
+fn test_resize_applies_bidi_mode_to_new_rows() {
+    use crate::config::BidiMode;
+    use wezterm_bidi::ParagraphDirectionHint;
+
+    #[derive(Debug)]
+    struct BidiConfig;
+
+    impl TerminalConfiguration for BidiConfig {
+        fn color_palette(&self) -> ColorPalette {
+            ColorPalette::default()
+        }
+
+        fn bidi_mode(&self) -> BidiMode {
+            BidiMode {
+                enabled: false,
+                hint: ParagraphDirectionHint::AutoLeftToRight,
+            }
+        }
+    }
+
+    let size = TerminalSize {
+        rows: 2,
+        cols: 20,
+        ..TerminalSize::default()
+    };
+    let new_size = TerminalSize { rows: 3, ..size };
+    let expected = (true, ParagraphDirectionHint::AutoLeftToRight);
+
+    for conpty in [false, true] {
+        let mut term = Terminal::new(
+            size,
+            Arc::new(BidiConfig),
+            "WezTerm",
+            "O_o",
+            Box::new(Vec::new()),
+        );
+        term.advance_bytes("\x1b[8h");
+        if conpty {
+            term.enable_conpty_quirks();
+            term.advance_bytes("first\r\nsecond\r\nthird");
+            assert_eq!(term.screen().scrollback_rows(), new_size.rows);
+        }
+
+        term.resize(new_size);
+        let new_row = new_size.rows - 1;
+        assert_eq!(
+            term.screen().visible_lines()[new_row].bidi_info(),
+            expected,
+            "primary screen with ConPTY quirks set to {}",
+            conpty
+        );
+
+        term.advance_bytes("\x1b[?47h");
+        assert_eq!(
+            term.screen().visible_lines()[new_row].bidi_info(),
+            expected,
+            "alternate screen with ConPTY quirks set to {}",
+            conpty
+        );
+    }
+}
+
 /// This test skips over an edge case with cursor positioning,
 /// while sizing down, but tries to trip over the same edge
 /// case while sizing back up again
