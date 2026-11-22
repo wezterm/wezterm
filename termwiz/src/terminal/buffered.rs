@@ -38,6 +38,11 @@ impl<T: Terminal> BufferedTerminal<T> {
         &mut self.terminal
     }
 
+    /// Get a reference to the underlying terminal instance
+    pub fn terminal_ref(&self) -> &T {
+        &self.terminal
+    }
+
     /// Compute the set of changes needed to update the screen to
     /// match the current contents of the embedded `Surface` and
     /// send them to the `Terminal`.
