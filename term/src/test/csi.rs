@@ -1,5 +1,27 @@
 use super::*;
 
+#[test]
+fn rtl_text_starts_at_column_zero_after_erasing_row() {
+    let mut term = TestTerm::new(1, 24, 0);
+    let text = "שלום עולם!";
+    let hint = Some(wezterm_bidi::ParagraphDirectionHint::AutoLeftToRight);
+    term.print(text);
+    let fresh = term.screen().visible_lines()[0].cluster(hint);
+
+    // Erase a populated row so the next print leaves explicit padding cells.
+    term.print("\r");
+    term.erase_in_line(EraseInLine::EraseLine);
+    term.print(text);
+    let erased = term.screen().visible_lines()[0].cluster(hint);
+
+    k9::assert_equal!(erased[0].text.as_str(), fresh[0].text.as_str());
+    k9::assert_equal!(erased[0].direction, wezterm_bidi::Direction::RightToLeft);
+    k9::assert_equal!(
+        erased.iter().map(|cluster| cluster.width).sum::<usize>(),
+        24
+    );
+}
+
 /// In this issue, the `CSI 2 P` sequence incorrectly removed two
 /// cells from the line, leaving them effectively blank, when those
 /// two cells should have been erased to the current background
