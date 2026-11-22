@@ -60,7 +60,7 @@ pub trait ConsoleOutputHandle {
     fn fill_attr(&mut self, attr: u16, x: i16, y: i16, len: u32) -> Result<u32>;
     fn set_attr(&mut self, attr: u16) -> Result<()>;
     fn set_cursor_position(&mut self, x: i16, y: i16) -> Result<()>;
-    fn get_buffer_info(&mut self) -> Result<CONSOLE_SCREEN_BUFFER_INFO>;
+    fn get_buffer_info(&self) -> Result<CONSOLE_SCREEN_BUFFER_INFO>;
     fn get_buffer_contents(&mut self) -> Result<Vec<CHAR_INFO>>;
     fn set_buffer_contents(&mut self, buffer: &[CHAR_INFO]) -> Result<()>;
     fn set_viewport(&mut self, left: i16, top: i16, right: i16, bottom: i16) -> Result<()>;
@@ -390,7 +390,7 @@ impl ConsoleOutputHandle for OutputHandle {
         Ok(())
     }
 
-    fn get_buffer_info(&mut self) -> Result<CONSOLE_SCREEN_BUFFER_INFO> {
+    fn get_buffer_info(&self) -> Result<CONSOLE_SCREEN_BUFFER_INFO> {
         let mut info: CONSOLE_SCREEN_BUFFER_INFO = unsafe { mem::zeroed() };
         let ok = unsafe { GetConsoleScreenBufferInfo(self.handle.as_raw_handle(), &mut info) };
         if ok == 0 {
@@ -746,7 +746,7 @@ impl Terminal for WindowsTerminal {
         Ok(())
     }
 
-    fn get_screen_size(&mut self) -> Result<ScreenSize> {
+    fn get_screen_size(&self) -> Result<ScreenSize> {
         let info = self.output_handle.get_buffer_info()?;
         let (cols, rows) = dimensions_from_buffer_info(info);
 

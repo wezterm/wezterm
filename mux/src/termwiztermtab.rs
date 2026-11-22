@@ -402,7 +402,7 @@ impl termwiz::terminal::Terminal for TermWizTerminal {
         termwiz::bail!("TermWizTerminalPane has no alt screen");
     }
 
-    fn get_screen_size(&mut self) -> termwiz::Result<ScreenSize> {
+    fn get_screen_size(&self) -> termwiz::Result<ScreenSize> {
         Ok(self.render_tx.screen_size)
     }
 

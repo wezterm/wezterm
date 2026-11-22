@@ -44,7 +44,7 @@ pub enum SetAttributeWhen {
 }
 
 pub trait UnixTty {
-    fn get_size(&mut self) -> Result<winsize>;
+    fn get_size(&self) -> Result<winsize>;
     fn set_size(&mut self, size: winsize) -> Result<()>;
     fn get_termios(&mut self) -> Result<Termios>;
     fn set_termios(&mut self, termios: &Termios, when: SetAttributeWhen) -> Result<()>;
@@ -141,7 +141,7 @@ impl RenderTty for TtyWriteHandle {
 }
 
 impl UnixTty for TtyWriteHandle {
-    fn get_size(&mut self) -> Result<winsize> {
+    fn get_size(&self) -> Result<winsize> {
         let mut size: winsize = unsafe { mem::zeroed() };
         if unsafe { libc::ioctl(self.fd.as_raw_fd(), libc::TIOCGWINSZ as _, &mut size) } != 0 {
             bail!("failed to ioctl(TIOCGWINSZ): {}", IoError::last_os_error());
@@ -376,7 +376,7 @@ impl Terminal for UnixTerminal {
         Ok(())
     }
 
-    fn get_screen_size(&mut self) -> Result<ScreenSize> {
+    fn get_screen_size(&self) -> Result<ScreenSize> {
         let size = self.write.get_size()?;
         Ok(ScreenSize {
             rows: cast(size.ws_row)?,

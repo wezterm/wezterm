@@ -23,7 +23,7 @@ pub struct BufferedTerminal<T: Terminal> {
 impl<T: Terminal> BufferedTerminal<T> {
     /// Create a new `BufferedTerminal` with a `Surface` of
     /// a matching size.
-    pub fn new(mut terminal: T) -> Result<Self> {
+    pub fn new(terminal: T) -> Result<Self> {
         let size = terminal.get_screen_size()?;
         let surface = Surface::new(size.cols, size.rows);
         Ok(Self {
