@@ -189,11 +189,13 @@ impl Dispatch<ZwpTextInputV3, TextInputData, WaylandState> for TextInputState {
                         raw: None,
                     }));
                 }
-                let status = if let Some(text) = pending_state.pre_edit.take() {
-                    DeadKeyStatus::Composing(text)
-                } else {
-                    DeadKeyStatus::None
-                };
+                // An empty preedit is the initial "no preedit" state (text-input-v3).
+                let status =
+                    if let Some(text) = pending_state.pre_edit.take().filter(|t| !t.is_empty()) {
+                        DeadKeyStatus::Composing(text)
+                    } else {
+                        DeadKeyStatus::None
+                    };
                 state.dispatch_to_focused_window(WindowEvent::AdviseDeadKeyStatus(status));
             }
             _ => {}
