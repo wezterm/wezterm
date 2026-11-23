@@ -4788,7 +4788,7 @@ impl BlockKey {
                     PolyCommand::LineTo(BlockCoord::Frac(25, 30), BlockCoord::Frac(1, 2)),
                 ],
                 intensity: BlockAlpha::Full,
-                style: PolyStyle::OutlineHeavy,
+                style: PolyStyle::Outline,
             }]),
             // [] Branch drawing fade out to left
             0xF5D3 => Self::Poly(&[Poly {
@@ -4805,7 +4805,7 @@ impl BlockKey {
                     PolyCommand::LineTo(BlockCoord::Frac(30 - 25, 30), BlockCoord::Frac(1, 2)),
                 ],
                 intensity: BlockAlpha::Full,
-                style: PolyStyle::OutlineHeavy,
+                style: PolyStyle::Outline,
             }]),
             // [] Branch drawing fade out to lower
             0xF5D4 => Self::Poly(&[Poly {
@@ -4822,7 +4822,7 @@ impl BlockKey {
                     PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(25, 30)),
                 ],
                 intensity: BlockAlpha::Full,
-                style: PolyStyle::OutlineHeavy,
+                style: PolyStyle::Outline,
             }]),
             // [] Branch drawing fade out to upper
             0xF5D5 => Self::Poly(&[Poly {
@@ -4839,7 +4839,7 @@ impl BlockKey {
                     PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 25, 30)),
                 ],
                 intensity: BlockAlpha::Full,
-                style: PolyStyle::OutlineHeavy,
+                style: PolyStyle::Outline,
             }]),
             // [] Branch drawing arc down and right
             0xF5D6 => Self::Branches(Branch::RIGHT_TO_DOWN),
@@ -5615,7 +5615,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
                             PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::One),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::Outline,
                         BlendMode::default(),
                     );
                 }
@@ -5625,7 +5625,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
                             PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::Outline,
                         BlendMode::default(),
                     );
                 }
@@ -5640,7 +5640,7 @@ impl GlyphCache {
                             },
                             PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::Outline,
                         BlendMode::default(),
                     );
                 }
@@ -5655,7 +5655,7 @@ impl GlyphCache {
                             },
                             PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::Outline,
                         BlendMode::default(),
                     );
                 }
@@ -5670,7 +5670,7 @@ impl GlyphCache {
                             },
                             PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::Outline,
                         BlendMode::default(),
                     );
                 }
@@ -5685,7 +5685,7 @@ impl GlyphCache {
                             },
                             PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::Outline,
                         BlendMode::default(),
                     );
                 }
@@ -5695,7 +5695,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
                             PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::Outline,
                         BlendMode::default(),
                     );
                 }
@@ -5705,7 +5705,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
                             PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::Outline,
                         BlendMode::default(),
                     );
                 }
@@ -5715,7 +5715,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
                             PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::Outline,
                         BlendMode::default(),
                     );
                 }
@@ -5725,7 +5725,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::One),
                             PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::Outline,
                         BlendMode::default(),
                     );
                 }
