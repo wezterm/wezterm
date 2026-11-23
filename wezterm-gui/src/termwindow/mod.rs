@@ -892,7 +892,6 @@ impl TermWindow {
             myself.load_os_parameters();
             window.show();
             myself.subscribe_to_pane_updates();
-            myself.last_focused_pane_id = myself.get_active_pane_no_overlay().map(|p| p.pane_id());
             myself.emit_window_event("window-config-reloaded", None);
             myself.emit_status_event();
         }
@@ -1020,6 +1019,7 @@ impl TermWindow {
                 if let Ok(notif) = item.downcast::<TermWindowNotif>() {
                     self.dispatch_notif(*notif, window)
                         .context("dispatch_notif")?;
+                    self.maybe_emit_pane_focus_changed();
                 }
                 Ok(true)
             }
@@ -1117,17 +1117,6 @@ impl TermWindow {
         fn chan_err<T>(e: smol::channel::TrySendError<T>) -> anyhow::Error {
             anyhow::anyhow!("{}", e)
         }
-
-        let may_change_focus = matches!(
-            notif,
-            TermWindowNotif::MuxNotification(
-                MuxNotification::PaneFocused(_)
-                    | MuxNotification::PaneAdded(_)
-                    | MuxNotification::PaneRemoved(_)
-                    | MuxNotification::TabAddedToWindow { .. }
-                    | MuxNotification::WindowInvalidated(_)
-            ) | TermWindowNotif::SwitchToMuxWindow(_)
-        );
 
         match notif {
             TermWindowNotif::InvalidateShapeCache => {
@@ -1372,10 +1361,6 @@ impl TermWindow {
             TermWindowNotif::SetInnerSize { width, height } => {
                 self.set_inner_size(window, width, height);
             }
-        }
-
-        if may_change_focus {
-            self.maybe_emit_pane_focus_changed();
         }
 
         Ok(())
@@ -1650,19 +1635,18 @@ impl TermWindow {
         }
     }
 
-    /// Emit "pane-focus-changed" event if pane focus changed since last check.
+    /// Emit "pane-focus-changed" if the active pane differs from the last one seen.
     fn maybe_emit_pane_focus_changed(&mut self) {
         let pane_id = match self.get_active_pane_no_overlay() {
             Some(pane) => pane.pane_id(),
             None => return,
         };
-
-        if self.last_focused_pane_id == Some(pane_id) {
-            return;
+        match self.last_focused_pane_id.replace(pane_id) {
+            Some(last) if last != pane_id => {
+                self.emit_window_event("pane-focus-changed", Some(pane_id));
+            }
+            _ => {}
         }
-
-        self.last_focused_pane_id = Some(pane_id);
-        self.emit_window_event("pane-focus-changed", Some(pane_id));
     }
 
     pub fn emit_window_event(&mut self, name: &str, pane_id: Option<PaneId>) {
