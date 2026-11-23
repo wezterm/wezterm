@@ -1126,7 +1126,7 @@ impl TermWindow {
                     | MuxNotification::PaneRemoved(_)
                     | MuxNotification::TabAddedToWindow { .. }
                     | MuxNotification::WindowInvalidated(_)
-            )
+            ) | TermWindowNotif::SwitchToMuxWindow(_)
         );
 
         match notif {
