@@ -437,7 +437,7 @@ hide:
 
     !!! note
         `wezterm-nightly-bin` is a live ebuild, it will pull the latest
-        nightly binary everytime it's merged. Also, it's a binary
+        nightly binary every time it's merged. Also, it's a binary
         package and therefore not built from source.
 
 === "Raw"
