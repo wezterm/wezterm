@@ -707,10 +707,13 @@ impl super::TermWindow {
                             context.bounds.max_x() - (context.bounds.min_x() + block_pixel_width),
                             context.bounds.max_y() - (context.bounds.min_y() + y_coord),
                         ),
+                        // Floats stack from the right edge leftwards, so a
+                        // float only gets the width that the floats before
+                        // it left over
                         Float::Right => euclid::rect(
                             0.,
                             y_coord,
-                            context.bounds.width(),
+                            (context.bounds.width() - float_width).max(0.),
                             context.bounds.max_y() - (context.bounds.min_y() + y_coord),
                         ),
                     };
@@ -731,7 +734,7 @@ impl super::TermWindow {
                     )?;
                     match child.float {
                         Float::Right => {
-                            float_width += float_width.max(kid.bounds.width());
+                            float_width += kid.bounds.width();
                         }
                         Float::None => {
                             block_pixel_width += kid.bounds.width();
