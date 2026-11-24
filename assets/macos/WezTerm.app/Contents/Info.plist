@@ -50,6 +50,8 @@
 	<string>An application launched via WezTerm would like to access your location information.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>An application launched via WezTerm would like to access your location information while active.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>An application launched via WezTerm would like to record system audio.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>An application launched via WezTerm would like to access your microphone.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
