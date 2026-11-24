@@ -7,6 +7,7 @@ use promise::spawn::spawn_into_main_thread;
 use std::net::TcpListener;
 use std::path::Path;
 use std::sync::Arc;
+use wezterm_mux_server_impl::sessionhandler::RenderPushPolicy;
 use wezterm_mux_server_impl::PKI;
 
 struct OpenSSLNetListener {
@@ -84,9 +85,10 @@ impl OpenSSLNetListener {
                             }
                             spawn_into_main_thread(async move {
                                 log::error!("Making new AsyncSslStream");
-                                wezterm_mux_server_impl::dispatch::process(AsyncSslStream::new(
-                                    stream,
-                                ))
+                                wezterm_mux_server_impl::dispatch::process(
+                                    AsyncSslStream::new(stream),
+                                    RenderPushPolicy::AllPanes,
+                                )
                                 .await
                                 .map_err(|e| {
                                     log::error!("process: {:?}", e);
