@@ -6,6 +6,7 @@ use crate::termwindow::render::{
     RenderScreenLineParams,
 };
 use crate::termwindow::{ScrollHit, UIItem, UIItemType};
+use crate::utilsprites::RenderMetrics;
 use ::window::bitmaps::TextureRect;
 use ::window::DeadKeyStatus;
 use anyhow::Context;
@@ -14,8 +15,10 @@ use mux::pane::{PaneId, WithPaneLines};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::PositionedPane;
 use ordered_float::NotNan;
+use std::rc::Rc;
 use std::time::Instant;
 use wezterm_dynamic::Value;
+use wezterm_font::FontConfiguration;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
 use wezterm_term::{Line, StableRowIndex};
 use window::color::LinearRgba;
@@ -84,7 +87,35 @@ impl crate::TermWindow {
 
         let pane_id = pos.pane.pane_id();
         let current_viewport = self.get_viewport(pane_id);
-        let dims = pos.pane.get_dimensions();
+        let pane_fonts = self.pane_fonts(pane_id);
+        let pane_metrics = self.pane_render_metrics(pane_id);
+        let pane_font_scale = self.pane_font_scale(pane_id);
+        let pane_font_scale_bits = pane_font_scale.to_bits();
+        let mut dims = pos.pane.get_dimensions();
+        if pane_font_scale != 1.0 {
+            let expected = self.compute_pane_terminal_size(pos, &pane_metrics);
+            if dims.cols != expected.cols || dims.viewport_rows != expected.rows {
+                let already_synced = self
+                    .pane_state
+                    .borrow()
+                    .get(&pane_id)
+                    .and_then(|s| s.font_state.as_ref())
+                    .and_then(|fs| fs.last_synced_pane_dims)
+                    == Some((dims.cols, dims.viewport_rows));
+                if !already_synced {
+                    pos.pane.resize(expected).ok();
+                    dims = pos.pane.get_dimensions();
+                    if let Some(fs) = self
+                        .pane_state
+                        .borrow_mut()
+                        .get_mut(&pane_id)
+                        .and_then(|s| s.font_state.as_mut())
+                    {
+                        fs.last_synced_pane_dims = Some((dims.cols, dims.viewport_rows));
+                    }
+                }
+            }
+        }
 
         let gl_state = self.render_state.as_ref().unwrap();
 
@@ -316,8 +347,11 @@ impl crate::TermWindow {
                 selrange: Option<SelectionRange>,
                 rectangular: bool,
                 dims: RenderableDimensions,
-                top_pixel_y: f32,
+                pane_top_pixel_y: f32,
                 left_pixel_x: f32,
+                pane_fonts: Rc<FontConfiguration>,
+                pane_metrics: RenderMetrics,
+                pane_font_scale_bits: u64,
                 pos: &'a PositionedPane,
                 pane_id: PaneId,
                 cursor: &'a StableCursorPosition,
@@ -340,14 +374,19 @@ impl crate::TermWindow {
             let left_pixel_x = padding_left
                 + border.left.get() as f32
                 + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
+            let pane_top_pixel_y =
+                top_pixel_y + (pos.top as f32 * self.render_metrics.cell_size.height as f32);
 
             let mut render = LineRender {
                 term_window: self,
                 selrange,
                 rectangular,
                 dims,
-                top_pixel_y,
+                pane_top_pixel_y,
                 left_pixel_x,
+                pane_fonts,
+                pane_metrics,
+                pane_font_scale_bits,
                 pos,
                 pane_id,
                 cursor: &cursor,
@@ -434,12 +473,12 @@ impl crate::TermWindow {
                         selection: selrange.clone(),
                         cursor,
                         shape_hash,
-                        top_pixel_y: NotNan::new(self.top_pixel_y).unwrap()
-                            + (line_idx + self.pos.top) as f32
-                                * self.term_window.render_metrics.cell_size.height as f32,
+                        top_pixel_y: NotNan::new(self.pane_top_pixel_y).unwrap()
+                            + line_idx as f32 * self.pane_metrics.cell_size.height as f32,
                         left_pixel_x: NotNan::new(self.left_pixel_x).unwrap(),
                         phys_line_idx: line_idx,
                         reverse_video: self.dims.reverse_video,
+                        font_scale_bits: self.pane_font_scale_bits,
                     };
 
                     if let Some(cached_quad) =
@@ -473,6 +512,7 @@ impl crate::TermWindow {
                     let shape_key = LineToEleShapeCacheKey {
                         shape_hash,
                         shape_generation: quad_key.shape_generation,
+                        font_scale_bits: self.pane_font_scale_bits,
                         composing: if self.cursor.y == stable_row && self.pos.is_active {
                             if let DeadKeyStatus::Composing(composing) =
                                 &self.term_window.dead_key_status
@@ -493,7 +533,7 @@ impl crate::TermWindow {
                                 top_pixel_y: *quad_key.top_pixel_y,
                                 left_pixel_x: self.left_pixel_x,
                                 pixel_width: self.dims.cols as f32
-                                    * self.term_window.render_metrics.cell_size.width as f32,
+                                    * self.pane_metrics.cell_size.width as f32,
                                 stable_line_idx: Some(stable_row),
                                 line: &line,
                                 selection: selrange.clone(),
@@ -515,12 +555,13 @@ impl crate::TermWindow {
                                 window_is_transparent: self.window_is_transparent,
                                 default_bg: self.default_bg,
                                 font: None,
+                                fonts: &self.pane_fonts,
                                 style: None,
                                 use_pixel_positioning: self
                                     .term_window
                                     .config
                                     .experimental_pixel_positioning,
-                                render_metrics: self.term_window.render_metrics,
+                                render_metrics: self.pane_metrics,
                                 shape_key: Some(shape_key),
                                 password_input,
                             },

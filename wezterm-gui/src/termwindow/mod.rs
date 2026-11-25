@@ -191,6 +191,13 @@ pub struct OverlayState {
     pub key_table_state: KeyTableState,
 }
 
+pub struct PaneFontState {
+    pub font_scale: f64,
+    pub fonts: Rc<FontConfiguration>,
+    pub render_metrics: RenderMetrics,
+    pub last_synced_pane_dims: Option<(usize, usize)>,
+}
+
 #[derive(Default)]
 pub struct PaneState {
     /// If is_some(), the top row of the visible screen.
@@ -205,6 +212,7 @@ pub struct PaneState {
 
     bell_start: Option<Instant>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
+    pub font_state: Option<PaneFontState>,
 }
 
 /// Data used when synchronously formatting pane and window titles
@@ -1306,16 +1314,21 @@ impl TermWindow {
                     // Also handled by clientpane
                     self.update_title_post_status();
                 }
-                MuxNotification::TabResized(_) => {
+                MuxNotification::TabResized(tab_id) => {
                     // Also handled by wezterm-client
                     self.update_title_post_status();
+                    if let Some(tab) = Mux::get().get_tab(tab_id) {
+                        self.sync_tab_custom_font_pane_sizes(&tab);
+                    }
                 }
                 MuxNotification::TabTitleChanged { .. } => {
                     self.update_title_post_status();
                 }
+                MuxNotification::PaneRemoved(pane_id) => {
+                    self.pane_state.borrow_mut().remove(&pane_id);
+                }
                 MuxNotification::PaneAdded(_)
                 | MuxNotification::WorkspaceRenamed { .. }
-                | MuxNotification::PaneRemoved(_)
                 | MuxNotification::WindowWorkspaceChanged(_)
                 | MuxNotification::ActiveWorkspaceChanged(_)
                 | MuxNotification::Empty
@@ -1800,6 +1813,13 @@ impl TermWindow {
         if let Err(err) = self.fonts.config_changed(&config) {
             log::error!("Failed to load font configuration: {:#}", err);
         }
+        for state in self.pane_state.borrow().values() {
+            if let Some(fs) = &state.font_state {
+                if let Err(err) = fs.fonts.config_changed(&config) {
+                    log::error!("Failed to reload per-pane font configuration: {:#}", err);
+                }
+            }
+        }
 
         if let Some(window) = mux.get_window(self.mux_window_id) {
             let term_config: Arc<dyn TerminalConfiguration> =
@@ -2120,17 +2140,19 @@ impl TermWindow {
                 0.0
             };
             let (padding_left, padding_top) = self.padding_left_top();
+            let pane_metrics = self.pane_render_metrics(pos.pane.pane_id());
 
             let r = Rect::new(
                 Point::new(
-                    (((cursor.x + pos.left) as isize).max(0) * self.render_metrics.cell_size.width)
+                    (pos.left as isize * self.render_metrics.cell_size.width)
+                        .add((cursor.x as isize).max(0) * pane_metrics.cell_size.width)
                         .add(padding_left as isize),
-                    ((cursor.y + pos.top as isize - top).max(0)
-                        * self.render_metrics.cell_size.height)
+                    (pos.top as isize * self.render_metrics.cell_size.height)
+                        .add((cursor.y - top).max(0) * pane_metrics.cell_size.height)
                         .add(tab_bar_height as isize)
                         .add(padding_top as isize),
                 ),
-                self.render_metrics.cell_size,
+                pane_metrics.cell_size,
             );
             win.set_text_cursor_position(r);
         }
@@ -3290,6 +3312,33 @@ impl TermWindow {
         RefMut::map(self.pane_state.borrow_mut(), |state| {
             state.entry(pane_id).or_insert_with(PaneState::default)
         })
+    }
+
+    pub fn pane_font_scale(&self, pane_id: PaneId) -> f64 {
+        self.pane_state
+            .borrow()
+            .get(&pane_id)
+            .and_then(|state| state.font_state.as_ref())
+            .map(|fs| fs.font_scale)
+            .unwrap_or(1.0)
+    }
+
+    pub fn pane_fonts(&self, pane_id: PaneId) -> Rc<FontConfiguration> {
+        self.pane_state
+            .borrow()
+            .get(&pane_id)
+            .and_then(|state| state.font_state.as_ref())
+            .map(|fs| Rc::clone(&fs.fonts))
+            .unwrap_or_else(|| Rc::clone(&self.fonts))
+    }
+
+    pub fn pane_render_metrics(&self, pane_id: PaneId) -> RenderMetrics {
+        self.pane_state
+            .borrow()
+            .get(&pane_id)
+            .and_then(|state| state.font_state.as_ref())
+            .map(|fs| fs.render_metrics)
+            .unwrap_or(self.render_metrics)
     }
 
     pub fn tab_state(&self, tab_id: TabId) -> RefMut<'_, TabState> {

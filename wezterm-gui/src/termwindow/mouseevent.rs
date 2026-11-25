@@ -272,6 +272,7 @@ impl super::TermWindow {
 
         if delta != 0 {
             tab.resize_split_by(split.index, delta);
+            self.sync_tab_custom_font_pane_sizes(&tab);
             if let Some(split) = tab.iter_splits().into_iter().nth(split.index) {
                 item.item_type = UIItemType::Split(split);
                 context.invalidate();
@@ -667,13 +668,23 @@ impl super::TermWindow {
             Some(MouseCapture::TerminalPane(_))
         );
 
+        let border = self.get_os_border();
+        let first_line_offset = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
+            self.tab_bar_pixel_height().unwrap_or(0.) as isize
+        } else {
+            0
+        } + border.top.get() as isize;
+        let (padding_left, padding_top) = self.padding_left_top();
+
         for pos in self.get_panes_to_render() {
-            if !is_already_captured
+            let hit = !is_already_captured
                 && row >= pos.top as i64
                 && row <= (pos.top + pos.height) as i64
                 && column >= pos.left
-                && column <= pos.left + pos.width
-            {
+                && column <= pos.left + pos.width;
+            let captured_hit = is_already_captured && pane.pane_id() == pos.pane.pane_id();
+
+            if hit {
                 if pane.pane_id() != pos.pane.pane_id() {
                     // We're over a pane that isn't active
                     match &event.kind {
@@ -704,22 +715,41 @@ impl super::TermWindow {
                         }
                     }
                 }
-                column = column.saturating_sub(pos.left);
-                row = row.saturating_sub(pos.top as i64);
-                break;
-            } else if is_already_captured && pane.pane_id() == pos.pane.pane_id() {
-                column = column.saturating_sub(pos.left);
-                row = row.saturating_sub(pos.top as i64).max(0);
+            }
 
-                if position.column < pos.left {
-                    x_pixel_offset -= self.render_metrics.cell_size.width
-                        * (pos.left as isize - position.column as isize);
-                }
-                if position.row < pos.top as i64 {
-                    y_pixel_offset -= self.render_metrics.cell_size.height
-                        * (pos.top as isize - position.row as isize);
-                }
+            if hit || captured_hit {
+                let pane_metrics = self.pane_render_metrics(pos.pane.pane_id());
+                let rel_x_px = event.coords.x
+                    - ((padding_left + border.left.get() as f32) as isize
+                        + pos.left as isize * self.render_metrics.cell_size.width);
+                let rel_y_px = event.coords.y
+                    - (padding_top as isize
+                        + first_line_offset
+                        + pos.top as isize * self.render_metrics.cell_size.height);
 
+                row = (rel_y_px.max(0) / pane_metrics.cell_size.height) as i64;
+                let col_f = rel_x_px.max(0) as f32 / pane_metrics.cell_size.width as f32;
+                column = if !pane.is_mouse_grabbed() {
+                    col_f.round()
+                } else {
+                    col_f
+                }
+                .trunc() as usize;
+
+                x_pixel_offset = if rel_x_px < 0 {
+                    rel_x_px
+                } else if column > 0 {
+                    rel_x_px % pane_metrics.cell_size.width
+                } else {
+                    rel_x_px
+                };
+                y_pixel_offset = if rel_y_px < 0 {
+                    rel_y_px
+                } else if row > 0 {
+                    rel_y_px % pane_metrics.cell_size.height
+                } else {
+                    rel_y_px
+                };
                 break;
             }
         }

@@ -29,7 +29,7 @@ use termwiz::hyperlink::Hyperlink;
 use termwiz::surface::{CursorShape, CursorVisibility, SequenceNo};
 use wezterm_font::shaper::PresentationWidth;
 use wezterm_font::units::{IntPixelLength, PixelLength};
-use wezterm_font::{ClearShapeCache, GlyphInfo, LoadedFont};
+use wezterm_font::{ClearShapeCache, FontConfiguration, GlyphInfo, LoadedFont};
 use wezterm_term::color::{ColorAttribute, ColorPalette};
 use wezterm_term::{CellAttributes, Line, StableRowIndex};
 use window::color::LinearRgba;
@@ -72,6 +72,7 @@ pub struct LineQuadCacheKey {
     pub cursor: Option<CursorProperties>,
     pub reverse_video: bool,
     pub password_input: bool,
+    pub font_scale_bits: u64,
 }
 
 pub struct LineQuadCacheValue {
@@ -90,6 +91,8 @@ pub struct LineToElementParams<'a> {
     pub window_is_transparent: bool,
     pub reverse_video: bool,
     pub shape_key: &'a Option<LineToEleShapeCacheKey>,
+    pub fonts: &'a Rc<FontConfiguration>,
+    pub render_metrics: RenderMetrics,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
@@ -97,6 +100,7 @@ pub struct LineToEleShapeCacheKey {
     pub shape_hash: [u8; 16],
     pub composing: Option<(usize, String)>,
     pub shape_generation: usize,
+    pub font_scale_bits: u64,
 }
 
 pub struct LineToElementShapeItem {
@@ -159,6 +163,7 @@ pub struct RenderScreenLineParams<'a> {
     /// Override font resolution; useful together with
     /// the resolved title font
     pub font: Option<Rc<LoadedFont>>,
+    pub fonts: &'a Rc<FontConfiguration>,
     pub style: Option<&'a TextStyle>,
 
     /// If true, use the shaper-determined pixel positions,
@@ -399,13 +404,15 @@ impl crate::TermWindow {
         style: &TextStyle,
         attrs: &CellAttributes,
         font: Option<&Rc<LoadedFont>>,
+        fonts: &Rc<FontConfiguration>,
         gl_state: &RenderState,
         metrics: &RenderMetrics,
     ) -> anyhow::Result<Rc<CachedGlyph>> {
         let fa_lock = "\u{f023}";
         let line = Line::from_text(fa_lock, attrs, 0, None);
         let cluster = line.cluster(None);
-        let shape_info = self.cached_cluster_shape(style, &cluster[0], gl_state, font, metrics)?;
+        let shape_info =
+            self.cached_cluster_shape(style, &cluster[0], gl_state, font, fonts, metrics)?;
         Ok(Rc::clone(&shape_info[0].glyph))
     }
 
@@ -804,12 +811,14 @@ impl crate::TermWindow {
         cluster: &CellCluster,
         gl_state: &RenderState,
         font: Option<&Rc<LoadedFont>>,
+        fonts: &Rc<FontConfiguration>,
         metrics: &RenderMetrics,
     ) -> anyhow::Result<Rc<Vec<ShapedInfo>>> {
         let shape_resolve_start = Instant::now();
         let key = BorrowedShapeCacheKey {
             style,
             text: &cluster.text,
+            font_scale_bits: fonts.get_font_scale().to_bits(),
         };
         let glyph_info = match self.lookup_cached_shape(&key) {
             Some(Ok(info)) => info,
@@ -817,7 +826,7 @@ impl crate::TermWindow {
             None => {
                 let font = match font {
                     Some(f) => Rc::clone(f),
-                    None => self.fonts.resolve_font(style)?,
+                    None => fonts.resolve_font(style)?,
                 };
                 let window = self.window.as_ref().unwrap().clone();
 

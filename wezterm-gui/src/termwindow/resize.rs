@@ -1,9 +1,12 @@
+use super::PaneFontState;
 use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::utilsprites::RenderMetrics;
 use ::window::{Dimensions, ResizeIncrement, Window, WindowOps, WindowState};
 use config::{ConfigHandle, DimensionContext};
+use mux::tab::{PositionedPane, Tab};
 use mux::Mux;
 use std::rc::Rc;
+use std::sync::Arc;
 use wezterm_font::FontConfiguration;
 use wezterm_term::TerminalSize;
 
@@ -17,6 +20,30 @@ pub struct RowsAndCols {
 pub enum ScaleChange {
     Absolute(f64),
     Relative(f64),
+}
+
+pub(crate) fn scaled_pane_terminal_size(
+    base_cols: usize,
+    base_rows: usize,
+    base_cell_w: usize,
+    base_cell_h: usize,
+    pane_cell_w: usize,
+    pane_cell_h: usize,
+    dpi: u32,
+) -> TerminalSize {
+    let slot_pixel_width = base_cols * base_cell_w;
+    let slot_pixel_height = base_rows * base_cell_h;
+    let cell_w = pane_cell_w.max(1);
+    let cell_h = pane_cell_h.max(1);
+    let cols = (slot_pixel_width / cell_w).max(1);
+    let rows = (slot_pixel_height / cell_h).max(1);
+    TerminalSize {
+        rows,
+        cols,
+        pixel_width: cols * cell_w,
+        pixel_height: rows * cell_h,
+        dpi,
+    }
 }
 
 impl super::TermWindow {
@@ -118,6 +145,28 @@ impl super::TermWindow {
                 );
                 // Restore prior scaling factors
                 self.fonts.change_scaling(prior_font, prior_dpi);
+            }
+        }
+
+        for state in self.pane_state.borrow_mut().values_mut() {
+            if let Some(fs) = state.font_state.as_mut() {
+                let (prior_pane_font, prior_pane_dpi) =
+                    fs.fonts.change_scaling(fs.font_scale, dimensions.dpi);
+                match RenderMetrics::new(&fs.fonts) {
+                    Ok(metrics) => {
+                        fs.render_metrics = metrics;
+                        fs.last_synced_pane_dims = None;
+                    }
+                    Err(err) => {
+                        log::error!(
+                            "{:#} while updating per-pane font scaling to {} with {:?}",
+                            err,
+                            fs.font_scale,
+                            dimensions
+                        );
+                        fs.fonts.change_scaling(prior_pane_font, prior_pane_dpi);
+                    }
+                }
             }
         }
 
@@ -298,6 +347,7 @@ impl super::TermWindow {
                 tab.resize(size);
             }
         };
+        self.sync_all_custom_font_pane_sizes();
         self.resize_overlays();
         self.invalidate_fancy_tab_bar();
         self.update_title();
@@ -454,22 +504,158 @@ impl super::TermWindow {
         }
     }
 
+    pub fn compute_pane_terminal_size(
+        &self,
+        pos: &PositionedPane,
+        metrics: &RenderMetrics,
+    ) -> TerminalSize {
+        scaled_pane_terminal_size(
+            pos.width,
+            pos.height,
+            self.render_metrics.cell_size.width.max(1) as usize,
+            self.render_metrics.cell_size.height.max(1) as usize,
+            metrics.cell_size.width.max(1) as usize,
+            metrics.cell_size.height.max(1) as usize,
+            self.dimensions.dpi as u32,
+        )
+    }
+
+    pub fn sync_pane_size_for_font_scale(&self, pos: &PositionedPane) {
+        let pane_id = pos.pane.pane_id();
+        let target = {
+            let state = self.pane_state.borrow();
+            let Some(fs) = state.get(&pane_id).and_then(|s| s.font_state.as_ref()) else {
+                return;
+            };
+            self.compute_pane_terminal_size(pos, &fs.render_metrics)
+        };
+        pos.pane.resize(target).ok();
+        let dims = pos.pane.get_dimensions();
+        if let Some(fs) = self
+            .pane_state
+            .borrow_mut()
+            .get_mut(&pane_id)
+            .and_then(|s| s.font_state.as_mut())
+        {
+            fs.last_synced_pane_dims = Some((dims.cols, dims.viewport_rows));
+        }
+    }
+
+    pub fn sync_tab_custom_font_pane_sizes(&self, tab: &Arc<Tab>) {
+        let panes = self.get_pos_panes_for_tab(tab);
+        for pos in panes {
+            let has_custom_font = self
+                .pane_state
+                .borrow()
+                .get(&pos.pane.pane_id())
+                .and_then(|s| s.font_state.as_ref())
+                .is_some();
+            if has_custom_font {
+                self.sync_pane_size_for_font_scale(&pos);
+            }
+        }
+    }
+
+    pub fn sync_all_custom_font_pane_sizes(&self) {
+        let mux = Mux::get();
+        if let Some(window) = mux.get_window(self.mux_window_id) {
+            for tab in window.iter_tabs() {
+                self.sync_tab_custom_font_pane_sizes(tab);
+            }
+        };
+    }
+
+    pub fn adjust_active_pane_font_scale(&mut self, change: ScaleChange) {
+        let Some(pos) = self.get_panes_to_render().into_iter().find(|p| p.is_active) else {
+            return;
+        };
+        let pane_id = pos.pane.pane_id();
+        let current_scale = self.pane_font_scale(pane_id);
+        let new_scale = match change {
+            ScaleChange::Relative(factor) => current_scale * factor,
+            ScaleChange::Absolute(scale) => scale,
+        };
+
+        let theoretical_height =
+            self.config.font_size * new_scale * self.dimensions.dpi as f64 / 72.0;
+        if theoretical_height < 2.0 {
+            log::warn!(
+                "refusing to go to an unreasonably small pane font scale {:?} \
+                 font_scale={} would yield font_height {}",
+                self.dimensions,
+                new_scale,
+                theoretical_height
+            );
+            return;
+        }
+
+        if (new_scale - 1.0).abs() < 1e-6 {
+            self.pane_state(pane_id).font_state = None;
+            let target = self.compute_pane_terminal_size(&pos, &self.render_metrics);
+            pos.pane.resize(target).ok();
+        } else {
+            let existing_fonts = self
+                .pane_state
+                .borrow()
+                .get(&pane_id)
+                .and_then(|s| s.font_state.as_ref())
+                .map(|fs| Rc::clone(&fs.fonts));
+
+            let fonts = match existing_fonts {
+                Some(fonts) => fonts,
+                None => match FontConfiguration::new(
+                    Some(self.config.clone()),
+                    self.dimensions.dpi,
+                ) {
+                    Ok(fc) => Rc::new(fc),
+                    Err(err) => {
+                        log::error!("Failed to create per-pane FontConfiguration: {:#}", err);
+                        return;
+                    }
+                },
+            };
+
+            let (prior_font, prior_dpi) = fonts.change_scaling(new_scale, self.dimensions.dpi);
+            let metrics = match RenderMetrics::new(&fonts) {
+                Ok(metrics) => metrics,
+                Err(err) => {
+                    log::error!(
+                        "{:#} while attempting to scale pane font to {} with {:?}",
+                        err,
+                        new_scale,
+                        self.dimensions
+                    );
+                    fonts.change_scaling(prior_font, prior_dpi);
+                    return;
+                }
+            };
+
+            let target = self.compute_pane_terminal_size(&pos, &metrics);
+            pos.pane.resize(target).ok();
+            let dims = pos.pane.get_dimensions();
+            self.pane_state(pane_id).font_state = Some(PaneFontState {
+                font_scale: new_scale,
+                fonts,
+                render_metrics: metrics,
+                last_synced_pane_dims: Some((dims.cols, dims.viewport_rows)),
+            });
+        }
+
+        if let Some(window) = self.window.as_ref() {
+            window.invalidate();
+        }
+    }
+
     pub fn decrease_font_size(&mut self) {
-        self.pending_scale_changes
-            .push_back(ScaleChange::Relative(1.0 / 1.1));
-        self.apply_pending_scale_changes();
+        self.adjust_active_pane_font_scale(ScaleChange::Relative(1.0 / 1.1));
     }
 
     pub fn increase_font_size(&mut self) {
-        self.pending_scale_changes
-            .push_back(ScaleChange::Relative(1.1));
-        self.apply_pending_scale_changes();
+        self.adjust_active_pane_font_scale(ScaleChange::Relative(1.1));
     }
 
     pub fn reset_font_size(&mut self) {
-        self.pending_scale_changes
-            .push_back(ScaleChange::Absolute(1.0));
-        self.apply_pending_scale_changes();
+        self.adjust_active_pane_font_scale(ScaleChange::Absolute(1.0));
     }
 
     pub fn set_window_size(&mut self, size: TerminalSize, window: &Window) -> anyhow::Result<()> {
@@ -533,6 +719,9 @@ impl super::TermWindow {
     }
 
     pub fn reset_font_and_window_size(&mut self, window: &Window) -> anyhow::Result<()> {
+        for state in self.pane_state.borrow_mut().values_mut() {
+            state.font_state = None;
+        }
         let size = self.config.initial_size(
             self.dimensions.dpi as u32,
             Some(crate::cell_pixel_dims(
@@ -564,5 +753,56 @@ pub fn effective_right_padding(config: &ConfigHandle, context: DimensionContext)
         context.pixel_cell as usize
     } else {
         config.window_padding.right.evaluate_as_pixels(context) as usize
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scaled_pane_terminal_size;
+
+    #[test]
+    fn scaled_pane_size_at_default_scale() {
+        let size = scaled_pane_terminal_size(80, 24, 10, 20, 10, 20, 96);
+        assert_eq!(size.cols, 80);
+        assert_eq!(size.rows, 24);
+        assert_eq!(size.pixel_width, 800);
+        assert_eq!(size.pixel_height, 480);
+        assert_eq!(size.dpi, 96);
+    }
+
+    #[test]
+    fn scaled_pane_size_with_larger_font() {
+        // Slot is 800x480 px; 20x40 px cells should fit 40x12 cells.
+        let size = scaled_pane_terminal_size(80, 24, 10, 20, 20, 40, 96);
+        assert_eq!(size.cols, 40);
+        assert_eq!(size.rows, 12);
+        assert_eq!(size.pixel_width, 800);
+        assert_eq!(size.pixel_height, 480);
+
+        // Non-exact multiple rounds down to fit within the slot.
+        let size = scaled_pane_terminal_size(80, 24, 10, 20, 15, 30, 96);
+        assert_eq!(size.cols, 53); // 800 / 15 = 53
+        assert_eq!(size.rows, 16); // 480 / 30 = 16
+        assert_eq!(size.pixel_width, 795);
+        assert_eq!(size.pixel_height, 480);
+    }
+
+    #[test]
+    fn scaled_pane_size_with_smaller_font() {
+        // Slot is 800x480 px; 5x10 px cells should fit 160x48 cells.
+        let size = scaled_pane_terminal_size(80, 24, 10, 20, 5, 10, 96);
+        assert_eq!(size.cols, 160);
+        assert_eq!(size.rows, 48);
+        assert_eq!(size.pixel_width, 800);
+        assert_eq!(size.pixel_height, 480);
+    }
+
+    #[test]
+    fn scaled_pane_size_clamps_to_at_least_one_cell() {
+        let size = scaled_pane_terminal_size(10, 5, 10, 20, 500, 500, 96);
+        assert_eq!(size.cols, 1);
+        assert_eq!(size.rows, 1);
+        assert_eq!(size.pixel_width, 500);
+        assert_eq!(size.pixel_height, 500);
     }
 }
