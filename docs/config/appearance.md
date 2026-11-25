@@ -232,7 +232,7 @@ config.color_schemes = {
 
 See also [wezterm.get_builtin_color_schemes()](lua/wezterm/get_builtin_color_schemes.md) for
 some more advanced examples, such as picking a random color scheme, or deriving from a
-builting color scheme.
+built-in color scheme.
 
 ### Defining a Color Scheme in a separate file
 
