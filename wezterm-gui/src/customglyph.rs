@@ -651,6 +651,9 @@ pub enum PolyStyle {
 }
 
 impl PolyStyle {
+    /// Kitty branch-drawing lines match light box drawing (U+2500), not the heavy form.
+    const BRANCH_LINE: Self = Self::Outline;
+
     fn apply(self, width: f32, paint: &Paint, path: &Path, pixmap: &mut PixmapMut) {
         match self {
             PolyStyle::Fill => {
@@ -4788,7 +4791,7 @@ impl BlockKey {
                     PolyCommand::LineTo(BlockCoord::Frac(25, 30), BlockCoord::Frac(1, 2)),
                 ],
                 intensity: BlockAlpha::Full,
-                style: PolyStyle::OutlineHeavy,
+                style: PolyStyle::BRANCH_LINE,
             }]),
             // [] Branch drawing fade out to left
             0xF5D3 => Self::Poly(&[Poly {
@@ -4805,7 +4808,7 @@ impl BlockKey {
                     PolyCommand::LineTo(BlockCoord::Frac(30 - 25, 30), BlockCoord::Frac(1, 2)),
                 ],
                 intensity: BlockAlpha::Full,
-                style: PolyStyle::OutlineHeavy,
+                style: PolyStyle::BRANCH_LINE,
             }]),
             // [] Branch drawing fade out to lower
             0xF5D4 => Self::Poly(&[Poly {
@@ -4822,7 +4825,7 @@ impl BlockKey {
                     PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(25, 30)),
                 ],
                 intensity: BlockAlpha::Full,
-                style: PolyStyle::OutlineHeavy,
+                style: PolyStyle::BRANCH_LINE,
             }]),
             // [] Branch drawing fade out to upper
             0xF5D5 => Self::Poly(&[Poly {
@@ -4839,7 +4842,7 @@ impl BlockKey {
                     PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(30 - 25, 30)),
                 ],
                 intensity: BlockAlpha::Full,
-                style: PolyStyle::OutlineHeavy,
+                style: PolyStyle::BRANCH_LINE,
             }]),
             // [] Branch drawing arc down and right
             0xF5D6 => Self::Branches(Branch::RIGHT_TO_DOWN),
@@ -5615,7 +5618,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
                             PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::One),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::BRANCH_LINE,
                         BlendMode::default(),
                     );
                 }
@@ -5625,7 +5628,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
                             PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::BRANCH_LINE,
                         BlendMode::default(),
                     );
                 }
@@ -5640,7 +5643,7 @@ impl GlyphCache {
                             },
                             PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::BRANCH_LINE,
                         BlendMode::default(),
                     );
                 }
@@ -5655,7 +5658,7 @@ impl GlyphCache {
                             },
                             PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::BRANCH_LINE,
                         BlendMode::default(),
                     );
                 }
@@ -5670,7 +5673,7 @@ impl GlyphCache {
                             },
                             PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::BRANCH_LINE,
                         BlendMode::default(),
                     );
                 }
@@ -5685,7 +5688,7 @@ impl GlyphCache {
                             },
                             PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::BRANCH_LINE,
                         BlendMode::default(),
                     );
                 }
@@ -5695,7 +5698,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
                             PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::BRANCH_LINE,
                         BlendMode::default(),
                     );
                 }
@@ -5705,7 +5708,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
                             PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::BRANCH_LINE,
                         BlendMode::default(),
                     );
                 }
@@ -5715,7 +5718,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
                             PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::BRANCH_LINE,
                         BlendMode::default(),
                     );
                 }
@@ -5725,7 +5728,7 @@ impl GlyphCache {
                             PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::One),
                             PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(1, 2)),
                         ],
-                        PolyStyle::OutlineHeavy,
+                        PolyStyle::BRANCH_LINE,
                         BlendMode::default(),
                     );
                 }
@@ -6033,4 +6036,27 @@ fn fill_rect(buffer: &mut Image, x: Range<f32>, y: Range<f32>, intensity: BlockA
         Transform::identity(),
         None,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn poly_style(c: char) -> PolyStyle {
+        match BlockKey::from_char(c) {
+            Some(BlockKey::Poly(polys)) => polys[0].style,
+            other => panic!("expected a poly, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn branch_fade_glyphs_match_light_box_drawing() {
+        // U+2500 is the light horizontal. U+2501 is the heavy one.
+        // The fading branch glyphs (U+F5D2..U+F5D5) should use the light stroke.
+        assert_eq!(poly_style('\u{2500}'), PolyStyle::Outline);
+        assert_eq!(poly_style('\u{2501}'), PolyStyle::OutlineHeavy);
+        for c in ['\u{F5D2}', '\u{F5D3}', '\u{F5D4}', '\u{F5D5}'] {
+            assert_eq!(poly_style(c), PolyStyle::Outline, "{c:?}");
+        }
+    }
 }
