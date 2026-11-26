@@ -837,8 +837,11 @@ impl SessionHandler {
                                 .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
 
                             let (_, lines) = pane.get_lines(line_idx..line_idx + 1);
-                            'found_data: for line in lines {
-                                if let Some(cell) = line.get_cell(cell_idx) {
+                            'found_data: for mut line in lines {
+                                // The wire index includes physical columns under wide graphemes.
+                                if let Some(cell) =
+                                    line.cells_mut_for_attr_changes_only().get(cell_idx)
+                                {
                                     if let Some(images) = cell.attrs().images() {
                                         for im in images {
                                             if im.image_data().hash() == data_hash {

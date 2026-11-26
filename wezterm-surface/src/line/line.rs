@@ -20,10 +20,14 @@ use siphasher::sip128::{Hasher128, SipHasher};
 #[cfg(feature = "appdata")]
 use std::sync::Mutex;
 use wezterm_bidi::{Direction, ParagraphDirectionHint};
+#[cfg(feature = "use_image")]
+use wezterm_cell::image::ImageCell;
 use wezterm_cell::{Cell, CellAttributes, SemanticType, UnicodeVersion};
 
 extern crate alloc;
 use crate::alloc::string::ToString;
+#[cfg(feature = "use_image")]
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -127,6 +131,18 @@ impl Line {
         self.bits.bits().hash(&mut hasher);
         for cell in self.visible_cells() {
             cell.compute_shape_hash(&mut hasher);
+            #[cfg(feature = "use_image")]
+            if let CellStorage::V(cells) = &self.cells {
+                for (idx, images) in
+                    cells.image_continuation_overrides(cell.cell_index(), cell.width())
+                {
+                    idx.hash(&mut hasher);
+                    images.len().hash(&mut hasher);
+                    for image in images {
+                        image.compute_shape_hash(&mut hasher);
+                    }
+                }
+            }
         }
         hasher.finish128().as_bytes()
     }
@@ -238,6 +254,16 @@ impl Line {
                     (*cell.attrs()).clone(),
                     seqno,
                 );
+                #[cfg(feature = "use_image")]
+                if let CellStorage::V(cells) = &self.cells {
+                    for (idx, _) in
+                        cells.image_continuation_overrides(cell.cell_index(), cell.width())
+                    {
+                        line.coerce_vec_storage()[idx - delta]
+                            .attrs_mut()
+                            .copy_images_from(cells[idx].attrs());
+                    }
+                }
             }
 
             lines
@@ -752,6 +778,35 @@ impl Line {
         self.set_cell_impl(idx, cell, false, seqno);
     }
 
+    /// Attach an image to one physical column without replacing its grapheme.
+    /// Replacement preserves named image placements, just as a text write does.
+    #[cfg(feature = "use_image")]
+    pub fn set_cell_image(
+        &mut self,
+        idx: usize,
+        image: ImageCell,
+        replace: bool,
+        seqno: SequenceNo,
+    ) {
+        let cells = self.coerce_vec_storage();
+        if idx >= cells.len() {
+            cells.resize_with(idx + 1, Cell::blank);
+        }
+        let attrs = cells[idx].attrs_mut();
+        if replace {
+            let previous_images = attrs.images();
+            attrs.set_image(Box::new(image));
+            for previous in previous_images.into_iter().flatten() {
+                if previous.has_placement_id() {
+                    attrs.attach_image(Box::new(previous));
+                }
+            }
+        } else {
+            attrs.attach_image(Box::new(image));
+        }
+        self.update_last_change_seqno(seqno);
+    }
+
     /// Assign a cell using grapheme text with a known width and attributes.
     /// This is a micro-optimization over first constructing a Cell from
     /// the grapheme info. If assigning this particular cell can be optimized
@@ -894,9 +949,14 @@ impl Line {
             let width = cells[prior].width();
             if width > 1 {
                 let attrs = cells[prior].attrs().clone();
-                for nerf in prior..prior + width {
-                    cells[nerf] = Cell::blank_with_attrs(attrs.clone());
+                for cell in cells.iter_mut().skip(prior + 1).take(width - 1) {
+                    #[cfg_attr(not(feature = "use_image"), allow(unused_mut))]
+                    let mut blank = Cell::blank_with_attrs(attrs.clone());
+                    #[cfg(feature = "use_image")]
+                    blank.attrs_mut().copy_images_from(cell.attrs());
+                    *cell = blank;
                 }
+                cells[prior] = Cell::blank_with_attrs(attrs);
             }
         }
     }
@@ -1044,6 +1104,40 @@ impl Line {
         CellCluster::make_cluster(self.len(), self.visible_cells(), bidi_hint)
     }
 
+    /// Cluster the visible text and gather the image-bearing physical columns.
+    #[cfg(feature = "use_image")]
+    pub fn cluster_with_images(
+        &self,
+        bidi_hint: Option<ParagraphDirectionHint>,
+    ) -> (Vec<CellCluster>, Vec<(usize, Vec<ImageCell>)>) {
+        let mut image_cells = vec![];
+        let cells = self.visible_cells().inspect(|cell| {
+            let start = cell.cell_index();
+            let width = cell.width().max(1);
+            match &self.cells {
+                CellStorage::V(cells) => {
+                    for (offset, cell) in cells.iter().skip(start).take(width).enumerate() {
+                        if let Some(images) = cell.attrs().images() {
+                            image_cells.push((start + offset, images));
+                        }
+                    }
+                }
+                CellStorage::C(_) => {
+                    // Clustered storage shares the lead's attributes across a grapheme.
+                    if let Some(images) = cell.attrs().images() {
+                        let last = start + width - 1;
+                        for idx in start..last {
+                            image_cells.push((idx, images.clone()));
+                        }
+                        image_cells.push((last, images));
+                    }
+                }
+            }
+        });
+        let clusters = CellCluster::make_cluster(self.len(), cells, bidi_hint);
+        (clusters, image_cells)
+    }
+
     fn make_cells(&mut self) {
         let cells = match &self.cells {
             CellStorage::V(_) => return,
@@ -1068,6 +1162,8 @@ impl Line {
     /// for mutation.
     pub fn compress_for_scrollback(&mut self) {
         let cv = match &self.cells {
+            #[cfg(feature = "use_image")]
+            CellStorage::V(v) if v.has_image_continuation_overrides() => return,
             CellStorage::V(v) => ClusteredLine::from_cell_vec(v.len(), self.visible_cells()),
             CellStorage::C(_) => return,
         };
@@ -1107,6 +1203,20 @@ impl Line {
         }
 
         let cells = self.coerce_vec_storage();
+        // Image-aware reflow can keep the result dense. Record the marker on
+        // the visible lead too, or reflow won't recognize this wrap later.
+        #[cfg(feature = "use_image")]
+        if let Some(lead) = cells.len().checked_sub(2) {
+            if cells[lead].width() > 1
+                && if wrapped {
+                    cells.has_image_continuation_overrides()
+                } else {
+                    cells[lead].attrs().wrapped()
+                }
+            {
+                cells[lead].attrs_mut().set_wrapped(wrapped);
+            }
+        }
         if let Some(cell) = cells.last_mut() {
             cell.attrs_mut().set_wrapped(wrapped);
         }
@@ -1117,20 +1227,26 @@ impl Line {
     /// This function is used by rewrapping logic when joining wrapped
     /// lines back together.
     pub fn append_line(&mut self, other: Line, seqno: SequenceNo) {
-        match &mut self.cells {
-            CellStorage::V(cells) => {
-                for cell in other.visible_cells() {
-                    cells.push(cell.as_cell());
-                    for _ in 1..cell.width() {
-                        cells.push(Cell::new(' ', cell.attrs().clone()));
+        match &other.cells {
+            #[cfg(feature = "use_image")]
+            CellStorage::V(cells) if cells.has_image_continuation_overrides() => {
+                self.coerce_vec_storage().extend(cells.iter().cloned());
+            }
+            _ => match &mut self.cells {
+                CellStorage::V(cells) => {
+                    for cell in other.visible_cells() {
+                        cells.push(cell.as_cell());
+                        for _ in 1..cell.width() {
+                            cells.push(Cell::new(' ', cell.attrs().clone()));
+                        }
                     }
                 }
-            }
-            CellStorage::C(cl) => {
-                for cell in other.visible_cells() {
-                    cl.append(cell.as_cell());
+                CellStorage::C(cl) => {
+                    for cell in other.visible_cells() {
+                        cl.append(cell.as_cell());
+                    }
                 }
-            }
+            },
         }
         self.update_last_change_seqno(seqno);
         self.invalidate_zones();

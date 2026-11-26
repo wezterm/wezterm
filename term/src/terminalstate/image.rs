@@ -5,7 +5,6 @@ use num_traits::{One, Zero};
 use ordered_float::NotNan;
 use std::sync::Arc;
 use wezterm_cell::image::{ImageCell, ImageDataType};
-use wezterm_cell::Cell;
 use wezterm_surface::change::ImageData;
 use wezterm_surface::TextureCoordinate;
 
@@ -186,6 +185,7 @@ impl TerminalState {
         );
 
         let mut remain_y = target_pixel_height;
+        let replace = params.style != ImageAttachStyle::Kitty;
         for y in 0..height_in_cells {
             let padding_bottom = cell_pixel_height.saturating_sub(remain_y) as u16;
             let y_delta = (remain_y.min(cell_pixel_height) as f32) / y_delta_divisor as f32;
@@ -217,12 +217,7 @@ impl TerminalState {
                     padding_right,
                     padding_bottom
                 );
-                let mut cell = self
-                    .screen_mut()
-                    .get_cell(cursor_x + x, cursor_y)
-                    .cloned()
-                    .unwrap_or_else(Cell::blank);
-                let img = Box::new(ImageCell::with_z_index(
+                let img = ImageCell::with_z_index(
                     TextureCoordinate::new(xpos, ypos),
                     TextureCoordinate::new(xpos + x_delta, ypos + y_delta),
                     params.data.clone(),
@@ -233,16 +228,10 @@ impl TerminalState {
                     padding_bottom,
                     params.image_id,
                     params.placement_id,
-                ));
-                match params.style {
-                    ImageAttachStyle::Kitty => cell.attrs_mut().attach_image(img),
-                    ImageAttachStyle::Sixel | ImageAttachStyle::Iterm => {
-                        cell.attrs_mut().set_image(img)
-                    }
-                };
+                );
 
                 self.screen_mut()
-                    .set_cell(cursor_x + x, cursor_y, &cell, seqno);
+                    .set_cell_image(cursor_x + x, cursor_y, img, replace, seqno);
                 xpos += x_delta;
             }
             ypos += y_delta;

@@ -4,6 +4,27 @@ use super::*;
 use wezterm_cell::image::ImageDataType;
 use wezterm_surface::change::ImageData;
 
+#[test]
+fn sixel_on_wide_continuation_preserves_text() {
+    let mut term = TestTerm::new(3, 10, 0);
+    term.print("A中B\r\nA中B");
+
+    // An ordinary space written into the continuation column still erases 中.
+    term.cup(2, 1);
+    term.print(b" ");
+    assert_visible_contents(&term, file!(), line!(), &["A中B", "A  B", ""]);
+
+    // Place the 1x1 Sixel from the reproduction in the same column on row 0.
+    term.cup(2, 0);
+    term.print(b"\x1bP0;1q\"1;1;1;1#0;2;100;0;0@\x1b\\");
+    assert_visible_contents(&term, file!(), line!(), &["A中B", "A  B", ""]);
+
+    // Inspect physical cells: the visible-cell iterator skips the continuation.
+    let screen = term.screen_mut();
+    let has_image = [0, 1, 2, 3].map(|x| screen.get_cell(x, 0).unwrap().attrs().images().is_some());
+    k9::assert_equal!(has_image, [false, false, true, false]);
+}
+
 /// A tiny but valid 11x11 PNG, base64 encoded.
 /// Taken from the reproduction in <https://github.com/wezterm/wezterm/issues/6344>.
 const TINY_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAsAAAALCAYAAACprHcmAAAACXBIWXMAAAGKAAABigEzlzBYAAAAOUlEQVQYlZXOwQ0AMAzCQEdi7yaT0xWAN7JuDCac2PQKYxflycOoICOKtPIuqFCg4/LzKxiz6xjyAYh9DR1sLUN1AAAAAElFTkSuQmCC";

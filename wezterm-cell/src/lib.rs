@@ -383,6 +383,16 @@ impl CellAttributes {
         self
     }
 
+    /// Copy only the image attachments, preserving their stacking order.
+    pub fn copy_images_from(&mut self, source: &Self) {
+        if let Some(fat) = source.fat.as_ref().filter(|fat| !fat.image.is_empty()) {
+            self.allocate_fat_attributes();
+            self.fat.as_mut().unwrap().image.clone_from(&fat.image);
+        } else {
+            self.clear_images();
+        }
+    }
+
     pub fn detach_image_with_placement(&mut self, image_id: u32, placement_id: Option<u32>) {
         if let Some(fat) = self.fat.as_mut() {
             fat.image

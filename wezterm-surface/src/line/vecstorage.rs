@@ -3,6 +3,8 @@ use alloc::sync::Arc;
 #[cfg(feature = "use_serde")]
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
+#[cfg(feature = "use_image")]
+use wezterm_cell::image::ImageCell;
 use wezterm_cell::Cell;
 
 extern crate alloc;
@@ -17,6 +19,40 @@ pub(crate) struct VecStorage {
 impl VecStorage {
     pub(crate) fn new(cells: Vec<Cell>) -> Self {
         Self { cells }
+    }
+
+    /// Yield continuations whose images differ from the leading cell's images.
+    /// An empty list overrides a leading cell that has images of its own.
+    #[cfg(feature = "use_image")]
+    pub(crate) fn image_continuation_overrides(
+        &self,
+        index: usize,
+        width: usize,
+    ) -> impl Iterator<Item = (usize, Vec<ImageCell>)> + '_ {
+        let end = (index + width).min(self.cells.len());
+        (index + 1..end).filter_map(move |continuation| {
+            let lead = self.cells[index].attrs();
+            let tail = self.cells[continuation].attrs();
+            if lead == tail {
+                return None;
+            }
+            let images = tail.images();
+            (images != lead.images()).then(|| (continuation, images.unwrap_or_default()))
+        })
+    }
+
+    #[cfg(feature = "use_image")]
+    pub(crate) fn has_image_continuation_overrides(&self) -> bool {
+        let mut cells = VecStorageIter {
+            cells: self.cells.iter(),
+            idx: 0,
+            skip_width: 0,
+        };
+        cells.any(|cell| {
+            self.image_continuation_overrides(cell.cell_index(), cell.width())
+                .next()
+                .is_some()
+        })
     }
 
     #[cfg_attr(not(feature = "use_image"), allow(unused_mut, unused_variables))]

@@ -450,7 +450,8 @@ impl crate::TermWindow {
         for item in shaped.iter() {
             let cluster = &item.cluster;
             let glyph_info = &item.glyph_info;
-            let images = cluster.attrs.images().unwrap_or_else(|| vec![]);
+            let visual_cluster_start = visual_cell_idx;
+            let mut image_cells = item.images.iter().peekable();
             let valign_adjust = match cluster.attrs.vertical_align() {
                 termwiz::cell::VerticalAlign::BaseLine => 0.,
                 termwiz::cell::VerticalAlign::SuperScript => {
@@ -460,10 +461,6 @@ impl crate::TermWindow {
                     params.render_metrics.cell_size.height as f32 * 0.25
                 }
             };
-
-            // TODO: remember logical/visual mapping for selection
-            #[allow(unused_variables, unused_assignments)]
-            let mut phys_cell_idx = cluster.first_cell_idx;
 
             // Pre-decrement by the cluster width when doing RTL,
             // so that we can render it right-justified
@@ -485,20 +482,19 @@ impl crate::TermWindow {
                     break;
                 }
 
-                for glyph_idx in 0..info.pos.num_cells as usize {
-                    for img in &images {
-                        if img.z_index() < 0 {
-                            self.populate_image_quad(
-                                &img,
-                                gl_state,
-                                layers,
-                                0,
-                                visual_cell_idx + glyph_idx,
-                                &params,
-                                hsv,
-                                item.fg_color,
-                            )?;
-                        }
+                let end = visual_cell_idx - visual_cluster_start + info.pos.num_cells as usize;
+                while let Some((offset, images)) = image_cells.next_if(|(col, _)| *col < end) {
+                    for img in images.iter().take_while(|img| img.z_index() < 0) {
+                        self.populate_image_quad(
+                            img,
+                            gl_state,
+                            layers,
+                            0,
+                            visual_cluster_start + offset,
+                            &params,
+                            hsv,
+                            item.fg_color,
+                        )?;
                     }
                 }
 
@@ -680,27 +676,35 @@ impl crate::TermWindow {
                     }
                 }
 
-                for glyph_idx in 0..info.pos.num_cells as usize {
-                    for img in &images {
-                        if img.z_index() >= 0 {
-                            overlay_images.push((
-                                visual_cell_idx + glyph_idx,
-                                img.clone(),
-                                item.fg_color,
-                            ));
-                        }
-                    }
-                }
-                #[allow(unused_assignments)]
-                {
-                    phys_cell_idx += info.pos.num_cells as usize;
-                }
                 visual_cell_idx += info.pos.num_cells as usize;
                 cluster_x_pos += if params.use_pixel_positioning {
                     glyph.x_advance.get() as f32 * width_scale
                 } else {
                     info.pos.num_cells as f32 * cell_width
                 };
+            }
+
+            if !item.images.is_empty() {
+                let rendered_cells = visual_cell_idx - visual_cluster_start;
+                let end = item
+                    .images
+                    .partition_point(|(col, _)| *col < rendered_cells);
+                let mut cells = item.images[..end].iter();
+                while let Some((offset, images)) = match direction {
+                    Direction::LeftToRight => cells.next(),
+                    Direction::RightToLeft => cells.next_back(),
+                } {
+                    // Preserve the overlay's existing destination span. Its
+                    // RTL indices count from the right; tile offsets count
+                    // from the left and must not mirror a wide grapheme.
+                    let offset = match direction {
+                        Direction::LeftToRight => *offset,
+                        Direction::RightToLeft => rendered_cells - 1 - offset,
+                    };
+                    for img in images.iter().filter(|img| img.z_index() >= 0) {
+                        overlay_images.push((visual_cluster_start + offset, img, item.fg_color));
+                    }
+                }
             }
 
             match direction {
@@ -718,7 +722,7 @@ impl crate::TermWindow {
 
         for (cell_idx, img, glyph_color) in overlay_images {
             self.populate_image_quad(
-                &img,
+                img,
                 gl_state,
                 layers,
                 2,
@@ -747,7 +751,7 @@ impl crate::TermWindow {
         } else {
             None
         };
-        let cell_clusters = if let Some((cursor_x, composing)) =
+        let composed_line = if let Some((cursor_x, composing)) =
             params.shape_key.as_ref().and_then(|k| k.composing.as_ref())
         {
             // Create an updated line with the composition overlaid
@@ -760,11 +764,13 @@ impl crate::TermWindow {
                     .set_foreground(ColorAttribute::TrueColorWithDefaultFallback((*fg).into()));
             }
 
-            line.overlay_text_with_attribute(*cursor_x, &composing, compose_attrs, seqno);
-            line.cluster(bidi_hint)
+            line.overlay_text_with_attribute(*cursor_x, composing, compose_attrs, seqno);
+            Some(line)
         } else {
-            params.line.cluster(bidi_hint)
+            None
         };
+        let line = composed_line.as_ref().unwrap_or(params.line);
+        let (cell_clusters, physical_images) = line.cluster_with_images(bidi_hint);
 
         let gl_state = self.render_state.as_ref().unwrap();
         let mut shaped = vec![];
@@ -894,6 +900,35 @@ impl crate::TermWindow {
                 .map(|info| info.glyph.x_advance.get() as f32)
                 .sum();
 
+            let mut images = vec![];
+            let first = cluster.first_cell_idx;
+            let start = physical_images.partition_point(|(idx, _)| *idx < first);
+            if matches!(physical_images.get(start), Some((idx, _)) if *idx < first + cluster.width)
+            {
+                // The shaper may combine several graphemes into a glyph.
+                // Reorder the graphemes, not the physical columns within them.
+                let mut bytes = cluster.text.char_indices();
+                let mut previous_cell = None;
+                let mut visual_col = 0;
+                while let Some((byte_idx, _)) = match cluster.direction {
+                    Direction::LeftToRight => bytes.next(),
+                    Direction::RightToLeft => bytes.next_back(),
+                } {
+                    let cell_idx = cluster.byte_to_cell_idx(byte_idx);
+                    if previous_cell == Some(cell_idx) {
+                        continue;
+                    }
+                    previous_cell = Some(cell_idx);
+                    for idx in cell_idx..cell_idx + cluster.byte_to_cell_width(byte_idx) as usize {
+                        if let Ok(pos) = physical_images.binary_search_by_key(&idx, |(idx, _)| *idx)
+                        {
+                            images.push((visual_col, physical_images[pos].1.clone()));
+                        }
+                        visual_col += 1;
+                    }
+                }
+            }
+
             shaped.push(LineToElementShape {
                 underline_tex_rect: style_params.underline_tex_rect,
                 bg_color: style_params.bg_color,
@@ -903,6 +938,7 @@ impl crate::TermWindow {
                 cluster: cluster.clone(),
                 glyph_info,
                 x_pos,
+                images,
             });
 
             x_pos += pixel_width;
