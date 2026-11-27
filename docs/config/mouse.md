@@ -58,6 +58,7 @@ local act = wezterm.action
 | Double Left Drag | `NONE`   | `act.ExtendSelectionToMouseCursor("Word")`  |
 | Triple Left Drag | `NONE`   | `act.ExtendSelectionToMouseCursor("Line")`  |
 | Single Middle Down | `NONE`   | `act.PasteFrom("PrimarySelection")`  |
+| Single Right Down | `NONE`   | `act.ShowContextMenu` {{since('nightly', inline=True)}} |
 | Single Left Drag | `SUPER` | `act.StartWindowDrag` (*since 20210314-114017-04b7cedd*) |
 | Single Left Drag | `CTRL+SHIFT` | `act.StartWindowDrag` (*since 20210314-114017-04b7cedd*) |
 
