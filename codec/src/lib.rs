@@ -22,11 +22,8 @@ use mux::window::WindowId;
 use portable_pty::CommandBuilder;
 use rangeset::*;
 use serde::{Deserialize, Serialize};
-use smol::io::AsyncWriteExt;
-use smol::prelude::*;
 use std::collections::HashMap;
-use std::convert::TryInto;
-use std::io::Cursor;
+use std::convert::{TryFrom, TryInto};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,9 +34,12 @@ use thiserror::Error;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{Alert, ClipboardSelection, StableRowIndex, TerminalSize};
 
+mod connection;
+pub use connection::{Connection, Event, Stalled, STALL_LIMIT};
+
 #[derive(Error, Debug)]
 #[error("Corrupt Response: {0}")]
-pub struct CorruptResponse(String);
+pub struct CorruptResponse(pub String);
 
 /// Returns the encoded length of the leb128 representation of value
 fn encoded_length(value: u64) -> usize {
@@ -108,44 +108,28 @@ fn encode_raw<W: std::io::Write>(
     Ok(buffer.len())
 }
 
-async fn encode_raw_async<W: Unpin + AsyncWriteExt>(
-    ident: u64,
-    serial: u64,
-    data: &[u8],
-    is_compressed: bool,
-    w: &mut W,
-) -> anyhow::Result<usize> {
-    let buffer = encode_raw_as_vec(ident, serial, data, is_compressed)?;
-    w.write_all(&buffer)
-        .await
-        .context("writing pdu data buffer")?;
-    Ok(buffer.len())
-}
-
-/// Read a single leb128 encoded value from the stream
-async fn read_u64_async<R>(r: &mut R) -> anyhow::Result<u64>
-where
-    R: Unpin + AsyncRead + std::fmt::Debug,
-{
-    let mut buf = vec![];
-    loop {
-        let mut byte = [0u8];
-        let nread = r.read(&mut byte).await?;
-        if nread == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "EOF while reading leb128 encoded value",
-            )
-            .into());
-        }
-        buf.push(byte[0]);
-
-        match leb128::read::unsigned(&mut buf.as_slice()) {
-            Ok(n) => {
-                return Ok(n);
+/// The size of the frame at the start of `buffer`, its length prefix
+/// included, once the prefix is in `buffer` whole; the frame itself may not
+/// be. See encode_raw() for the frame format.
+fn frame_len(buffer: &[u8]) -> anyhow::Result<Option<usize>> {
+    let mut prefix = buffer;
+    match leb128::read::unsigned(&mut prefix) {
+        Ok(tagged_len) => {
+            let len = tagged_len & !COMPRESSED_MASK;
+            let prefix_len = buffer.len() - prefix.len();
+            match usize::try_from(len)
+                .ok()
+                .and_then(|len| len.checked_add(prefix_len))
+            {
+                Some(frame_len) => Ok(Some(frame_len)),
+                None => {
+                    Err(CorruptResponse(format!("a frame of {len} bytes is implausible")).into())
+                }
             }
-            Err(leb128::read::Error::IoError(_)) => continue,
-            Err(leb128::read::Error::Overflow) => anyhow::bail!("leb128 is too large"),
+        }
+        Err(leb128::read::Error::IoError(_)) => Ok(None),
+        Err(leb128::read::Error::Overflow) => {
+            Err(CorruptResponse("a frame's length is not a 64-bit number".to_string()).into())
         }
     }
 }
@@ -170,71 +154,6 @@ struct Decoded {
 
 /// Decode a frame.
 /// See encode_raw() for the frame format.
-async fn decode_raw_async<R: Unpin + AsyncRead + std::fmt::Debug>(
-    r: &mut R,
-    max_serial: Option<u64>,
-) -> anyhow::Result<Decoded> {
-    let len = read_u64_async(r)
-        .await
-        .context("decode_raw_async failed to read PDU length")?;
-    let (len, is_compressed) = if (len & COMPRESSED_MASK) != 0 {
-        (len & !COMPRESSED_MASK, true)
-    } else {
-        (len, false)
-    };
-    let serial = read_u64_async(r)
-        .await
-        .context("decode_raw_async failed to read PDU serial")?;
-    if let Some(max_serial) = max_serial {
-        if serial > max_serial && max_serial > 0 {
-            return Err(CorruptResponse(format!(
-                "decode_raw_async: serial {serial} is implausibly large \
-                (bigger than {max_serial})"
-            ))
-            .into());
-        }
-    }
-    let ident = read_u64_async(r)
-        .await
-        .context("decode_raw_async failed to read PDU ident")?;
-    let data_len =
-        match (len as usize).overflowing_sub(encoded_length(ident) + encoded_length(serial)) {
-            (_, true) => {
-                return Err(CorruptResponse(format!(
-                    "decode_raw_async: sizes don't make sense: \
-                    len:{len} serial:{serial} (enc={}) ident:{ident} (enc={})",
-                    encoded_length(serial),
-                    encoded_length(ident)
-                ))
-                .into());
-            }
-            (data_len, false) => data_len,
-        };
-
-    if is_compressed {
-        metrics::histogram!("pdu.decode.compressed.size").record(data_len as f64);
-    } else {
-        metrics::histogram!("pdu.decode.size").record(data_len as f64);
-    }
-
-    let mut data = vec![0u8; data_len];
-    r.read_exact(&mut data).await.with_context(|| {
-        format!(
-            "decode_raw_async failed to read {} bytes of data \
-            for PDU of length {} with serial={} ident={}",
-            data_len, len, serial, ident
-        )
-    })?;
-    Ok(Decoded {
-        ident,
-        serial,
-        data,
-        is_compressed,
-    })
-}
-
-/// Decode a frame.
-/// See encode_raw() for the frame format.
 fn decode_raw<R: std::io::Read>(mut r: R) -> anyhow::Result<Decoded> {
     let len = read_u64(r.by_ref()).context("reading PDU length")?;
     let (len, is_compressed) = if (len & COMPRESSED_MASK) != 0 {
@@ -247,14 +166,13 @@ fn decode_raw<R: std::io::Read>(mut r: R) -> anyhow::Result<Decoded> {
     let data_len =
         match (len as usize).overflowing_sub(encoded_length(ident) + encoded_length(serial)) {
             (_, true) => {
-                anyhow::bail!(
-                    "sizes don't make sense: len:{} serial:{} (enc={}) ident:{} (enc={})",
-                    len,
-                    serial,
+                return Err(CorruptResponse(format!(
+                    "sizes don't make sense: len:{len} serial:{serial} (enc={}) \
+                     ident:{ident} (enc={})",
                     encoded_length(serial),
-                    ident,
                     encoded_length(ident)
-                );
+                ))
+                .into());
             }
             (data_len, false) => data_len,
         };
@@ -359,22 +277,6 @@ macro_rules! pdu {
                 }
             }
 
-            pub async fn encode_async<W: Unpin + AsyncWriteExt>(&self, w: &mut W, serial: u64) -> Result<(), Error> {
-                match self {
-                    Pdu::Invalid{..} => bail!("attempted to serialize Pdu::Invalid"),
-                    $(
-                        Pdu::$name(s) => {
-                            let (data, is_compressed) = serialize(s)?;
-                            let encoded_size = encode_raw_async($vers, serial, &data, is_compressed, w).await?;
-                            log::debug!("encode_async {} size={encoded_size}", stringify!($name));
-                            metrics::histogram!("pdu.size", "pdu" => stringify!($name)).record(encoded_size as f64);
-                            metrics::histogram!("pdu.size.rate", "pdu" => stringify!($name)).record(encoded_size as f64);
-                            Ok(())
-                        }
-                    ,)*
-                }
-            }
-
             pub fn pdu_name(&self) -> &'static str {
                 match self {
                     Pdu::Invalid{..} => "Invalid",
@@ -402,32 +304,6 @@ macro_rules! pdu {
                     _ => {
                         metrics::histogram!("pdu.size", "pdu" => "??").record(decoded.data.len() as f64);
                         metrics::histogram!("pdu.size.rate", "pdu" => "??").record(decoded.data.len() as f64);
-                        Ok(DecodedPdu {
-                            serial: decoded.serial,
-                            pdu: Pdu::Invalid{ident:decoded.ident}
-                        })
-                    }
-                }
-            }
-
-            pub async fn decode_async<R>(r: &mut R, max_serial: Option<u64>) -> Result<DecodedPdu, Error>
-                where R: std::marker::Unpin,
-                      R: AsyncRead,
-                      R: std::fmt::Debug
-            {
-                let decoded = decode_raw_async(r, max_serial).await.context("decoding a PDU")?;
-                match decoded.ident {
-                    $(
-                        $vers => {
-                            metrics::histogram!("pdu.size", "pdu" => stringify!($name)).record(decoded.data.len() as f64);
-                            Ok(DecodedPdu {
-                                serial: decoded.serial,
-                                pdu: Pdu::$name(deserialize(decoded.data.as_slice(), decoded.is_compressed)?)
-                            })
-                        }
-                    ,)*
-                    _ => {
-                        metrics::histogram!("pdu.size", "pdu" => "??").record(decoded.data.len() as f64);
                         Ok(DecodedPdu {
                             serial: decoded.serial,
                             pdu: Pdu::Invalid{ident:decoded.ident}
@@ -520,72 +396,6 @@ impl Pdu {
             | Self::SetPaneZoomed(_)
             | Self::SpawnV2(_) => true,
             _ => false,
-        }
-    }
-
-    pub fn stream_decode(buffer: &mut Vec<u8>) -> anyhow::Result<Option<DecodedPdu>> {
-        let mut cursor = Cursor::new(buffer.as_slice());
-        match Self::decode(&mut cursor) {
-            Ok(decoded) => {
-                let consumed = cursor.position() as usize;
-                let remain = buffer.len() - consumed;
-                // Remove `consumed` bytes from the start of the vec.
-                // This is safe because the vec is just bytes and we are
-                // constrained the offsets accordingly.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        buffer.as_ptr().add(consumed),
-                        buffer.as_mut_ptr(),
-                        remain,
-                    );
-                }
-                buffer.truncate(remain);
-                Ok(Some(decoded))
-            }
-            Err(err) => {
-                if let Some(ioerr) = err.root_cause().downcast_ref::<std::io::Error>() {
-                    match ioerr.kind() {
-                        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::WouldBlock => {
-                            return Ok(None);
-                        }
-                        _ => {}
-                    }
-                } else {
-                    log::error!("not an ioerror in stream_decode: {:?}", err);
-                }
-                Err(err)
-            }
-        }
-    }
-
-    pub fn try_read_and_decode<R: std::io::Read>(
-        r: &mut R,
-        buffer: &mut Vec<u8>,
-    ) -> anyhow::Result<Option<DecodedPdu>> {
-        loop {
-            if let Some(decoded) =
-                Self::stream_decode(buffer).context("stream_decode of buffer for PDU")?
-            {
-                return Ok(Some(decoded));
-            }
-
-            let mut buf = [0u8; 4096];
-            let size = match r.read(&mut buf) {
-                Ok(size) => size,
-                Err(err) => {
-                    if err.kind() == std::io::ErrorKind::WouldBlock {
-                        return Ok(None);
-                    }
-                    return Err(err.into());
-                }
-            };
-            if size == 0 {
-                return Err(
-                    std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "End Of File").into(),
-                );
-            }
-
-            buffer.extend_from_slice(&buf[0..size]);
         }
     }
 
@@ -1190,34 +1000,23 @@ mod test {
     }
 
     #[test]
-    fn stream_decode() {
+    fn frame_len_is_known_once_the_length_prefix_is_whole() {
         let mut encoded = Vec::new();
         Pdu::Ping(Ping {}).encode(&mut encoded, 0x1).unwrap();
-        Pdu::Pong(Pong {}).encode(&mut encoded, 0x2).unwrap();
-        assert_eq!(encoded.len(), 6);
+        assert_eq!(frame_len(&encoded).unwrap(), Some(encoded.len()));
+        assert_eq!(frame_len(&encoded[..1]).unwrap(), Some(encoded.len()));
+        assert_eq!(frame_len(&[]).unwrap(), None);
 
-        let mut cursor = Cursor::new(encoded.as_slice());
-        let mut read_buffer = Vec::new();
+        // A length that takes two bytes, the first alone saying nothing yet.
+        let mut big = Vec::new();
+        encode_raw(0x42, 1, &[b'a'; 300], false, &mut big).unwrap();
+        assert_eq!(frame_len(&big[..1]).unwrap(), None);
+        assert_eq!(frame_len(&big[..2]).unwrap(), Some(big.len()));
 
-        assert_eq!(
-            Pdu::try_read_and_decode(&mut cursor, &mut read_buffer).unwrap(),
-            Some(DecodedPdu {
-                serial: 1,
-                pdu: Pdu::Ping(Ping {})
-            })
-        );
-        assert_eq!(
-            Pdu::try_read_and_decode(&mut cursor, &mut read_buffer).unwrap(),
-            Some(DecodedPdu {
-                serial: 2,
-                pdu: Pdu::Pong(Pong {})
-            })
-        );
-        let err = Pdu::try_read_and_decode(&mut cursor, &mut read_buffer).unwrap_err();
-        assert_eq!(
-            err.downcast_ref::<std::io::Error>().unwrap().kind(),
-            std::io::ErrorKind::UnexpectedEof
-        );
+        // A length longer than 64 bits, whole: its last byte ends it.
+        let mut overlong = vec![0xff; 10];
+        overlong.push(0x7f);
+        assert!(frame_len(&overlong).unwrap_err().is::<CorruptResponse>());
     }
 
     #[test]

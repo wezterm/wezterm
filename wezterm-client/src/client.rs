@@ -2,11 +2,9 @@ use crate::domain::{ClientDomain, ClientDomainConfig};
 use crate::pane::ClientPane;
 use anyhow::{anyhow, bail, Context};
 use async_ossl::AsyncSslStream;
-use async_trait::async_trait;
 use codec::*;
 use config::{configuration, SshDomain, TlsDomainClient, UnixDomain, UnixTarget};
 use filedescriptor::FileDescriptor;
-use futures::FutureExt;
 use mux::client::ClientId;
 use mux::connui::ConnectionUI;
 use mux::domain::DomainId;
@@ -31,7 +29,7 @@ use std::os::unix::process::CommandExt;
 use std::os::windows::io::{AsRawSocket, AsSocket, BorrowedSocket, RawSocket};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use wezterm_uds::UnixStream;
 
@@ -48,7 +46,6 @@ enum ReaderMessage {
         pdu: Pdu,
         promise: Sender<anyhow::Result<Pdu>>,
     },
-    Readable,
 }
 
 #[derive(Clone)]
@@ -374,65 +371,116 @@ async fn client_thread_async(
         map: HashMap::new(),
     };
 
-    let mut stream = reconnectable.take_stream().unwrap();
+    // The connection reads what the server sends while it writes requests:
+    // a client that stopped reading while it wrote would deadlock with the
+    // server once both had more to send than the socket holds.
+    let mut connection = Connection::new(reconnectable.take_stream().unwrap(), STALL_LIMIT);
+    // Since when the client has waited on a reply and heard nothing at all
+    // from the server; a server silent for the stall limit while it owes a
+    // reply has stopped answering.
+    let mut silent_since: Option<Instant> = None;
 
     loop {
-        let rx_msg = rx.recv();
-        let wait_for_read = stream
-            .wait_for_readable()
-            .map(|_| Ok(ReaderMessage::Readable));
-
-        match smol::future::or(rx_msg, wait_for_read).await {
-            Ok(ReaderMessage::SendPdu { pdu, promise }) => {
+        let silence = async {
+            match silent_since {
+                Some(since) => {
+                    smol::Timer::at(since + STALL_LIMIT).await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
+        let wake = smol::future::or(async { Some(rx.recv().await) }, async {
+            silence.await;
+            None
+        });
+        let event = match connection.next(wake).await {
+            Ok(Event::Other(None)) => {
+                let reason = format!(
+                    "the server answered nothing for {:?} while {} request(s) waited",
+                    STALL_LIMIT,
+                    promises.map.len()
+                );
+                log::error!("{}", reason);
+                promises.fail_all(&reason);
+                return Err(ServerSilent(reason).into());
+            }
+            Ok(Event::Other(Some(message))) => Event::Other(message),
+            Ok(Event::Pdu(decoded)) => Event::Pdu(decoded),
+            Ok(Event::Drained) => Event::Drained,
+            Err(err) => {
+                let reason = if err.root_cause().is::<Stalled>() {
+                    format!("the server stopped taking requests: {:#}", err)
+                } else {
+                    format!("the connection to the server failed: {:#}", err)
+                };
+                log::error!("{}", reason);
+                promises.fail_all(&reason);
+                return Err(err).context(reason);
+            }
+        };
+        match event {
+            Event::Other(Ok(ReaderMessage::SendPdu { pdu, promise })) => {
                 let serial = next_serial;
                 next_serial += 1;
                 promises.map.insert(serial, promise);
-
-                pdu.encode_async(&mut stream, serial)
-                    .await
+                connection
+                    .send(&pdu, serial)
                     .context("encoding a PDU to send to the server")?;
-                stream.flush().await.context("flushing PDU to server")?;
+                silent_since.get_or_insert_with(Instant::now);
             }
-            Ok(ReaderMessage::Readable) => {
-                match Pdu::decode_async(&mut stream, Some(next_serial)).await {
-                    Ok(decoded) => {
-                        log::debug!(
-                            "decoded serial {} {}",
-                            decoded.serial,
-                            decoded.pdu.pdu_name()
-                        );
-                        if decoded.serial == 0 {
-                            process_unilateral(local_domain_id, decoded)
-                                .context("processing unilateral PDU from server")
-                                .map_err(|e| {
-                                    log::error!("process_unilateral: {:?}", e);
-                                    e
-                                })?;
-                        } else if let Some(promise) = promises.map.remove(&decoded.serial) {
-                            if promise.try_send(Ok(decoded.pdu)).is_err() {
-                                return Err(NotReconnectableError::ClientWasDestroyed.into());
-                            }
-                        } else {
-                            let reason =
-                                format!("got serial {:?} without a corresponding promise", decoded);
-                            promises.fail_all(&reason);
-                            anyhow::bail!("{}", reason);
-                        }
-                    }
-                    Err(err) => {
-                        let reason = format!("Error while decoding response pdu: {:#}", err);
-                        log::error!("{}", reason);
-                        promises.fail_all(&reason);
-                        return Err(err).context("Error while decoding response pdu");
-                    }
-                }
-            }
-            Err(_) => {
+            Event::Other(Err(_)) => {
                 return Err(NotReconnectableError::ClientWasDestroyed.into());
+            }
+            Event::Drained => {}
+            Event::Pdu(decoded) => {
+                let decoded = *decoded;
+                log::debug!(
+                    "decoded serial {} {}",
+                    decoded.serial,
+                    decoded.pdu.pdu_name()
+                );
+                if decoded.serial >= next_serial {
+                    let reason = format!(
+                        "the server answered request {}, which was never sent (the last \
+                         sent was {})",
+                        decoded.serial,
+                        next_serial - 1
+                    );
+                    promises.fail_all(&reason);
+                    return Err(CorruptResponse(reason).into());
+                }
+                if decoded.serial == 0 {
+                    process_unilateral(local_domain_id, decoded)
+                        .context("processing unilateral PDU from server")
+                        .map_err(|e| {
+                            log::error!("process_unilateral: {:?}", e);
+                            e
+                        })?;
+                } else if let Some(promise) = promises.map.remove(&decoded.serial) {
+                    if promise.try_send(Ok(decoded.pdu)).is_err() {
+                        return Err(NotReconnectableError::ClientWasDestroyed.into());
+                    }
+                } else {
+                    let reason =
+                        format!("got serial {:?} without a corresponding promise", decoded);
+                    promises.fail_all(&reason);
+                    anyhow::bail!("{}", reason);
+                }
+                // Hearing from the server restarts the wait on what it owes.
+                silent_since = if promises.map.is_empty() {
+                    None
+                } else {
+                    Some(Instant::now())
+                };
             }
         }
     }
 }
+
+/// The server answered nothing for the stall limit while replies were owed.
+#[derive(Error, Debug)]
+#[error("{0}")]
+struct ServerSilent(String);
 
 pub fn unix_connect_with_retry(
     target: &UnixTarget,
@@ -516,12 +564,8 @@ pub fn unix_connect_with_retry(
     error.expect("only get here after at least one unix fail")
 }
 
-#[async_trait(?Send)]
-pub trait AsyncReadAndWrite: Unpin + AsyncRead + AsyncWrite + std::fmt::Debug + Send {
-    async fn wait_for_readable(&self) -> anyhow::Result<()>;
-}
+pub trait AsyncReadAndWrite: Unpin + AsyncRead + AsyncWrite + std::fmt::Debug + Send {}
 
-#[async_trait(?Send)]
 impl<T> AsyncReadAndWrite for Async<T>
 where
     T: std::fmt::Debug,
@@ -530,9 +574,6 @@ where
     T: Send,
     T: async_io::IoSafe,
 {
-    async fn wait_for_readable(&self) -> anyhow::Result<()> {
-        Ok(self.readable().await?)
-    }
 }
 
 #[derive(Debug)]
@@ -1053,7 +1094,18 @@ impl Client {
             loop {
                 if let Err(e) = client_thread(&mut reconnectable, local_domain_id, &mut receiver) {
                     if !reconnectable.reconnectable() || local_domain_id.is_none() {
-                        log::debug!("client thread ended: {}", e);
+                        if matches!(
+                            e.root_cause().downcast_ref::<NotReconnectableError>(),
+                            Some(NotReconnectableError::ClientWasDestroyed)
+                        ) {
+                            log::debug!("client thread ended: {:#}", e);
+                        } else {
+                            // The domain detaches next, closing its windows.
+                            log::error!(
+                                "lost the connection to the mux server, so its windows close: {:#}",
+                                e
+                            );
+                        }
                         break;
                     }
 

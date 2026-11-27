@@ -238,18 +238,27 @@ impl SessionHandler {
         )
     }
 
-    pub fn schedule_pane_push(&mut self, pane_id: PaneId) {
-        let sender = self.to_write_tx.clone();
+    /// Send the client what changed in pane `pane_id` since it was last sent
+    /// the pane; nothing once the pane is gone, which the client is told of
+    /// on its own.
+    pub(crate) fn push_pane_changes(&mut self, pane_id: PaneId) -> anyhow::Result<()> {
+        let pane = match Mux::get().get_pane(pane_id) {
+            Some(pane) => pane,
+            None => return Ok(()),
+        };
         let per_pane = self.per_pane(pane_id);
-        spawn_into_main_thread(async move {
-            let mux = Mux::get();
-            let pane = mux
-                .get_pane(pane_id)
-                .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
-            maybe_push_pane_changes(&pane, sender, per_pane)?;
-            Ok::<(), anyhow::Error>(())
-        })
-        .detach();
+        maybe_push_pane_changes(&pane, self.to_write_tx.clone(), per_pane)
+    }
+
+    /// The client as the log names it.
+    pub(crate) fn client_name(&self) -> String {
+        match &self.client_id {
+            Some(id) => format!(
+                "the client {}@{} (process {})",
+                id.username, id.hostname, id.pid
+            ),
+            None => "a client that never said who it is".to_string(),
+        }
     }
 
     pub fn process_one(&mut self, decoded: DecodedPdu) {
