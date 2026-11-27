@@ -164,6 +164,9 @@ As features stabilize some brief notes about them will accumulate here.
   alternate screen for panes in a `wezterm connect` domain, because the client
   always reported the alternate screen as inactive. The server now advises the
   client of the alternate screen state. #4922
+* mux: mouse wheel scrolling in applications that use mouse reporting or the
+  alternate screen was slow on high latency connections due to a limit of one
+  wheel event per network round trip.
 * macOS: Fix window border when opacity<1 and shadow enabled.
   Thanks to @Adams-Galaxy! #8038 #5158
 * perf: Terminal images were hashed three times each on the transmit path; the sha256
