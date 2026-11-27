@@ -350,7 +350,8 @@ impl OperatingSystemCommand {
                 }
                 single_string!(SystemNotification)
             }
-            SetCurrentWorkingDirectory => single_string!(CurrentWorkingDirectory),
+            // `;` is valid in a file:// URL, so keep everything after the code
+            SetCurrentWorkingDirectory => single_title_string!(CurrentWorkingDirectory),
             ITermProprietary => {
                 self::ITermProprietary::parse(osc).map(OperatingSystemCommand::ITermProprietary)
             }
@@ -1455,6 +1456,26 @@ mod test {
         assert_eq!(
             parse(&["lhello"], "\x1b]lhello\x1b\\"),
             OperatingSystemCommand::SetWindowTitleSun("hello".into())
+        );
+    }
+
+    #[test]
+    fn current_working_directory() {
+        assert_eq!(
+            parse(
+                &["7", "file://host/C:/Users/me/"],
+                "]7;file://host/C:/Users/me/\\"
+            ),
+            OperatingSystemCommand::CurrentWorkingDirectory("file://host/C:/Users/me/".into())
+        );
+
+        // `;` is valid in a file:// URL, so everything after the code is the URL
+        assert_eq!(
+            parse(
+                &["7", "file://host/home/me/a", "b", "c/"],
+                "]7;file://host/home/me/a;b;c/\\"
+            ),
+            OperatingSystemCommand::CurrentWorkingDirectory("file://host/home/me/a;b;c/".into())
         );
     }
 
