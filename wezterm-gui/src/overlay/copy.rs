@@ -999,6 +999,31 @@ impl CopyRenderable {
         self.select_to_cursor_pos();
     }
 
+    fn is_row_blank(&self, y: StableRowIndex) -> bool {
+        let (_top, lines) = self.delegate.get_lines(y..y + 1);
+        match lines.first() {
+            Some(line) => line.visible_cells().all(|c| c.str().trim().is_empty()),
+            None => true,
+        }
+    }
+
+    fn move_by_paragraph(&mut self, forward: bool) {
+        let dims = self.delegate.get_dimensions();
+        if dims.scrollback_rows == 0 {
+            return;
+        }
+        let min_row = dims.scrollback_top;
+        let max_row = dims.scrollback_top + dims.scrollback_rows as isize - 1;
+        let start_y = self.cursor.y.clamp(min_row, max_row);
+        let y = find_paragraph_row(start_y, min_row, max_row, forward, |row| {
+            self.is_row_blank(row)
+        });
+
+        self.cursor.x = 0;
+        self.cursor.y = y;
+        self.select_to_cursor_pos();
+    }
+
     fn perform_jump(&mut self, jump: Jump, repeat: bool) {
         let y = self.cursor.y;
         let (_top, lines) = self.delegate.get_lines(y..y + 1);
@@ -1279,6 +1304,8 @@ impl Pane for CopyOverlay {
                     MoveForwardSemanticZone => render.move_by_zone(1, None),
                     MoveBackwardZoneOfType(zone_type) => render.move_by_zone(-1, Some(*zone_type)),
                     MoveForwardZoneOfType(zone_type) => render.move_by_zone(1, Some(*zone_type)),
+                    MoveBackwardParagraph => render.move_by_paragraph(false),
+                    MoveForwardParagraph => render.move_by_paragraph(true),
                     JumpForward { prev_char } => render.jump(true, *prev_char),
                     JumpBackward { prev_char } => render.jump(false, *prev_char),
                     JumpAgain => render.jump_again(false),
@@ -1617,6 +1644,73 @@ fn is_whitespace_word(word: &str) -> bool {
         c.is_whitespace()
     } else {
         false
+    }
+}
+
+fn find_paragraph_row(
+    start_row: StableRowIndex,
+    min_row: StableRowIndex,
+    max_row: StableRowIndex,
+    forward: bool,
+    mut is_blank: impl FnMut(StableRowIndex) -> bool,
+) -> StableRowIndex {
+    let step: isize = if forward { 1 } else { -1 };
+    let mut y = start_row.clamp(min_row, max_row);
+
+    // Phase 1: if currently on blank line(s), skip consecutive blank lines
+    while is_blank(y) {
+        let next = y + step;
+        if next < min_row || next > max_row {
+            return y;
+        }
+        y = next;
+    }
+
+    // Phase 2: advance past non-blank lines until hitting a blank line or boundary
+    loop {
+        let next = y + step;
+        if next < min_row || next > max_row {
+            return y;
+        }
+        y = next;
+        if is_blank(y) {
+            return y;
+        }
+    }
+}
+
+#[cfg(test)]
+mod paragraph_tests {
+    use super::*;
+
+    fn blank_fn(lines: &[&str]) -> impl FnMut(StableRowIndex) -> bool + '_ {
+        move |y| lines[y as usize].trim().is_empty()
+    }
+
+    #[test]
+    fn forward_and_backward_paragraph() {
+        let lines = &["aaa", "", "bbb", "ccc", "", "", "ddd", "eee"];
+        let max = lines.len() as isize - 1;
+
+        assert_eq!(find_paragraph_row(2, 0, max, true, blank_fn(lines)), 4);
+        assert_eq!(find_paragraph_row(3, 0, max, true, blank_fn(lines)), 4);
+        assert_eq!(find_paragraph_row(4, 0, max, true, blank_fn(lines)), 7);
+        assert_eq!(find_paragraph_row(7, 0, max, true, blank_fn(lines)), 7);
+
+        assert_eq!(find_paragraph_row(3, 0, max, false, blank_fn(lines)), 1);
+        assert_eq!(find_paragraph_row(2, 0, max, false, blank_fn(lines)), 1);
+        assert_eq!(find_paragraph_row(5, 0, max, false, blank_fn(lines)), 1);
+        assert_eq!(find_paragraph_row(1, 0, max, false, blank_fn(lines)), 0);
+        assert_eq!(find_paragraph_row(0, 0, max, false, blank_fn(lines)), 0);
+    }
+
+    #[test]
+    fn all_blank_lines_and_nonzero_scrollback_top() {
+        let is_blank = |y: StableRowIndex| y >= 10 && y <= 14;
+        assert_eq!(find_paragraph_row(12, 10, 14, true, is_blank), 14);
+        assert_eq!(find_paragraph_row(12, 10, 14, false, is_blank), 10);
+        assert_eq!(find_paragraph_row(10, 10, 10, true, |_| false), 10);
+        assert_eq!(find_paragraph_row(10, 10, 10, false, |_| true), 10);
     }
 }
 
@@ -2011,6 +2105,26 @@ pub fn copy_key_table() -> KeyTable {
             WKeyCode::End,
             Modifiers::NONE,
             KeyAssignment::CopyMode(CopyModeAssignment::MoveToEndOfLineContent),
+        ),
+        (
+            WKeyCode::Char('{'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardParagraph),
+        ),
+        (
+            WKeyCode::Char('{'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveBackwardParagraph),
+        ),
+        (
+            WKeyCode::Char('}'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardParagraph),
+        ),
+        (
+            WKeyCode::Char('}'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveForwardParagraph),
         ),
     ] {
         table.insert((key, mods), KeyTableEntry { action });

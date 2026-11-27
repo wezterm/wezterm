@@ -221,6 +221,14 @@ return {
           { CopyMode = 'Close' },
         },
       },
+      { key = '{', mods = 'NONE', action = act.CopyMode 'MoveBackwardParagraph' },
+      {
+        key = '{',
+        mods = 'SHIFT',
+        action = act.CopyMode 'MoveBackwardParagraph',
+      },
+      { key = '}', mods = 'NONE', action = act.CopyMode 'MoveForwardParagraph' },
+      { key = '}', mods = 'SHIFT', action = act.CopyMode 'MoveForwardParagraph' },
       { key = 'PageUp', mods = 'NONE', action = act.CopyMode 'PageUp' },
       { key = 'PageDown', mods = 'NONE', action = act.CopyMode 'PageDown' },
       {
