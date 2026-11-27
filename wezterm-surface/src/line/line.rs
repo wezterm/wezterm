@@ -178,9 +178,7 @@ impl Line {
         seqno: SequenceNo,
     ) -> Line {
         let mut line = Self::from_text(s, attrs, seqno, None);
-        line.cells_mut()
-            .last_mut()
-            .map(|cell| cell.attrs_mut().set_wrapped(true));
+        line.set_last_cell_was_wrapped(true, seqno);
         line
     }
 
@@ -1106,9 +1104,12 @@ impl Line {
             return;
         }
 
+        let last_cell_index = self.visible_cells().last().map(|cell| cell.cell_index());
         let cells = self.coerce_vec_storage();
-        if let Some(cell) = cells.last_mut() {
-            cell.attrs_mut().set_wrapped(wrapped);
+        if let Some(index) = last_cell_index {
+            for cell in &mut cells[index..] {
+                cell.attrs_mut().set_wrapped(wrapped);
+            }
         }
     }
 
