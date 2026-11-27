@@ -10,7 +10,7 @@ use crate::os::x11::window::XWindow;
 use crate::screen::Screens;
 use crate::{
     Appearance, Clipboard, CursorIcon, Rect, RequestedWindowGeometry, ResizeIncrement, ScreenPoint,
-    WindowEvent, WindowOps,
+    ScreenRect, WindowEvent, WindowOps,
 };
 use async_trait::async_trait;
 use config::ConfigHandle;
@@ -383,6 +383,14 @@ impl WindowOps for Window {
             Self::X11(x) => x.set_window_position(coords),
             #[cfg(feature = "wayland")]
             Self::Wayland(w) => w.set_window_position(coords),
+        }
+    }
+
+    fn get_window_screen_rect(&self) -> Option<ScreenRect> {
+        match self {
+            Self::X11(x) => x.get_window_screen_rect(),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(_) => None,
         }
     }
 

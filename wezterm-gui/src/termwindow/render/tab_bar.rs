@@ -95,6 +95,7 @@ impl crate::TermWindow {
                 default_bg,
                 style: None,
                 font: None,
+                fonts: &self.fonts,
                 use_pixel_positioning: self.config.experimental_pixel_positioning,
                 render_metrics: self.render_metrics,
                 shape_key: None,

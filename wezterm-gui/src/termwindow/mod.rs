@@ -32,7 +32,7 @@ use ::window::*;
 use anyhow::{anyhow, ensure, Context};
 use config::keyassignment::{
     Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
-    QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
+    QuickSelectArguments, RotationDirection, SpawnCommand, SpawnTabDomain, SplitSize,
 };
 use config::window::WindowLevel;
 use config::{
@@ -41,6 +41,7 @@ use config::{
 };
 use lfucache::*;
 use mlua::{FromLua, LuaSerdeExt, UserData, UserDataFields};
+use mux::domain::SplitSource;
 use mux::pane::{
     CachePolicy, CloseReason, Pane, PaneId, Pattern as MuxPattern, PerformAssignmentResult,
 };
@@ -73,10 +74,12 @@ pub mod background;
 pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
+pub mod context_menu;
 pub mod keyevent;
 pub mod modal;
 mod mouseevent;
 pub mod palette;
+pub mod pane_drag;
 pub mod paneselect;
 mod prevcursor;
 pub mod render;
@@ -150,6 +153,19 @@ pub enum TermWindowNotif {
         width: usize,
         height: usize,
     },
+    SilenceTimeout {
+        pane_id: PaneId,
+        generation: u64,
+    },
+    PaneDragHover {
+        src_pane_id: PaneId,
+        local_coords: Option<(f32, f32)>,
+    },
+    PaneDragDrop {
+        src_pane_id: PaneId,
+        local_coords: (f32, f32),
+    },
+    ClearPaneDragTarget,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,6 +176,7 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
+    PaneTitleBar(PaneId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,6 +208,21 @@ pub struct OverlayState {
     pub key_table_state: KeyTableState,
 }
 
+pub struct PaneFontState {
+    pub font_scale: f64,
+    pub fonts: Rc<FontConfiguration>,
+    pub render_metrics: RenderMetrics,
+    pub last_synced_pane_dims: Option<(usize, usize)>,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct PaneWatchState {
+    pub watch_for_silence: bool,
+    pub watch_for_activity: bool,
+    pub silence_generation: u64,
+    pub silence_last_activity: Option<Instant>,
+}
+
 #[derive(Default)]
 pub struct PaneState {
     /// If is_some(), the top row of the visible screen.
@@ -205,6 +237,9 @@ pub struct PaneState {
 
     bell_start: Option<Instant>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
+    pub font_state: Option<PaneFontState>,
+    pub last_synced_pane_dims: Option<(usize, usize)>,
+    pub watch: PaneWatchState,
 }
 
 /// Data used when synchronously formatting pane and window titles
@@ -444,6 +479,8 @@ pub struct TermWindow {
 
     ui_items: Vec<UIItem>,
     dragging: Option<(UIItem, MouseEvent)>,
+    pub pane_drag_target: Option<crate::termwindow::pane_drag::PaneDropTarget>,
+    pane_drag_last_window: Option<Window>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
@@ -788,6 +825,8 @@ impl TermWindow {
             semantic_zones: HashMap::new(),
             ui_items: vec![],
             dragging: None,
+            pane_drag_target: None,
+            pane_drag_last_window: None,
             last_ui_item: None,
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
@@ -1233,23 +1272,7 @@ impl TermWindow {
                     alert: Alert::Bell,
                     pane_id,
                 } => {
-                    if !self.window_contains_pane(pane_id) {
-                        return Ok(());
-                    }
-
-                    match self.config.audible_bell {
-                        AudibleBell::SystemBeep => {
-                            Connection::get().expect("on main thread").beep();
-                        }
-                        AudibleBell::Disabled => {}
-                    }
-
-                    log::trace!("Ding! (this is the bell) in pane {}", pane_id);
-                    self.emit_window_event("bell", Some(pane_id));
-
-                    let mut per_pane = self.pane_state(pane_id);
-                    per_pane.bell_start.replace(Instant::now());
-                    window.invalidate();
+                    self.trigger_bell_for_pane(pane_id);
                 }
                 MuxNotification::Alert {
                     alert: Alert::ToastNotification { .. },
@@ -1306,16 +1329,22 @@ impl TermWindow {
                     // Also handled by clientpane
                     self.update_title_post_status();
                 }
-                MuxNotification::TabResized(_) => {
+                MuxNotification::TabResized(tab_id) => {
                     // Also handled by wezterm-client
                     self.update_title_post_status();
+                    if let Some(tab) = Mux::get().get_tab(tab_id) {
+                        self.sync_tab_custom_font_pane_sizes(&tab);
+                    }
+                    window.invalidate();
                 }
                 MuxNotification::TabTitleChanged { .. } => {
                     self.update_title_post_status();
                 }
+                MuxNotification::PaneRemoved(pane_id) => {
+                    self.pane_state.borrow_mut().remove(&pane_id);
+                }
                 MuxNotification::PaneAdded(_)
                 | MuxNotification::WorkspaceRenamed { .. }
-                | MuxNotification::PaneRemoved(_)
                 | MuxNotification::WindowWorkspaceChanged(_)
                 | MuxNotification::ActiveWorkspaceChanged(_)
                 | MuxNotification::Empty
@@ -1357,6 +1386,65 @@ impl TermWindow {
             }
             TermWindowNotif::SetInnerSize { width, height } => {
                 self.set_inner_size(window, width, height);
+            }
+            TermWindowNotif::SilenceTimeout {
+                pane_id,
+                generation,
+            } => {
+                self.handle_silence_timeout(pane_id, generation);
+            }
+            TermWindowNotif::PaneDragHover {
+                src_pane_id,
+                local_coords,
+            } => {
+                self.pane_drag_target = local_coords
+                    .and_then(|(x, y)| self.resolve_pane_drop_target(src_pane_id, x, y));
+                window.invalidate();
+            }
+            TermWindowNotif::PaneDragDrop {
+                src_pane_id,
+                local_coords,
+            } => {
+                self.pane_drag_target = None;
+                let target = self.resolve_pane_drop_target(
+                    src_pane_id,
+                    local_coords.0,
+                    local_coords.1,
+                );
+                window.invalidate();
+                if let Some(target) = target {
+                    let split_req =
+                        crate::termwindow::pane_drag::drop_edge_to_split_request(target.edge);
+                    let win = window.clone();
+                    promise::spawn::spawn(async move {
+                        let mux = Mux::get();
+                        if let Err(err) = mux
+                            .split_pane(
+                                target.target_pane_id,
+                                split_req,
+                                SplitSource::MovePane(src_pane_id),
+                                SpawnTabDomain::CurrentPaneDomain,
+                            )
+                            .await
+                        {
+                            log::error!(
+                                "failed to move pane {} onto {}: {err:#}",
+                                src_pane_id,
+                                target.target_pane_id
+                            );
+                        } else {
+                            let _ = mux.focus_pane_and_containing_tab(src_pane_id);
+                            win.invalidate();
+                            win.focus();
+                        }
+                    })
+                    .detach();
+                }
+            }
+            TermWindowNotif::ClearPaneDragTarget => {
+                if self.pane_drag_target.take().is_some() {
+                    window.invalidate();
+                }
             }
         }
 
@@ -1436,8 +1524,155 @@ impl TermWindow {
         tab.contains_pane(pane_id)
     }
 
+    fn trigger_bell_for_pane(&mut self, pane_id: PaneId) {
+        if !self.window_contains_pane(pane_id) {
+            return;
+        }
+
+        match self.config.audible_bell {
+            AudibleBell::SystemBeep => {
+                Connection::get().expect("on main thread").beep();
+            }
+            AudibleBell::Disabled => {}
+        }
+
+        log::trace!("Ding! (this is the bell) in pane {}", pane_id);
+        self.emit_window_event("bell", Some(pane_id));
+
+        {
+            let mut per_pane = self.pane_state(pane_id);
+            per_pane.bell_start.replace(Instant::now());
+        }
+        if let Some(ref win) = self.window {
+            win.invalidate();
+        }
+    }
+
+    fn schedule_silence_timer(&self, pane_id: PaneId, generation: u64, delay: Duration) {
+        if let Some(window) = self.window.clone() {
+            promise::spawn::spawn(async move {
+                Timer::after(delay).await;
+                window.notify(TermWindowNotif::SilenceTimeout {
+                    pane_id,
+                    generation,
+                });
+            })
+            .detach();
+        }
+    }
+
+    fn toggle_watch_for_silence(&mut self, pane_id: PaneId) {
+        let schedule = {
+            let mut per_pane = self.pane_state(pane_id);
+            let enabled = !per_pane.watch.watch_for_silence;
+            per_pane.watch.watch_for_silence = enabled;
+            per_pane.watch.silence_generation =
+                per_pane.watch.silence_generation.wrapping_add(1);
+            if enabled {
+                per_pane.watch.silence_last_activity = Some(Instant::now());
+                Some(per_pane.watch.silence_generation)
+            } else {
+                per_pane.watch.silence_last_activity = None;
+                None
+            }
+        };
+
+        if let Some(generation) = schedule {
+            let delay = Duration::from_secs(self.config.silence_timeout_seconds);
+            self.schedule_silence_timer(pane_id, generation, delay);
+        }
+    }
+
+    fn toggle_watch_for_activity(&mut self, pane_id: PaneId) {
+        let mut per_pane = self.pane_state(pane_id);
+        per_pane.watch.watch_for_activity = !per_pane.watch.watch_for_activity;
+    }
+
+    fn handle_silence_timeout(&mut self, pane_id: PaneId, generation: u64) {
+        if !self.window_contains_pane(pane_id) {
+            return;
+        }
+
+        let timeout_secs = self.config.silence_timeout_seconds;
+        let timeout = Duration::from_secs(timeout_secs);
+
+        enum Action {
+            Reschedule(Duration),
+            Trigger,
+            Ignore,
+        }
+
+        let action = {
+            let mut states = self.pane_state.borrow_mut();
+            match states.get_mut(&pane_id) {
+                Some(state)
+                    if state.watch.watch_for_silence
+                        && state.watch.silence_generation == generation =>
+                {
+                    let elapsed = state
+                        .watch
+                        .silence_last_activity
+                        .map(|t| t.elapsed())
+                        .unwrap_or(timeout);
+                    if elapsed < timeout {
+                        Action::Reschedule(timeout - elapsed)
+                    } else {
+                        state.watch.watch_for_silence = false;
+                        state.watch.silence_last_activity = None;
+                        Action::Trigger
+                    }
+                }
+                _ => Action::Ignore,
+            }
+        };
+
+        match action {
+            Action::Reschedule(remaining) => {
+                self.schedule_silence_timer(pane_id, generation, remaining);
+            }
+            Action::Trigger => {
+                self.trigger_bell_for_pane(pane_id);
+                let title = Mux::get()
+                    .get_pane(pane_id)
+                    .map(|p| p.get_title())
+                    .unwrap_or_else(|| format!("pane {}", pane_id));
+                wezterm_toast_notification::persistent_toast_notification(
+                    "Silence detected",
+                    &format!("No activity in {title} for {timeout_secs}s"),
+                );
+            }
+            Action::Ignore => {}
+        }
+    }
+
     fn mux_pane_output_event(&mut self, pane_id: PaneId) {
         metrics::histogram!("mux.pane_output_event.rate").record(1.);
+        if self.window_contains_pane(pane_id) {
+            let mut triggered_activity = false;
+            {
+                let mut states = self.pane_state.borrow_mut();
+                if let Some(state) = states.get_mut(&pane_id) {
+                    if state.watch.watch_for_silence {
+                        state.watch.silence_last_activity = Some(Instant::now());
+                    }
+                    if state.watch.watch_for_activity {
+                        state.watch.watch_for_activity = false;
+                        triggered_activity = true;
+                    }
+                }
+            }
+            if triggered_activity {
+                self.trigger_bell_for_pane(pane_id);
+                let title = Mux::get()
+                    .get_pane(pane_id)
+                    .map(|p| p.get_title())
+                    .unwrap_or_else(|| format!("pane {}", pane_id));
+                wezterm_toast_notification::persistent_toast_notification(
+                    "Activity detected",
+                    &format!("Activity detected in {title}"),
+                );
+            }
+        }
         if self.is_pane_visible(pane_id) {
             if let Some(ref win) = self.window {
                 win.invalidate();
@@ -1800,6 +2035,13 @@ impl TermWindow {
         if let Err(err) = self.fonts.config_changed(&config) {
             log::error!("Failed to load font configuration: {:#}", err);
         }
+        for state in self.pane_state.borrow().values() {
+            if let Some(fs) = &state.font_state {
+                if let Err(err) = fs.fonts.config_changed(&config) {
+                    log::error!("Failed to reload per-pane font configuration: {:#}", err);
+                }
+            }
+        }
 
         if let Some(window) = mux.get_window(self.mux_window_id) {
             let term_config: Arc<dyn TerminalConfiguration> =
@@ -2120,17 +2362,20 @@ impl TermWindow {
                 0.0
             };
             let (padding_left, padding_top) = self.padding_left_top();
+            let pane_metrics = self.pane_render_metrics(pos.pane.pane_id());
 
             let r = Rect::new(
                 Point::new(
-                    (((cursor.x + pos.left) as isize).max(0) * self.render_metrics.cell_size.width)
+                    (pos.left as isize * self.render_metrics.cell_size.width)
+                        .add((cursor.x as isize).max(0) * pane_metrics.cell_size.width)
                         .add(padding_left as isize),
-                    ((cursor.y + pos.top as isize - top).max(0)
-                        * self.render_metrics.cell_size.height)
+                    (pos.top as isize * self.render_metrics.cell_size.height)
+                        .add((cursor.y - top).max(0) * pane_metrics.cell_size.height)
                         .add(tab_bar_height as isize)
-                        .add(padding_top as isize),
+                        .add(padding_top as isize)
+                        .add(self.pane_title_bar_pixel_height() as isize),
                 ),
-                self.render_metrics.cell_size,
+                pane_metrics.cell_size,
             );
             win.set_text_cursor_position(r);
         }
@@ -3160,6 +3405,16 @@ impl TermWindow {
                 let modal = crate::termwindow::palette::CommandPalette::new(self);
                 self.set_modal(Rc::new(modal));
             }
+            ShowContextMenu => {
+                let modal = crate::termwindow::context_menu::ContextMenu::new(self, pane.pane_id());
+                self.set_modal(Rc::new(modal));
+            }
+            ToggleWatchForSilence => {
+                self.toggle_watch_for_silence(pane.pane_id());
+            }
+            ToggleWatchForActivity => {
+                self.toggle_watch_for_activity(pane.pane_id());
+            }
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
@@ -3290,6 +3545,33 @@ impl TermWindow {
         RefMut::map(self.pane_state.borrow_mut(), |state| {
             state.entry(pane_id).or_insert_with(PaneState::default)
         })
+    }
+
+    pub fn pane_font_scale(&self, pane_id: PaneId) -> f64 {
+        self.pane_state
+            .borrow()
+            .get(&pane_id)
+            .and_then(|state| state.font_state.as_ref())
+            .map(|fs| fs.font_scale)
+            .unwrap_or(1.0)
+    }
+
+    pub fn pane_fonts(&self, pane_id: PaneId) -> Rc<FontConfiguration> {
+        self.pane_state
+            .borrow()
+            .get(&pane_id)
+            .and_then(|state| state.font_state.as_ref())
+            .map(|fs| Rc::clone(&fs.fonts))
+            .unwrap_or_else(|| Rc::clone(&self.fonts))
+    }
+
+    pub fn pane_render_metrics(&self, pane_id: PaneId) -> RenderMetrics {
+        self.pane_state
+            .borrow()
+            .get(&pane_id)
+            .and_then(|state| state.font_state.as_ref())
+            .map(|fs| fs.render_metrics)
+            .unwrap_or(self.render_metrics)
     }
 
     pub fn tab_state(&self, tab_id: TabId) -> RefMut<'_, TabState> {

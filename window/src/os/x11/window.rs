@@ -2094,6 +2094,30 @@ impl WindowOps for XWindow {
         });
     }
 
+    fn get_window_screen_rect(&self) -> Option<ScreenRect> {
+        let conn = Connection::get()?;
+        let xconn = conn.x11();
+        let geom = xconn
+            .send_and_wait_request(&xcb::x::GetGeometry {
+                drawable: xcb::x::Drawable::Window(self.0),
+            })
+            .ok()?;
+        let trans = xconn
+            .send_and_wait_request(&xcb::x::TranslateCoordinates {
+                src_window: self.0,
+                dst_window: xconn.root,
+                src_x: 0,
+                src_y: 0,
+            })
+            .ok()?;
+        Some(euclid::rect(
+            trans.dst_x() as isize,
+            trans.dst_y() as isize,
+            geom.width() as isize,
+            geom.height() as isize,
+        ))
+    }
+
     fn set_text_cursor_position(&self, cursor: Rect) {
         XConnection::with_window_inner(self.0, move |inner| {
             inner.set_text_cursor_position(cursor);

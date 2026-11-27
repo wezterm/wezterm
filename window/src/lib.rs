@@ -300,6 +300,12 @@ pub trait WindowOps {
     /// windows to move themselves (not Wayland).
     fn set_window_position(&self, _coords: ScreenPoint) {}
 
+    /// Returns the window's client area rectangle in screen coordinates,
+    /// if supported by the windowing backend.
+    fn get_window_screen_rect(&self) -> Option<ScreenRect> {
+        None
+    }
+
     /// inform the windowing system of the current textual
     /// cursor input location.  This is used primarily for
     /// the platform specific input method editor
