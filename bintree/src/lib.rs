@@ -13,6 +13,7 @@ use std::fmt::Debug;
 /// Non-leaf nodes in the tree can be labelled with an optional node data type `N`,
 /// which defaults to `()`.
 /// Leaf nodes have a required leaf data type `L`.
+#[derive(Clone)]
 pub enum Tree<L, N = ()> {
     Empty,
     Node {

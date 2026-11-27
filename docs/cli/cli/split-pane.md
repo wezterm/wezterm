@@ -48,6 +48,20 @@ The following options affect the behavior:
 * `--top` - Split vertically, with the new pane on the top.
 * `--top-level` - Rather than splitting the active pane, split the entire window.
 
+## When there is no room for the split
+
+Each part of a split needs at least one cell each way, beside the one-cell
+divider. A split that leaves no room for that is refused before anything
+changes: no program is started, and a pane named by `--move-pane-id` stays
+where it was. A pane moved within its own tab is measured for on the tab
+without it, since taking it out gives its room to its neighbours. The error
+names the sizes; for `wezterm cli split-pane --pane-id 0 --bottom --cells 30
+--move-pane-id 1` in an 80x24 tab, it is:
+
+```
+pane 1 cannot move beside pane 0, and stays where it was: no room for a pane of 30 cells below pane 0, which is 80x24 cells: the split would leave parts of 80x0 and 80x30 cells, and each needs at least 1x1 beside the divider
+```
+
 ## Synopsis
 
 ```console
