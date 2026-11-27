@@ -54,7 +54,7 @@ use mux::{Mux, MuxNotification};
 use mux_lua::MuxPane;
 use smol::channel::Sender;
 use smol::Timer;
-use std::cell::{RefCell, RefMut};
+use std::cell::{Cell, RefCell, RefMut};
 use std::collections::{HashMap, LinkedList};
 use std::ops::Add;
 use std::rc::Rc;
@@ -363,6 +363,107 @@ enum EventState {
     InProgressWithQueued(Option<PaneId>),
 }
 
+// After a reset with nobody at the keyboard every window stops drawing: NVIDIA
+// keeps resetting the contexts of a session on another console that draws,
+// refuses them memory, and crashed in a swap of another window. Input, or a
+// retry after a growing delay, resumes.
+thread_local! {
+    static GPU_PAUSED: Cell<bool> = const { Cell::new(false) };
+    /// The last input or resume: a lost context found soon after is recreated
+    /// rather than waited out
+    static LAST_ACTIVITY: Cell<Option<Instant>> = const { Cell::new(None) };
+    static RETRY_DELAY: Cell<Duration> = const { Cell::new(RETRY_FIRST) };
+    static LAST_RECOVERED: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// A pause's retry timer does nothing once a later pause has begun
+    static PAUSE_GENERATION: Cell<u64> = const { Cell::new(0) };
+}
+
+const ACTIVITY_GRACE: Duration = Duration::from_secs(10);
+const RETRY_FIRST: Duration = Duration::from_secs(30);
+const RETRY_MAX: Duration = Duration::from_secs(300);
+/// A recovery that lasted this long starts the retries from RETRY_FIRST again
+const RECOVERY_LASTED: Duration = Duration::from_secs(600);
+
+fn gpu_paused() -> bool {
+    GPU_PAUSED.with(Cell::get)
+}
+
+/// Pauses drawing, unless there was activity within ACTIVITY_GRACE - the user
+/// is here, so a lost context is recreated instead. A failed rebuild forces it.
+/// Returns whether drawing is paused.
+fn pause_gpu(force: bool) -> bool {
+    let recent = LAST_ACTIVITY
+        .with(Cell::get)
+        .map_or(false, |at| at.elapsed() < ACTIVITY_GRACE);
+    if recent && !force {
+        return false;
+    }
+    if !GPU_PAUSED.with(|paused| paused.replace(true)) {
+        // taken: only the first pause after a recovery may count it
+        let lasted = LAST_RECOVERED
+            .with(Cell::take)
+            .map_or(false, |at| at.elapsed() >= RECOVERY_LASTED);
+        if lasted {
+            RETRY_DELAY.with(|d| d.set(RETRY_FIRST));
+        }
+        let delay = RETRY_DELAY.with(Cell::get);
+        let generation = PAUSE_GENERATION.with(|g| {
+            g.set(g.get() + 1);
+            g.get()
+        });
+        log::warn!(
+            "drawing paused after a GPU reset; it resumes on input or in {}s",
+            delay.as_secs()
+        );
+        promise::spawn::spawn(async move {
+            Timer::after(delay).await;
+            if gpu_paused() && PAUSE_GENERATION.with(Cell::get) == generation {
+                RETRY_DELAY.with(|d| d.set((delay * 2).min(RETRY_MAX)));
+                resume_gpu(&format!("retrying after {}s", delay.as_secs()));
+            }
+        })
+        .detach();
+    }
+    true
+}
+
+fn resume_gpu(reason: &str) {
+    LAST_ACTIVITY.with(|at| at.set(Some(Instant::now())));
+    if GPU_PAUSED.with(|paused| paused.replace(false)) {
+        log::info!("drawing again: {reason}");
+        for win in front_end().gui_windows() {
+            win.window.invalidate();
+        }
+    }
+}
+
+fn gpu_input() {
+    RETRY_DELAY.with(|d| d.set(RETRY_FIRST));
+    resume_gpu("input arrived");
+}
+
+/// Recovering a lost context is tested on X11 only. Wayland waits for a frame
+/// callback that a paint drawing nothing never commits, and Wayland and Windows
+/// hold their own reference to the lost context, which so is not released.
+fn gl_recovery_supported(window: &Window) -> bool {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    return matches!(window, Window::X11(_));
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = window;
+        false
+    }
+}
+
+/// Recovery of a lost OpenGL context
+enum GlRecovery {
+    None,
+    /// Released; recreated at the next paint
+    Lost,
+    /// Being recreated; the new context arrives in the slot
+    Pending(Rc<RefCell<Option<anyhow::Result<Rc<glium::backend::Context>>>>>),
+}
+
 pub struct TermWindow {
     pub window: Option<Window>,
     pub config: ConfigHandle,
@@ -465,6 +566,7 @@ pub struct TermWindow {
     connection_name: String,
 
     gl: Option<Rc<glium::backend::Context>>,
+    gl_recovery: GlRecovery,
     webgpu: Option<Rc<WebGpuState>>,
     config_subscription: Option<config::ConfigSubscription>,
 }
@@ -558,29 +660,26 @@ impl TermWindow {
     }
 
     fn created(&mut self, ctx: RenderContext) -> anyhow::Result<()> {
+        if let Err(err) = self.create_render_state(ctx) {
+            log::error!("failed to create RenderState: {}", err);
+            panic!("No OpenGL");
+        }
+        Ok(())
+    }
+
+    fn create_render_state(&mut self, ctx: RenderContext) -> anyhow::Result<()> {
         self.render_state = None;
 
         let render_info = ctx.renderer_info();
         self.opengl_info.replace(render_info.clone());
 
-        match RenderState::new(ctx, &self.fonts, &self.render_metrics, ATLAS_SIZE) {
-            Ok(render_state) => {
-                log::debug!(
-                    "OpenGL initialized! {} wezterm version: {}",
-                    render_info,
-                    config::wezterm_version(),
-                );
-                self.render_state.replace(render_state);
-            }
-            Err(err) => {
-                log::error!("failed to create RenderState: {}", err);
-            }
-        }
-
-        if self.render_state.is_none() {
-            panic!("No OpenGL");
-        }
-
+        let render_state = RenderState::new(ctx, &self.fonts, &self.render_metrics, ATLAS_SIZE)?;
+        log::debug!(
+            "OpenGL initialized! {} wezterm version: {}",
+            render_info,
+            config::wezterm_version(),
+        );
+        self.render_state.replace(render_state);
         Ok(())
     }
 }
@@ -691,6 +790,7 @@ impl TermWindow {
             config_subscription: None,
             os_parameters: None,
             gl: None,
+            gl_recovery: GlRecovery::None,
             webgpu: None,
             window: None,
             window_background,
@@ -944,10 +1044,14 @@ impl TermWindow {
                 Ok(true)
             }
             WindowEvent::FocusChanged(focused) => {
+                if focused {
+                    gpu_input();
+                }
                 self.focus_changed(focused, window);
                 Ok(true)
             }
             WindowEvent::MouseEvent(event) => {
+                gpu_input();
                 self.mouse_event_impl(event, window);
                 Ok(true)
             }
@@ -983,10 +1087,12 @@ impl TermWindow {
                 Ok(true)
             }
             WindowEvent::RawKeyEvent(event) => {
+                gpu_input();
                 self.raw_key_event_impl(event, window);
                 Ok(true)
             }
             WindowEvent::KeyEvent(event) => {
+                gpu_input();
                 self.key_event_impl(event, window);
                 Ok(true)
             }
@@ -1065,15 +1171,48 @@ impl TermWindow {
     }
 
     fn do_paint(&mut self, window: &Window) -> bool {
+        if gpu_paused() {
+            return false;
+        }
+
+        match std::mem::replace(&mut self.gl_recovery, GlRecovery::None) {
+            GlRecovery::None => {}
+            GlRecovery::Lost => {
+                self.recreate_opengl(window);
+                return false;
+            }
+            GlRecovery::Pending(slot) => {
+                let Some(result) = slot.borrow_mut().take() else {
+                    self.gl_recovery = GlRecovery::Pending(slot);
+                    return false;
+                };
+                let result = result.and_then(|gl| {
+                    self.create_render_state(RenderContext::Glium(Rc::clone(&gl)))?;
+                    Ok(gl)
+                });
+                match result {
+                    Ok(gl) => {
+                        self.gl.replace(gl);
+                        LAST_RECOVERED.with(|at| at.set(Some(Instant::now())));
+                        log::info!("opengl context recreated");
+                    }
+                    Err(err) => {
+                        log::error!("failed to recreate the opengl context: {:#}", err);
+                        self.gl_recovery = GlRecovery::Lost;
+                        pause_gpu(true);
+                        return false;
+                    }
+                }
+            }
+        }
+
         let gl = match self.gl.as_ref() {
             Some(gl) => gl,
             None => return false,
         };
 
         if gl.is_context_lost() {
-            log::error!("opengl context was lost; should reinit");
-            window.close();
-            front_end().forget_known_window(window);
+            self.context_lost(window);
             return false;
         }
 
@@ -1085,7 +1224,53 @@ impl TermWindow {
             ),
         );
         self.paint_impl(&mut RenderFrame::Glium(&mut frame));
-        window.finish_frame(frame).is_ok()
+        let finished = window.finish_frame(frame).is_ok();
+        // lost during this frame: recover now, not a frame later
+        if self.gl.as_ref().map_or(false, |gl| gl.is_context_lost()) {
+            self.context_lost(window);
+        }
+        finished
+    }
+
+    fn context_lost(&mut self, window: &Window) {
+        if !gl_recovery_supported(window) {
+            log::error!("opengl context was lost; should reinit");
+            window.close();
+            front_end().forget_known_window(window);
+            return;
+        }
+        log::warn!("opengl context was lost");
+        self.release_opengl();
+        if !pause_gpu(false) {
+            self.recreate_opengl(window);
+        }
+    }
+
+    /// Drops every GL object of this window, which releases the lost context
+    /// and its EGL surface; recreate_opengl makes a new one.
+    fn release_opengl(&mut self) {
+        self.render_state = None;
+        self.gl = None;
+        self.gl_recovery = GlRecovery::Lost;
+        self.shape_generation += 1;
+        self.shape_cache.borrow_mut().clear();
+        self.line_to_ele_shape_cache.borrow_mut().clear();
+        self.line_quad_cache.borrow_mut().clear();
+        self.invalidate_fancy_tab_bar();
+        self.invalidate_modal();
+    }
+
+    /// Makes a new context on the same window; the next paint picks it up.
+    fn recreate_opengl(&mut self, window: &Window) {
+        let slot = Rc::new(RefCell::new(None));
+        self.gl_recovery = GlRecovery::Pending(Rc::clone(&slot));
+        let window = window.clone();
+        promise::spawn::spawn(async move {
+            let result = window.enable_opengl().await;
+            slot.borrow_mut().replace(result);
+            window.invalidate();
+        })
+        .detach();
     }
 
     fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
