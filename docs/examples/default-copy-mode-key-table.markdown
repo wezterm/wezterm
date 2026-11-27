@@ -43,6 +43,16 @@ return {
       { key = '0', mods = 'NONE', action = act.CopyMode 'MoveToStartOfLine' },
       { key = ';', mods = 'NONE', action = act.CopyMode 'JumpAgain' },
       {
+        key = '%',
+        mods = 'NONE',
+        action = act.CopyMode 'JumpToMatchingBracket',
+      },
+      {
+        key = '%',
+        mods = 'SHIFT',
+        action = act.CopyMode 'JumpToMatchingBracket',
+      },
+      {
         key = 'F',
         mods = 'NONE',
         action = act.CopyMode { JumpBackward = { prev_char = false } },
