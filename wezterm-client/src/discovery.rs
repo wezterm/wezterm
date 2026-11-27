@@ -230,7 +230,7 @@ mod windows {
                 let path = std::str::from_utf8(&source_slice[0..len])
                     .context("reading path from shared memory")?;
 
-                let path: PathBuf = path.into();
+                let path: PathBuf = config::RUNTIME_DIR.join(path);
 
                 Ok(path)
             })
@@ -395,4 +395,28 @@ pub fn discover_gui_socks() -> Vec<PathBuf> {
 
 fn is_sock_dead(sock: &std::path::Path) -> bool {
     UnixStream::connect(sock).is_err()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_resolve_joins_runtime_dir_with_published_file_name() {
+        let class_name = format!(
+            "codex-discovery-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos()
+        );
+        let published = config::RUNTIME_DIR.join(format!("gui-sock-{}", class_name));
+
+        let _holder = publish_gui_sock_path(&published, &class_name).expect("publish gui sock path");
+        let resolved = resolve_gui_sock_path(&class_name).expect("resolve gui sock path");
+
+        assert_eq!(resolved, published);
+    }
 }
