@@ -68,4 +68,4 @@ return {
 }
 ```
 
-See also: [pane:get_lines_as_text()](get_lines_as_text.md).
+See also: [pane:get_lines_as_text()](get_lines_as_text.md), [pane:get_logical_lines_as_escapes()](get_logical_lines_as_escapes.md).
