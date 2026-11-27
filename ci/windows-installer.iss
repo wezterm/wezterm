@@ -7,6 +7,10 @@
 #define MyAppPublisher "Wez Furlong"
 #define MyAppURL "http://wezterm.org"
 #define MyAppExeName "wezterm-gui.exe"
+; The folder cargo built into: deploy.sh passes it as /DTargetDir.
+#ifndef TargetDir
+  #define TargetDir "..\target"
+#endif
 
 [Setup]
 AppId={{BCF6F0DA-5B9A-408D-8562-F680AE6E1EAF}
@@ -43,15 +47,15 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\target\release\wezterm.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\wezterm-gui.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\wezterm-mux-server.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\mesa\opengl32.dll"; DestDir: "{app}\mesa"; Flags: ignoreversion
-Source: "..\target\release\libEGL.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\libGLESv2.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\conpty.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\OpenConsole.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\strip-ansi-escapes.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#TargetDir}\release\wezterm.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#TargetDir}\release\wezterm-gui.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#TargetDir}\release\wezterm-mux-server.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#TargetDir}\release\mesa\opengl32.dll"; DestDir: "{app}\mesa"; Flags: ignoreversion
+Source: "{#TargetDir}\release\libEGL.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#TargetDir}\release\libGLESv2.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#TargetDir}\release\conpty.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#TargetDir}\release\OpenConsole.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#TargetDir}\release\strip-ansi-escapes.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

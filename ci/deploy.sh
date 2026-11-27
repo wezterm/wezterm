@@ -126,7 +126,7 @@ case $OSTYPE in
     cp $TARGET_DIR/release/mesa/opengl32.dll \
         $zipdir/mesa
     7z a -tzip $zipname $zipdir
-    iscc.exe -DMyAppVersion=${TAG_NAME#nightly} -F${instname} ci/windows-installer.iss
+    iscc.exe -DMyAppVersion=${TAG_NAME#nightly} "-DTargetDir=$(cygpath -w "$(realpath "$TARGET_DIR")")" -F${instname} ci/windows-installer.iss
     ;;
   linux-gnu|linux)
     distro=$(lsb_release -is 2>/dev/null || sh -c "source /etc/os-release && echo \$NAME")

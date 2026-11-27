@@ -1,6 +1,31 @@
 // Suppress warnings about `anyhow` going unused; the uses are target-specific.
 use anyhow as _;
 
+/// The folder cargo puts this profile's programs in, wherever the target directory is: in the
+/// checkout's `target`, or wherever `CARGO_TARGET_DIR`, `build.target-dir` or a cargo wrapper put
+/// it, with or without `--target`. Cargo gives the build script `OUT_DIR` inside that folder's
+/// `build` directory (cargo's `build-dir`, which is the target directory unless configured apart):
+/// `<that folder>/build/<package>-<hash>/out`, or `<that folder>/build/<package>/<hash>/out` in the
+/// layout newer cargo uses. The folder is the parent of the nearest `build` above `OUT_DIR`, so it
+/// holds for either layout.
+#[cfg(any(windows, target_os = "macos"))]
+fn profile_output_dir() -> std::path::PathBuf {
+    let out_dir =
+        std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
+    out_dir
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.file_name().map_or(false, |name| name == "build"))
+        .and_then(|build| build.parent())
+        .unwrap_or_else(|| {
+            panic!(
+                "OUT_DIR {} is not inside a build directory: <profile>/build/.../out",
+                out_dir.display()
+            )
+        })
+        .to_path_buf()
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -9,12 +34,12 @@ fn main() {
         use anyhow::Context as _;
         use std::io::Write;
         use std::path::Path;
-        let profile = std::env::var("PROFILE").unwrap();
         let repo_dir = std::env::current_dir()
             .ok()
             .and_then(|cwd| cwd.parent().map(|p| p.to_path_buf()))
             .unwrap();
-        let exe_output_dir = repo_dir.join("target").join(profile);
+        // Beside the programs, which load them from their own folder.
+        let exe_output_dir = profile_output_dir();
         let windows_dir = repo_dir.join("assets").join("windows");
 
         let conhost_dir = windows_dir.join("conhost");
@@ -157,7 +182,6 @@ END
     #[cfg(target_os = "macos")]
     {
         use anyhow::Context as _;
-        let profile = std::env::var("PROFILE").unwrap();
         let repo_dir = std::env::current_dir()
             .ok()
             .and_then(|cwd| cwd.parent().map(|p| p.to_path_buf()))
@@ -171,10 +195,8 @@ END
             .join("WezTerm.app")
             .join("Contents")
             .join("Info.plist");
-        let build_target_dir = std::env::var("CARGO_TARGET_DIR")
-            .and_then(|s| Ok(std::path::PathBuf::from(s)))
-            .unwrap_or(repo_dir.join("target").join(profile));
-        let dest_plist = build_target_dir.join("Info.plist");
+        // Beside the program, as a bundle has it beside its executable.
+        let dest_plist = profile_output_dir().join("Info.plist");
         println!("cargo:rerun-if-changed=assets/macos/WezTerm.app/Contents/Info.plist");
 
         std::fs::copy(&src_plist, &dest_plist)
