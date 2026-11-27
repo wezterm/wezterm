@@ -64,6 +64,19 @@ impl UserData for MuxWindow {
             let mut window = this.resolve_mut(&mux)?;
             Ok(window.set_title(&title))
         });
+        methods.add_method("get_vars", |_, this, _: ()| {
+            let mux = get_mux()?;
+            let window = this.resolve(&mux)?;
+            Ok(window.get_vars().clone())
+        });
+        methods.add_method(
+            "set_var",
+            |_, this, (name, value): (String, Option<String>)| {
+                let mux = get_mux()?;
+                let mut window = this.resolve_mut(&mux)?;
+                Ok(window.set_var(&name, value.as_deref()))
+            },
+        );
         methods.add_method("tabs", |_, this, _: ()| {
             let mux = get_mux()?;
             let window = this.resolve(&mux)?;

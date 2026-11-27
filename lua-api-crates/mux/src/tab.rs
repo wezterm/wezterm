@@ -46,6 +46,19 @@ impl UserData for MuxTab {
             let tab = this.resolve(&mux)?;
             Ok(tab.set_title(&title))
         });
+        methods.add_method("get_vars", |_, this, _: ()| {
+            let mux = get_mux()?;
+            let tab = this.resolve(&mux)?;
+            Ok(tab.get_vars())
+        });
+        methods.add_method(
+            "set_var",
+            |_, this, (name, value): (String, Option<String>)| {
+                let mux = get_mux()?;
+                let tab = this.resolve(&mux)?;
+                Ok(tab.set_var(&name, value.as_deref()))
+            },
+        );
         methods.add_method("active_pane", |_, this, _: ()| {
             let mux = get_mux()?;
             let tab = this.resolve(&mux)?;

@@ -276,6 +276,54 @@ fn process_unilateral(
             .detach();
             return Ok(());
         }
+        Pdu::TabVarChanged(TabVarChanged {
+            tab_id,
+            name,
+            value,
+        }) => {
+            let (tab_id, name, value) = (*tab_id, name.clone(), value.clone());
+            promise::spawn::spawn_into_main_thread(async move {
+                let mux = Mux::try_get().ok_or_else(|| anyhow!("no more mux"))?;
+                let client_domain = mux
+                    .get_domain(local_domain_id)
+                    .ok_or_else(|| anyhow!("no such domain {}", local_domain_id))?;
+                let client_domain =
+                    client_domain
+                        .downcast_ref::<ClientDomain>()
+                        .ok_or_else(|| {
+                            anyhow!("domain {} is not a ClientDomain instance", local_domain_id)
+                        })?;
+
+                client_domain.process_remote_tab_var_change(tab_id, &name, value.as_deref());
+                anyhow::Result::<()>::Ok(())
+            })
+            .detach();
+            return Ok(());
+        }
+        Pdu::WindowVarChanged(WindowVarChanged {
+            window_id,
+            name,
+            value,
+        }) => {
+            let (window_id, name, value) = (*window_id, name.clone(), value.clone());
+            promise::spawn::spawn_into_main_thread(async move {
+                let mux = Mux::try_get().ok_or_else(|| anyhow!("no more mux"))?;
+                let client_domain = mux
+                    .get_domain(local_domain_id)
+                    .ok_or_else(|| anyhow!("no such domain {}", local_domain_id))?;
+                let client_domain =
+                    client_domain
+                        .downcast_ref::<ClientDomain>()
+                        .ok_or_else(|| {
+                            anyhow!("domain {} is not a ClientDomain instance", local_domain_id)
+                        })?;
+
+                client_domain.process_remote_window_var_change(window_id, &name, value.as_deref());
+                anyhow::Result::<()>::Ok(())
+            })
+            .detach();
+            return Ok(());
+        }
         Pdu::TabTitleChanged(TabTitleChanged { tab_id, title }) => {
             let title = title.to_string();
             let tab_id = *tab_id;
@@ -1381,6 +1429,8 @@ impl Client {
     rpc!(set_configured_palette_for_pane, SetPalette, UnitResponse);
     rpc!(set_tab_title, TabTitleChanged, UnitResponse);
     rpc!(set_window_title, WindowTitleChanged, UnitResponse);
+    rpc!(set_tab_var, TabVarChanged, UnitResponse);
+    rpc!(set_window_var, WindowVarChanged, UnitResponse);
     rpc!(rename_workspace, RenameWorkspace, UnitResponse);
     rpc!(erase_scrollback, EraseScrollbackRequest, UnitResponse);
     rpc!(

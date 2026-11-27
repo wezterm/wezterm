@@ -44,6 +44,13 @@ $ wezterm cli list --format json
 ]
 ```
 
+{{since('nightly')}}
+
+Each entry of the JSON output also has `tab_vars` and `window_vars`: the
+variables of the pane's tab and window, set with
+[wezterm cli set-tab-var](set-tab-var.md) and
+[wezterm cli set-window-var](set-window-var.md).
+
 ## Synopsis
 
 ```console

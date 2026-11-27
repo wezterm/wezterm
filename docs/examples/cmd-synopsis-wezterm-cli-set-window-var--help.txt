@@ -1,0 +1,26 @@
+Set or remove a variable of a window, which programs in its panes cannot change
+
+Usage: wezterm cli set-window-var [OPTIONS] <NAME> [VALUE]
+
+Arguments:
+  <NAME>
+          The name of the variable
+
+  [VALUE]
+          The value to set the variable to
+
+Options:
+      --window-id <WINDOW_ID>
+          Specify the target window by its id
+
+      --pane-id <PANE_ID>
+          Specify the current pane. The default is to use the current pane based
+          on the environment variable WEZTERM_PANE.
+          
+          The pane is used to figure out which window to set the variable on.
+
+      --unset
+          Remove the variable instead of setting it
+
+  -h, --help
+          Print help (see a summary with '-h')

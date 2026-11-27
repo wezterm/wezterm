@@ -1,6 +1,7 @@
 use crate::pane::CloseReason;
 use crate::{Mux, MuxNotification, Tab, TabId};
 use config::GuiPosition;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 static WIN_ID: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
@@ -13,6 +14,10 @@ pub struct Window {
     last_active_tab_id: Option<TabId>,
     workspace: String,
     title: String,
+    /// Named values a program sets to recognize this window by (see
+    /// `wezterm cli set-window-var`). Unlike the title, nothing running in a
+    /// pane can change them.
+    vars: BTreeMap<String, String>,
     initial_position: Option<GuiPosition>,
 }
 
@@ -25,6 +30,7 @@ impl Window {
             active_tab_idx: 0,
             last_active_tab_id: None,
             title: String::new(),
+            vars: BTreeMap::new(),
             workspace: workspace.unwrap_or_else(|| Mux::get().active_workspace()),
             initial_position,
         }
@@ -56,6 +62,35 @@ impl Window {
     /// Return current title.
     pub fn get_title(&self) -> &str {
         &self.title
+    }
+
+    /// Set the variable `name` to `value`, or remove it when `value` is None,
+    /// notifying listeners if it changed.
+    pub fn set_var(&mut self, name: &str, value: Option<&str>) {
+        if set_var(&mut self.vars, name, value) {
+            Mux::try_get().map(|mux| {
+                mux.notify(MuxNotification::WindowVarChanged {
+                    window_id: self.id,
+                    name: name.to_string(),
+                    value: value.map(str::to_string),
+                })
+            });
+        }
+    }
+
+    /// Take the variables a mux server reports for the window it mirrors,
+    /// without notifying: the change is the server's, not one to send back.
+    pub fn sync_vars(&mut self, vars: BTreeMap<String, String>) {
+        self.vars = vars;
+    }
+
+    /// Take one variable change a mux server reports, without notifying.
+    pub fn sync_var(&mut self, name: &str, value: Option<&str>) {
+        set_var(&mut self.vars, name, value);
+    }
+
+    pub fn get_vars(&self) -> &BTreeMap<String, String> {
+        &self.vars
     }
 
     /// Set window workspace, notifying listeners if it changed.
@@ -291,5 +326,25 @@ impl Window {
         if invalidated {
             self.invalidate();
         }
+    }
+}
+
+/// Set `name` to `value` in `vars`, or remove it when `value` is None;
+/// returns whether that changed `vars`.
+pub(crate) fn set_var(
+    vars: &mut BTreeMap<String, String>,
+    name: &str,
+    value: Option<&str>,
+) -> bool {
+    match value {
+        Some(value) => {
+            if vars.get(name).map(String::as_str) == Some(value) {
+                false
+            } else {
+                vars.insert(name.to_string(), value.to_string());
+                true
+            }
+        }
+        None => vars.remove(name).is_some(),
     }
 }

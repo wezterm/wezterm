@@ -8,7 +8,7 @@ use config::keyassignment::PaneDirection;
 use parking_lot::Mutex;
 use rangeset::intersects_range;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::sync::Arc;
 use url::Url;
@@ -45,6 +45,10 @@ struct TabInner {
     active: usize,
     zoomed: Option<Arc<dyn Pane>>,
     title: String,
+    /// Named values a program sets to recognize this tab by (see
+    /// `wezterm cli set-tab-var`). Unlike the title, nothing running in a
+    /// pane can change them.
+    vars: BTreeMap<String, String>,
     recency: Recency,
 }
 
@@ -533,6 +537,38 @@ impl Tab {
         }
     }
 
+    pub fn get_vars(&self) -> BTreeMap<String, String> {
+        self.inner.lock().vars.clone()
+    }
+
+    /// Set the variable `name` to `value`, or remove it when `value` is None,
+    /// notifying listeners if it changed.
+    pub fn set_var(&self, name: &str, value: Option<&str>) {
+        let mut inner = self.inner.lock();
+        if crate::window::set_var(&mut inner.vars, name, value) {
+            let tab_id = inner.id;
+            drop(inner);
+            Mux::try_get().map(|mux| {
+                mux.notify(MuxNotification::TabVarChanged {
+                    tab_id,
+                    name: name.to_string(),
+                    value: value.map(str::to_string),
+                })
+            });
+        }
+    }
+
+    /// Take the variables a mux server reports for the tab it mirrors,
+    /// without notifying: the change is the server's, not one to send back.
+    pub fn sync_vars(&self, vars: BTreeMap<String, String>) {
+        self.inner.lock().vars = vars;
+    }
+
+    /// Take one variable change a mux server reports, without notifying.
+    pub fn sync_var(&self, name: &str, value: Option<&str>) {
+        crate::window::set_var(&mut self.inner.lock().vars, name, value);
+    }
+
     /// Called by the multiplexer client when building a local tab to
     /// mirror a remote tab.  The supplied `root` is the information
     /// about our counterpart in the remote server.
@@ -763,6 +799,7 @@ impl TabInner {
             active: 0,
             zoomed: None,
             title: String::new(),
+            vars: BTreeMap::new(),
             recency: Recency::default(),
         }
     }
@@ -2524,5 +2561,75 @@ mod test {
     #[test]
     fn tab_is_send_and_sync() {
         assert!(is_send_and_sync::<Tab>());
+    }
+
+    fn size() -> TerminalSize {
+        TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        }
+    }
+
+    fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_variable_is_set_replaced_and_removed() {
+        let tab = Tab::new(&size());
+        assert_eq!(tab.get_vars(), vars(&[]));
+        tab.set_var("session.id", Some("a1"));
+        tab.set_var("other", Some("x"));
+        assert_eq!(
+            tab.get_vars(),
+            vars(&[("other", "x"), ("session.id", "a1")])
+        );
+        tab.set_var("session.id", Some("b2"));
+        assert_eq!(
+            tab.get_vars(),
+            vars(&[("other", "x"), ("session.id", "b2")])
+        );
+        tab.set_var("session.id", None);
+        assert_eq!(tab.get_vars(), vars(&[("other", "x")]));
+        // Removing a variable that is not there changes nothing.
+        tab.set_var("session.id", None);
+        assert_eq!(tab.get_vars(), vars(&[("other", "x")]));
+    }
+
+    #[test]
+    fn a_title_does_not_touch_the_variables() {
+        let tab = Tab::new(&size());
+        tab.set_var("session.id", Some("a1"));
+        tab.set_title("✳ renamed by the program in the pane");
+        assert_eq!(tab.get_vars(), vars(&[("session.id", "a1")]));
+    }
+
+    #[test]
+    fn a_sync_takes_the_servers_variables_as_they_are() {
+        let tab = Tab::new(&size());
+        tab.set_var("stale", Some("1"));
+        tab.sync_vars(vars(&[("session.id", "a1")]));
+        assert_eq!(tab.get_vars(), vars(&[("session.id", "a1")]));
+        tab.sync_var("session.id", Some("b2"));
+        tab.sync_var("gone", None);
+        assert_eq!(tab.get_vars(), vars(&[("session.id", "b2")]));
+    }
+
+    #[test]
+    fn set_var_reports_only_real_changes() {
+        // Listeners are notified, and clients send a change on, only when it is one.
+        let mut map = BTreeMap::new();
+        assert!(crate::window::set_var(&mut map, "name", Some("v")));
+        assert!(!crate::window::set_var(&mut map, "name", Some("v")));
+        assert!(crate::window::set_var(&mut map, "name", Some("w")));
+        assert!(crate::window::set_var(&mut map, "name", None));
+        assert!(!crate::window::set_var(&mut map, "name", None));
+        assert!(map.is_empty());
     }
 }

@@ -46,7 +46,9 @@ for cmd in \
     rename-workspace \
     send-text \
     set-tab-title \
+    set-tab-var \
     set-window-title \
+    set-window-var \
     spawn \
     split-pane \
     zoom-pane \

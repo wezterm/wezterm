@@ -24,7 +24,7 @@ use rangeset::*;
 use serde::{Deserialize, Serialize};
 use smol::io::AsyncWriteExt;
 use smol::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::io::Cursor;
 use std::ops::Range;
@@ -442,7 +442,7 @@ macro_rules! pdu {
 /// The overall version of the codec.
 /// This must be bumped when backwards incompatible changes
 /// are made to the types and protocol.
-pub const CODEC_VERSION: usize = 46;
+pub const CODEC_VERSION: usize = 47;
 
 // Defines the Pdu enum.
 // Each struct has an explicit identifying number.
@@ -503,6 +503,8 @@ pdu! {
     GetPaneDirection: 60,
     GetPaneDirectionResponse: 61,
     AdjustPaneSize: 62,
+    TabVarChanged: 63,
+    WindowVarChanged: 64,
 }
 
 impl Pdu {
@@ -647,7 +649,10 @@ pub struct ListPanes {}
 pub struct ListPanesResponse {
     pub tabs: Vec<PaneNode>,
     pub tab_titles: Vec<String>,
+    /// The variables of each tab, in the order of `tabs`.
+    pub tab_vars: Vec<BTreeMap<String, String>>,
     pub window_titles: HashMap<WindowId, String>,
+    pub window_vars: HashMap<WindowId, BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
@@ -818,6 +823,24 @@ pub struct TabTitleChanged {
 pub struct WindowTitleChanged {
     pub window_id: WindowId,
     pub title: String,
+}
+
+/// Sets (`value` is Some) or removes (None) a tab variable. A client sends it
+/// to change the variable; the server sends it to its clients when it changed.
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct TabVarChanged {
+    pub tab_id: TabId,
+    pub name: String,
+    pub value: Option<String>,
+}
+
+/// Sets (`value` is Some) or removes (None) a window variable. A client sends it
+/// to change the variable; the server sends it to its clients when it changed.
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct WindowVarChanged {
+    pub window_id: WindowId,
+    pub name: String,
+    pub value: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
