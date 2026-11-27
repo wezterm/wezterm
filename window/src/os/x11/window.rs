@@ -17,6 +17,7 @@ use raw_window_handle::{
     RawWindowHandle, WindowHandle, XcbDisplayHandle, XcbWindowHandle,
 };
 use std::any::Any;
+use std::cell::Cell;
 use std::convert::TryInto;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -83,9 +84,20 @@ impl Default for DragAndDrop {
     }
 }
 
+/// Who still needs the child window, which holds the EGL surface: it is
+/// destroyed once the window is closed and no GL state is left on it.
+/// Destroying it first made the NVIDIA driver fail MakeCurrent with
+/// BAD_ALLOC for the remaining windows (#8255).
+#[derive(Default)]
+struct ChildWindowUse {
+    gl_states: Cell<usize>,
+    closed: Cell<bool>,
+}
+
 pub(crate) struct XWindowInner {
     pub window_id: xcb::x::Window,
     pub child_id: xcb::x::Window,
+    child_use: Rc<ChildWindowUse>,
     conn: Weak<XConnection>,
     pub events: WindowEventSender,
     width: u16,
@@ -172,8 +184,21 @@ impl XWindowInner {
             ),
         };
 
+        let child_use = Rc::clone(&self.child_use);
+        let child = self.child_id;
         // Don't chain on the end of the above to avoid borrowing gl_connection twice.
         let gl_state = gl_state.map(Rc::new).and_then(|state| unsafe {
+            child_use.gl_states.set(child_use.gl_states.get() + 1);
+            state.set_after_drop(move || {
+                child_use.gl_states.set(child_use.gl_states.get() - 1);
+                if child_use.closed.get() && child_use.gl_states.get() == 0 {
+                    if let Some(conn) = Connection::get() {
+                        log::trace!("GL state dropped, sending DestroyWindow for {:?}", child);
+                        conn.x11()
+                            .send_request_no_reply_log(&xcb::x::DestroyWindow { window: child });
+                    }
+                }
+            });
             conn.gl_connection
                 .borrow_mut()
                 .replace(Rc::clone(state.get_connection()));
@@ -1483,6 +1508,7 @@ impl XWindow {
                 appearance,
                 window_id,
                 child_id,
+                child_use: Rc::default(),
                 conn: Rc::downgrade(&conn),
                 events,
                 width: width.try_into()?,
@@ -1614,9 +1640,12 @@ impl XWindowInner {
             window: self.window_id,
         });
 
-        conn.send_request_no_reply_log(&xcb::x::DestroyWindow {
-            window: self.child_id,
-        });
+        self.child_use.closed.set(true);
+        if self.child_use.gl_states.get() == 0 {
+            conn.send_request_no_reply_log(&xcb::x::DestroyWindow {
+                window: self.child_id,
+            });
+        }
 
         // Arrange to destroy the window after a couple of seconds; that
         // should give whatever stuff is still referencing the window

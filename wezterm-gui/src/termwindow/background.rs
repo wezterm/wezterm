@@ -421,7 +421,7 @@ impl crate::TermWindow {
     ) -> anyhow::Result<bool> {
         let render_layer = gl_state.layer_for_zindex(layer_index)?;
         let vbs = render_layer.vb.borrow();
-        let mut layer0 = vbs[0].map();
+        let mut layer0 = vbs[0].map()?;
 
         let color = bg_color.mul_alpha(layer.def.opacity);
 

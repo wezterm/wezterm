@@ -50,6 +50,9 @@ impl std::fmt::Debug for EglWrapper {
     }
 }
 
+/// EGL_NV_robustness_video_memory_purge, which the generated bindings lack
+const GENERATE_RESET_ON_VIDEO_MEMORY_PURGE_NV: u32 = 0x334C;
+
 #[derive(Debug)]
 pub struct GlConnection {
     egl: EglWrapper,
@@ -81,11 +84,98 @@ impl Drop for GlConnection {
     }
 }
 
+thread_local! {
+    /// The last make_current of this thread failed; glium's reset query then
+    /// reports a reset
+    static MAKE_CURRENT_FAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The names glium loads the reset-status query under; it calls the one its
+/// context supports, so each keeps its own driver function. glium 0.35 never
+/// calls the KHR one; wrapped all the same, for a glium that does.
+const RESET_STATUS_NAMES: [&str; 4] = [
+    "glGetGraphicsResetStatus",
+    "glGetGraphicsResetStatusARB",
+    "glGetGraphicsResetStatusEXT",
+    "glGetGraphicsResetStatusKHR",
+];
+const RESET_STATUS_CORE: usize = 0;
+const RESET_STATUS_ARB: usize = 1;
+const RESET_STATUS_EXT: usize = 2;
+const RESET_STATUS_KHR: usize = 3;
+
+static DRIVER_RESET_STATUS: [std::sync::atomic::AtomicPtr<c_void>; 4] =
+    [const { std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()) }; 4];
+
+fn driver_reset_status(name: usize) -> u32 {
+    let f = DRIVER_RESET_STATUS[name].load(std::sync::atomic::Ordering::Relaxed);
+    if f.is_null() {
+        return 0;
+    }
+    unsafe { std::mem::transmute::<*mut c_void, extern "system" fn() -> u32>(f)() }
+}
+
+/// glium's make_current cannot report a failure, and with no context current
+/// the driver reports no reset, so the frame went on into the null pointer
+/// glMapBufferRange returned. glium's query answers lost instead.
+/// The reason is logged here: glium asks with the variant its context
+/// supports, and stops asking once it saw the context lost.
+fn reset_status(name: usize) -> u32 {
+    if MAKE_CURRENT_FAILED.with(|failed| failed.get()) {
+        return 0x8255; // GL_UNKNOWN_CONTEXT_RESET
+    }
+    let status = driver_reset_status(name);
+    if status != 0 {
+        let reason = match status {
+            0x8253 => "guilty",
+            0x8254 => "innocent",
+            0x8255 => "unknown cause",
+            0x92BB => "video memory purged",
+            _ => "unrecognized status",
+        };
+        // NVIDIA reports "guilty" for the work it drops while another
+        // session has the GPU
+        log::warn!("the driver reset the opengl context ({reason}, {status:#x})");
+    }
+    status
+}
+
+extern "system" fn reset_status_core() -> u32 {
+    reset_status(RESET_STATUS_CORE)
+}
+extern "system" fn reset_status_arb() -> u32 {
+    reset_status(RESET_STATUS_ARB)
+}
+extern "system" fn reset_status_ext() -> u32 {
+    reset_status(RESET_STATUS_EXT)
+}
+extern "system" fn reset_status_khr() -> u32 {
+    reset_status(RESET_STATUS_KHR)
+}
+const RESET_STATUS_WRAPPERS: [extern "system" fn() -> u32; 4] = [
+    reset_status_core,
+    reset_status_arb,
+    reset_status_ext,
+    reset_status_khr,
+];
+
 #[derive(Debug)]
 pub struct GlState {
     connection: Rc<GlConnection>,
     surface: ffi::types::EGLSurface,
     context: ffi::types::EGLContext,
+    after_drop: AfterDrop,
+}
+
+/// Runs once the surface and context are destroyed: the native window
+/// they were made on must outlive them.
+#[derive(Default)]
+struct AfterDrop(std::cell::RefCell<Option<Box<dyn FnOnce()>>>);
+
+impl std::fmt::Debug for AfterDrop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AfterDrop")
+    }
 }
 
 impl Drop for GlState {
@@ -101,6 +191,9 @@ impl Drop for GlState {
                 .DestroySurface(self.connection.display, self.surface);
             self.connection
                 .DestroyContext(self.connection.display, self.context);
+        }
+        if let Some(after_drop) = self.after_drop.0.borrow_mut().take() {
+            after_drop();
         }
     }
 }
@@ -400,6 +493,11 @@ impl GlState {
         &self.connection
     }
 
+    /// Called after this state's surface and context are destroyed.
+    pub fn set_after_drop(&self, f: impl FnOnce() + 'static) {
+        self.after_drop.0.borrow_mut().replace(Box::new(f));
+    }
+
     fn with_egl_lib<F: FnMut(EglWrapper) -> anyhow::Result<Self>>(
         mut func: F,
     ) -> anyhow::Result<Self> {
@@ -609,33 +707,89 @@ impl GlState {
                     }
                 };
 
-            let mut attributes = vec![ffi::CONTEXT_MAJOR_VERSION, 3];
+            let mut attempts = vec![];
             if cfg!(windows) {
                 // On Windows, where drivers may be dynamically unloaded,
                 // let's make an effort to try to survive that event.
-                for &a in &[
+                attempts.push(vec![
                     ffi::CONTEXT_OPENGL_ROBUST_ACCESS_EXT,
                     ffi::TRUE,
                     ffi::CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT,
                     ffi::LOSE_CONTEXT_ON_RESET_EXT,
-                ] {
-                    attributes.push(a);
+                ]);
+            } else {
+                // Reset notification, where offered: NVIDIA resets the contexts
+                // of a session on another console, and its purge notification
+                // reports the video memory it takes from them, which otherwise
+                // came back garbled. Each attempt asks for less.
+                let (strategy, extension) = if connection.is_opengl {
+                    (
+                        [
+                            ffi::CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR,
+                            ffi::LOSE_CONTEXT_ON_RESET_KHR,
+                        ],
+                        "EGL_KHR_create_context",
+                    )
+                } else {
+                    (
+                        [
+                            ffi::CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT,
+                            ffi::LOSE_CONTEXT_ON_RESET_EXT,
+                        ],
+                        "EGL_EXT_create_context_robustness",
+                    )
+                };
+                if connection.has_extension(extension) {
+                    if connection.has_extension("EGL_NV_robustness_video_memory_purge") {
+                        let mut purge = strategy.to_vec();
+                        purge.extend([GENERATE_RESET_ON_VIDEO_MEMORY_PURGE_NV, ffi::TRUE]);
+                        attempts.push(purge);
+                    }
+                    attempts.push(strategy.to_vec());
+                }
+                attempts.push(vec![]);
+            }
+
+            let mut context = None;
+            for extra in attempts {
+                let mut attributes = vec![ffi::CONTEXT_MAJOR_VERSION, 3];
+                attributes.extend(&extra);
+                attributes.push(ffi::NONE);
+                match connection.egl.create_context(
+                    connection.display,
+                    config,
+                    std::ptr::null(),
+                    &attributes,
+                ) {
+                    Ok(c) => {
+                        log::debug!("EGL context attributes {:x?}", attributes);
+                        context = Some(c);
+                        break;
+                    }
+                    Err(e) => {
+                        log::debug!("EGL context attributes {:x?} refused: {:#}", attributes, e);
+                        errors.push_str(&format!("{:#} {:x?} {:x?}\n", e, config, attributes));
+                    }
                 }
             }
-            attributes.push(ffi::NONE);
-
-            let context = match connection.egl.create_context(
-                connection.display,
-                config,
-                std::ptr::null(),
-                &attributes,
-            ) {
-                Ok(c) => c,
-                Err(e) => {
-                    errors.push_str(&format!("{:#} {:x?}\n", e, config));
-                    continue;
-                }
+            let context = match context {
+                Some(c) => c,
+                None => continue,
             };
+
+            // Current once here, where a failure is an error: glium makes it
+            // current without checking, then reads the GL version through a
+            // null pointer.
+            if unsafe { connection.MakeCurrent(connection.display, surface, surface, context) } == 0
+            {
+                let e = connection.egl.error("MakeCurrent");
+                errors.push_str(&format!("{:#} {:x?}\n", e, config));
+                unsafe {
+                    connection.DestroyContext(connection.display, context);
+                    connection.DestroySurface(connection.display, surface);
+                }
+                continue;
+            }
 
             log::trace!("Successfully created a surface using this configuration");
             connection.egl.log_config_info(connection.display, config);
@@ -650,6 +804,7 @@ impl GlState {
                 connection: Rc::clone(connection),
                 context,
                 surface,
+                after_drop: AfterDrop::default(),
             });
         }
 
@@ -679,7 +834,15 @@ unsafe impl glium::backend::Backend for GlState {
 
     unsafe fn get_proc_address(&self, symbol: &str) -> *const c_void {
         let sym_name = std::ffi::CString::new(symbol).expect("symbol to be cstring compatible");
-        self.connection.GetProcAddress(sym_name.as_ptr()) as *const c_void
+        let f = self.connection.GetProcAddress(sym_name.as_ptr()) as *const c_void;
+        if let Some(name) = RESET_STATUS_NAMES.iter().position(|&n| n == symbol) {
+            if !f.is_null() {
+                DRIVER_RESET_STATUS[name]
+                    .store(f as *mut c_void, std::sync::atomic::Ordering::Relaxed);
+                return RESET_STATUS_WRAPPERS[name] as *const c_void;
+            }
+        }
+        f
     }
 
     fn get_framebuffer_dimensions(&self) -> (u32, u32) {
@@ -710,15 +873,35 @@ unsafe impl glium::backend::Backend for GlState {
     }
 
     unsafe fn make_current(&self) {
-        if self.connection.MakeCurrent(
+        let failed = self.connection.MakeCurrent(
             self.connection.display,
             self.surface,
             self.surface,
             self.context,
-        ) == 0
-        {
-            let err = self.connection.egl.error("MakeCurrent");
-            log::error!("make_current failed {:?} {:?}", self, err);
+        ) == 0;
+        if failed {
+            // once per run of failures: glium retries on every GL call
+            if !MAKE_CURRENT_FAILED.with(|f| f.get()) {
+                let err = self.connection.egl.error("MakeCurrent");
+                log::error!(
+                    "make_current failed for surface {:?}, context {:?}: {:#}",
+                    self.surface,
+                    self.context,
+                    err
+                );
+            }
+            // whatever stayed current belongs to another window
+            self.connection.MakeCurrent(
+                self.connection.display,
+                ffi::NO_SURFACE,
+                ffi::NO_SURFACE,
+                ffi::NO_CONTEXT,
+            );
         }
+        // Set even if the release failed too and another window's context is
+        // still current: that one may then be reported lost (recreated, or
+        // its window closed where recovery is unsupported), which is better
+        // than this window's GL calls reaching it.
+        MAKE_CURRENT_FAILED.with(|f| f.set(failed));
     }
 }
