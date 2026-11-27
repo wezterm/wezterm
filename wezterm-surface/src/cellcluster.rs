@@ -57,7 +57,18 @@ impl CellCluster {
         let mut whitespace_run = 0;
         let mut only_whitespace = false;
 
-        for c in iter {
+        let mut iter = iter.fuse();
+        let bidi_cells: Vec<_> = if bidi_hint.is_some() {
+            iter.by_ref().collect()
+        } else {
+            Vec::new()
+        };
+        let padding_start = bidi_cells
+            .iter()
+            .rposition(|cell| cell.str() != " ")
+            .map(|last_text_cell| last_text_cell + 1);
+
+        for (index, c) in bidi_cells.into_iter().chain(iter).enumerate() {
             let cell_idx = c.cell_index();
             let presentation = c.presentation();
             let cell_str = c.str();
@@ -120,8 +131,10 @@ impl CellCluster {
                             only_whitespace = false;
                         }
 
-                        let force_break = (!only_whitespace && whitespace_run > 2)
-                            || (!only_whitespace && bidi_hint.is_none() && was_whitespace);
+                        let force_break = !only_whitespace
+                            && (whitespace_run > 2
+                                || (bidi_hint.is_none() && was_whitespace)
+                                || padding_start == Some(index));
 
                         if force_break {
                             clusters.push(last);
