@@ -1711,20 +1711,7 @@ impl KeyEvent {
     pub fn encode_kitty(&self, flags: KittyKeyboardFlags) -> String {
         use KeyCode::*;
 
-        // A `Composed` string holding exactly one char is functionally a plain
-        // character keypress; it is how an IME (or the Windows emoji picker)
-        // delivers text that has no backing physical key. It never carries a
-        // `raw` event, and unlike every other key it has no dedicated arm
-        // below, so it used to fall through to the final `_` catch-all. That
-        // arm needs `raw` to resolve a kitty function code, so with `raw`
-        // always `None` the whole function returned an empty string and the
-        // keypress was dropped outright. That made single CJK characters and
-        // full-width punctuation impossible to type with a CJK IME whenever
-        // the kitty keyboard protocol was active. Normalize it to `Char` up
-        // front so the rest of this function treats it like any other single
-        // character. Multi-char `Composed` strings (e.g. ZWJ emoji sequences)
-        // don't reach this function via WezTerm's normal routing and keep
-        // falling through as before.
+        // Single-char `Composed` is a plain keypress with no raw event; normalize to `Char`
         if let Composed(s) = &self.key {
             let mut chars = s.chars();
             if let (Some(c), None) = (chars.next(), chars.next()) {
@@ -2404,11 +2391,8 @@ mod test {
 
     #[test]
     fn encode_kitty_single_char_composed_matches_char() {
-        // An IME or the Windows emoji picker delivers text as a `Composed`
-        // event with no backing raw hardware key event (`raw: None`). Before
-        // this fix `encode_kitty` had no arm for `Composed`, so such an event
-        // reached the catch-all arm, failed to resolve a kitty function code
-        // and encoded as an empty string -- a silent drop.
+        // A single-char Composed event (IME, emoji picker) must encode exactly
+        // like the equivalent Char key.
         let flags = KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
 
         let composed = KeyEvent {
@@ -2442,10 +2426,7 @@ mod test {
 
     #[test]
     fn encode_kitty_multi_char_composed_is_unaffected() {
-        // A multi-char Composed string (e.g. a ZWJ emoji sequence) is written
-        // to the pane as raw text by keyevent.rs and never goes through kitty
-        // encoding. This locks in that the single-char normalization above
-        // does not change encode_kitty's own behavior for that case.
+        // Multi-char Composed strings are unaffected by the normalization.
         let flags = KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
 
         let multi = KeyEvent {
