@@ -9,7 +9,6 @@ use parking_lot::Mutex;
 use rangeset::intersects_range;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::sync::Arc;
 use url::Url;
 use wezterm_term::{StableRowIndex, TerminalSize};
@@ -335,146 +334,91 @@ fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
     }
 }
 
-fn adjust_x_size(tree: &mut Tree, mut x_adjust: isize, cell_dimensions: &TerminalSize) {
-    let (min_x, _) = compute_min_size(tree);
-    while x_adjust != 0 {
-        match tree {
-            Tree::Empty | Tree::Leaf(_) => return,
-            Tree::Node { data: None, .. } => return,
-            Tree::Node {
-                left,
-                right,
-                data: Some(data),
-            } => {
-                data.first.dpi = cell_dimensions.dpi;
-                data.second.dpi = cell_dimensions.dpi;
-                match data.direction {
-                    SplitDirection::Vertical => {
-                        let new_cols = (data.first.cols as isize)
-                            .saturating_add(x_adjust)
-                            .max(min_x as isize);
-                        x_adjust = new_cols.saturating_sub(data.first.cols as isize);
+/// Splits `available` cells between two children in proportion to their
+/// current sizes, while leaving each at least its minimum size.
+fn split_proportionally(
+    available: usize,
+    first: usize,
+    second: usize,
+    min_first: usize,
+    min_second: usize,
+) -> usize {
+    let total = first + second;
+    let ideal = if total == 0 {
+        available / 2
+    } else {
+        (available * first + total / 2) / total
+    };
+    ideal
+        .min(available.saturating_sub(min_second))
+        .max(min_first)
+}
 
-                        if x_adjust != 0 {
-                            adjust_x_size(&mut *left, x_adjust, cell_dimensions);
-                            data.first.cols = new_cols.try_into().unwrap();
-                            data.first.pixel_width =
-                                data.first.cols.saturating_mul(cell_dimensions.pixel_width);
-
-                            adjust_x_size(&mut *right, x_adjust, cell_dimensions);
-                            data.second.cols = data.first.cols;
-                            data.second.pixel_width = data.first.pixel_width;
-                        }
-                        return;
-                    }
-                    SplitDirection::Horizontal if x_adjust > 0 => {
-                        adjust_x_size(&mut *left, 1, cell_dimensions);
-                        data.first.cols += 1;
-                        data.first.pixel_width =
-                            data.first.cols.saturating_mul(cell_dimensions.pixel_width);
-                        x_adjust -= 1;
-
-                        if x_adjust > 0 {
-                            adjust_x_size(&mut *right, 1, cell_dimensions);
-                            data.second.cols += 1;
-                            data.second.pixel_width =
-                                data.second.cols.saturating_mul(cell_dimensions.pixel_width);
-                            x_adjust -= 1;
-                        }
-                    }
-                    SplitDirection::Horizontal => {
-                        // x_adjust is negative
-                        if data.first.cols > 1 {
-                            adjust_x_size(&mut *left, -1, cell_dimensions);
-                            data.first.cols -= 1;
-                            data.first.pixel_width =
-                                data.first.cols.saturating_mul(cell_dimensions.pixel_width);
-                            x_adjust += 1;
-                        }
-                        if x_adjust < 0 && data.second.cols > 1 {
-                            adjust_x_size(&mut *right, -1, cell_dimensions);
-                            data.second.cols -= 1;
-                            data.second.pixel_width =
-                                data.second.cols.saturating_mul(cell_dimensions.pixel_width);
-                            x_adjust += 1;
-                        }
-                    }
-                }
-            }
-        }
+fn sized(cols: usize, rows: usize, cell_dimensions: &TerminalSize) -> TerminalSize {
+    TerminalSize {
+        cols,
+        rows,
+        pixel_width: cols * cell_dimensions.pixel_width,
+        pixel_height: rows * cell_dimensions.pixel_height,
+        dpi: cell_dimensions.dpi,
     }
 }
 
-fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &TerminalSize) {
-    let (_, min_y) = compute_min_size(tree);
-    while y_adjust != 0 {
-        match tree {
-            Tree::Empty | Tree::Leaf(_) => return,
-            Tree::Node { data: None, .. } => return,
-            Tree::Node {
-                left,
-                right,
-                data: Some(data),
-            } => {
-                data.first.dpi = cell_dimensions.dpi;
-                data.second.dpi = cell_dimensions.dpi;
-                match data.direction {
-                    SplitDirection::Horizontal => {
-                        let new_rows = (data.first.rows as isize)
-                            .saturating_add(y_adjust)
-                            .max(min_y as isize);
-                        y_adjust = new_rows.saturating_sub(data.first.rows as isize);
-
-                        if y_adjust != 0 {
-                            adjust_y_size(&mut *left, y_adjust, cell_dimensions);
-                            data.first.rows = new_rows.try_into().unwrap();
-                            data.first.pixel_height =
-                                data.first.rows.saturating_mul(cell_dimensions.pixel_height);
-
-                            adjust_y_size(&mut *right, y_adjust, cell_dimensions);
-                            data.second.rows = data.first.rows;
-                            data.second.pixel_height = data.first.pixel_height;
-                        }
-                        return;
-                    }
-                    SplitDirection::Vertical if y_adjust > 0 => {
-                        adjust_y_size(&mut *left, 1, cell_dimensions);
-                        data.first.rows += 1;
-                        data.first.pixel_height =
-                            data.first.rows.saturating_mul(cell_dimensions.pixel_height);
-                        y_adjust -= 1;
-                        if y_adjust > 0 {
-                            adjust_y_size(&mut *right, 1, cell_dimensions);
-                            data.second.rows += 1;
-                            data.second.pixel_height = data
-                                .second
-                                .rows
-                                .saturating_mul(cell_dimensions.pixel_height);
-                            y_adjust -= 1;
-                        }
-                    }
-                    SplitDirection::Vertical => {
-                        // y_adjust is negative
-                        if data.first.rows > 1 {
-                            adjust_y_size(&mut *left, -1, cell_dimensions);
-                            data.first.rows -= 1;
-                            data.first.pixel_height =
-                                data.first.rows.saturating_mul(cell_dimensions.pixel_height);
-                            y_adjust += 1;
-                        }
-                        if y_adjust < 0 && data.second.rows > 1 {
-                            adjust_y_size(&mut *right, -1, cell_dimensions);
-                            data.second.rows -= 1;
-                            data.second.pixel_height = data
-                                .second
-                                .rows
-                                .saturating_mul(cell_dimensions.pixel_height);
-                            y_adjust += 1;
-                        }
-                    }
-                }
+/// Lays the tree out to exactly fill `cols` x `rows`, keeping the existing
+/// proportions of each split (subject to minimum pane sizes).
+///
+/// The current split sizes are only used as weights, so every child always
+/// fills its parent exactly. A tree whose recorded sizes don't add up, such
+/// as one a mux server rebuilt from panes that were resized one at a time,
+/// is repaired here rather than carried forward.
+fn resize_proportionally(
+    tree: &mut Tree,
+    cols: usize,
+    rows: usize,
+    cell_dimensions: &TerminalSize,
+) {
+    if let Tree::Node {
+        left,
+        right,
+        data: Some(data),
+    } = tree
+    {
+        let (min_left_x, min_left_y) = compute_min_size(&mut *left);
+        let (min_right_x, min_right_y) = compute_min_size(&mut *right);
+        let (first, second) = match data.direction {
+            SplitDirection::Horizontal => {
+                let available = cols.saturating_sub(1);
+                let first_cols = split_proportionally(
+                    available,
+                    data.first.cols,
+                    data.second.cols,
+                    min_left_x,
+                    min_right_x,
+                );
+                (
+                    sized(first_cols, rows, cell_dimensions),
+                    sized(available.saturating_sub(first_cols), rows, cell_dimensions),
+                )
             }
-        }
+            SplitDirection::Vertical => {
+                let available = rows.saturating_sub(1);
+                let first_rows = split_proportionally(
+                    available,
+                    data.first.rows,
+                    data.second.rows,
+                    min_left_y,
+                    min_right_y,
+                );
+                (
+                    sized(cols, first_rows, cell_dimensions),
+                    sized(cols, available.saturating_sub(first_rows), cell_dimensions),
+                )
+            }
+        };
+        data.first = first;
+        data.second = second;
+        resize_proportionally(&mut *left, first.cols, first.rows, cell_dimensions);
+        resize_proportionally(&mut *right, second.cols, second.rows, cell_dimensions);
     }
 }
 
@@ -1148,7 +1092,6 @@ impl TabInner {
         } else {
             let dims = cell_dimensions(&size);
             let (min_x, min_y) = compute_min_size(self.pane.as_mut().unwrap());
-            let current_size = self.size;
 
             // Constrain the new size to the minimum possible dimensions
             let cols = size.cols.max(min_x);
@@ -1161,17 +1104,8 @@ impl TabInner {
                 dpi: dims.dpi,
             };
 
-            // Update the split nodes with adjusted sizes
-            adjust_x_size(
-                self.pane.as_mut().unwrap(),
-                cols as isize - current_size.cols as isize,
-                &dims,
-            );
-            adjust_y_size(
-                self.pane.as_mut().unwrap(),
-                rows as isize - current_size.rows as isize,
-                &dims,
-            );
+            // Update the split nodes, keeping their proportions
+            resize_proportionally(self.pane.as_mut().unwrap(), cols, rows, &dims);
 
             self.size = size;
 
@@ -2267,7 +2201,18 @@ mod test {
         }
 
         fn get_dimensions(&self) -> RenderableDimensions {
-            unimplemented!();
+            let size = *self.size.lock();
+            RenderableDimensions {
+                cols: size.cols,
+                viewport_rows: size.rows,
+                scrollback_rows: size.rows,
+                physical_top: 0,
+                scrollback_top: 0,
+                dpi: size.dpi,
+                pixel_width: size.pixel_width,
+                pixel_height: size.pixel_height,
+                reverse_video: false,
+            }
         }
 
         fn get_title(&self) -> String {
@@ -2524,5 +2469,187 @@ mod test {
     #[test]
     fn tab_is_send_and_sync() {
         assert!(is_send_and_sync::<Tab>());
+    }
+
+    const CELL_W: usize = 10;
+    const CELL_H: usize = 20;
+
+    fn cells(cols: usize, rows: usize) -> TerminalSize {
+        TerminalSize {
+            cols,
+            rows,
+            pixel_width: cols * CELL_W,
+            pixel_height: rows * CELL_H,
+            dpi: 96,
+        }
+    }
+
+    fn split(tab: &Tab, index: usize, direction: SplitDirection, id: PaneId) {
+        let request = SplitRequest {
+            direction,
+            ..Default::default()
+        };
+        let size = tab.compute_split_size(index, request).unwrap();
+        tab.split_and_insert(index, request, FakePane::new(id, size.second))
+            .unwrap();
+    }
+
+    fn layout(tab: &Tab) -> String {
+        tab.iter_panes()
+            .iter()
+            .map(|p| {
+                format!(
+                    "{}@{},{}:{}x{}",
+                    p.pane.pane_id(),
+                    p.left,
+                    p.top,
+                    p.width,
+                    p.height
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The panes must exactly tile the tab: nothing overlaps, nothing
+    /// sticks out, every edge meets the tab edge or a divider, and each
+    /// pane was told the same size the layout gives it.
+    fn assert_tiles(tab: &Tab, context: &str) {
+        let size = tab.get_size();
+        let panes = tab.iter_panes();
+        let desc = format!(
+            "{context}: tab {}x{} :: {}",
+            size.cols,
+            size.rows,
+            layout(tab)
+        );
+        let mut grid = vec![vec![false; size.cols]; size.rows];
+        for p in &panes {
+            assert!(
+                p.left + p.width <= size.cols && p.top + p.height <= size.rows,
+                "pane sticks out of the tab; {}",
+                desc
+            );
+            for row in &mut grid[p.top..p.top + p.height] {
+                for cell in &mut row[p.left..p.left + p.width] {
+                    assert!(!*cell, "panes overlap; {}", desc);
+                    *cell = true;
+                }
+            }
+            let right = p.left + p.width;
+            let bottom = p.top + p.height;
+            assert!(
+                right == size.cols || panes.iter().any(|q| q.left == right + 1),
+                "gap right of pane {}; {desc}",
+                p.pane.pane_id()
+            );
+            assert!(
+                bottom == size.rows || panes.iter().any(|q| q.top == bottom + 1),
+                "gap below pane {}; {desc}",
+                p.pane.pane_id()
+            );
+            let dims = p.pane.get_dimensions();
+            assert_eq!(
+                (dims.cols, dims.viewport_rows),
+                (p.width, p.height),
+                "pane {} was sized differently from its slot; {desc}",
+                p.pane.pane_id()
+            );
+        }
+        assert_eq!(
+            panes.iter().map(|p| p.left + p.width).max(),
+            Some(size.cols),
+            "panes don't reach the right edge; {desc}"
+        );
+        assert_eq!(
+            panes.iter().map(|p| p.top + p.height).max(),
+            Some(size.rows),
+            "panes don't reach the bottom edge; {desc}"
+        );
+    }
+
+    /// `left | (top / bottom)`: the layout from the mux-client reports.
+    fn three_pane_tab() -> Tab {
+        let tab = Tab::new(&cells(80, 24));
+        tab.assign_pane(&FakePane::new(1, cells(80, 24)));
+        split(&tab, 0, SplitDirection::Horizontal, 2);
+        split(&tab, 1, SplitDirection::Vertical, 3);
+        assert_tiles(&tab, "initial");
+        tab
+    }
+
+    #[test]
+    fn resize_big_tiny_big_keeps_proportions() {
+        let tab = three_pane_tab();
+        // left 39 cols, right column split 11 over 12 rows
+        tab.resize(cells(347, 78));
+        assert_tiles(&tab, "grown");
+        let grown = layout(&tab);
+
+        tab.resize(cells(5, 3));
+        assert_tiles(&tab, "tiny");
+        tab.resize(cells(347, 78));
+        assert_tiles(&tab, "regrown");
+
+        for p in tab.iter_panes() {
+            assert!(
+                p.height >= 30 && p.width >= 100,
+                "pane {} starved after shrink and regrow: {} (was {grown})",
+                p.pane.pane_id(),
+                layout(&tab)
+            );
+        }
+    }
+
+    #[test]
+    fn resize_sequence_always_tiles() {
+        // Window drags: deterministic pseudo-random sizes, including ones
+        // below the minimum the layout can hold.
+        let tab = three_pane_tab();
+        let mut seed: u64 = 0x5eed;
+        for step in 0..500 {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let cols = 1 + (seed >> 33) as usize % 400;
+            let rows = 1 + (seed >> 17) as usize % 100;
+            tab.resize(cells(cols, rows));
+            assert_tiles(&tab, &format!("step {step} resize to {cols}x{rows}"));
+        }
+    }
+
+    #[test]
+    fn resize_repairs_layout_rebuilt_from_mismatched_panes() {
+        // A mux server applies a client's Resize to one pane, then rebuilds
+        // the split sizes from all panes (sessionhandler.rs, Pdu::Resize).
+        // Until the client's other resizes arrive, the panes disagree.
+        let tab = three_pane_tab();
+        let panes = tab.iter_panes();
+        panes[2].pane.resize(cells(35, 12)).unwrap(); // bottom-right only
+        tab.rebuild_splits_sizes_from_contained_panes();
+
+        // The next resize must produce a layout that fits again.
+        tab.resize(cells(80, 24));
+        assert_tiles(&tab, "same size after rebuild");
+        tab.resize(cells(172, 37));
+        assert_tiles(&tab, "grown after rebuild");
+    }
+
+    #[test]
+    fn shrinking_nested_splits_does_not_hang() {
+        // (a | b) | c: shrinking hard leaves the inner split at its
+        // minimum while the outer one still has room to give.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let tab = Tab::new(&cells(80, 24));
+            tab.assign_pane(&FakePane::new(1, cells(80, 24)));
+            split(&tab, 0, SplitDirection::Horizontal, 2);
+            split(&tab, 0, SplitDirection::Horizontal, 3);
+            tab.resize(cells(200, 24));
+            tab.resize(cells(1, 24));
+            tx.send(layout(&tab)).ok();
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("Tab::resize did not return within 10s");
     }
 }
