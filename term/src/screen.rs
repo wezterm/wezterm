@@ -6,6 +6,7 @@ use log::debug;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use termwiz::input::KeyboardEncoding;
+use wezterm_cell::image::ImageCell;
 use wezterm_surface::SequenceNo;
 
 /// Holds the model of a screen.  This can either be the primary screen
@@ -407,6 +408,19 @@ impl Screen {
 
         let line = self.line_mut(line_idx);
         line.set_cell(x, cell.clone(), seqno);
+    }
+
+    pub(crate) fn set_cell_image(
+        &mut self,
+        x: usize,
+        y: VisibleRowIndex,
+        image: ImageCell,
+        replace: bool,
+        seqno: SequenceNo,
+    ) {
+        let line_idx = self.phys_row(y);
+        self.line_mut(line_idx)
+            .set_cell_image(x, image, replace, seqno);
     }
 
     pub fn set_cell_grapheme(

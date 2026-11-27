@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use termwiz::cellcluster::CellCluster;
 use termwiz::hyperlink::Hyperlink;
+use termwiz::image::ImageCell;
 use termwiz::surface::{CursorShape, CursorVisibility, SequenceNo};
 use wezterm_font::shaper::PresentationWidth;
 use wezterm_font::units::{IntPixelLength, PixelLength};
@@ -117,6 +118,8 @@ pub struct LineToElementShape {
     pub pixel_width: f32,
     pub glyph_info: Rc<Vec<ShapedInfo>>,
     pub cluster: CellCluster,
+    // Physical image tiles indexed from the visual left edge of this cluster.
+    pub images: Vec<(usize, Vec<ImageCell>)>,
 }
 
 pub struct RenderScreenLineResult {
