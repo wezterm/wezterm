@@ -765,7 +765,7 @@ rustup default {toolchain}
             ),
         ]
 
-    def create_winget_pr(self):
+    def create_winget_pr(self, nightly=False):
         steps = []
         if "windows" in self.name:
             steps += [
@@ -786,18 +786,35 @@ rustup default {toolchain}
                     "Setup name for winget repo",
                     "cd winget-pkgs && git config user.name 'Wez Furlong'",
                 ),
-                RunStep(
-                    "Create winget manifest and push to fork",
-                    "bash ci/make-winget-pr.sh winget-pkgs WezTerm-*.exe",
-                ),
-                RunStep(
-                    "Submit PR",
-                    'cd winget-pkgs && gh pr create --fill --body "PR automatically created by release automation in the wezterm repo"',
-                    env={
-                        "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
-                    },
-                ),
             ]
+            if nightly:
+                # Every upload (scheduled or push) replaces the installer at
+                # the fixed nightly URL, so refresh the manifest each time.
+                # The script reuses one fork branch and opens a PR only when
+                # none is open, so this never stacks up PRs upstream.
+                steps += [
+                    RunStep(
+                        "Update nightly winget manifest PR",
+                        "bash ci/make-winget-pr.sh winget-pkgs WezTerm-nightly-setup.exe nightly",
+                        env={
+                            "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
+                        },
+                    ),
+                ]
+            else:
+                steps += [
+                    RunStep(
+                        "Create winget manifest and push to fork",
+                        "bash ci/make-winget-pr.sh winget-pkgs WezTerm-*.exe",
+                    ),
+                    RunStep(
+                        "Submit PR",
+                        'cd winget-pkgs && gh pr create --fill --body "PR automatically created by release automation in the wezterm repo"',
+                        env={
+                            "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
+                        },
+                    ),
+                ]
 
         return steps
 
@@ -1001,7 +1018,9 @@ rustup default {toolchain}
 
         uploader = Job(
             runs_on="ubuntu-latest",
-            steps=self.checkout(submodules=False) + self.upload_asset_nightly(),
+            steps=self.checkout(submodules=False)
+            + self.upload_asset_nightly()
+            + self.create_winget_pr(nightly=True),
         )
 
         return (
