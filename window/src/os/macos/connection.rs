@@ -173,6 +173,17 @@ impl ConnectionOps for Connection {
         }
     }
 
+    fn request_attention(&self) {
+        // NSCriticalRequest: the dock icon bounces continuously until the
+        // user brings the application to the foreground. macOS automatically
+        // suppresses the bounce while this application is already active,
+        // so no explicit focus check is needed here.
+        const NS_CRITICAL_REQUEST: u64 = 1;
+        unsafe {
+            let () = msg_send![NSApp(), requestUserAttention: NS_CRITICAL_REQUEST];
+        }
+    }
+
     fn screens(&self) -> anyhow::Result<Screens> {
         let mut by_name = HashMap::new();
         let mut virtual_rect = euclid::rect(0, 0, 0, 0);
