@@ -39,6 +39,11 @@ pub struct StartCommand {
     #[arg(long = "always-new-process")]
     pub always_new_process: bool,
 
+    /// Wait for PROG to exit and exit with its exit status, without waiting
+    /// for the GUI window to close. Requires PROG and the local domain.
+    #[arg(long = "wait-exit", requires = "prog")]
+    pub wait_exit: bool,
+
     /// When spawning into an existing GUI instance, spawn a new
     /// tab into the active window rather than spawn a new window.
     #[arg(long, conflicts_with = "always_new_process")]
@@ -106,6 +111,31 @@ pub struct StartCommand {
     /// as if it were a login shell. [aliases: -e]
     #[arg(value_parser, value_hint=ValueHint::CommandWithArguments, num_args=1..)]
     pub prog: Vec<OsString>,
+}
+
+#[cfg(test)]
+mod exit_status_flag_tests {
+    use super::*;
+
+    #[test]
+    fn status_reporting_is_explicitly_opted_in() {
+        let ordinary = StartCommand::try_parse_from(["start", "--", "cmd.exe"]).unwrap();
+        assert!(!ordinary.wait_exit);
+
+        let tracked = StartCommand::try_parse_from([
+            "start",
+            "--always-new-process",
+            "--no-auto-connect",
+            "--wait-exit",
+            "--",
+            "cmd.exe",
+        ])
+        .unwrap();
+        assert!(tracked.wait_exit);
+        assert_eq!(tracked.prog, vec![OsString::from("cmd.exe")]);
+
+        assert!(StartCommand::try_parse_from(["start", "--wait-exit"]).is_err());
+    }
 }
 
 #[derive(Debug, Parser, Clone)]
