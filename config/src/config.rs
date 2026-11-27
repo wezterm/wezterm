@@ -666,6 +666,9 @@ pub struct Config {
     #[dynamic(default = "default_reverse_video_cursor_min_contrast")]
     pub reverse_video_cursor_min_contrast: f32,
 
+    #[dynamic(default)]
+    pub force_reverse_video_selection: bool,
+
     /// Specifies the default cursor style.  various escape sequences
     /// can override the default style in different situations (eg:
     /// an editor can change it depending on the mode), but this value
