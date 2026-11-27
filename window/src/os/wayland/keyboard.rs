@@ -25,7 +25,7 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
             WlKeyboardEvent::Enter {
                 serial, surface, ..
             } => {
-                *state.active_surface_id.borrow_mut() = Some(surface.id());
+                *state.keyboard_surface_id.borrow_mut() = Some(surface.id());
                 *state.last_serial.borrow_mut() = *serial;
                 if let Some(sud) = SurfaceUserData::try_from_wl(&surface) {
                     let window_id = sud.window_id;
