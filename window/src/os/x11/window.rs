@@ -10,6 +10,7 @@ use crate::{
 };
 use anyhow::{anyhow, Context as _};
 use async_trait::async_trait;
+use config::window::WindowAppearance;
 use config::ConfigHandle;
 use promise::{Future, Promise};
 use raw_window_handle::{
@@ -1272,6 +1273,32 @@ impl XWindowInner {
         )
     }
 
+    /// Hints the preferred light/dark variant of the window decorations
+    /// to the window manager when `window_appearance` is forced.
+    /// Only honored by some window managers, such as Mutter.
+    fn update_gtk_theme_variant(&mut self) -> anyhow::Result<()> {
+        let conn = self.conn();
+        let variant = match self.config.window_appearance {
+            WindowAppearance::System => None,
+            WindowAppearance::ForcedDark => Some("dark"),
+            WindowAppearance::ForcedLight => Some("light"),
+        };
+        match variant {
+            Some(variant) => conn.send_request_no_reply(&xcb::x::ChangeProperty {
+                mode: PropMode::Replace,
+                window: self.window_id,
+                property: conn.atom_gtk_theme_variant,
+                r#type: conn.atom_utf8_string,
+                data: variant.as_bytes(),
+            })?,
+            None => conn.send_request_no_reply(&xcb::x::DeleteProperty {
+                window: self.window_id,
+                property: conn.atom_gtk_theme_variant,
+            })?,
+        }
+        Ok(())
+    }
+
     #[allow(clippy::identity_op)]
     fn adjust_decorations(&mut self, decorations: WindowDecorations) -> anyhow::Result<()> {
         // Set the motif hints to disable decorations.
@@ -1547,10 +1574,11 @@ impl XWindow {
             data: &[5u32],
         })?;
 
-        window
-            .lock()
-            .unwrap()
-            .adjust_decorations(config.window_decorations)?;
+        {
+            let mut window = window.lock().unwrap();
+            window.adjust_decorations(config.window_decorations)?;
+            window.update_gtk_theme_variant()?;
+        }
 
         let window_handle = Window::X11(XWindow::from_id(window_id));
 
@@ -1705,6 +1733,7 @@ impl XWindowInner {
             self.config.dpi != config.dpi || self.config.dpi_by_screen != config.dpi_by_screen;
         self.config = config.clone();
         let _ = self.adjust_decorations(config.window_decorations);
+        let _ = self.update_gtk_theme_variant();
 
         if dpi_changed {
             let _ = self.configure_notify("config reload", self.width, self.height);

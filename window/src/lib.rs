@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use bitflags::bitflags;
-use config::window::WindowLevel;
+use config::window::{WindowAppearance, WindowLevel};
 use config::{ConfigHandle, Dimension, GeometryOrigin};
 use promise::Future;
 use std::any::Any;
@@ -79,6 +79,34 @@ pub enum Appearance {
     /// darker background but with higher contrast than regular
     /// dark mode
     DarkHighContrast,
+}
+
+impl Appearance {
+    pub fn is_dark(self) -> bool {
+        matches!(self, Self::Dark | Self::DarkHighContrast)
+    }
+
+    fn is_high_contrast(self) -> bool {
+        matches!(self, Self::LightHighContrast | Self::DarkHighContrast)
+    }
+
+    /// Applies the `window_appearance` config to the appearance reported
+    /// by the system, yielding the appearance the window should use.
+    /// A forced setting only overrides light vs. dark; the high contrast
+    /// preference of the system is preserved.
+    pub fn with_window_appearance(self, setting: WindowAppearance) -> Self {
+        let dark = match setting {
+            WindowAppearance::System => return self,
+            WindowAppearance::ForcedDark => true,
+            WindowAppearance::ForcedLight => false,
+        };
+        match (dark, self.is_high_contrast()) {
+            (true, false) => Self::Dark,
+            (true, true) => Self::DarkHighContrast,
+            (false, false) => Self::Light,
+            (false, true) => Self::LightHighContrast,
+        }
+    }
 }
 
 impl std::string::ToString for Appearance {
@@ -378,6 +406,57 @@ impl ResizeIncrement {
             y: 1,
             base_width: 0,
             base_height: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    const ALL: [Appearance; 4] = [
+        Appearance::Light,
+        Appearance::Dark,
+        Appearance::LightHighContrast,
+        Appearance::DarkHighContrast,
+    ];
+
+    #[test]
+    fn system_window_appearance_follows_system() {
+        for raw in ALL {
+            assert_eq!(raw.with_window_appearance(WindowAppearance::System), raw);
+        }
+    }
+
+    #[test]
+    fn forced_window_appearance_keeps_high_contrast() {
+        // Forcing only overrides light vs. dark; whether the system asked
+        // for high contrast is preserved.
+        let cases = [
+            (Appearance::Light, Appearance::Dark, Appearance::Light),
+            (Appearance::Dark, Appearance::Dark, Appearance::Light),
+            (
+                Appearance::LightHighContrast,
+                Appearance::DarkHighContrast,
+                Appearance::LightHighContrast,
+            ),
+            (
+                Appearance::DarkHighContrast,
+                Appearance::DarkHighContrast,
+                Appearance::LightHighContrast,
+            ),
+        ];
+        for (raw, forced_dark, forced_light) in cases {
+            assert_eq!(
+                raw.with_window_appearance(WindowAppearance::ForcedDark),
+                forced_dark,
+                "{raw:?} with ForcedDark"
+            );
+            assert_eq!(
+                raw.with_window_appearance(WindowAppearance::ForcedLight),
+                forced_light,
+                "{raw:?} with ForcedLight"
+            );
         }
     }
 }

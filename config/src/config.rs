@@ -81,6 +81,11 @@ pub struct Config {
     #[dynamic(default)]
     pub window_decorations: WindowDecorations,
 
+    /// Overrides the light/dark appearance of the window,
+    /// independently of the system-wide appearance
+    #[dynamic(default)]
+    pub window_appearance: crate::window::WindowAppearance,
+
     #[dynamic(default = "default_integrated_title_buttons")]
     pub integrated_title_buttons: Vec<IntegratedTitleButton>,
 

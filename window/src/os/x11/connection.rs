@@ -90,6 +90,7 @@ pub struct XConnection {
     pub atom_motif_wm_hints: Atom,
     pub atom_net_wm_pid: Atom,
     pub atom_net_wm_name: Atom,
+    pub atom_gtk_theme_variant: Atom,
     pub atom_net_wm_icon: Atom,
     pub atom_net_move_resize_window: Atom,
     pub atom_net_wm_moveresize: Atom,
@@ -708,6 +709,7 @@ impl XConnection {
         let atom_motif_wm_hints = Self::intern_atom(&conn, "_MOTIF_WM_HINTS")?;
         let atom_net_wm_pid = Self::intern_atom(&conn, "_NET_WM_PID")?;
         let atom_net_wm_name = Self::intern_atom(&conn, "_NET_WM_NAME")?;
+        let atom_gtk_theme_variant = Self::intern_atom(&conn, "_GTK_THEME_VARIANT")?;
         let atom_net_wm_icon = Self::intern_atom(&conn, "_NET_WM_ICON")?;
         let atom_net_move_resize_window = Self::intern_atom(&conn, "_NET_MOVERESIZE_WINDOW")?;
         let atom_net_wm_moveresize = Self::intern_atom(&conn, "_NET_WM_MOVERESIZE")?;
@@ -845,6 +847,7 @@ impl XConnection {
             atom_motif_wm_hints,
             atom_net_wm_pid,
             atom_net_wm_name,
+            atom_gtk_theme_variant,
             atom_net_move_resize_window,
             atom_net_wm_moveresize,
             atom_net_supported,
