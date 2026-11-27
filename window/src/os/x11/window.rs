@@ -1844,7 +1844,10 @@ impl XWindowInner {
     }
 
     fn update_ime_position(&mut self) {
-        if !self.has_focus.unwrap_or(false) {
+        // update_pos can open an input context. When IME event processing is
+        // disabled, that handshake cannot finish and cursor motion keeps retrying
+        // it. Use the same setting as XConnection::process_xcb_event_ime.
+        if !config::configuration().use_ime || !self.has_focus.unwrap_or(false) {
             return;
         }
         self.conn().ime.borrow_mut().update_pos(
