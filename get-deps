@@ -53,6 +53,7 @@ alpine_deps() {
     'libx11-dev' \
     'libxkbcommon-dev' \
     'openssl-dev' \
+    'openssl-libs-static' \
     'pkgconf' \
     'python3' \
     'wayland-dev' \
@@ -61,6 +62,7 @@ alpine_deps() {
     'xcb-util-keysyms-dev' \
     'xcb-util-wm-dev' \
     'zlib-dev' \
+    'zlib-static' \
     'zstd-dev'
 
   if ! test_cmd 'cargo'; then
