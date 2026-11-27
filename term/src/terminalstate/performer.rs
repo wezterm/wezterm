@@ -1086,7 +1086,7 @@ impl<'a> Performer<'a> {
                     TProg::SetPercentage(p) => Progress::Percentage(p),
                     TProg::SetError(p) => Progress::Error(p),
                     TProg::SetIndeterminate => Progress::Indeterminate,
-                    TProg::Paused => Progress::None,
+                    TProg::Paused(p) => Progress::Paused(p),
                 };
                 if prog != self.progress {
                     self.progress = prog.clone();

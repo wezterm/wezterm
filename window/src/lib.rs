@@ -51,6 +51,40 @@ impl Default for Clipboard {
     }
 }
 
+/// Progress state reflected in the window's taskbar button.
+/// Percentages are in the range 0-100.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskbarProgress {
+    #[default]
+    None,
+    Normal(u8),
+    Error(u8),
+    Indeterminate,
+    Paused(u8),
+}
+
+impl TaskbarProgress {
+    /// The state to show for a window with several panes. Like Windows
+    /// Terminal: error, then paused, then a percentage, then indeterminate.
+    /// Within the same state, the higher percentage wins.
+    pub fn most_important(states: impl IntoIterator<Item = Self>) -> Self {
+        states
+            .into_iter()
+            .max_by_key(Self::importance)
+            .unwrap_or_default()
+    }
+
+    fn importance(&self) -> (u8, u8) {
+        match *self {
+            Self::None => (0, 0),
+            Self::Indeterminate => (1, 0),
+            Self::Normal(pct) => (2, pct),
+            Self::Paused(pct) => (3, pct),
+            Self::Error(pct) => (4, pct),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dimensions {
     pub pixel_width: usize,
@@ -272,6 +306,11 @@ pub trait WindowOps {
     /// Change the titlebar text for the window
     fn set_title(&self, title: &str);
 
+    /// Show progress on the window's taskbar button.
+    ///
+    /// This is only implemented on Windows.
+    fn set_taskbar_progress(&self, _progress: TaskbarProgress) {}
+
     /// Resize the inner or client area of the window
     fn set_inner_size(&self, width: usize, height: usize);
 
@@ -379,5 +418,49 @@ impl ResizeIncrement {
             base_width: 0,
             base_height: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::TaskbarProgress::{self, *};
+
+    #[test]
+    fn taskbar_progress_without_panes_is_none() {
+        assert_eq!(TaskbarProgress::most_important([]), None);
+    }
+
+    #[test]
+    fn taskbar_progress_prefers_error_then_paused_then_normal() {
+        // A failing pane must not be hidden by busy or paused neighbours,
+        // whatever their order
+        assert_eq!(
+            TaskbarProgress::most_important([Normal(90), Error(10), Paused(50), Indeterminate]),
+            Error(10)
+        );
+        assert_eq!(
+            TaskbarProgress::most_important([Normal(90), Paused(5), Indeterminate]),
+            Paused(5)
+        );
+    }
+
+    #[test]
+    fn taskbar_progress_prefers_a_percentage_over_indeterminate() {
+        assert_eq!(
+            TaskbarProgress::most_important([Indeterminate, Normal(1), None]),
+            Normal(1)
+        );
+        assert_eq!(
+            TaskbarProgress::most_important([None, Indeterminate]),
+            Indeterminate
+        );
+    }
+
+    #[test]
+    fn taskbar_progress_takes_the_highest_percentage_of_a_state() {
+        assert_eq!(
+            TaskbarProgress::most_important([Normal(20), Normal(70), Normal(40)]),
+            Normal(70)
+        );
     }
 }
