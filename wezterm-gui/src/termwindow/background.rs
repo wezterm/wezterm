@@ -564,7 +564,48 @@ impl crate::TermWindow {
                 // log::info!("quad {origin_x},{origin_y} {width}x{height}");
                 quad.set_position(origin_x, origin_y, origin_x + width, origin_y + height);
 
-                let coords = sprite.texture_coords();
+                /*
+                The following code adjusts the sprite's texture coordinates to
+                avoid sampling artifacts (seams/gaps) that may occur if the
+                texture has padding around its edges. The idea is to shrink the
+                original texture coordinate rectangle by one pixel on all
+                sides. This is achieved by:
+
+                1. Calculating a normalized "shrink" value for both x and y
+                based on the texture's widthand height (i.e., 1 pixel in
+                texture-space).
+                2. Offsetting the origin (top-left corner) of the coordinate
+                rectangle by this shrink value, effectively moving it inward.
+                3. Reducing the rectangle's width and height by twice the
+                shrink value to ensure the right and bottom edges are also
+                inset.
+                4. Finally, retrieving the new min and max values along both x
+                and y axes for further use.
+
+                Note: I believe this issue is likely to be found across all
+                sprites, but applying this logic in mod.rs in
+                to_texture_coords() applied to everything, including glyphs,
+                which looked bad. The issue only becomes majorly apparent with
+                the backgrounds which is why I opted to put this patch here.
+                Someone with better knowledge of 2D graphics might have better
+                success than me in fixing this. Atlas.rs looked okay, and I
+                played around with padding and other variables without much
+                success.
+                */
+
+                let mut coords = sprite.texture_coords();
+
+                // Apply padding shrink to avoid sampling padding
+                // This assumes the texture is big enough to allow a 1-pixel
+                // inset on all sides
+                let shrink_x = 1.0 / sprite.texture.width() as f32;
+                let shrink_y = 1.0 / sprite.texture.height() as f32;
+
+                coords.origin.x += shrink_x;
+                coords.origin.y += shrink_y;
+                coords.size.width -= 2.0 * shrink_x;
+                coords.size.height -= 2.0 * shrink_y;
+
                 let mut x1 = coords.min_x();
                 let mut x2 = coords.max_x();
                 let mut y1 = coords.min_y();
