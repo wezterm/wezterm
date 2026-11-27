@@ -914,20 +914,21 @@ impl super::TermWindow {
             }),
         };
 
+        // Since we use shift to force assessing the mouse bindings, pretend
+        // that shift is not one of the mods when the mouse is grabbed.
+        let mut mouse_reporting = pane.is_mouse_grabbed();
+        let mut modifiers = event.modifiers;
+
+        if mouse_reporting {
+            if modifiers.contains(self.config.bypass_mouse_reporting_modifiers) {
+                modifiers.remove(self.config.bypass_mouse_reporting_modifiers);
+                mouse_reporting = false;
+            }
+        }
+
         if allow_action {
             if let Some(mut event_trigger_type) = event_trigger_type {
                 self.current_event = Some(event_trigger_type.to_dynamic());
-                let mut modifiers = event.modifiers;
-
-                // Since we use shift to force assessing the mouse bindings, pretend
-                // that shift is not one of the mods when the mouse is grabbed.
-                let mut mouse_reporting = pane.is_mouse_grabbed();
-                if mouse_reporting {
-                    if modifiers.contains(self.config.bypass_mouse_reporting_modifiers) {
-                        modifiers.remove(self.config.bypass_mouse_reporting_modifiers);
-                        mouse_reporting = false;
-                    }
-                }
 
                 if mouse_reporting {
                     // If they were scrolled back prior to launching an
@@ -1032,7 +1033,41 @@ impl super::TermWindow {
         if allow_action
             && !(self.config.swallow_mouse_click_on_pane_focus && is_click_to_focus_pane)
         {
-            pane.mouse_event(mouse_event).ok();
+            match (
+                &event.kind,
+                mouse_reporting && self.config.tui_scroll_gesture_support,
+            ) {
+                // TUI requested mouse; apply fan-out only for wheel events
+                (WMEK::VertWheel(n), true) | (WMEK::HorzWheel(n), true) => {
+                    const MAX_WHEEL_FANOUT: usize = 256;
+                    let steps = (*n).abs() as usize;
+
+                    if steps > 1 {
+                        let steps = steps.min(MAX_WHEEL_FANOUT);
+
+                        // Per-tick clone with the same coords/mods but a unit wheel delta
+                        let mut tick = mouse_event.clone();
+                        tick.button = match mouse_event.button {
+                            TMB::WheelUp(_) => TMB::WheelUp(1),
+                            TMB::WheelDown(_) => TMB::WheelDown(1),
+                            TMB::WheelLeft(_) => TMB::WheelLeft(1),
+                            TMB::WheelRight(_) => TMB::WheelRight(1),
+                            other => other,
+                        };
+
+                        for _ in 0..steps {
+                            pane.mouse_event(tick.clone()).ok();
+                        }
+                    } else {
+                        // Single-step wheel: forward as-is
+                        pane.mouse_event(mouse_event).ok();
+                    }
+                }
+                _ => {
+                    // Not a wheel or mouse reporting off: forward as-is
+                    pane.mouse_event(mouse_event).ok();
+                }
+            }
         }
 
         match event.kind {
