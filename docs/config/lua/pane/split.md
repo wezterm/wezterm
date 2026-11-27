@@ -62,6 +62,15 @@ Or you may use the default domain:
 pane:split { domain = 'DefaultDomain' }
 ```
 
+### move_pane_id
+
+Move an existing pane into the newly split location, rather than creating a new
+one.
+
+```lua
+other_pane:split { move_pane_id = pane:pane_id() }
+```
+
 ### direction
 
 Specifies where the new pane should be placed.  Possible values are:
