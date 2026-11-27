@@ -127,6 +127,13 @@ pub struct Config {
     #[dynamic(default)]
     pub bold_brightens_ansi_colors: BoldBrightening,
 
+    /// Linear-light foreground brightness multiplier for dim/faint text.
+    #[dynamic(
+        default = "default_one_point_oh_f64",
+        validate = "validate_dim_tint_factor"
+    )]
+    pub dim_tint_factor: f64,
+
     /// The color palette
     pub colors: Option<Palette>,
 
@@ -2177,6 +2184,14 @@ fn validate_row_or_col(value: &u16) -> Result<(), String> {
         Err("initial_cols and initial_rows must be non-zero".to_string())
     } else {
         Ok(())
+    }
+}
+
+fn validate_dim_tint_factor(value: &f64) -> Result<(), String> {
+    if (0.0..=1.0).contains(value) {
+        Ok(())
+    } else {
+        Err("dim_tint_factor must be between 0.0 and 1.0".to_string())
     }
 }
 
