@@ -71,6 +71,7 @@ impl crate::TermWindow {
         let mut left_status = vec![];
         let mut left_eles = vec![];
         let mut right_eles = vec![];
+        let mut window_button_eles = vec![];
         let bar_colors = ElementColors {
             border: BorderColor::default(),
             bg: if self.focused.is_some() {
@@ -401,7 +402,7 @@ impl crate::TermWindow {
                     {
                         left_eles.push(item_to_elem(item))
                     } else {
-                        right_eles.push(item_to_elem(item))
+                        window_button_eles.push(item_to_elem(item))
                     }
                 }
                 TabBarItem::Tab { tab_idx, active } => {
@@ -468,6 +469,16 @@ impl crate::TermWindow {
                 })
                 .zindex(1),
         );
+        // The window buttons float first, so that they keep the right edge
+        // and a long right status gets cut instead of pushing them out of
+        // the window
+        if !window_button_eles.is_empty() {
+            children.push(
+                Element::new(&font, ElementContent::Children(window_button_eles))
+                    .colors(bar_colors.clone())
+                    .float(Float::Right),
+            );
+        }
         children.push(
             Element::new(&font, ElementContent::Children(right_eles))
                 .colors(bar_colors.clone())
