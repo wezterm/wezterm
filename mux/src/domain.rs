@@ -93,20 +93,22 @@ pub trait Domain: Downcast + Send + Sync {
             None => anyhow::bail!("invalid pane id {}", pane_id),
         };
 
-        let split_size = match tab.compute_split_size(pane_index, split_request) {
-            Some(s) => s,
-            None => anyhow::bail!("invalid pane index {}", pane_index),
-        };
-
+        // Each split is checked for room before its pane is spawned or taken
+        // out of its tab, so a split that is refused leaves no pane outside
+        // a tab.
         let pane = match source {
             SplitSource::Spawn {
                 command,
                 command_dir,
             } => {
+                let split_size = tab.check_split(pane_index, split_request)?;
                 self.spawn_pane(split_size.second, command, command_dir)
                     .await?
             }
             SplitSource::MovePane(src_pane_id) => {
+                if src_pane_id == pane_id {
+                    anyhow::bail!("pane {} cannot move beside itself", src_pane_id);
+                }
                 let (_domain, _window, src_tab) = mux
                     .resolve_pane_id(src_pane_id)
                     .ok_or_else(|| anyhow::anyhow!("pane {} not found", src_pane_id))?;
@@ -114,6 +116,20 @@ pub trait Domain: Downcast + Send + Sync {
                     Some(t) => t,
                     None => anyhow::bail!("Invalid tab id {}", src_tab),
                 };
+
+                if src_tab.tab_id() == tab.tab_id() {
+                    // Taking the pane out gives its room to its neighbours,
+                    // so the split is checked on the tab without it.
+                    tab.check_move_within(src_pane_id, pane_id, split_request)
+                } else {
+                    tab.check_split(pane_index, split_request).map(|_| ())
+                }
+                .with_context(|| {
+                    format!(
+                        "pane {} cannot move beside pane {}, and stays where it was",
+                        src_pane_id, pane_id
+                    )
+                })?;
 
                 let pane = src_tab.remove_pane(src_pane_id).ok_or_else(|| {
                     anyhow::anyhow!("pane {} not found in its containing tab!?", src_pane_id)
