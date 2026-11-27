@@ -2,6 +2,7 @@ use crate::quad::Vertex;
 use anyhow::anyhow;
 use config::{ConfigHandle, GpuInfo, WebGpuPowerPreference};
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use window::bitmaps::Texture2d;
@@ -35,8 +36,10 @@ pub struct WebGpuState {
     pub texture_nearest_sampler: wgpu::Sampler,
     pub texture_linear_sampler: wgpu::Sampler,
     pub handle: RawHandlePair,
+    lost: Arc<AtomicBool>,
 }
 
+#[derive(Clone, Copy)]
 pub struct RawHandlePair {
     window: RawWindowHandle,
     display: RawDisplayHandle,
@@ -338,6 +341,29 @@ impl WebGpuState {
 
         let queue = Arc::new(queue);
 
+        // The device can be lost at any time, eg: when its GPU is reset, or when
+        // presenting through another GPU fails after a display was unplugged.
+        // Remember that, so that the window can replace this state, and don't
+        // treat the errors from using the lost device until then as fatal.
+        let lost = Arc::new(AtomicBool::new(false));
+        device.set_device_lost_callback({
+            let lost = Arc::clone(&lost);
+            move |reason, message| {
+                log::error!("webgpu device lost ({reason:?}): {message}");
+                lost.store(true, Ordering::Relaxed);
+            }
+        });
+        device.on_uncaptured_error({
+            let lost = Arc::clone(&lost);
+            Box::new(move |error| {
+                if !lost.load(Ordering::Relaxed) {
+                    // As wgpu does without a handler
+                    panic!("wgpu error: {}", error);
+                }
+                log::debug!("ignoring error from lost webgpu device: {error}");
+            })
+        });
+
         // Explicitly request an SRGB format, if available
         let pref_format_srgb = caps.formats[0].add_srgb_suffix();
         let format = if caps.formats.contains(&pref_format_srgb) {
@@ -506,7 +532,13 @@ impl WebGpuState {
             texture_bind_group_layout,
             texture_nearest_sampler,
             texture_linear_sampler,
+            lost,
         })
+    }
+
+    /// Returns true if the device was lost, and this state needs to be replaced
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Relaxed)
     }
 
     pub fn create_uniform(&self, uniform: ShaderUniform) -> wgpu::BindGroup {
