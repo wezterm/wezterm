@@ -1,3 +1,4 @@
+use crate::renderstate::ContextLost;
 use crate::termwindow::{RenderFrame, TermWindowNotif};
 use ::window::bitmaps::atlas::OutOfTextureSpace;
 use ::window::WindowOps;
@@ -90,6 +91,9 @@ impl crate::TermWindow {
                                 self.allow_images,
                             );
                         }
+                    } else if err.root_cause().downcast_ref::<ContextLost>().is_some() {
+                        // nothing to draw on a lost context; the next do_paint finds it lost
+                        return;
                     } else if err.root_cause().downcast_ref::<ClearShapeCache>().is_some() {
                         self.invalidate_fancy_tab_bar();
                         self.invalidate_modal();
@@ -182,7 +186,7 @@ impl crate::TermWindow {
         let layer = gl_state
             .layer_for_zindex(0)
             .context("layer_for_zindex(0)")?;
-        let mut layers = layer.quad_allocator();
+        let mut layers = layer.quad_allocator()?;
         log::trace!("quad map elapsed {:?}", start.elapsed());
         metrics::histogram!("quad.map").record(start.elapsed());
 
