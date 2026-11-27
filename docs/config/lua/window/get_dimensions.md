@@ -10,3 +10,9 @@ The table has the following fields:
 - `pixel_height`: the height of the window in pixels
 - `dpi`: The DPI of the screen the window in on
 - `is_full_screen`: whether the window is in full screen mode
+- `is_maximized`: whether the window is maximized {{since('nightly', inline=True)}}
+
+The pixel sizes are at the scale of the screen the window is on, so the same
+window has different pixel sizes on screens of different scales.
+[window:get_content_size()](get_content_size.md) {{since('nightly', inline=True)}}
+reports a size that means the same on every screen.

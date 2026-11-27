@@ -126,6 +126,10 @@ pub enum TermWindowNotif {
     SetLeftStatus(String),
     SetRightStatus(String),
     GetDimensions(Sender<(Dimensions, WindowState)>),
+    /// The window's font scale: 1.0 at the configured font_size, and
+    /// changed by IncreaseFontSize, DecreaseFontSize and ResetFontSize.
+    GetFontScale(Sender<f64>),
+    SetFontScale(f64),
     GetSelectionForPane {
         pane_id: PaneId,
         tx: Sender<String>,
@@ -150,6 +154,9 @@ pub enum TermWindowNotif {
         width: usize,
         height: usize,
     },
+    /// Resize the window to a size in the units of
+    /// WindowOps::get_content_size.
+    SetContentSize(ContentSize),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -376,6 +383,10 @@ pub struct TermWindow {
     pub window_state: WindowState,
     pub resizes_pending: usize,
     is_repaint_pending: bool,
+    /// The size, in pixels, at which painting was last refused because
+    /// the renderer cannot draw a window that large; see
+    /// too_large_to_paint.
+    refused_paint_size: Option<(usize, usize)>,
     pending_scale_changes: LinkedList<resize::ScaleChange>,
     /// Terminal dimensions
     terminal_size: TerminalSize,
@@ -707,6 +718,7 @@ impl TermWindow {
             window_state: WindowState::default(),
             resizes_pending: 0,
             is_repaint_pending: false,
+            refused_paint_size: None,
             pending_scale_changes: LinkedList::new(),
             terminal_size,
             render_state,
@@ -1064,9 +1076,34 @@ impl TermWindow {
         }
     }
 
+    /// Whether the window is larger than the renderer can draw, which is
+    /// at most `max` pixels: the GPU's largest viewport with OpenGL, or
+    /// its largest texture with WebGPU. Both renderers refuse a larger
+    /// window with a panic, so such a window is not painted, and the
+    /// error is logged once for each size refused.
+    fn too_large_to_paint(&mut self, max: (u32, u32)) -> bool {
+        let size = (self.dimensions.pixel_width, self.dimensions.pixel_height);
+        if size.0 <= max.0 as usize && size.1 <= max.1 as usize {
+            self.refused_paint_size = None;
+            return false;
+        }
+        if self.refused_paint_size != Some(size) {
+            log::error!(
+                "not painting the window: at {}x{} pixels it is larger than \
+                 the {}x{} pixels the GPU can draw",
+                size.0,
+                size.1,
+                max.0,
+                max.1
+            );
+            self.refused_paint_size = Some(size);
+        }
+        true
+    }
+
     fn do_paint(&mut self, window: &Window) -> bool {
         let gl = match self.gl.as_ref() {
-            Some(gl) => gl,
+            Some(gl) => Rc::clone(gl),
             None => return false,
         };
 
@@ -1077,8 +1114,12 @@ impl TermWindow {
             return false;
         }
 
+        if self.too_large_to_paint(gl.get_max_viewport_dimensions()) {
+            return false;
+        }
+
         let mut frame = glium::Frame::new(
-            Rc::clone(&gl),
+            gl,
             (
                 self.dimensions.pixel_width as u32,
                 self.dimensions.pixel_height as u32,
@@ -1089,6 +1130,10 @@ impl TermWindow {
     }
 
     fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
+        let max = self.webgpu.as_ref().unwrap().max_surface_dimension();
+        if self.too_large_to_paint((max, max)) {
+            return Ok(false);
+        }
         self.webgpu.as_mut().unwrap().resize(self.dimensions);
         match self.do_paint_webgpu_impl() {
             Ok(ok) => Ok(ok),
@@ -1173,6 +1218,18 @@ impl TermWindow {
                 tx.try_send((self.dimensions, self.window_state))
                     .map_err(chan_err)
                     .context("send GetDimensions response")?;
+            }
+            TermWindowNotif::GetFontScale(tx) => {
+                tx.try_send(self.fonts.get_font_scale())
+                    .map_err(chan_err)
+                    .context("send GetFontScale response")?;
+            }
+            TermWindowNotif::SetFontScale(scale) => {
+                // Queued with the key assignments' changes, so it applies
+                // after a resize in progress, as theirs do.
+                self.pending_scale_changes
+                    .push_back(resize::ScaleChange::Absolute(scale));
+                self.apply_pending_scale_changes();
             }
             TermWindowNotif::GetEffectiveConfig(tx) => {
                 tx.try_send(self.config.clone())
@@ -1357,6 +1414,10 @@ impl TermWindow {
             }
             TermWindowNotif::SetInnerSize { width, height } => {
                 self.set_inner_size(window, width, height);
+            }
+            TermWindowNotif::SetContentSize(size) => {
+                self.resizes_pending += 1;
+                window.set_content_size(size);
             }
         }
 

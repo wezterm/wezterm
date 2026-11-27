@@ -9,8 +9,8 @@ use crate::os::x11::connection::XConnection;
 use crate::os::x11::window::XWindow;
 use crate::screen::Screens;
 use crate::{
-    Appearance, Clipboard, CursorIcon, Rect, RequestedWindowGeometry, ResizeIncrement, ScreenPoint,
-    WindowEvent, WindowOps,
+    Appearance, Clipboard, ContentSize, CursorIcon, Rect, RequestedWindowGeometry, ResizeIncrement,
+    ScreenPoint, WindowEvent, WindowOps,
 };
 use async_trait::async_trait;
 use config::ConfigHandle;
@@ -383,6 +383,30 @@ impl WindowOps for Window {
             Self::X11(x) => x.set_window_position(coords),
             #[cfg(feature = "wayland")]
             Self::Wayland(w) => w.set_window_position(coords),
+        }
+    }
+
+    fn get_window_position(&self) -> Future<Option<ScreenPoint>> {
+        match self {
+            Self::X11(x) => x.get_window_position(),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.get_window_position(),
+        }
+    }
+
+    fn get_content_size(&self) -> Future<ContentSize> {
+        match self {
+            Self::X11(x) => x.get_content_size(),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.get_content_size(),
+        }
+    }
+
+    fn set_content_size(&self, size: ContentSize) {
+        match self {
+            Self::X11(x) => x.set_content_size(size),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.set_content_size(size),
         }
     }
 

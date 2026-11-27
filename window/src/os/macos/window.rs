@@ -8,9 +8,9 @@ use crate::connection::ConnectionOps;
 use crate::os::macos::menu::{MenuItem, RepresentedItem};
 use crate::parameters::{Border, Parameters, TitleBar};
 use crate::{
-    Clipboard, Connection, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent,
-    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
-    RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, ScreenPoint, Size, ULength,
+    Clipboard, Connection, ContentSize, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode,
+    KeyEvent, Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent,
+    Rect, RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, ScreenPoint, Size, ULength,
     WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
 };
 use anyhow::{anyhow, bail, ensure};
@@ -446,6 +446,20 @@ fn set_window_position(window: *mut Object, coords: ScreenPoint) {
     }
 }
 
+/// The top left of the content area, the point set_window_position moves
+/// there. macOS measures the screen from its bottom left, so the content
+/// area's top is its origin plus its height.
+fn get_window_position(window: *mut Object) -> ScreenPoint {
+    unsafe {
+        let frame = NSWindow::frame(window);
+        let content_frame = NSWindow::contentRectForFrameRect_(window, frame);
+        cartesian_to_screen_point(NSPoint::new(
+            content_frame.origin.x,
+            content_frame.origin.y + content_frame.size.height,
+        ))
+    }
+}
+
 impl Window {
     pub async fn new_window<F>(
         _class_name: &str,
@@ -812,6 +826,35 @@ impl WindowOps for Window {
     fn set_inner_size(&self, width: usize, height: usize) {
         Connection::with_window_inner(self.id, move |inner| {
             inner.set_inner_size(width, height);
+            if let Some(window_view) = WindowView::get_this(unsafe { &**inner.view }) {
+                window_view
+                    .inner
+                    .borrow_mut()
+                    .events
+                    .dispatch(WindowEvent::SetInnerSizeCompleted);
+            }
+            Ok(())
+        });
+    }
+
+    fn get_window_position(&self) -> Future<Option<ScreenPoint>> {
+        Connection::with_window_inner(self.id, |inner| {
+            Ok(Some(get_window_position(*inner.window)))
+        })
+    }
+
+    /// The content view's size in points, which AppKit keeps while the
+    /// window moves between screens of different backing scales.
+    fn get_content_size(&self) -> Future<ContentSize> {
+        Connection::with_window_inner(self.id, |inner| {
+            let frame = unsafe { NSView::frame(*inner.view as *mut _) };
+            Ok(ContentSize::new(frame.size.width, frame.size.height))
+        })
+    }
+
+    fn set_content_size(&self, size: ContentSize) {
+        Connection::with_window_inner(self.id, move |inner| {
+            inner.set_content_size(size);
             if let Some(window_view) = WindowView::get_this(unsafe { &**inner.view }) {
                 window_view
                     .inner
@@ -1329,12 +1372,52 @@ impl WindowInner {
 
             NSWindow::setContentSize_(
                 *self.window,
-                NSSize::new(width as f64 / scale, height as f64 / scale),
+                self.fit_content_size(NSSize::new(width as f64 / scale, height as f64 / scale)),
             );
 
             // setContentSize_ doesn't explicitly invalidate,
             // so we need to do it ourselves
             self.invalidate();
+        }
+    }
+
+    /// Resize the content area to `size` points. setContentSize_ keeps
+    /// the frame's origin, its bottom left, so the top left is put back
+    /// where it was.
+    fn set_content_size(&mut self, size: ContentSize) {
+        unsafe {
+            let frame = NSWindow::frame(*self.window);
+            let top_left = NSPoint::new(frame.origin.x, frame.origin.y + frame.size.height);
+            NSWindow::setContentSize_(
+                *self.window,
+                self.fit_content_size(NSSize::new(size.width, size.height)),
+            );
+            NSWindow::setFrameTopLeftPoint_(*self.window, top_left);
+            self.invalidate();
+        }
+    }
+
+    /// `size`, in points, made to fit the largest content area whose
+    /// window fits in the visible area (the screen less the menu bar and
+    /// the Dock) of the window's screen, as AppKit limits a resize by
+    /// the user. A window on no screen, being entirely off every screen,
+    /// fits the main screen, where AppKit puts new windows.
+    fn fit_content_size(&self, size: NSSize) -> NSSize {
+        unsafe {
+            let mut screen: id = msg_send![*self.window, screen];
+            if screen.is_null() {
+                screen = NSScreen::mainScreen(nil);
+            }
+            if screen.is_null() {
+                // No screen is attached, so there is no area to fit.
+                return size;
+            }
+            let visible = NSScreen::visibleFrame(screen);
+            let largest = NSWindow::contentRectForFrameRect_(*self.window, visible).size;
+            NSSize::new(
+                size.width.min(largest.width),
+                size.height.min(largest.height),
+            )
         }
     }
 

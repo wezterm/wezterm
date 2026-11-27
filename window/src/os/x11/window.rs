@@ -3,8 +3,8 @@ use crate::bitmaps::*;
 use crate::connection::ConnectionOps;
 use crate::os::{xkeysyms, Connection, Window};
 use crate::{
-    Appearance, Clipboard, CursorIcon, DeadKeyStatus, Dimensions, MouseButtons, MouseEvent,
-    MouseEventKind, MousePress, Point, Rect, RequestedWindowGeometry, ResizeIncrement,
+    Appearance, Clipboard, ContentSize, CursorIcon, DeadKeyStatus, Dimensions, MouseButtons,
+    MouseEvent, MouseEventKind, MousePress, Point, Rect, RequestedWindowGeometry, ResizeIncrement,
     ResolvedGeometry, ScreenPoint, ScreenRect, WindowDecorations, WindowEvent, WindowEventSender,
     WindowOps, WindowState,
 };
@@ -1547,10 +1547,13 @@ impl XWindow {
             data: &[5u32],
         })?;
 
-        window
-            .lock()
-            .unwrap()
-            .adjust_decorations(config.window_decorations)?;
+        {
+            let mut inner = window.lock().unwrap();
+            // The size hints carry the window's gravity, which the window
+            // manager must have before it places the window.
+            inner.set_resize_increments(ResizeIncrement::disabled())?;
+            inner.adjust_decorations(config.window_decorations)?;
+        }
 
         let window_handle = Window::X11(XWindow::from_id(window_id));
 
@@ -1778,7 +1781,8 @@ impl XWindowInner {
         }
 
         // We ask the window manager to move the window for us so that
-        // we don't have to deal with adjusting for the frame size.
+        // we don't have to deal with adjusting for the frame size. The
+        // request's static gravity is the window's own (set_resize_increments).
         // Note that neither this technique or the configure_window
         // approach below will successfully move a window running
         // under the crostini environment on a chromebook :-(
@@ -1805,6 +1809,97 @@ impl XWindowInner {
                 ]),
             ),
         });
+    }
+
+    /// Resize the window to `width` x `height` pixels, at most the size
+    /// of the screen it is on.
+    fn set_inner_size(&mut self, width: usize, height: usize) {
+        let (screen_width, screen_height) = match self.screen_size() {
+            Ok(size) => size,
+            Err(err) => {
+                log::error!("not resizing the window to {width}x{height}: {err:#}");
+                // The resize is over, though nothing was resized.
+                self.events.dispatch(WindowEvent::SetInnerSizeCompleted);
+                return;
+            }
+        };
+        let width = width.min(screen_width) as u32;
+        let height = height.min(screen_height) as u32;
+        if (width, height) == (self.width.into(), self.height.into()) {
+            // The X server sends no ConfigureNotify for a request that
+            // changes nothing, so the resize is over now.
+            self.events.dispatch(WindowEvent::SetInnerSizeCompleted);
+            return;
+        }
+        self.conn()
+            .send_request_no_reply_log(&xcb::x::ConfigureWindow {
+                window: self.window_id,
+                value_list: &[
+                    xcb::x::ConfigWindow::Width(width),
+                    xcb::x::ConfigWindow::Height(height),
+                ],
+            });
+        self.resize_child(width, height);
+        self.outstanding_configure_requests += 1;
+    }
+
+    /// The size of the screen the window is on: the RandR output it
+    /// overlaps most, the main one when it overlaps none, or the whole X
+    /// screen when the server has no RandR. X11 tells a window nothing
+    /// of the panels on a screen, so the size is the whole screen's.
+    fn screen_size(&self) -> anyhow::Result<(usize, usize)> {
+        let conn = self.conn();
+        if !conn.has_randr {
+            let screen = conn
+                .get_setup()
+                .roots()
+                .nth(conn.screen_num as usize)
+                .ok_or_else(|| anyhow!("the X server has no screen {}", conn.screen_num))?;
+            return Ok((
+                screen.width_in_pixels().into(),
+                screen.height_in_pixels().into(),
+            ));
+        }
+        let position = self.get_window_position()?;
+        let window_rect: ScreenRect = euclid::rect(
+            position.x,
+            position.y,
+            self.width as isize,
+            self.height as isize,
+        );
+        let screens = conn.get_cached_screens()?;
+        let screen = screens
+            .by_name
+            .values()
+            .filter_map(|screen| {
+                screen
+                    .rect
+                    .intersection(&window_rect)
+                    .map(|overlap| (screen, overlap.area()))
+            })
+            .max_by_key(|(_, area)| *area)
+            .map_or(&screens.main, |(screen, _)| screen);
+        Ok((screen.rect.width() as usize, screen.rect.height() as usize))
+    }
+
+    /// Where the client area's top left pixel is on the root window. That is
+    /// the point set_window_position moves it to: its request uses static
+    /// gravity, which places the client area itself rather than the frame the
+    /// window manager wraps around it.
+    fn get_window_position(&self) -> anyhow::Result<ScreenPoint> {
+        let conn = self.conn();
+        let coords = conn
+            .send_and_wait_request(&xcb::x::TranslateCoordinates {
+                src_window: self.window_id,
+                dst_window: conn.root,
+                src_x: 0,
+                src_y: 0,
+            })
+            .context("querying the window's position on the screen")?;
+        Ok(ScreenPoint::new(
+            coords.dst_x().into(),
+            coords.dst_y().into(),
+        ))
     }
 
     /// Change the title for the window manager
@@ -1881,12 +1976,23 @@ impl XWindowInner {
             });
     }
 
+    /// Set WM_NORMAL_HINTS: the resize increments, and the window's gravity.
+    ///
+    /// The gravity is static, the meaning set_window_position gives a
+    /// position: where the client area goes, not the frame the window
+    /// manager wraps around it. The window manager reads the window's
+    /// position by the window's gravity whenever it configures it, so a
+    /// window moved with static gravity but declaring another is placed by
+    /// its frame the next time it is resized or restored from maximized:
+    /// openbox does so. new_window sets these hints before mapping the
+    /// window, and every later call keeps the gravity.
     fn set_resize_increments(&mut self, incr: ResizeIncrement) -> anyhow::Result<()> {
         use xcb_util::*;
         let hints = xcb_size_hints_t {
             flags: XCB_ICCCM_SIZE_HINT_P_MIN_SIZE
                 | XCB_ICCCM_SIZE_HINT_P_RESIZE_INC
-                | XCB_ICCCM_SIZE_HINT_BASE_SIZE,
+                | XCB_ICCCM_SIZE_HINT_BASE_SIZE
+                | XCB_ICCCM_SIZE_HINT_P_WIN_GRAVITY,
             x: 0,
             y: 0,
             width: 0,
@@ -1903,7 +2009,7 @@ impl XWindowInner {
             max_aspect_den: 0,
             base_width: incr.base_width.into(),
             base_height: incr.base_height.into(),
-            win_gravity: 0,
+            win_gravity: xcb::x::Gravity::Static as u32,
         };
 
         let data = unsafe {
@@ -2058,17 +2164,21 @@ impl WindowOps for XWindow {
 
     fn set_inner_size(&self, width: usize, height: usize) {
         XConnection::with_window_inner(self.0, move |inner| {
-            inner
-                .conn()
-                .send_request_no_reply_log(&xcb::x::ConfigureWindow {
-                    window: inner.window_id,
-                    value_list: &[
-                        xcb::x::ConfigWindow::Width(width as u32),
-                        xcb::x::ConfigWindow::Height(height as u32),
-                    ],
-                });
-            inner.resize_child(width as u32, height as u32);
-            inner.outstanding_configure_requests += 1;
+            inner.set_inner_size(width, height);
+            Ok(())
+        });
+    }
+
+    /// X11 measures windows in pixels on every screen.
+    fn get_content_size(&self) -> Future<ContentSize> {
+        XConnection::with_window_inner(self.0, |inner| {
+            Ok(ContentSize::new(inner.width.into(), inner.height.into()))
+        })
+    }
+
+    fn set_content_size(&self, size: ContentSize) {
+        XConnection::with_window_inner(self.0, move |inner| {
+            inner.set_inner_size(size.width.round() as usize, size.height.round() as usize);
             Ok(())
         });
     }
@@ -2092,6 +2202,10 @@ impl WindowOps for XWindow {
             inner.set_window_position(coords);
             Ok(())
         });
+    }
+
+    fn get_window_position(&self) -> Future<Option<ScreenPoint>> {
+        XConnection::with_window_inner(self.0, |inner| inner.get_window_position().map(Some))
     }
 
     fn set_text_cursor_position(&self, cursor: Rect) {
