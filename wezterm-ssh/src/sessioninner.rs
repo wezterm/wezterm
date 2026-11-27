@@ -108,6 +108,33 @@ impl SessionInner {
 
     #[cfg(feature = "libssh-rs")]
     fn run_impl_libssh(&mut self) -> anyhow::Result<()> {
+        // On Windows, create a Unix socket bridge to the Windows SSH agent if needed
+        #[cfg(windows)]
+        let _agent_bridge = {
+            let identity_agent = self.identity_agent();
+
+            if let Some(agent) =
+                identity_agent.filter(|agent| crate::agent_bridge::is_named_pipe(agent))
+            {
+                match crate::agent_bridge::create_agent_bridge(agent.clone().into()) {
+                    Ok((socket_path, bridge)) => {
+                        // Replace the named pipe path with the Unix socket path
+                        self.config.insert(
+                            "identityagent".to_string(),
+                            socket_path.to_string_lossy().to_string(),
+                        );
+                        Some(bridge)
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to create SSH agent bridge: {:#}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
         let hostname = self
             .config
             .get("hostname")
