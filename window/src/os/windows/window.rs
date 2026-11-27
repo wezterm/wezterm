@@ -2549,7 +2549,7 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
         // to drive it forwards.  It will generate a call to `ime_composition`
         // or `ime_endcomposition` when it completes.
 
-        if msg == WM_KEYDOWN {
+        if msg == WM_KEYDOWN || msg == WM_KEYUP {
             // Release the borrow before calling translate_message:
             // TranslateMessage can trigger other window messages (like WM_SIZE)
             // via CtfImeCreateInputContext, which would otherwise cause a
