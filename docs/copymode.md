@@ -52,6 +52,9 @@ The default key assignments in copy mode are as follows:
 |                       | <kbd>Shift</kbd> + <kbd>Tab</kbd>     |
 |                       | <kbd>b</kbd>             |
 | Move forward one word end    | <kbd>e</kbd> {{since('20230320-124340-559cb7b0', inline=True)}}|
+| Move forward one WORD | <kbd>Shift</kbd> + <kbd>W</kbd> {{since('nightly', inline=True)}}|
+| Move backward one WORD | <kbd>Shift</kbd> + <kbd>B</kbd> {{since('nightly', inline=True)}}|
+| Move forward one WORD end | <kbd>Shift</kbd> + <kbd>E</kbd> {{since('nightly', inline=True)}}|
 | Move to start of this line     | <kbd>0</kbd> |
 |                                | <kbd>Home</kbd> |
 | Move to start of next line     | <kbd>Enter</kbd> |
