@@ -73,6 +73,7 @@ pub mod background;
 pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
+pub mod context_menu;
 pub mod keyevent;
 pub mod modal;
 mod mouseevent;
@@ -150,6 +151,10 @@ pub enum TermWindowNotif {
         width: usize,
         height: usize,
     },
+    SilenceTimeout {
+        pane_id: PaneId,
+        generation: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,6 +203,14 @@ pub struct PaneFontState {
     pub last_synced_pane_dims: Option<(usize, usize)>,
 }
 
+#[derive(Default, Debug, Clone)]
+pub struct PaneWatchState {
+    pub watch_for_silence: bool,
+    pub watch_for_activity: bool,
+    pub silence_generation: u64,
+    pub silence_last_activity: Option<Instant>,
+}
+
 #[derive(Default)]
 pub struct PaneState {
     /// If is_some(), the top row of the visible screen.
@@ -213,6 +226,7 @@ pub struct PaneState {
     bell_start: Option<Instant>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
     pub font_state: Option<PaneFontState>,
+    pub watch: PaneWatchState,
 }
 
 /// Data used when synchronously formatting pane and window titles
@@ -1241,23 +1255,7 @@ impl TermWindow {
                     alert: Alert::Bell,
                     pane_id,
                 } => {
-                    if !self.window_contains_pane(pane_id) {
-                        return Ok(());
-                    }
-
-                    match self.config.audible_bell {
-                        AudibleBell::SystemBeep => {
-                            Connection::get().expect("on main thread").beep();
-                        }
-                        AudibleBell::Disabled => {}
-                    }
-
-                    log::trace!("Ding! (this is the bell) in pane {}", pane_id);
-                    self.emit_window_event("bell", Some(pane_id));
-
-                    let mut per_pane = self.pane_state(pane_id);
-                    per_pane.bell_start.replace(Instant::now());
-                    window.invalidate();
+                    self.trigger_bell_for_pane(pane_id);
                 }
                 MuxNotification::Alert {
                     alert: Alert::ToastNotification { .. },
@@ -1371,6 +1369,12 @@ impl TermWindow {
             TermWindowNotif::SetInnerSize { width, height } => {
                 self.set_inner_size(window, width, height);
             }
+            TermWindowNotif::SilenceTimeout {
+                pane_id,
+                generation,
+            } => {
+                self.handle_silence_timeout(pane_id, generation);
+            }
         }
 
         Ok(())
@@ -1449,8 +1453,155 @@ impl TermWindow {
         tab.contains_pane(pane_id)
     }
 
+    fn trigger_bell_for_pane(&mut self, pane_id: PaneId) {
+        if !self.window_contains_pane(pane_id) {
+            return;
+        }
+
+        match self.config.audible_bell {
+            AudibleBell::SystemBeep => {
+                Connection::get().expect("on main thread").beep();
+            }
+            AudibleBell::Disabled => {}
+        }
+
+        log::trace!("Ding! (this is the bell) in pane {}", pane_id);
+        self.emit_window_event("bell", Some(pane_id));
+
+        {
+            let mut per_pane = self.pane_state(pane_id);
+            per_pane.bell_start.replace(Instant::now());
+        }
+        if let Some(ref win) = self.window {
+            win.invalidate();
+        }
+    }
+
+    fn schedule_silence_timer(&self, pane_id: PaneId, generation: u64, delay: Duration) {
+        if let Some(window) = self.window.clone() {
+            promise::spawn::spawn(async move {
+                Timer::after(delay).await;
+                window.notify(TermWindowNotif::SilenceTimeout {
+                    pane_id,
+                    generation,
+                });
+            })
+            .detach();
+        }
+    }
+
+    fn toggle_watch_for_silence(&mut self, pane_id: PaneId) {
+        let schedule = {
+            let mut per_pane = self.pane_state(pane_id);
+            let enabled = !per_pane.watch.watch_for_silence;
+            per_pane.watch.watch_for_silence = enabled;
+            per_pane.watch.silence_generation =
+                per_pane.watch.silence_generation.wrapping_add(1);
+            if enabled {
+                per_pane.watch.silence_last_activity = Some(Instant::now());
+                Some(per_pane.watch.silence_generation)
+            } else {
+                per_pane.watch.silence_last_activity = None;
+                None
+            }
+        };
+
+        if let Some(generation) = schedule {
+            let delay = Duration::from_secs(self.config.silence_timeout_seconds);
+            self.schedule_silence_timer(pane_id, generation, delay);
+        }
+    }
+
+    fn toggle_watch_for_activity(&mut self, pane_id: PaneId) {
+        let mut per_pane = self.pane_state(pane_id);
+        per_pane.watch.watch_for_activity = !per_pane.watch.watch_for_activity;
+    }
+
+    fn handle_silence_timeout(&mut self, pane_id: PaneId, generation: u64) {
+        if !self.window_contains_pane(pane_id) {
+            return;
+        }
+
+        let timeout_secs = self.config.silence_timeout_seconds;
+        let timeout = Duration::from_secs(timeout_secs);
+
+        enum Action {
+            Reschedule(Duration),
+            Trigger,
+            Ignore,
+        }
+
+        let action = {
+            let mut states = self.pane_state.borrow_mut();
+            match states.get_mut(&pane_id) {
+                Some(state)
+                    if state.watch.watch_for_silence
+                        && state.watch.silence_generation == generation =>
+                {
+                    let elapsed = state
+                        .watch
+                        .silence_last_activity
+                        .map(|t| t.elapsed())
+                        .unwrap_or(timeout);
+                    if elapsed < timeout {
+                        Action::Reschedule(timeout - elapsed)
+                    } else {
+                        state.watch.watch_for_silence = false;
+                        state.watch.silence_last_activity = None;
+                        Action::Trigger
+                    }
+                }
+                _ => Action::Ignore,
+            }
+        };
+
+        match action {
+            Action::Reschedule(remaining) => {
+                self.schedule_silence_timer(pane_id, generation, remaining);
+            }
+            Action::Trigger => {
+                self.trigger_bell_for_pane(pane_id);
+                let title = Mux::get()
+                    .get_pane(pane_id)
+                    .map(|p| p.get_title())
+                    .unwrap_or_else(|| format!("pane {}", pane_id));
+                wezterm_toast_notification::persistent_toast_notification(
+                    "Silence detected",
+                    &format!("No activity in {title} for {timeout_secs}s"),
+                );
+            }
+            Action::Ignore => {}
+        }
+    }
+
     fn mux_pane_output_event(&mut self, pane_id: PaneId) {
         metrics::histogram!("mux.pane_output_event.rate").record(1.);
+        if self.window_contains_pane(pane_id) {
+            let mut triggered_activity = false;
+            {
+                let mut states = self.pane_state.borrow_mut();
+                if let Some(state) = states.get_mut(&pane_id) {
+                    if state.watch.watch_for_silence {
+                        state.watch.silence_last_activity = Some(Instant::now());
+                    }
+                    if state.watch.watch_for_activity {
+                        state.watch.watch_for_activity = false;
+                        triggered_activity = true;
+                    }
+                }
+            }
+            if triggered_activity {
+                self.trigger_bell_for_pane(pane_id);
+                let title = Mux::get()
+                    .get_pane(pane_id)
+                    .map(|p| p.get_title())
+                    .unwrap_or_else(|| format!("pane {}", pane_id));
+                wezterm_toast_notification::persistent_toast_notification(
+                    "Activity detected",
+                    &format!("Activity detected in {title}"),
+                );
+            }
+        }
         if self.is_pane_visible(pane_id) {
             if let Some(ref win) = self.window {
                 win.invalidate();
@@ -3181,6 +3332,16 @@ impl TermWindow {
             ActivateCommandPalette => {
                 let modal = crate::termwindow::palette::CommandPalette::new(self);
                 self.set_modal(Rc::new(modal));
+            }
+            ShowContextMenu => {
+                let modal = crate::termwindow::context_menu::ContextMenu::new(self, pane.pane_id());
+                self.set_modal(Rc::new(modal));
+            }
+            ToggleWatchForSilence => {
+                self.toggle_watch_for_silence(pane.pane_id());
+            }
+            ToggleWatchForActivity => {
+                self.toggle_watch_for_activity(pane.pane_id());
             }
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),

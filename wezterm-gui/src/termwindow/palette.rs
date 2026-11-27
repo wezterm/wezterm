@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use termwiz::nerdfonts::NERD_FONTS;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
-use wezterm_term::{KeyCode, KeyModifiers, MouseEvent};
+use wezterm_term::{KeyCode, KeyModifiers};
 use window::color::LinearRgba;
 use window::Modifiers;
 
@@ -582,8 +582,12 @@ impl Modal for CommandPalette {
         false
     }
 
-    fn mouse_event(&self, _event: MouseEvent, _term_window: &mut TermWindow) -> anyhow::Result<()> {
-        Ok(())
+    fn mouse_event(
+        &self,
+        _event: ::window::MouseEvent,
+        _term_window: &mut TermWindow,
+    ) -> anyhow::Result<bool> {
+        Ok(false)
     }
 
     fn key_down(

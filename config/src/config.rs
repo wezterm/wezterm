@@ -905,6 +905,11 @@ pub struct Config {
 
     #[dynamic(default = "default_ulimit_nproc")]
     pub ulimit_nproc: u64,
+
+    /// Number of seconds of inactivity before "Watch for Silence" triggers
+    /// a bell and notification. Defaults to 10 seconds.
+    #[dynamic(default = "default_silence_timeout_seconds")]
+    pub silence_timeout_seconds: u64,
 }
 impl_lua_conversion_dynamic!(Config);
 
@@ -918,6 +923,10 @@ fn default_ulimit_nofile() -> u64 {
 
 fn default_ulimit_nproc() -> u64 {
     2048
+}
+
+fn default_silence_timeout_seconds() -> u64 {
+    10
 }
 
 impl Default for Config {
@@ -2211,4 +2220,15 @@ fn default_macos_forward_mods() -> Modifiers {
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {
     FontRasterizerSelection::Harfbuzz
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_silence_timeout_is_10_seconds() {
+        let cfg = Config::default();
+        assert_eq!(cfg.silence_timeout_seconds, 10);
+    }
 }

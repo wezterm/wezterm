@@ -67,6 +67,21 @@ impl super::TermWindow {
 
         self.current_mouse_event.replace(event.clone());
 
+        if let Some(modal) = self.get_modal() {
+            if let WMEK::Release(ref press) = event.kind {
+                self.current_mouse_capture = None;
+                self.current_mouse_buttons.retain(|p| p != press);
+            }
+            match modal.mouse_event(event.clone(), self) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(err) => {
+                    log::error!("Error dispatching mouse event to modal: {err:#}");
+                    return;
+                }
+            }
+        }
+
         let border = self.get_os_border();
 
         let first_line_offset = if self.show_tab_bar && !self.config.tab_bar_at_bottom {

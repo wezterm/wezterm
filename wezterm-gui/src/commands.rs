@@ -2011,6 +2011,30 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: None,
         },
+        ShowContextMenu => CommandDef {
+            brief: "Show Context Menu".into(),
+            doc: "Shows the right-click context menu".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: None,
+        },
+        ToggleWatchForSilence => CommandDef {
+            brief: "Watch for Silence".into(),
+            doc: "Toggle watching the active pane for silence".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell"],
+            icon: None,
+        },
+        ToggleWatchForActivity => CommandDef {
+            brief: "Watch for Activity".into(),
+            doc: "Toggle watching the active pane for activity".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell"],
+            icon: None,
+        },
     })
 }
 
@@ -2040,6 +2064,8 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         CloseCurrentPane { confirm: true },
         DetachDomain(SpawnTabDomain::CurrentPaneDomain),
         ResetTerminal,
+        ToggleWatchForSilence,
+        ToggleWatchForActivity,
         // ----------------- Edit
         #[cfg(not(target_os = "macos"))]
         PasteFrom(ClipboardPasteSource::PrimarySelection),
