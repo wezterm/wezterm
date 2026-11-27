@@ -27,12 +27,16 @@ impl PointerHandler for WaylandState {
         pointer: &WlPointer,
         events: &[PointerEvent],
     ) {
-        let mut pstate = pointer
-            .data::<PointerUserData>()
-            .unwrap()
-            .state
-            .lock()
-            .unwrap();
+        // Events that were already queued for a pointer we have since
+        // released (eg: the compositor removed the pointer capability while
+        // the session was being suspended) arrive with a dead proxy whose
+        // user data can no longer be resolved. There is nothing useful to do
+        // with them, so drop them rather than panic.
+        let Some(pdata) = pointer.data::<PointerUserData>() else {
+            log::debug!("ignoring {} events for released pointer", events.len());
+            return;
+        };
+        let mut pstate = pdata.state.lock().unwrap();
 
         for evt in events {
             if let PointerEventKind::Enter { .. } = &evt.kind {
