@@ -1711,6 +1711,16 @@ impl KeyEvent {
     pub fn encode_kitty(&self, flags: KittyKeyboardFlags) -> String {
         use KeyCode::*;
 
+        // Single-char `Composed` is a plain keypress with no raw event; normalize to `Char`
+        if let Composed(s) = &self.key {
+            let mut chars = s.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                let mut normalized = self.clone();
+                normalized.key = Char(c);
+                return normalized.encode_kitty(flags);
+            }
+        }
+
         if !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES) && !self.key_is_down {
             return String::new();
         }
@@ -2377,6 +2387,60 @@ mod test {
             .encode_kitty(flags),
             "\x1b[11;1:3~".to_string()
         );
+    }
+
+    #[test]
+    fn encode_kitty_single_char_composed_matches_char() {
+        // A single-char Composed event (IME, emoji picker) must encode exactly
+        // like the equivalent Char key.
+        let flags = KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+
+        let composed = KeyEvent {
+            key: KeyCode::Composed("\u{2615}".to_string()), // HOT BEVERAGE
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+        let equivalent_char = KeyEvent {
+            key: KeyCode::Char('\u{2615}'),
+            ..composed.clone()
+        };
+
+        assert_eq!(composed.encode_kitty(flags), "\x1b[9749;1u".to_string());
+        assert_eq!(
+            composed.encode_kitty(flags),
+            equivalent_char.encode_kitty(flags),
+            "a single-char Composed key must encode identically to the equivalent Char key"
+        );
+
+        let flags_with_text = flags | KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT;
+        assert_eq!(
+            composed.encode_kitty(flags_with_text),
+            "\x1b[9749;1;9749u".to_string()
+        );
+    }
+
+    #[test]
+    fn encode_kitty_multi_char_composed_is_unaffected() {
+        // Multi-char Composed strings are unaffected by the normalization.
+        let flags = KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+
+        let multi = KeyEvent {
+            key: KeyCode::Composed("ab".to_string()),
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+
+        assert_eq!(multi.encode_kitty(flags), "");
     }
 
     #[test]

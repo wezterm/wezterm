@@ -160,6 +160,15 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Kitty keyboard protocol: a single-character `Composed` key event (delivered
+  by an IME, or by the Windows emoji picker) has no backing raw hardware key
+  event. `encode_kitty` had no match arm for `Composed`, so the event fell
+  through to the catch-all arm, which needs a raw event to resolve a kitty
+  function code and produced an empty string instead -- the keypress was
+  silently dropped. With a CJK IME this made single characters and full-width
+  punctuation impossible to type whenever the kitty keyboard protocol was
+  active on Windows. Single-char `Composed` events are now normalized to
+  `Char` before encoding. #8275 #7915 #7944
 * Multiplexer: the mouse wheel was not mapped to cursor up/down keys in the
   alternate screen for panes in a `wezterm connect` domain, because the client
   always reported the alternate screen as inactive. The server now advises the
