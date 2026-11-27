@@ -158,6 +158,10 @@ As features stabilize some brief notes about them will accumulate here.
   search matching. Thanks to @mrdziuban! #7385
 * The line editor used by prompt overlays and the debug overlay now supports
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
+* Retro tab bar: when the tab titles do not all fit, a tab whose title is
+  shorter than an even share now keeps its full width and the room it leaves
+  goes to the longer titles, instead of every tab being clamped to an even
+  share. See [tab_max_width](config/lua/config/tab_max_width.md).
 
 #### Fixed
 * Multiplexer: the mouse wheel was not mapped to cursor up/down keys in the
