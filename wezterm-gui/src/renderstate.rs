@@ -380,6 +380,19 @@ unsafe impl<'a, T: ?Sized + ::window::glium::buffer::Content + 'static> ExtendSt
     }
 }
 
+/// The OpenGL context was lost: the frame is abandoned, and the window
+/// recovers at its next paint
+#[derive(Debug)]
+pub struct ContextLost;
+
+impl std::fmt::Display for ContextLost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the opengl context was lost")
+    }
+}
+
+impl std::error::Error for ContextLost {}
+
 impl TripleVertexBuffer {
     pub fn clear_quad_allocation(&self) {
         *self.next_quad.borrow_mut() = 0;
@@ -399,7 +412,7 @@ impl TripleVertexBuffer {
         (num_quads * VERTICES_PER_CELL, num_quads * INDICES_PER_CELL)
     }
 
-    pub fn map(&self) -> MappedQuads<'_> {
+    pub fn map(&self) -> anyhow::Result<MappedQuads<'_>> {
         let mut bufs = self.current_vb_mut();
 
         // To map the vertex buffer, we need to hold a mutable reference to
@@ -414,12 +427,24 @@ impl TripleVertexBuffer {
         // that the owner is dropped after the derived data.
         let mapping = match &mut *bufs {
             VertexBuffer::Glium(vb) => {
+                let context = Rc::clone(vb.get_context());
+                // a lost context maps nothing, and glium makes a reference of
+                // the null pointer before any check of ours could see it
+                if context.is_context_lost() {
+                    return Err(ContextLost.into());
+                }
                 let buf_slice = unsafe {
                     vb.slice_mut(..)
                         .expect("to map vertex buffer")
                         .extend_lifetime()
                 };
                 let mapping = buf_slice.map();
+                // A reset during the map: glium has made a reference of the null
+                // pointer already, which only a fallible map in glium could
+                // avoid, but at least the quads are not written there.
+                if context.is_context_lost() {
+                    return Err(ContextLost.into());
+                }
 
                 MappedVertexBuffer::Glium(GliumMappedVertexBuffer {
                     _owner: bufs,
@@ -429,11 +454,11 @@ impl TripleVertexBuffer {
             VertexBuffer::WebGpu(vb) => MappedVertexBuffer::WebGpu(vb.map()),
         };
 
-        MappedQuads {
+        Ok(MappedQuads {
             mapping,
             next: self.next_quad.borrow_mut(),
             capacity: self.capacity,
-        }
+        })
     }
 
     pub fn current_vb_mut(&self) -> RefMut<'static, VertexBuffer> {
@@ -478,20 +503,20 @@ impl RenderLayer {
         }
     }
 
-    pub fn quad_allocator(&self) -> TripleLayerQuadAllocator<'_> {
+    pub fn quad_allocator(&self) -> anyhow::Result<TripleLayerQuadAllocator<'_>> {
         // We're creating a self-referential struct here to manage the lifetimes
         // of these related items.  The transmutes are safe because we're only
         // transmuting the lifetimes (not the types), and we're keeping hold
         // of the owner in the returned struct.
         unsafe {
             let vbs = self.vb.borrow().extend_lifetime();
-            let layer0 = vbs[0].map().extend_lifetime();
-            let layer1 = vbs[1].map().extend_lifetime();
-            let layer2 = vbs[2].map().extend_lifetime();
-            TripleLayerQuadAllocator::Gpu(BorrowedLayers {
+            let layer0 = vbs[0].map()?.extend_lifetime();
+            let layer1 = vbs[1].map()?.extend_lifetime();
+            let layer2 = vbs[2].map()?.extend_lifetime();
+            Ok(TripleLayerQuadAllocator::Gpu(BorrowedLayers {
                 layers: [layer0, layer1, layer2],
                 _owner: vbs,
-            })
+            }))
         }
     }
 

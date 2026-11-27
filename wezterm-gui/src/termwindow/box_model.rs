@@ -831,7 +831,7 @@ impl super::TermWindow {
         inherited_colors: Option<&ElementColors>,
     ) -> anyhow::Result<()> {
         let layer = gl_state.layer_for_zindex(element.zindex)?;
-        let mut layers = layer.quad_allocator();
+        let mut layers = layer.quad_allocator()?;
 
         let colors = match &element.hover_colors {
             Some(hc) => {
