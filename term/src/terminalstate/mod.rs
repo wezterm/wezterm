@@ -2889,6 +2889,10 @@ impl TerminalState {
             .copied()
             .unwrap_or(self.keyboard_encoding)
     }
+
+    pub fn get_application_cursor_keys(&self) -> bool {
+        self.application_cursor_keys
+    }
 }
 
 #[cfg(test)]
