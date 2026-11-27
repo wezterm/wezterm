@@ -99,11 +99,15 @@ impl SixelBuilder {
         match self.current_command {
             b'#' if self.param_no >= 4 => {
                 // Define a color
-                let color_number = self.params[0] as u16;
-                let system = self.params[1] as u16;
-                let a = self.params[2] as u16;
-                let b = self.params[3] as u8;
-                let c = self.params[4] as u8;
+                let param = |i| match self.params.get(i).copied().unwrap_or(-1) {
+                    -1 => 0,
+                    v => v.max(0),
+                };
+                let color_number = param(0) as u16;
+                let system = param(1) as u16;
+                let a = param(2) as u16;
+                let b = param(3) as u8;
+                let c = param(4) as u8;
 
                 if system == 1 {
                     self.sixel.data.push(SixelData::DefineColorMapHSL {
