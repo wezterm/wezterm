@@ -43,7 +43,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::PaneTitleBar(_) => {}
         }
     }
 
@@ -54,7 +55,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::PaneTitleBar(_) => {}
         }
     }
 
@@ -144,9 +146,11 @@ impl super::TermWindow {
                     // Completed a window drag
                     return;
                 }
-                if press == &MousePress::Left && self.dragging.take().is_some() {
-                    // Completed a drag
-                    return;
+                if press == &MousePress::Left {
+                    if let Some((item, start_event)) = self.dragging.take() {
+                        self.finish_drag_ui_item(item, start_event, event, context);
+                        return;
+                    }
                 }
             }
 
@@ -348,6 +352,175 @@ impl super::TermWindow {
         self.dragging.replace((item, start_event));
     }
 
+    fn find_window_at_screen_coords(
+        &self,
+        screen_coords: ::window::ScreenPoint,
+    ) -> Option<(::window::Window, ::window::ScreenRect)> {
+        let fe = crate::frontend::front_end();
+        let mut self_match = None;
+        for gui_win in fe.gui_windows() {
+            if let Some(rect) = gui_win.window.get_window_screen_rect() {
+                if rect.contains(screen_coords) {
+                    if gui_win.mux_window_id != self.mux_window_id {
+                        return Some((gui_win.window, rect));
+                    }
+                    self_match = Some((gui_win.window, rect));
+                }
+            }
+        }
+        self_match
+    }
+
+    fn drag_pane_title_bar(
+        &mut self,
+        item: UIItem,
+        pane_id: mux::pane::PaneId,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        self.dragging.replace((item, start_event));
+        context.set_cursor(Some(CursorIcon::Grabbing));
+
+        let hovered = self.find_window_at_screen_coords(event.screen_coords);
+        let new_win = hovered.as_ref().map(|(w, _)| w.clone());
+
+        if self.pane_drag_last_window.as_ref() != new_win.as_ref() {
+            if let Some(old_win) = self.pane_drag_last_window.take() {
+                old_win.notify(TermWindowNotif::ClearPaneDragTarget);
+            }
+        }
+
+        if let Some((win, rect)) = hovered {
+            let local_x = (event.screen_coords.x - rect.origin.x) as f32;
+            let local_y = (event.screen_coords.y - rect.origin.y) as f32;
+            win.notify(TermWindowNotif::PaneDragHover {
+                src_pane_id: pane_id,
+                local_coords: Some((local_x, local_y)),
+            });
+            self.pane_drag_last_window = Some(win);
+        }
+    }
+
+    fn finish_drag_ui_item(
+        &mut self,
+        item: UIItem,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        let UIItemType::PaneTitleBar(pane_id) = item.item_type else {
+            return;
+        };
+
+        if let Some(old_win) = self.pane_drag_last_window.take() {
+            old_win.notify(TermWindowNotif::ClearPaneDragTarget);
+        }
+        for gui_win in crate::frontend::front_end().gui_windows() {
+            gui_win.window.notify(TermWindowNotif::ClearPaneDragTarget);
+        }
+        context.set_cursor(Some(CursorIcon::Default));
+
+        let drag_dist = (event.screen_coords.x - start_event.screen_coords.x).abs()
+            + (event.screen_coords.y - start_event.screen_coords.y).abs();
+        if drag_dist < 5 {
+            return;
+        }
+
+        if let Some((target_win, rect)) = self.find_window_at_screen_coords(event.screen_coords) {
+            let local_x = (event.screen_coords.x - rect.origin.x) as f32;
+            let local_y = (event.screen_coords.y - rect.origin.y) as f32;
+            target_win.notify(TermWindowNotif::PaneDragDrop {
+                src_pane_id: pane_id,
+                local_coords: (local_x, local_y),
+            });
+            return;
+        }
+
+        let is_sole_pane_in_window = {
+            let mux = Mux::get();
+            mux.get_window(self.mux_window_id)
+                .map(|w| {
+                    let mut tabs = w.iter_tabs();
+                    match (tabs.next(), tabs.next()) {
+                        (Some(tab), None) => tab.iter_panes_ignoring_zoom().len() == 1,
+                        _ => false,
+                    }
+                })
+                .unwrap_or(false)
+        };
+
+        if is_sole_pane_in_window {
+            context.set_window_position(event.screen_coords);
+            return;
+        }
+
+        let drop_coords = event.screen_coords;
+        promise::spawn::spawn(async move {
+            let mux = Mux::get();
+            match mux.move_pane_to_new_tab(pane_id, None, None).await {
+                Ok((_tab, new_window_id)) => {
+                    let fe = crate::frontend::front_end();
+                    if let Err(err) = fe.reconcile_workspace().await {
+                        log::error!("failed to reconcile workspace after pane pop-out: {err:#}");
+                    }
+                    if let Some(gui_win) = fe.gui_window_for_mux_window(new_window_id) {
+                        gui_win.window.set_window_position(drop_coords);
+                        gui_win.window.focus();
+                    }
+                }
+                Err(err) => {
+                    log::error!("failed to pop out pane {pane_id} to new window: {err:#}");
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn mouse_event_pane_title_bar(
+        &mut self,
+        item: UIItem,
+        pane_id: mux::pane::PaneId,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        let focus_clicked_pane = |tw: &mut Self| {
+            let mux = Mux::get();
+            if let Some(tab) = mux.get_active_tab_for_window(tw.mux_window_id) {
+                if let Some(pos) = tab
+                    .iter_panes()
+                    .into_iter()
+                    .find(|p| p.pane.pane_id() == pane_id)
+                {
+                    tab.set_active_idx(pos.index);
+                    context.invalidate();
+                }
+            }
+        };
+
+        match event.kind {
+            WMEK::Press(MousePress::Left) => {
+                focus_clicked_pane(self);
+                self.dragging = Some((item, event));
+                context.set_cursor(Some(CursorIcon::Grabbing));
+            }
+            WMEK::Press(MousePress::Right) => {
+                focus_clicked_pane(self);
+                if let Some(pane) = Mux::get()
+                    .get_pane(pane_id)
+                    .or_else(|| self.get_active_pane_or_overlay())
+                {
+                    self.perform_key_assignment(&pane, &KeyAssignment::ShowContextMenu)
+                        .ok();
+                }
+            }
+            WMEK::Move => {
+                context.set_cursor(Some(CursorIcon::Grab));
+            }
+            _ => {}
+        }
+    }
+
     fn drag_ui_item(
         &mut self,
         item: UIItem,
@@ -363,6 +536,9 @@ impl super::TermWindow {
             }
             UIItemType::ScrollThumb => {
                 self.drag_scroll_thumb(item, start_event, event, context);
+            }
+            UIItemType::PaneTitleBar(pane_id) => {
+                self.drag_pane_title_bar(item, pane_id, start_event, event, context);
             }
             _ => {
                 log::error!("drag not implemented for {:?}", item);
@@ -397,6 +573,9 @@ impl super::TermWindow {
             }
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
+            }
+            UIItemType::PaneTitleBar(pane_id) => {
+                self.mouse_event_pane_title_bar(item, pane_id, event, context);
             }
         }
     }
@@ -740,7 +919,8 @@ impl super::TermWindow {
                 let rel_y_px = event.coords.y
                     - (padding_top as isize
                         + first_line_offset
-                        + pos.top as isize * self.render_metrics.cell_size.height);
+                        + pos.top as isize * self.render_metrics.cell_size.height
+                        + self.pane_title_bar_pixel_height() as isize);
 
                 row = (rel_y_px.max(0) / pane_metrics.cell_size.height) as i64;
                 let col_f = rel_x_px.max(0) as f32 / pane_metrics.cell_size.width as f32;

@@ -511,7 +511,7 @@ impl super::TermWindow {
     ) -> TerminalSize {
         scaled_pane_terminal_size(
             pos.width,
-            pos.height,
+            pos.height.saturating_sub(self.pane_title_bar_rows()).max(1),
             self.render_metrics.cell_size.width.max(1) as usize,
             self.render_metrics.cell_size.height.max(1) as usize,
             metrics.cell_size.width.max(1) as usize,
@@ -524,19 +524,18 @@ impl super::TermWindow {
         let pane_id = pos.pane.pane_id();
         let target = {
             let state = self.pane_state.borrow();
-            let Some(fs) = state.get(&pane_id).and_then(|s| s.font_state.as_ref()) else {
-                return;
+            let metrics = match state.get(&pane_id).and_then(|s| s.font_state.as_ref()) {
+                Some(fs) => fs.render_metrics,
+                None if self.config.show_pane_title_bar => self.render_metrics,
+                None => return,
             };
-            self.compute_pane_terminal_size(pos, &fs.render_metrics)
+            self.compute_pane_terminal_size(pos, &metrics)
         };
         pos.pane.resize(target).ok();
         let dims = pos.pane.get_dimensions();
-        if let Some(fs) = self
-            .pane_state
-            .borrow_mut()
-            .get_mut(&pane_id)
-            .and_then(|s| s.font_state.as_mut())
-        {
+        let mut pane_state = self.pane_state(pane_id);
+        pane_state.last_synced_pane_dims = Some((dims.cols, dims.viewport_rows));
+        if let Some(fs) = pane_state.font_state.as_mut() {
             fs.last_synced_pane_dims = Some((dims.cols, dims.viewport_rows));
         }
     }
@@ -550,7 +549,7 @@ impl super::TermWindow {
                 .get(&pos.pane.pane_id())
                 .and_then(|s| s.font_state.as_ref())
                 .is_some();
-            if has_custom_font {
+            if has_custom_font || self.config.show_pane_title_bar {
                 self.sync_pane_size_for_font_scale(&pos);
             }
         }

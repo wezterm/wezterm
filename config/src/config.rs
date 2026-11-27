@@ -910,6 +910,11 @@ pub struct Config {
     /// a bell and notification. Defaults to 10 seconds.
     #[dynamic(default = "default_silence_timeout_seconds")]
     pub silence_timeout_seconds: u64,
+
+    /// Show a small per-pane titlebar / drag handle at the top of each pane
+    /// that can be dragged to move panes within or across windows.
+    #[dynamic(default = "default_true")]
+    pub show_pane_title_bar: bool,
 }
 impl_lua_conversion_dynamic!(Config);
 
@@ -2230,5 +2235,11 @@ mod tests {
     fn default_silence_timeout_is_10_seconds() {
         let cfg = Config::default();
         assert_eq!(cfg.silence_timeout_seconds, 10);
+    }
+
+    #[test]
+    fn default_show_pane_title_bar_is_true() {
+        let cfg = Config::default();
+        assert!(cfg.show_pane_title_bar);
     }
 }

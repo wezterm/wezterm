@@ -92,25 +92,21 @@ impl crate::TermWindow {
         let pane_font_scale = self.pane_font_scale(pane_id);
         let pane_font_scale_bits = pane_font_scale.to_bits();
         let mut dims = pos.pane.get_dimensions();
-        if pane_font_scale != 1.0 {
+        if pane_font_scale != 1.0 || self.config.show_pane_title_bar {
             let expected = self.compute_pane_terminal_size(pos, &pane_metrics);
             if dims.cols != expected.cols || dims.viewport_rows != expected.rows {
                 let already_synced = self
                     .pane_state
                     .borrow()
                     .get(&pane_id)
-                    .and_then(|s| s.font_state.as_ref())
-                    .and_then(|fs| fs.last_synced_pane_dims)
+                    .and_then(|s| s.last_synced_pane_dims)
                     == Some((dims.cols, dims.viewport_rows));
                 if !already_synced {
                     pos.pane.resize(expected).ok();
                     dims = pos.pane.get_dimensions();
-                    if let Some(fs) = self
-                        .pane_state
-                        .borrow_mut()
-                        .get_mut(&pane_id)
-                        .and_then(|s| s.font_state.as_mut())
-                    {
+                    let mut pane_state = self.pane_state(pane_id);
+                    pane_state.last_synced_pane_dims = Some((dims.cols, dims.viewport_rows));
+                    if let Some(fs) = pane_state.font_state.as_mut() {
                         fs.last_synced_pane_dims = Some((dims.cols, dims.viewport_rows));
                     }
                 }
@@ -374,8 +370,9 @@ impl crate::TermWindow {
             let left_pixel_x = padding_left
                 + border.left.get() as f32
                 + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
-            let pane_top_pixel_y =
-                top_pixel_y + (pos.top as f32 * self.render_metrics.cell_size.height as f32);
+            let pane_top_pixel_y = top_pixel_y
+                + (pos.top as f32 * self.render_metrics.cell_size.height as f32)
+                + self.pane_title_bar_pixel_height();
 
             let mut render = LineRender {
                 term_window: self,

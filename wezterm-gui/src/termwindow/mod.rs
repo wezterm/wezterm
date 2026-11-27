@@ -32,7 +32,7 @@ use ::window::*;
 use anyhow::{anyhow, ensure, Context};
 use config::keyassignment::{
     Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
-    QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
+    QuickSelectArguments, RotationDirection, SpawnCommand, SpawnTabDomain, SplitSize,
 };
 use config::window::WindowLevel;
 use config::{
@@ -41,6 +41,7 @@ use config::{
 };
 use lfucache::*;
 use mlua::{FromLua, LuaSerdeExt, UserData, UserDataFields};
+use mux::domain::SplitSource;
 use mux::pane::{
     CachePolicy, CloseReason, Pane, PaneId, Pattern as MuxPattern, PerformAssignmentResult,
 };
@@ -78,6 +79,7 @@ pub mod keyevent;
 pub mod modal;
 mod mouseevent;
 pub mod palette;
+pub mod pane_drag;
 pub mod paneselect;
 mod prevcursor;
 pub mod render;
@@ -155,6 +157,15 @@ pub enum TermWindowNotif {
         pane_id: PaneId,
         generation: u64,
     },
+    PaneDragHover {
+        src_pane_id: PaneId,
+        local_coords: Option<(f32, f32)>,
+    },
+    PaneDragDrop {
+        src_pane_id: PaneId,
+        local_coords: (f32, f32),
+    },
+    ClearPaneDragTarget,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,6 +176,7 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
+    PaneTitleBar(PaneId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -226,6 +238,7 @@ pub struct PaneState {
     bell_start: Option<Instant>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
     pub font_state: Option<PaneFontState>,
+    pub last_synced_pane_dims: Option<(usize, usize)>,
     pub watch: PaneWatchState,
 }
 
@@ -466,6 +479,8 @@ pub struct TermWindow {
 
     ui_items: Vec<UIItem>,
     dragging: Option<(UIItem, MouseEvent)>,
+    pub pane_drag_target: Option<crate::termwindow::pane_drag::PaneDropTarget>,
+    pane_drag_last_window: Option<Window>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
@@ -810,6 +825,8 @@ impl TermWindow {
             semantic_zones: HashMap::new(),
             ui_items: vec![],
             dragging: None,
+            pane_drag_target: None,
+            pane_drag_last_window: None,
             last_ui_item: None,
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
@@ -1318,6 +1335,7 @@ impl TermWindow {
                     if let Some(tab) = Mux::get().get_tab(tab_id) {
                         self.sync_tab_custom_font_pane_sizes(&tab);
                     }
+                    window.invalidate();
                 }
                 MuxNotification::TabTitleChanged { .. } => {
                     self.update_title_post_status();
@@ -1374,6 +1392,59 @@ impl TermWindow {
                 generation,
             } => {
                 self.handle_silence_timeout(pane_id, generation);
+            }
+            TermWindowNotif::PaneDragHover {
+                src_pane_id,
+                local_coords,
+            } => {
+                self.pane_drag_target = local_coords
+                    .and_then(|(x, y)| self.resolve_pane_drop_target(src_pane_id, x, y));
+                window.invalidate();
+            }
+            TermWindowNotif::PaneDragDrop {
+                src_pane_id,
+                local_coords,
+            } => {
+                self.pane_drag_target = None;
+                let target = self.resolve_pane_drop_target(
+                    src_pane_id,
+                    local_coords.0,
+                    local_coords.1,
+                );
+                window.invalidate();
+                if let Some(target) = target {
+                    let split_req =
+                        crate::termwindow::pane_drag::drop_edge_to_split_request(target.edge);
+                    let win = window.clone();
+                    promise::spawn::spawn(async move {
+                        let mux = Mux::get();
+                        if let Err(err) = mux
+                            .split_pane(
+                                target.target_pane_id,
+                                split_req,
+                                SplitSource::MovePane(src_pane_id),
+                                SpawnTabDomain::CurrentPaneDomain,
+                            )
+                            .await
+                        {
+                            log::error!(
+                                "failed to move pane {} onto {}: {err:#}",
+                                src_pane_id,
+                                target.target_pane_id
+                            );
+                        } else {
+                            let _ = mux.focus_pane_and_containing_tab(src_pane_id);
+                            win.invalidate();
+                            win.focus();
+                        }
+                    })
+                    .detach();
+                }
+            }
+            TermWindowNotif::ClearPaneDragTarget => {
+                if self.pane_drag_target.take().is_some() {
+                    window.invalidate();
+                }
             }
         }
 
@@ -2301,7 +2372,8 @@ impl TermWindow {
                     (pos.top as isize * self.render_metrics.cell_size.height)
                         .add((cursor.y - top).max(0) * pane_metrics.cell_size.height)
                         .add(tab_bar_height as isize)
-                        .add(padding_top as isize),
+                        .add(padding_top as isize)
+                        .add(self.pane_title_bar_pixel_height() as isize),
                 ),
                 pane_metrics.cell_size,
             );
