@@ -1711,6 +1711,29 @@ impl KeyEvent {
     pub fn encode_kitty(&self, flags: KittyKeyboardFlags) -> String {
         use KeyCode::*;
 
+        // A `Composed` string holding exactly one char is functionally a plain
+        // character keypress; it is how an IME (or the Windows emoji picker)
+        // delivers text that has no backing physical key. It never carries a
+        // `raw` event, and unlike every other key it has no dedicated arm
+        // below, so it used to fall through to the final `_` catch-all. That
+        // arm needs `raw` to resolve a kitty function code, so with `raw`
+        // always `None` the whole function returned an empty string and the
+        // keypress was dropped outright. That made single CJK characters and
+        // full-width punctuation impossible to type with a CJK IME whenever
+        // the kitty keyboard protocol was active. Normalize it to `Char` up
+        // front so the rest of this function treats it like any other single
+        // character. Multi-char `Composed` strings (e.g. ZWJ emoji sequences)
+        // don't reach this function via WezTerm's normal routing and keep
+        // falling through as before.
+        if let Composed(s) = &self.key {
+            let mut chars = s.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                let mut normalized = self.clone();
+                normalized.key = Char(c);
+                return normalized.encode_kitty(flags);
+            }
+        }
+
         if !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES) && !self.key_is_down {
             return String::new();
         }
@@ -2377,6 +2400,66 @@ mod test {
             .encode_kitty(flags),
             "\x1b[11;1:3~".to_string()
         );
+    }
+
+    #[test]
+    fn encode_kitty_single_char_composed_matches_char() {
+        // An IME or the Windows emoji picker delivers text as a `Composed`
+        // event with no backing raw hardware key event (`raw: None`). Before
+        // this fix `encode_kitty` had no arm for `Composed`, so such an event
+        // reached the catch-all arm, failed to resolve a kitty function code
+        // and encoded as an empty string -- a silent drop.
+        let flags = KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+
+        let composed = KeyEvent {
+            key: KeyCode::Composed("\u{2615}".to_string()), // HOT BEVERAGE
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+        let equivalent_char = KeyEvent {
+            key: KeyCode::Char('\u{2615}'),
+            ..composed.clone()
+        };
+
+        assert_eq!(composed.encode_kitty(flags), "\x1b[9749;1u".to_string());
+        assert_eq!(
+            composed.encode_kitty(flags),
+            equivalent_char.encode_kitty(flags),
+            "a single-char Composed key must encode identically to the equivalent Char key"
+        );
+
+        let flags_with_text = flags | KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT;
+        assert_eq!(
+            composed.encode_kitty(flags_with_text),
+            "\x1b[9749;1;9749u".to_string()
+        );
+    }
+
+    #[test]
+    fn encode_kitty_multi_char_composed_is_unaffected() {
+        // A multi-char Composed string (e.g. a ZWJ emoji sequence) is written
+        // to the pane as raw text by keyevent.rs and never goes through kitty
+        // encoding. This locks in that the single-char normalization above
+        // does not change encode_kitty's own behavior for that case.
+        let flags = KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+
+        let multi = KeyEvent {
+            key: KeyCode::Composed("ab".to_string()),
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+
+        assert_eq!(multi.encode_kitty(flags), "");
     }
 
     #[test]
