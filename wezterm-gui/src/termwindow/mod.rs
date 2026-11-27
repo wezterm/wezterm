@@ -202,6 +202,8 @@ pub struct PaneState {
     /// contents, we're overlaying a little internal application
     /// tab.  We'll also route input to it.
     pub overlay: Option<OverlayState>,
+    /// Cached palette and hash; if None, we calculate it.
+    palette_and_hash: Option<Rc<(ColorPalette, [u8; 32])>>,
 
     bell_start: Option<Instant>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
@@ -1223,6 +1225,9 @@ impl TermWindow {
                     alert: Alert::PaletteChanged,
                     pane_id,
                 } => {
+                    if let Some(state) = self.pane_state.borrow_mut().get_mut(&pane_id) {
+                        state.palette_and_hash = None;
+                    }
                     // Shape cache includes color information, so
                     // ensure that we invalidate that as part of
                     // this overall invalidation for the palette
@@ -1809,7 +1814,8 @@ impl TermWindow {
                     pane.pane.set_config(Arc::clone(&term_config));
                 }
             }
-            for state in self.pane_state.borrow().values() {
+            for state in self.pane_state.borrow_mut().values_mut() {
+                state.palette_and_hash = None;
                 if let Some(overlay) = &state.overlay {
                     overlay.pane.set_config(Arc::clone(&term_config));
                 }

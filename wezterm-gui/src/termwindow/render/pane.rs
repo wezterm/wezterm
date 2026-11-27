@@ -14,11 +14,48 @@ use mux::pane::{PaneId, WithPaneLines};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::PositionedPane;
 use ordered_float::NotNan;
+use std::rc::Rc;
 use std::time::Instant;
 use wezterm_dynamic::Value;
-use wezterm_term::color::{ColorAttribute, ColorPalette};
+use wezterm_term::color::{ColorAttribute, ColorPalette, SrgbaTuple};
 use wezterm_term::{Line, StableRowIndex};
 use window::color::LinearRgba;
+
+fn hash_palette(palette: &ColorPalette) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let ColorPalette {
+        colors,
+        foreground,
+        background,
+        cursor_fg,
+        cursor_bg,
+        cursor_border,
+        selection_fg,
+        selection_bg,
+        scrollbar_thumb,
+        split,
+    } = palette;
+    let mut hasher = Sha256::new();
+    let mut hash_color = |srgba: &SrgbaTuple| {
+        hasher.update(srgba.0.to_le_bytes());
+        hasher.update(srgba.1.to_le_bytes());
+        hasher.update(srgba.2.to_le_bytes());
+        hasher.update(srgba.3.to_le_bytes());
+    };
+    for color in colors.0.iter() {
+        hash_color(color);
+    }
+    hash_color(foreground);
+    hash_color(background);
+    hash_color(cursor_fg);
+    hash_color(cursor_bg);
+    hash_color(cursor_border);
+    hash_color(selection_fg);
+    hash_color(selection_bg);
+    hash_color(scrollbar_thumb);
+    hash_color(split);
+    hasher.finalize().into()
+}
 
 impl crate::TermWindow {
     fn paint_pane_box_model(&mut self, pos: &PositionedPane) -> anyhow::Result<()> {
@@ -58,7 +95,17 @@ impl crate::TermWindow {
         let global_cursor_fg = self.palette().cursor_fg;
         let global_cursor_bg = self.palette().cursor_bg;
         let config = self.config.clone();
-        let palette = pos.pane.palette();
+        let pane_id = pos.pane.pane_id();
+        let palette_and_hash = self
+            .pane_state(pane_id)
+            .palette_and_hash
+            .get_or_insert_with(|| {
+                let palette = pos.pane.palette();
+                let hash = hash_palette(&palette);
+                Rc::new((palette, hash))
+            })
+            .clone();
+        let (palette, palette_hash) = palette_and_hash.as_ref();
 
         let (padding_left, padding_top) = self.padding_left_top();
 
@@ -82,7 +129,6 @@ impl crate::TermWindow {
             self.prev_cursor.update(&cursor);
         }
 
-        let pane_id = pos.pane.pane_id();
         let current_viewport = self.get_viewport(pane_id);
         let dims = pos.pane.get_dimensions();
 
@@ -322,6 +368,7 @@ impl crate::TermWindow {
                 pane_id: PaneId,
                 cursor: &'a StableCursorPosition,
                 palette: &'a ColorPalette,
+                palette_hash: &'a [u8; 32],
                 default_bg: LinearRgba,
                 cursor_border_color: LinearRgba,
                 selection_fg: LinearRgba,
@@ -351,7 +398,8 @@ impl crate::TermWindow {
                 pos,
                 pane_id,
                 cursor: &cursor,
-                palette: &palette,
+                palette,
+                palette_hash,
                 cursor_border_color,
                 selection_fg,
                 selection_bg,
@@ -499,6 +547,7 @@ impl crate::TermWindow {
                                 selection: selrange.clone(),
                                 cursor: &self.cursor,
                                 palette: &self.palette,
+                                palette_hash: Some(self.palette_hash),
                                 dims: &self.dims,
                                 config: &self.term_window.config,
                                 cursor_border_color: self.cursor_border_color,

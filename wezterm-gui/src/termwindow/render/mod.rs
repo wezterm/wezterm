@@ -136,6 +136,7 @@ pub struct RenderScreenLineParams<'a> {
     pub selection: Range<usize>,
     pub cursor: &'a StableCursorPosition,
     pub palette: &'a ColorPalette,
+    pub palette_hash: Option<&'a [u8; 32]>,
     pub dims: &'a RenderableDimensions,
     pub config: &'a ConfigHandle,
     pub pane: Option<&'a Arc<dyn Pane>>,
@@ -464,10 +465,19 @@ impl crate::TermWindow {
             padding.next_power_of_two()
         };
 
+        let do_cursor_color_fallback =
+            params.config.force_reverse_video_cursor && params.cursor_is_default_color;
         let (sprite, next_due, _load_state) = gl_state
             .glyph_cache
             .borrow_mut()
-            .cached_image(image.image_data(), Some(padding), self.allow_images)
+            .cached_image(
+                image.image_data(),
+                params
+                    .palette_hash
+                    .map(|h| (params.palette, h, do_cursor_color_fallback)),
+                Some(padding),
+                self.allow_images,
+            )
             .context("cached_image")?;
         self.update_next_frame_time(next_due);
         let width = sprite.coords.size.width;

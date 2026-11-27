@@ -447,7 +447,9 @@ impl TerminalState {
 
         let mut img = img.data();
         match &mut *img {
-            ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => {
+            ImageDataType::EncodedLease(_)
+            | ImageDataType::EncodedFile(_)
+            | ImageDataType::Indexed { .. } => {
                 anyhow::bail!("invalid image type")
             }
             ImageDataType::Rgba8 {
@@ -604,6 +606,9 @@ impl TerminalState {
         match &mut *anim {
             ImageDataType::EncodedLease(_) | ImageDataType::EncodedFile(_) => {
                 anyhow::bail!("Expected decoded image for image id {}", image_id)
+            }
+            ImageDataType::Indexed { .. } => {
+                anyhow::bail!("Expected non-indexed image for image id {image_id}")
             }
             ImageDataType::Rgba8 {
                 data,
@@ -808,6 +813,23 @@ impl TerminalState {
                 );
 
                 ImageDataType::new_single_frame(width, height, data)
+            }
+            Some(format @ (KittyImageFormat::Indexed | KittyImageFormat::IndexedAlpha)) => {
+                let (Some(width), Some(height)) = (transmit.width, transmit.height) else {
+                    anyhow::bail!("missing width/height info for kitty img");
+                };
+                check_image_dimensions(width, height)?;
+                let has_alpha = matches!(format, KittyImageFormat::IndexedAlpha);
+                let n = if has_alpha { 2 } else { 1 };
+                let Some(exp) = width.checked_mul(height).and_then(|x| x.checked_mul(n)) else {
+                    anyhow::bail!("Overflow computing data size for image {width}x{height}x{n}");
+                };
+                anyhow::ensure!(
+                    data.len() == exp as usize,
+                    "transmit data len is {} but it doesn't match {width}x{height}x{n} = {exp}",
+                    data.len(),
+                );
+                ImageDataType::new_indexed(width, height, has_alpha, data)
             }
             Some(KittyImageFormat::Png) => {
                 let info = dimensions(&data)?;

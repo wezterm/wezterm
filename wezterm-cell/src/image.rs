@@ -257,6 +257,16 @@ pub enum ImageDataType {
         /// Must be updated whenever a frame changes.
         hashes: Vec<[u8; 32]>,
     },
+    /// Data is indexed
+    Indexed {
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        has_alpha: bool,
+        /// sha256 of all the fields
+        /// Must be updated whenever any of the fields change.
+        hash: [u8; 32],
+    },
 }
 
 impl std::fmt::Debug for ImageDataType {
@@ -293,6 +303,20 @@ impl std::fmt::Debug for ImageDataType {
                 .field("durations", durations)
                 .field("hashes", hashes)
                 .finish(),
+            Self::Indexed {
+                data,
+                width,
+                height,
+                has_alpha,
+                hash,
+            } => fmt
+                .debug_struct("Indexed")
+                .field("data_of_len", &data.len())
+                .field("width", &width)
+                .field("height", &height)
+                .field("has_alpha", &has_alpha)
+                .field("hash", &hash)
+                .finish(),
         }
     }
 }
@@ -312,6 +336,34 @@ impl ImageDataType {
             width,
             height,
             data,
+            hash,
+        }
+    }
+
+    pub fn new_indexed(width: u32, height: u32, has_alpha: bool, data: Vec<u8>) -> Self {
+        use sha2::Digest;
+        let n = if has_alpha { 2 } else { 1 };
+        assert_eq!(
+            width.strict_mul(height).strict_mul(n) as usize,
+            data.len(),
+            "invalid dimensions {width}x{height} for indexed data of length {}",
+            data.len(),
+        );
+        let mut hasher = sha2::Sha256::new();
+        if has_alpha {
+            hasher.update(b"idxa\0");
+        } else {
+            hasher.update(b"idx\0");
+        }
+        hasher.update(width.to_le_bytes());
+        hasher.update(height.to_le_bytes());
+        hasher.update(&data);
+        let hash = hasher.finalize().into();
+        Self::Indexed {
+            data,
+            width,
+            height,
+            has_alpha,
             hash,
         }
     }
@@ -337,7 +389,7 @@ impl ImageDataType {
         use sha2::Digest;
         match self {
             ImageDataType::EncodedLease(lease) => lease.content_id().as_hash_bytes(),
-            ImageDataType::Rgba8 { hash, .. } => *hash,
+            ImageDataType::Rgba8 { hash, .. } | ImageDataType::Indexed { hash, .. } => *hash,
             ImageDataType::EncodedFile(data) => ImageDataType::hash_bytes(data),
             ImageDataType::AnimRgba8 {
                 frames, durations, ..
@@ -386,7 +438,8 @@ impl ImageDataType {
             ImageDataType::EncodedFile(data) => Ok(dimensions_for_data(data)?),
             ImageDataType::EncodedLease(lease) => Ok(dimensions_for_data(&lease.get_data()?)?),
             ImageDataType::AnimRgba8 { width, height, .. }
-            | ImageDataType::Rgba8 { width, height, .. } => Ok((*width, *height)),
+            | ImageDataType::Rgba8 { width, height, .. }
+            | ImageDataType::Indexed { width, height, .. } => Ok((*width, *height)),
         }
     }
 
@@ -608,7 +661,7 @@ impl ImageData {
         match &*self.data() {
             ImageDataType::EncodedFile(d) => d.len(),
             ImageDataType::EncodedLease(_) => 0,
-            ImageDataType::Rgba8 { data, .. } => data.len(),
+            ImageDataType::Rgba8 { data, .. } | ImageDataType::Indexed { data, .. } => data.len(),
             ImageDataType::AnimRgba8 { frames, .. } => frames.len() * frames[0].len(),
         }
     }
