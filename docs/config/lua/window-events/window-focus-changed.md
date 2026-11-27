@@ -19,7 +19,7 @@ local wezterm = require 'wezterm'
 
 wezterm.on('window-focus-changed', function(window, pane)
   wezterm.log_info(
-    'the focus state of ',
+    'the focus state of window ',
     window:window_id(),
     ' changed to ',
     window:is_focused()
@@ -27,3 +27,5 @@ wezterm.on('window-focus-changed', function(window, pane)
 end)
 ```
 
+See also [pane-focus-changed](pane-focus-changed.md) which is emitted when
+changing focus between panes.

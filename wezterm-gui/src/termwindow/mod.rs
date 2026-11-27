@@ -448,6 +448,7 @@ pub struct TermWindow {
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
     event_states: HashMap<String, EventState>,
+    last_focused_pane_id: Option<PaneId>,
     pub current_event: Option<Value>,
     has_animation: RefCell<Option<Instant>>,
     /// We use this to attempt to do something reasonable
@@ -781,6 +782,7 @@ impl TermWindow {
                 None,
             )),
             event_states: HashMap::new(),
+            last_focused_pane_id: None,
             current_event: None,
             has_animation: RefCell::new(None),
             scheduled_animation: RefCell::new(None),
@@ -1017,6 +1019,7 @@ impl TermWindow {
                 if let Ok(notif) = item.downcast::<TermWindowNotif>() {
                     self.dispatch_notif(*notif, window)
                         .context("dispatch_notif")?;
+                    self.maybe_emit_pane_focus_changed();
                 }
                 Ok(true)
             }
@@ -1470,6 +1473,7 @@ impl TermWindow {
                     | Alert::Bell,
             }
             | MuxNotification::PaneFocused(pane_id)
+            | MuxNotification::PaneAdded(pane_id)
             | MuxNotification::PaneRemoved(pane_id)
             | MuxNotification::PaneOutput(pane_id) => {
                 // Check window validity and propagate to the window event handler
@@ -1482,12 +1486,6 @@ impl TermWindow {
                     return true;
                 }
                 let _ = pane_id;
-            }
-            MuxNotification::PaneAdded(_pane_id) => {
-                // If some other client spawns a pane inside this window, this
-                // gives us an opportunity to attach it to the clipboard.
-                let mux = Mux::get();
-                return mux.get_window(mux_window_id).is_some();
             }
             MuxNotification::TabAddedToWindow { window_id, .. }
             | MuxNotification::WindowTitleChanged { window_id, .. }
@@ -1634,6 +1632,20 @@ impl TermWindow {
             }
         } else {
             *state = EventState::None;
+        }
+    }
+
+    /// Emit "pane-focus-changed" if the active pane differs from the last one seen.
+    fn maybe_emit_pane_focus_changed(&mut self) {
+        let pane_id = match self.get_active_pane_no_overlay() {
+            Some(pane) => pane.pane_id(),
+            None => return,
+        };
+        match self.last_focused_pane_id.replace(pane_id) {
+            Some(last) if last != pane_id => {
+                self.emit_window_event("pane-focus-changed", Some(pane_id));
+            }
+            _ => {}
         }
     }
 
