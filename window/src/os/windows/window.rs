@@ -161,6 +161,53 @@ fn adjust_client_to_window_dimensions(
     (rect_width(&rect), rect_height(&rect))
 }
 
+/// Resizing with SWP_NOMOVE keeps the top-left corner in place. If the window
+/// straddles two monitors with different scale factors, the new size can move
+/// most of the window onto the other monitor. Windows then switches the window
+/// to that monitor's dpi, the dpi change resizes the window again to keep its
+/// rows and cols, which moves it back, and so on: the window flips between the
+/// two dpis forever and stops responding.
+///
+/// Returns the position that keeps a window of the given outer size on the
+/// monitor it is on now, or None if no move is needed.
+unsafe fn origin_keeping_monitor(hwnd: HWND, width: i32, height: i32) -> Option<(i32, i32)> {
+    let mut rect: RECT = std::mem::zeroed();
+    if GetWindowRect(hwnd, &mut rect) == 0 {
+        return None;
+    }
+    let resized = RECT {
+        left: rect.left,
+        top: rect.top,
+        right: rect.left + width,
+        bottom: rect.top + height,
+    };
+
+    let current = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    if current.is_null() || MonitorFromRect(&resized, MONITOR_DEFAULTTONEAREST) == current {
+        return None;
+    }
+
+    let mut mi: MONITORINFO = std::mem::zeroed();
+    mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(current, &mut mi) == 0 {
+        return None;
+    }
+    let origin = clamp_origin_to_work_area(&resized, &mi.rcWork);
+    if origin == (rect.left, rect.top) {
+        None
+    } else {
+        Some(origin)
+    }
+}
+
+/// Shift `rect` so that it lies within `work`, without resizing it.
+/// If it is larger than `work`, align it with the top-left corner.
+fn clamp_origin_to_work_area(rect: &RECT, work: &RECT) -> (i32, i32) {
+    let x = rect.left.min(work.right - rect_width(rect)).max(work.left);
+    let y = rect.top.min(work.bottom - rect_height(rect)).max(work.top);
+    (x, y)
+}
+
 fn rc_to_pointer(arc: &Rc<RefCell<WindowInner>>) -> *const RefCell<WindowInner> {
     let cloned = Rc::clone(arc);
     Rc::into_raw(cloned)
@@ -903,6 +950,7 @@ impl WindowOps for Window {
         Connection::with_window_inner(self.0, move |inner| {
             let hwnd = inner.hwnd;
             let decorations = inner.config.window_decorations;
+            let in_size_move = inner.in_size_move;
             promise::spawn::spawn(async move {
                 log::trace!("set_inner_size called with {width}x{height}");
                 let frame_dpi = unsafe { GetDpiForWindow(hwnd.0) };
@@ -914,17 +962,25 @@ impl WindowOps for Window {
                 );
                 let window_state = get_window_state(hwnd.0);
                 if window_state.can_resize() {
+                    // While the user drags the window, the move loop owns
+                    // its position.
+                    let origin = if in_size_move {
+                        None
+                    } else {
+                        unsafe { origin_keeping_monitor(hwnd.0, width, height) }
+                    };
+                    let (x, y, flags) = match origin {
+                        Some((x, y)) => {
+                            log::trace!(
+                                "set_inner_size: moving to {x},{y} to stay on the current monitor"
+                            );
+                            (x, y, SWP_NOACTIVATE | SWP_NOZORDER)
+                        }
+                        None => (0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER),
+                    };
                     log::trace!("set_inner_size now calling SetWindowPos with {width}x{height}");
                     unsafe {
-                        SetWindowPos(
-                            hwnd.0,
-                            hwnd.0,
-                            0,
-                            0,
-                            width,
-                            height,
-                            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
-                        );
+                        SetWindowPos(hwnd.0, hwnd.0, x, y, width, height, flags);
                         wm_paint(hwnd.0, 0, 0, 0);
                         if let Some(inner) = rc_from_hwnd(hwnd.0) {
                             let mut inner = inner.borrow_mut();
@@ -3022,5 +3078,69 @@ unsafe extern "system" fn wnd_proc(
             log::error!("caught {:?}", e);
             std::process::exit(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    #[test]
+    fn clamp_origin_keeps_a_rect_that_fits() {
+        let work = rect(0, 0, 1920, 1032);
+        assert_eq!(
+            clamp_origin_to_work_area(&rect(100, 50, 900, 650), &work),
+            (100, 50)
+        );
+    }
+
+    #[test]
+    fn clamp_origin_pulls_back_a_rect_that_grew_onto_the_next_monitor() {
+        // Window anchored at 1164,369 grew to 1474x1222 and now reaches into
+        // the monitor to the right of a 1920x1080 display
+        let work = rect(0, 0, 1920, 1032);
+        assert_eq!(
+            clamp_origin_to_work_area(&rect(1164, 369, 2638, 1591), &work),
+            (446, 0)
+        );
+    }
+
+    #[test]
+    fn clamp_origin_pushes_a_rect_onto_a_monitor_to_the_right() {
+        // The same window shrank to 1234x1011 while it belongs to the
+        // monitor on the right
+        let work = rect(1920, 0, 3840, 1160);
+        assert_eq!(
+            clamp_origin_to_work_area(&rect(1164, 369, 2398, 1380), &work),
+            (1920, 149)
+        );
+    }
+
+    #[test]
+    fn clamp_origin_handles_negative_coordinates() {
+        // Monitor left of the primary one
+        let work = rect(-1920, 0, 0, 1040);
+        assert_eq!(
+            clamp_origin_to_work_area(&rect(-400, 100, 600, 900), &work),
+            (-1000, 100)
+        );
+    }
+
+    #[test]
+    fn clamp_origin_aligns_an_oversized_rect_top_left() {
+        let work = rect(0, 0, 1920, 1032);
+        assert_eq!(
+            clamp_origin_to_work_area(&rect(300, 200, 2500, 1500), &work),
+            (0, 0)
+        );
     }
 }

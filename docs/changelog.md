@@ -160,6 +160,10 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Windows: a window that straddles two monitors with different scale factors
+  could flip between their dpis forever, using a full CPU core and no longer
+  responding. Resizing the window to keep its rows and cols after a dpi change
+  now keeps it on its current monitor. #1983
 * Multiplexer: the mouse wheel was not mapped to cursor up/down keys in the
   alternate screen for panes in a `wezterm connect` domain, because the client
   always reported the alternate screen as inactive. The server now advises the
