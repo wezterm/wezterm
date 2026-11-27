@@ -211,13 +211,19 @@ impl TmuxDomainState {
             active_lock: active_lock.clone(),
         };
 
-        let terminal = wezterm_term::Terminal::new(
+        let mut terminal = wezterm_term::Terminal::new(
             size,
             std::sync::Arc::new(config::TermConfig::new()),
             "WezTerm",
             config::wezterm_version(),
             Box::new(writer.clone()),
         );
+        // Suppress DA responses for tmux control mode panes.
+        // tmux's own terminal emulator already responds to DA queries
+        // from pane applications. If wezterm also responds, the response
+        // travels back via send-keys and arrives after the querying
+        // application has exited, leaking as garbage in the shell.
+        terminal.suppress_device_attributes();
 
         Ok(Arc::new(LocalPane::new(
             local_pane_id,
