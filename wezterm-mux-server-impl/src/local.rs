@@ -1,3 +1,4 @@
+use crate::sessionhandler::RenderPushPolicy;
 use anyhow::{anyhow, Context as _};
 use config::{create_user_owned_dirs, UnixDomain};
 use promise::spawn::spawn_into_main_thread;
@@ -22,10 +23,12 @@ impl LocalListener {
             match stream {
                 Ok(stream) => {
                     spawn_into_main_thread(async move {
-                        crate::dispatch::process(stream).await.map_err(|e| {
-                            log::error!("{:#}", e);
-                            e
-                        })
+                        crate::dispatch::process(stream, RenderPushPolicy::RenderClientsOnly)
+                            .await
+                            .map_err(|e| {
+                                log::error!("{:#}", e);
+                                e
+                            })
                     })
                     .detach();
                 }

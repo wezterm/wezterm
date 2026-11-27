@@ -36,7 +36,7 @@ impl PduSender {
 }
 
 #[derive(Default, Debug)]
-pub(crate) struct PerPane {
+struct PerPane {
     cursor_position: StableCursorPosition,
     title: String,
     working_dir: Option<Url>,
@@ -46,7 +46,8 @@ pub(crate) struct PerPane {
     sent_initial_palette: bool,
     seqno: SequenceNo,
     config_generation: usize,
-    pub(crate) notifications: Vec<Alert>,
+    notifications: Vec<Alert>,
+    render_requested: bool,
 }
 
 impl PerPane {
@@ -204,9 +205,18 @@ fn maybe_push_pane_changes(
     Ok(())
 }
 
+pub enum RenderPushPolicy {
+    /// TLS reconnects can resume without sending a new client identity.
+    AllPanes,
+    /// CLI sessions get render pushes only for panes they explicitly request.
+    /// Identified mux clients get all panes, including new ones they need to discover.
+    RenderClientsOnly,
+}
+
 pub struct SessionHandler {
     to_write_tx: PduSender,
-    per_pane: HashMap<TabId, Arc<Mutex<PerPane>>>,
+    per_pane: HashMap<PaneId, Arc<Mutex<PerPane>>>,
+    render_push_policy: RenderPushPolicy,
     client_id: Option<Arc<ClientId>>,
     proxy_client_id: Option<ClientId>,
 }
@@ -221,16 +231,17 @@ impl Drop for SessionHandler {
 }
 
 impl SessionHandler {
-    pub fn new(to_write_tx: PduSender) -> Self {
+    pub fn new(to_write_tx: PduSender, render_push_policy: RenderPushPolicy) -> Self {
         Self {
             to_write_tx,
             per_pane: HashMap::new(),
+            render_push_policy,
             client_id: None,
             proxy_client_id: None,
         }
     }
 
-    pub(crate) fn per_pane(&mut self, pane_id: PaneId) -> Arc<Mutex<PerPane>> {
+    fn per_pane(&mut self, pane_id: PaneId) -> Arc<Mutex<PerPane>> {
         Arc::clone(
             self.per_pane
                 .entry(pane_id)
@@ -238,9 +249,28 @@ impl SessionHandler {
         )
     }
 
-    pub fn schedule_pane_push(&mut self, pane_id: PaneId) {
+    pub(crate) fn pane_removed(&mut self, pane_id: PaneId) {
+        self.per_pane.remove(&pane_id);
+    }
+
+    pub(crate) fn schedule_pane_push(&mut self, pane_id: PaneId, alert: Option<Alert>) {
+        let per_pane = if matches!(self.render_push_policy, RenderPushPolicy::AllPanes)
+            || self.client_id.is_some()
+        {
+            self.per_pane(pane_id)
+        } else {
+            let Some(per_pane) = self.per_pane.get(&pane_id) else {
+                return;
+            };
+            if !per_pane.lock().unwrap().render_requested {
+                return;
+            }
+            Arc::clone(per_pane)
+        };
+        if let Some(alert) = alert {
+            per_pane.lock().unwrap().notifications.push(alert);
+        }
         let sender = self.to_write_tx.clone();
-        let per_pane = self.per_pane(pane_id);
         spawn_into_main_thread(async move {
             let mux = Mux::get();
             let pane = mux
@@ -775,6 +805,7 @@ impl SessionHandler {
                             let mux = Mux::get();
                             let is_alive = match mux.get_pane(pane_id) {
                                 Some(pane) => {
+                                    per_pane.lock().unwrap().render_requested = true;
                                     maybe_push_pane_changes(&pane, sender, per_pane)?;
                                     true
                                 }

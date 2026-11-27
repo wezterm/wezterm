@@ -1,4 +1,4 @@
-use crate::sessionhandler::{PduSender, SessionHandler};
+use crate::sessionhandler::{PduSender, RenderPushPolicy, SessionHandler};
 use anyhow::Context;
 use async_ossl::AsyncSslStream;
 use codec::{DecodedPdu, Pdu};
@@ -7,6 +7,9 @@ use mux::{Mux, MuxNotification};
 use smol::prelude::*;
 use smol::Async;
 use wezterm_uds::UnixStream;
+
+#[cfg(all(test, unix))]
+mod tests;
 
 #[cfg(unix)]
 pub trait AsRawDesc: std::os::unix::io::AsRawFd + std::os::fd::AsFd {}
@@ -23,7 +26,7 @@ enum Item {
     Readable,
 }
 
-pub async fn process<T>(stream: T) -> anyhow::Result<()>
+pub async fn process<T>(stream: T, render_push_policy: RenderPushPolicy) -> anyhow::Result<()>
 where
     T: 'static,
     T: std::io::Read,
@@ -33,10 +36,13 @@ where
     T: async_io::IoSafe,
 {
     let stream = smol::Async::new(stream)?;
-    process_async(stream).await
+    process_async(stream, render_push_policy).await
 }
 
-pub async fn process_async<T>(mut stream: Async<T>) -> anyhow::Result<()>
+async fn process_async<T>(
+    mut stream: Async<T>,
+    render_push_policy: RenderPushPolicy,
+) -> anyhow::Result<()>
 where
     T: 'static,
     T: std::io::Read,
@@ -56,7 +62,7 @@ where
                 .map_err(|e| anyhow::anyhow!("{:?}", e))
         }
     });
-    let mut handler = SessionHandler::new(pdu_sender);
+    let mut handler = SessionHandler::new(pdu_sender, render_push_policy);
 
     {
         let mux = Mux::get();
@@ -109,22 +115,18 @@ where
                 }
             }
             Ok(Item::Notif(MuxNotification::PaneOutput(pane_id))) => {
-                handler.schedule_pane_push(pane_id);
+                handler.schedule_pane_push(pane_id, None);
             }
             Ok(Item::Notif(MuxNotification::PaneAdded(_pane_id))) => {}
             Ok(Item::Notif(MuxNotification::PaneRemoved(pane_id))) => {
+                handler.pane_removed(pane_id);
                 Pdu::PaneRemoved(codec::PaneRemoved { pane_id })
                     .encode_async(&mut stream, 0)
                     .await?;
                 stream.flush().await.context("flushing PDU to client")?;
             }
             Ok(Item::Notif(MuxNotification::Alert { pane_id, alert })) => {
-                {
-                    let per_pane = handler.per_pane(pane_id);
-                    let mut per_pane = per_pane.lock().unwrap();
-                    per_pane.notifications.push(alert);
-                }
-                handler.schedule_pane_push(pane_id);
+                handler.schedule_pane_push(pane_id, Some(alert));
             }
             Ok(Item::Notif(MuxNotification::SaveToDownloads { .. })) => {}
             Ok(Item::Notif(MuxNotification::AssignClipboard {
