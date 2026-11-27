@@ -32,6 +32,8 @@ mod keyboard;
 mod kitty;
 mod mouse;
 pub(crate) mod performer;
+#[cfg(test)]
+pub(crate) use performer::test_hooks;
 mod sixel;
 use crate::terminalstate::image::*;
 use crate::terminalstate::kitty::*;

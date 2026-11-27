@@ -792,6 +792,55 @@ impl Line {
         self.set_cell(idx, Cell::new_grapheme_with_width(text, width, attr), seqno);
     }
 
+    /// Assign one width-1 cell per byte of `text`, starting at `idx`.
+    /// `text` must be printable ASCII. The result is the same as calling
+    /// `set_cell_grapheme` for each byte in turn, but a run that extends
+    /// the end of a line in clustered storage is appended in one step.
+    pub fn set_cells_ascii(
+        &mut self,
+        idx: usize,
+        text: &str,
+        attr: &CellAttributes,
+        seqno: SequenceNo,
+    ) {
+        debug_assert!(text.bytes().all(|b| (0x20..0x7f).contains(&b)));
+        if text.is_empty() {
+            return;
+        }
+
+        // Invalidating implicit hyperlinks converts the line to vector
+        // storage, after which per-cell assignment is what happens anyway.
+        let has_implicit = (self.bits & LineBits::HAS_IMPLICIT_HYPERLINKS) != LineBits::NONE;
+
+        if let CellStorage::C(cl) = &mut self.cells {
+            if idx >= cl.len() && !has_implicit {
+                if idx > cl.len()
+                    && *attr == CellAttributes::blank()
+                    && text.bytes().all(|b| b == b' ')
+                {
+                    // Appending blanks beyond the end of the line; they
+                    // are already implicitly blank
+                    return;
+                }
+                if attr.hyperlink().is_some() {
+                    self.bits |= LineBits::HAS_HYPERLINK;
+                }
+                while cl.len() < idx {
+                    cl.append_grapheme(" ", 1, CellAttributes::blank());
+                }
+                cl.append_ascii(text, attr);
+                self.invalidate_implicit_hyperlinks(seqno);
+                self.invalidate_zones();
+                self.update_last_change_seqno(seqno);
+                return;
+            }
+        }
+
+        for i in 0..text.len() {
+            self.set_cell_grapheme(idx + i, &text[i..i + 1], 1, attr.clone(), seqno);
+        }
+    }
+
     pub fn set_cell_clearing_image_placements(
         &mut self,
         idx: usize,
