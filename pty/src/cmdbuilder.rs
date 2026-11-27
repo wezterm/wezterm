@@ -41,7 +41,7 @@ impl EnvEntry {
 
 #[cfg(unix)]
 fn get_shell() -> String {
-    use nix::unistd::{access, AccessFlags};
+    use rustix::fs::{access, Access};
     use std::ffi::CStr;
     use std::str;
 
@@ -57,7 +57,7 @@ fn get_shell() -> String {
                 );
             }
             Ok(shell) => {
-                if let Err(err) = access(Path::new(&shell), AccessFlags::X_OK) {
+                if let Err(err) = access(Path::new(&shell), Access::EXEC_OK) {
                     log::warn!(
                         "passwd database shell={shell:?} which is \
                          not executable ({err:#}), falling back to /bin/sh"
@@ -430,7 +430,7 @@ impl CommandBuilder {
     }
 
     fn search_path(&self, exe: &OsStr, cwd: &OsStr) -> anyhow::Result<OsString> {
-        use nix::unistd::{access, AccessFlags};
+        use rustix::fs::{access, Access};
 
         let exe_path: &Path = exe.as_ref();
         if exe_path.is_relative() {
@@ -447,9 +447,9 @@ impl CommandBuilder {
                         "Unable to spawn {} because it is a directory",
                         abs_path.display()
                     );
-                } else if access(&abs_path, AccessFlags::X_OK).is_ok() {
+                } else if access(&abs_path, Access::EXEC_OK).is_ok() {
                     return Ok(abs_path.into_os_string());
-                } else if access(&abs_path, AccessFlags::F_OK).is_ok() {
+                } else if access(&abs_path, Access::EXISTS).is_ok() {
                     anyhow::bail!(
                         "Unable to spawn {} because it is not executable",
                         abs_path.display()
@@ -468,9 +468,9 @@ impl CommandBuilder {
 
                     if candidate.is_dir() {
                         errors.push(format!("{} exists but is a directory", candidate.display()));
-                    } else if access(&candidate, AccessFlags::X_OK).is_ok() {
+                    } else if access(&candidate, Access::EXEC_OK).is_ok() {
                         return Ok(candidate.into_os_string());
-                    } else if access(&candidate, AccessFlags::F_OK).is_ok() {
+                    } else if access(&candidate, Access::EXISTS).is_ok() {
                         errors.push(format!(
                             "{} exists but is not executable",
                             candidate.display()
@@ -492,8 +492,8 @@ impl CommandBuilder {
                 exe_path.display()
             );
         } else {
-            if let Err(err) = access(exe_path, AccessFlags::X_OK) {
-                if access(exe_path, AccessFlags::F_OK).is_ok() {
+            if let Err(err) = access(exe_path, Access::EXEC_OK) {
+                if access(exe_path, Access::EXISTS).is_ok() {
                     anyhow::bail!(
                         "Unable to spawn {} because it is not executable ({err:#})",
                         exe_path.display()
@@ -558,10 +558,10 @@ impl CommandBuilder {
     /// We take the contents of the $SHELL env var first, then
     /// fall back to looking it up from the password database.
     pub fn get_shell(&self) -> String {
-        use nix::unistd::{access, AccessFlags};
+        use rustix::fs::{access, Access};
 
         if let Some(shell) = self.get_env("SHELL").and_then(OsStr::to_str) {
-            match access(shell, AccessFlags::X_OK) {
+            match access(shell, Access::EXEC_OK) {
                 Ok(()) => return shell.into(),
                 Err(err) => log::warn!(
                     "$SHELL -> {shell:?} which is \

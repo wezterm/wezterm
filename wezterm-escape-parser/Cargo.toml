@@ -15,7 +15,7 @@ bitflags = "2.0"
 hex = {workspace = true, default-features=false, features=["alloc"]}
 image = {workspace =true, optional=true }
 log.workspace = true
-nix = { workspace=true, optional=true, features=["mman", "fs"] }
+rustix = { workspace=true, optional=true, features=["shm"] }
 num-derive.workspace = true
 num-traits.workspace = true
 ordered-float.workspace = true
@@ -38,7 +38,7 @@ windows-sys = { workspace = true, features = [
 
 [features]
 std = ["vtparse/std", "thiserror/std", "wezterm-input-types/std", "hex/std", "wezterm-dynamic/std"]
-kitty-shm = ["dep:nix", "dep:windows-sys"]
+kitty-shm = ["dep:rustix", "dep:windows-sys"]
 use_serde = ["dep:serde", "wezterm-color-types/use_serde", "wezterm-blob-leases/serde", "bitflags/serde", "wezterm-input-types/serde"]
 use_image = ["image", "dep:image"]
 image = ["sha2", "wezterm-blob-leases"]

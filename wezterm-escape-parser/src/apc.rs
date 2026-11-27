@@ -268,20 +268,15 @@ fn read_shared_memory_data(
     data_offset: Option<u32>,
     data_size: Option<u32>,
 ) -> std::result::Result<std::vec::Vec<u8>, std::io::Error> {
-    use nix::sys::mman::{shm_open, shm_unlink};
+    use rustix::fs::Mode;
+    use rustix::shm;
     use std::fs::File;
     use std::io::{Read, Seek};
 
-    let fd = shm_open(
-        name,
-        nix::fcntl::OFlag::O_RDONLY,
-        nix::sys::stat::Mode::empty(),
-    )
-    .map_err(|_| {
-        let err = std::io::Error::last_os_error();
+    let fd = shm::open(name, shm::OFlags::RDONLY, Mode::empty()).map_err(|err| {
         std::io::Error::new(
             std::io::ErrorKind::Other,
-            format!("shm_open {} failed: {:#}", name, err),
+            format!("shm::open {} failed: {:#}", name, err),
         )
     })?;
     let mut f = File::from(fd);
@@ -298,7 +293,7 @@ fn read_shared_memory_data(
         res
     };
 
-    if let Err(err) = shm_unlink(name) {
+    if let Err(err) = shm::unlink(name) {
         log::warn!(
             "Unable to unlink kitty image protocol shm file {}: {:#}",
             name,
