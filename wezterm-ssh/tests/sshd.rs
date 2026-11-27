@@ -241,6 +241,10 @@ impl SshdConfig {
             .insert("StrictModes".to_string(), Self::yes_value(yes));
     }
 
+    pub fn set_env(&mut self, pair: String) {
+        self.0.entry("SetEnv".to_string()).or_default().push(pair);
+    }
+
     fn yes_value(yes: bool) -> Vec<String> {
         vec![Self::yes_string(yes)]
     }
@@ -338,6 +342,9 @@ impl Sshd {
 
         let sshd_pid_file = tmp.child("sshd.pid");
         config.set_pid_file(sshd_pid_file.path());
+
+        // Prevent user config from interfering with the tests
+        config.set_env(format!("HOME={}", tmp.path().display()));
 
         // Generate $ROOT/sshd_config based on config
         let sshd_config_file = tmp.child("sshd_config");
