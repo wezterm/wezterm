@@ -79,7 +79,8 @@ impl PointerUserData {
 #[derive(Default)]
 pub struct PointerState {
     active_surface_id: Option<ObjectId>,
-    serial: u32,
+    /// Serial of the most recent pointer event; needed for xdg_toplevel.move.
+    pub(super) serial: u32,
     /// Active drag-and-drop session, if any.
     pub drag_and_drop_session: Option<DragAndDropSession>,
 }
