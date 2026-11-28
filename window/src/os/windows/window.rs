@@ -2913,38 +2913,6 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
     None
 }
 
-#[cfg(test)]
-mod ime_keyboard_tests {
-    use super::*;
-
-    #[test]
-    fn ime_processed_system_key_down_is_translated() {
-        // The IME substitutes VK_PROCESSKEY when it handles F10.
-        assert!(should_translate_ime_key(
-            WM_SYSKEYDOWN,
-            VK_PROCESSKEY as WPARAM
-        ));
-    }
-
-    #[test]
-    fn ime_processed_non_system_key_down_is_still_translated() {
-        // Other conversion shortcuts, such as F7, use WM_KEYDOWN.
-        assert!(should_translate_ime_key(
-            WM_KEYDOWN,
-            VK_PROCESSKEY as WPARAM
-        ));
-    }
-
-    #[test]
-    fn ordinary_function_keys_keep_the_binding_and_terminal_path() {
-        // When Windows leaves the original virtual key in the message, the
-        // normal raw and mapped key handlers still get it.
-        assert!(!should_translate_ime_key(WM_SYSKEYDOWN, VK_F10 as WPARAM));
-        assert!(!should_translate_ime_key(WM_KEYDOWN, VK_F10 as WPARAM));
-        assert!(!should_translate_ime_key(WM_KEYDOWN, VK_F7 as WPARAM));
-    }
-}
-
 unsafe fn drop_files(hwnd: HWND, _msg: UINT, wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
     let inner = rc_from_hwnd(hwnd)?;
     let h_drop = wparam as HDROP;
@@ -3052,5 +3020,37 @@ unsafe extern "system" fn wnd_proc(
             log::error!("caught {:?}", e);
             std::process::exit(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod ime_keyboard_tests {
+    use super::*;
+
+    #[test]
+    fn ime_processed_system_key_down_is_translated() {
+        // The IME substitutes VK_PROCESSKEY when it handles F10.
+        assert!(should_translate_ime_key(
+            WM_SYSKEYDOWN,
+            VK_PROCESSKEY as WPARAM
+        ));
+    }
+
+    #[test]
+    fn ime_processed_non_system_key_down_is_still_translated() {
+        // Other conversion shortcuts, such as F7, use WM_KEYDOWN.
+        assert!(should_translate_ime_key(
+            WM_KEYDOWN,
+            VK_PROCESSKEY as WPARAM
+        ));
+    }
+
+    #[test]
+    fn ordinary_function_keys_keep_the_binding_and_terminal_path() {
+        // When Windows leaves the original virtual key in the message, the
+        // normal raw and mapped key handlers still get it.
+        assert!(!should_translate_ime_key(WM_SYSKEYDOWN, VK_F10 as WPARAM));
+        assert!(!should_translate_ime_key(WM_KEYDOWN, VK_F10 as WPARAM));
+        assert!(!should_translate_ime_key(WM_KEYDOWN, VK_F7 as WPARAM));
     }
 }
