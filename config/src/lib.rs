@@ -666,15 +666,9 @@ impl ConfigInner {
     fn use_test(&mut self) {
         let mut config = Config::default_config();
         config.font_locator = FontLocatorSelection::ConfigDirsOnly;
-        let exe_name = std::env::current_exe().unwrap();
-        let exe_dir = exe_name.parent().unwrap();
-        config.font_dirs.push(exe_dir.join("../../../assets/fonts"));
-        // If we're building for a specific target, the dir
-        // level is one deeper.
-        #[cfg(target_os = "macos")]
         config
             .font_dirs
-            .push(exe_dir.join("../../../../assets/fonts"));
+            .push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/fonts"));
         // Specify the same DPI used on non-mac systems so
         // that we have consistent values regardless of the
         // operating system that we're running tests on
@@ -831,4 +825,28 @@ fn default_one_point_oh() -> f32 {
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_configuration_finds_bundled_fonts() {
+        let mut inner = ConfigInner::new();
+        inner.use_test();
+
+        // Cargo can place test binaries outside the source tree.
+        for font in ["FiraCode-Regular.ttf", "JetBrainsMono-Regular.ttf"] {
+            assert!(
+                inner
+                    .config
+                    .font_dirs
+                    .iter()
+                    .any(|dir| dir.join(font).is_file()),
+                "{font} not found in {:?}",
+                inner.config.font_dirs
+            );
+        }
+    }
 }
