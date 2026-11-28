@@ -2506,13 +2506,18 @@ unsafe fn translate_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARA
     });
 }
 
+fn should_translate_ime_key(msg: UINT, wparam: WPARAM) -> bool {
+    // Windows can report F10 as a system key even without Alt.
+    wparam == VK_PROCESSKEY as WPARAM && matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN)
+}
+
 unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
     let repeat = (lparam & 0xffff) as u16;
     let scan_code = ((lparam >> 16) & 0xff) as u8;
     let releasing = (lparam & (1 << 31)) != 0;
-    let ime_active = wparam == VK_PROCESSKEY as WPARAM;
+    let ime_processed = wparam == VK_PROCESSKEY as WPARAM;
     let phys_code = super::keycodes::vkey_to_phys(wparam);
 
     let alt_pressed = (lparam & (1 << 29)) != 0;
@@ -2540,26 +2545,19 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
         alt_pressed,
         was_down,
         releasing,
-        ime_active,
+        ime_processed,
         inner.dead_pending,
     );
 
-    if ime_active {
-        // If the IME is active, allow Windows to perform default processing
-        // to drive it forwards.  It will generate a call to `ime_composition`
-        // or `ime_endcomposition` when it completes.
+    if should_translate_ime_key(msg, wparam) {
+        // TranslateMessage advances the IME and can synchronously trigger
+        // other window messages, so release the borrow before calling it.
+        drop(inner);
+        translate_message(hwnd, msg, wparam, lparam);
+        return Some(0);
+    }
 
-        if msg == WM_KEYDOWN {
-            // Release the borrow before calling translate_message:
-            // TranslateMessage can trigger other window messages (like WM_SIZE)
-            // via CtfImeCreateInputContext, which would otherwise cause a
-            // RefCell borrow conflict while inner is still borrowed.
-            drop(inner);
-            // Explicitly allow the built-in translation to occur for the IME
-            translate_message(hwnd, msg, wparam, lparam);
-            return Some(0);
-        }
-
+    if ime_processed {
         return None;
     }
 
@@ -2913,6 +2911,38 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
         return Some(0);
     }
     None
+}
+
+#[cfg(test)]
+mod ime_keyboard_tests {
+    use super::*;
+
+    #[test]
+    fn ime_processed_system_key_down_is_translated() {
+        // The IME substitutes VK_PROCESSKEY when it handles F10.
+        assert!(should_translate_ime_key(
+            WM_SYSKEYDOWN,
+            VK_PROCESSKEY as WPARAM
+        ));
+    }
+
+    #[test]
+    fn ime_processed_non_system_key_down_is_still_translated() {
+        // Other conversion shortcuts, such as F7, use WM_KEYDOWN.
+        assert!(should_translate_ime_key(
+            WM_KEYDOWN,
+            VK_PROCESSKEY as WPARAM
+        ));
+    }
+
+    #[test]
+    fn ordinary_function_keys_keep_the_binding_and_terminal_path() {
+        // When Windows leaves the original virtual key in the message, the
+        // normal raw and mapped key handlers still get it.
+        assert!(!should_translate_ime_key(WM_SYSKEYDOWN, VK_F10 as WPARAM));
+        assert!(!should_translate_ime_key(WM_KEYDOWN, VK_F10 as WPARAM));
+        assert!(!should_translate_ime_key(WM_KEYDOWN, VK_F7 as WPARAM));
+    }
 }
 
 unsafe fn drop_files(hwnd: HWND, _msg: UINT, wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
